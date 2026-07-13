@@ -4,6 +4,8 @@
 
 pub mod angle;
 pub mod fx;
+pub mod isqrt;
 
 pub use angle::Angle;
 pub use fx::Fx;
+pub use isqrt::isqrt;
