@@ -23,12 +23,53 @@ pub fn gen_sin_quarter() -> Vec<u8> {
     out
 }
 
+/// easing 曲线函数类型。
+type Curve = fn(f64) -> f64;
+
+/// 8 条 easing 曲线，每条 257 项 Q16.16 归一化 [0,1]（顺序须与 `Easing` 枚举一致）。
+pub fn gen_easing() -> Vec<u8> {
+    let curves: [Curve; 8] = [
+        |t| t,                           // Linear
+        |t| t * t,                       // QuadIn
+        |t| 1.0 - (1.0 - t) * (1.0 - t), // QuadOut
+        |t| {
+            if t < 0.5 {
+                2.0 * t * t
+            } else {
+                1.0 - (-2.0 * t + 2.0).powi(2) / 2.0
+            }
+        }, // QuadInOut
+        |t| t * t * t,                   // CubicIn
+        |t| 1.0 - (1.0 - t).powi(3),     // CubicOut
+        |t| {
+            if t < 0.5 {
+                4.0 * t * t * t
+            } else {
+                1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+            }
+        }, // CubicInOut
+        |t| t * t * (3.0 - 2.0 * t),     // Smoothstep
+    ];
+    let mut out = Vec::with_capacity(8 * 257 * 4);
+    for f in curves {
+        for i in 0..=256i64 {
+            let t = (i as f64) / 256.0;
+            let v = (f(t) * 65536.0).round_ties_even() as i32;
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    out
+}
+
 /// 表生成器函数类型（消 clippy::type_complexity）。
 type TableGen = fn() -> Vec<u8>;
 
 /// 所有表的 (文件名, 生成器) 清单——bake 与 verify 共用单一真相源。
 fn registry() -> Vec<(&'static str, TableGen)> {
-    vec![("sin_quarter.bin", gen_sin_quarter as TableGen)]
+    vec![
+        ("sin_quarter.bin", gen_sin_quarter as TableGen),
+        ("easing.bin", gen_easing as TableGen),
+    ]
 }
 
 /// 生成全部表并写入 stg-core 源目录（开发者刻意重烘时用）。

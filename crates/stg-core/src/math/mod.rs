@@ -4,11 +4,13 @@
 
 pub mod angle;
 pub mod codec;
+pub mod easing;
 pub mod fx;
 pub mod isqrt;
 pub mod trig;
 
 pub use angle::Angle;
+pub use easing::{Easing, ease};
 pub use fx::Fx;
 pub use isqrt::isqrt;
 pub use trig::{cos, sin, sincos};
