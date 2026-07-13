@@ -75,6 +75,64 @@ impl Default for Fnv1a64 {
     }
 }
 
+/// 参与快照校验和的类型（D11）。按字段声明序把自身喂入 hasher。
+///
+/// `#[derive(Checksum)]`（stg-derive）从结构体字段自动生成实现，杜绝"加字段忘哈希"；
+/// 手写实现仅用于基本类型与数组（见下）。
+pub trait Checksum {
+    /// 把自身字节按契约（小端、字段声明序）喂入 hasher。
+    fn hash_into(&self, h: &mut Fnv1a64);
+
+    /// 便利收口：新建 hasher、喂入、出摘要。
+    #[inline]
+    fn checksum(&self) -> u64 {
+        let mut h = Fnv1a64::new();
+        self.hash_into(&mut h);
+        h.finish()
+    }
+}
+
+macro_rules! impl_le {
+    ($($t:ty),*) => { $(
+        impl Checksum for $t {
+            #[inline]
+            fn hash_into(&self, h: &mut Fnv1a64) {
+                h.write_bytes(&self.to_le_bytes());
+            }
+        }
+    )* };
+}
+impl_le!(i16, u16, i32, u32, i64, u64);
+
+impl Checksum for u8 {
+    #[inline]
+    fn hash_into(&self, h: &mut Fnv1a64) {
+        h.write_u8(*self);
+    }
+}
+impl Checksum for i8 {
+    #[inline]
+    fn hash_into(&self, h: &mut Fnv1a64) {
+        h.write_u8(*self as u8);
+    }
+}
+impl Checksum for bool {
+    #[inline]
+    fn hash_into(&self, h: &mut Fnv1a64) {
+        h.write_u8(*self as u8);
+    }
+}
+
+/// 数组逐元素哈希 == SoA 整条哈希（同类型连续、无内部 padding，天然跳过字段间 padding）。
+impl<T: Checksum, const N: usize> Checksum for [T; N] {
+    #[inline]
+    fn hash_into(&self, h: &mut Fnv1a64) {
+        for e in self {
+            e.hash_into(h);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +165,28 @@ mod tests {
         let mut b = Fnv1a64::new();
         b.write_bytes(&[0x04, 0x03, 0x02, 0x01]);
         assert_eq!(a.finish(), b.finish());
+    }
+
+    #[test]
+    fn prim_matches_manual() {
+        let mut h = Fnv1a64::new();
+        0x0102_0304u32.hash_into(&mut h);
+        assert_eq!(0x0102_0304u32.checksum(), h.finish());
+    }
+
+    #[test]
+    fn array_equals_concat_bytes() {
+        // [u32;2] 逐元素 == 直接喂 8 字节小端
+        let a: [u32; 2] = [0x1122_3344, 0x5566_7788];
+        let mut h = Fnv1a64::new();
+        h.write_bytes(&0x1122_3344u32.to_le_bytes());
+        h.write_bytes(&0x5566_7788u32.to_le_bytes());
+        assert_eq!(a.checksum(), h.finish());
+    }
+
+    #[test]
+    fn bool_and_i8() {
+        assert_eq!(true.checksum(), 1u8.checksum());
+        assert_eq!((-1i8).checksum(), 0xffu8.checksum());
     }
 }
