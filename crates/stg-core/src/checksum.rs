@@ -75,6 +75,9 @@ impl Default for Fnv1a64 {
     }
 }
 
+/// `#[derive(Checksum)]` 过程宏（stg-derive）—— 与下方 `Checksum` trait 同名（宏 vs 类型命名空间，不冲突）。
+pub use stg_derive::Checksum;
+
 /// 参与快照校验和的类型（D11）。按字段声明序把自身喂入 hasher。
 ///
 /// `#[derive(Checksum)]`（stg-derive）从结构体字段自动生成实现，杜绝"加字段忘哈希"；
@@ -188,5 +191,42 @@ mod tests {
     fn bool_and_i8() {
         assert_eq!(true.checksum(), 1u8.checksum());
         assert_eq!((-1i8).checksum(), 0xffu8.checksum());
+    }
+
+    #[test]
+    fn derived_matches_manual_field_order() {
+        #[derive(Checksum)]
+        struct Foo {
+            a: u32,
+            b: u16,
+            c: [i32; 3],
+        }
+        let foo = Foo {
+            a: 1,
+            b: 2,
+            c: [3, 4, 5],
+        };
+        let mut h = Fnv1a64::new();
+        1u32.hash_into(&mut h);
+        2u16.hash_into(&mut h);
+        [3i32, 4, 5].hash_into(&mut h);
+        assert_eq!(foo.checksum(), h.finish());
+    }
+
+    #[test]
+    fn derived_tuple_struct_and_newtypes() {
+        #[derive(Checksum)]
+        struct Pair(u32, u16);
+        let p = Pair(7, 9);
+        let mut h = Fnv1a64::new();
+        7u32.hash_into(&mut h);
+        9u16.hash_into(&mut h);
+        assert_eq!(p.checksum(), h.finish());
+        // Fx / Angle 现在可校验（透明包裹其内层）
+        assert_eq!(
+            crate::math::Fx::from_int(3).checksum(),
+            (3i32 << 16).checksum()
+        );
+        assert_eq!(crate::math::Angle(8192).checksum(), 8192u16.checksum());
     }
 }

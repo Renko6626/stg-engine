@@ -18,6 +18,9 @@
 //! 当前仅落地确定性契约的最底层基础设施 —— [`checksum`]（vendored FNV-1a 64，D11）。
 //! 数学核 / 池框架 / World 本体 / step 相位随 **M0** 逐模块长肉，全程 TDD + 金向量回归。
 
+// 让 #[derive(Checksum)] 生成的 `::stg_core::…` 绝对路径在本 crate 内解析（serde 同款）。
+extern crate self as stg_core;
+
 pub mod checksum;
 pub mod math;
 

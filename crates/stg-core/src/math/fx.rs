@@ -5,7 +5,7 @@
 /// 乘除走 `Mul`/`Div` 重载（i64 中转 + 移位）——newtype 使裸 i32 乘法（"忘了移位差 65536 倍"
 /// 的经典静默灾难）在类型上不可能发生（D1）。
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, crate::checksum::Checksum)]
 pub struct Fx(pub i32);
 
 impl Fx {

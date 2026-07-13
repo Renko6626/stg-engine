@@ -17,7 +17,7 @@ description  = "弹幕 STG 引擎的确定性内核（断层线以下：定点�
 # │ CI 有一步 `cargo tree -p stg-core` 断言这条防火墙（见 .github/ci.yml）│
 # └──────────────────────────────────────────────────────────────────────┘
 #
-# M0 起将引入（编译期工具，非运行时依赖）：
-#   stg-derive.workspace = true   # #[derive(Checksum)]（D11 防漏单一真相源）
+# 编译期 proc-macro（syn/quote 走 stg-derive，不进运行时、不在确定性防火墙禁用名单）：
+stg-derive.workspace = true   # #[derive(Checksum)]（D11 防漏单一真相源）
 
 [dev-dependencies]
