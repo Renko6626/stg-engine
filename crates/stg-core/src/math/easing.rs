@@ -1,20 +1,31 @@
 //! easing 曲线（D1）——每曲线 257 × Q16.16 归一化查表 + 相邻插值。用于 `move_to` / `STEP_*`（D4/D5）。
 //! 表字节由 harness 用 f64 生成并 commit（多项式曲线是精确算术，天然跨平台一致）。
+//!
+//! **linear 亦烘入表**（第 0 行 = identity）：为统一表结构、`ease()` 零特例；与母文档 D1 原设想
+//! "linear 直算不烘" 的差异见此——代价 +1KB、精确无损。
 
 use crate::math::Fx;
 use crate::math::codec::decode_i32;
 
-/// 首版 8 条曲线（`repr(u8)` = 表的行索引）。
+/// 首版 8 条曲线（`repr(u8)` = 表的行索引）。所有 `f(t)` 定义域/值域均为 `[0,1]`。
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Easing {
+    /// `t` —— 匀速，无缓动（identity）。
     Linear = 0,
+    /// `t²` —— 慢起步→加速，末端最快（起点速度 0）。ease-in。
     QuadIn = 1,
+    /// `1−(1−t)²` —— 快起步→减速到停（终点速度 0）。ease-out。
     QuadOut = 2,
+    /// `t<.5: 2t²`，否则 `1−(−2t+2)²/2` —— 慢-快-慢对称 S，两端速度 0。通用平滑。
     QuadInOut = 3,
+    /// `t³` —— 同 QuadIn 但更陡（起步更慢、末端更冲）。强 ease-in。
     CubicIn = 4,
+    /// `1−(1−t)³` —— 同 QuadOut 但更强的急起缓停。强 ease-out。
     CubicOut = 5,
+    /// `t<.5: 4t³`，否则 `1−(−2t+2)³/2` —— 更强的对称 S（中段更陡）。
     CubicInOut = 6,
+    /// `3t²−2t³` —— 经典 Hermite S，两端一阶导=0，最顺的起停（形近 QuadInOut 但更顺）。
     Smoothstep = 7,
 }
 

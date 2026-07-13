@@ -270,7 +270,7 @@ pub struct WorldView<'w> {
 | `sin / cos / sincos` | 四分之一波对称表 **16384 × i32**（64 KB），入 `Angle` 出 `Fx`；取整规则 round-half-to-even |
 | `atan2(y, x) -> Angle` | 整数 CORDIC，**迭代次数钉死 16 轮**（次数是契约；改 = bump engine_ver） |
 | `isqrt(u64) -> u32` | 整数牛顿法，单调收敛、终止条件写死 |
-| easing 表 | 每曲线 **257 × i32**（Q16.16 归一化 [0,1]），首版烘 8 条：linear（直算不烘）、quad/cubic 的 in/out/in-out、smoothstep |
+| easing 表 | 每曲线 **257 × i32**（Q16.16 归一化 [0,1]），首版烘 8 条：linear（**M0-1 实现改为亦烘入表**：统一表结构、`ease()` 无特例，代价 +1KB）、quad/cubic 的 in/out/in-out、smoothstep。各条公式/手感见 `math::easing::Easing` 变体注释 |
 
 全部烘焙表遵守母文档 §2.1 纪律：**生成一次、commit 原始字节、`include_bytes!` 嵌入；CI 再生成并断言与 commit 字节逐位相同**；表哈希进握手/回放头。
 
