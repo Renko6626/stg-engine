@@ -19,10 +19,10 @@
 //! 数学核 / 池框架 / World 本体 / step 相位随 **M0** 逐模块长肉，全程 TDD + 金向量回归。
 
 pub mod checksum;
+pub mod math;
 
 // ── Phase 1 M0+ 起逐步落地（占位，勿在 scaffold 阶段实现）──────────────────
 //
-//   pub mod math;   // D1 定点数学核：Fx / Angle / 烘焙表 / 整数 CORDIC / isqrt
 //   pub mod pool;   // D2 `define_pool!` 宏与六个实体池（SoA + generation 句柄）
 //   pub mod world;  // Part III 世界本体（WorldBody 字段、pub(crate) 相位函数）
 //   pub mod step;   // P2 组装层宪法顺序（导演槽 + PhaseGuard）
