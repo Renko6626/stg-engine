@@ -229,4 +229,43 @@ mod tests {
         );
         assert_eq!(crate::math::Angle(8192).checksum(), 8192u16.checksum());
     }
+
+    #[test]
+    fn skip_field_excluded() {
+        #[derive(Checksum)]
+        #[allow(dead_code)] // _scratch 刻意跳过校验、不被读
+        struct WithSkip {
+            a: u32,
+            #[checksum(skip = "纯输出缓冲，重演再生")]
+            _scratch: u64,
+            b: u16,
+        }
+        let x = WithSkip {
+            a: 1,
+            _scratch: 999,
+            b: 2,
+        };
+        let y = WithSkip {
+            a: 1,
+            _scratch: 12345,
+            b: 2,
+        };
+        assert_eq!(x.checksum(), y.checksum()); // _scratch 不参与
+    }
+
+    #[test]
+    fn checksum_fields_lists_nonskipped() {
+        #[derive(Checksum)]
+        struct Bar {
+            x: u32,
+            y: u16,
+        }
+        let b = Bar { x: 7, y: 9 };
+        let rep = b.checksum_fields();
+        assert_eq!(rep.len(), 2);
+        assert_eq!(rep[0].0, "x");
+        assert_eq!(rep[1].0, "y");
+        assert_eq!(rep[0].1, 7u32.checksum());
+        assert_eq!(rep[1].1, 9u16.checksum());
+    }
 }
