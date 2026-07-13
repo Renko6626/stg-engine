@@ -2,6 +2,8 @@
 //!
 //! 超越函数走烘焙表：字节 commit 进 `tables/`，`include_bytes!` + `const fn` 解码。
 
+pub mod angle;
 pub mod fx;
 
+pub use angle::Angle;
 pub use fx::Fx;
