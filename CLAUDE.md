@@ -76,6 +76,7 @@ headless 高速模拟。核心性质是**确定性**——同一份 `(初始状�
   保留 Q32.32 于 **i64、不归一化**（`math::geom::len_sq`），既不溢出又不丢精度；比较时 `r²`(`r.raw()²`)
   同为 Q32.32，直接比、不开根。通用律：`Q(m).f × Q(m).f = Q(2m).(2f)`，`>>f` 才回 `Q(m).f`；
   **保留双宽 = 累加器模式**。两个大坐标相乘却 `>>16 as i32` 塞回 `Fx` = 必溢出的经典翻车。
+  **完整坑表（加减语义 / Angle 回绕 / ECL 脚本 / 大数参数方程策略）见 [`docs/fixed-point-corners.md`](docs/fixed-point-corners.md)。**
 - **烘焙表纪律**：**绝不在各平台构建期用浮点现生成表**。生成一次 → commit 原始字节 →
   `include_bytes!` 嵌入 → CI 再生成断言**逐位相同**；取整 round-half-to-even；表哈希进握手/回放头。
 - **校验和**：**vendored FNV-1a 64**（`stg_core::checksum`，算法字节冻结，绝不走外部依赖）。
@@ -93,6 +94,7 @@ Cargo.lock                       【提交】—— 确定性须锁依赖版本
 CLAUDE.md  README.md
 design_doc.md  stg-world-design.md   权威设计（勿轻改，改动过评审）
 docs/superpowers/{specs,plans}/  brainstorm 产出的设计与实施计划
+docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
 .github/workflows/ci.yml         三平台矩阵 + 校验和对拍 + fmt/clippy + 依赖防火墙
 crates/
   stg-core/         确定性内核（现仅 checksum；math/pool/world/step 随 M0）
