@@ -11,6 +11,8 @@ use std::process::ExitCode;
 
 use stg_core::checksum::Fnv1a64;
 
+mod tables;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -62,14 +64,27 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// 烘焙 sin/cos/easing 表 —— M0 落地（用 f64 生成 → commit 原始字节到 stg-core）。
+/// 烘焙 sin/cos/easing 表 —— 用 f64 生成原始字节并写入 stg-core 源目录（§2.1）。
 fn cmd_bake_tables() -> ExitCode {
-    eprintln!("bake-tables: 尚无表可烘焙（数学核烘焙表于 M0 落地）");
-    ExitCode::SUCCESS
+    match tables::bake_all() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("bake-tables 失败: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
-/// 断言现生成的表字节 == 已 commit 的字节（§2.1 CI 防漂移）—— M0 落地。
+/// 断言现生成的表字节 == 已 commit 的字节（§2.1 CI 防漂移）。
 fn cmd_verify_tables() -> ExitCode {
-    eprintln!("verify-tables: 尚无 commit 的烘焙表（数学核于 M0 落地）—— 空验证通过");
-    ExitCode::SUCCESS
+    match tables::verify_all() {
+        Ok(()) => {
+            eprintln!("verify-tables: 全部表与 commit 字节一致 ✔");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("verify-tables 失败: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
