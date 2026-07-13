@@ -4,12 +4,14 @@
 
 pub mod angle;
 pub mod codec;
+pub mod cordic;
 pub mod easing;
 pub mod fx;
 pub mod isqrt;
 pub mod trig;
 
 pub use angle::Angle;
+pub use cordic::atan2;
 pub use easing::{Easing, ease};
 pub use fx::Fx;
 pub use isqrt::isqrt;

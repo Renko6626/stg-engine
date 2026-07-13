@@ -61,6 +61,17 @@ pub fn gen_easing() -> Vec<u8> {
     out
 }
 
+/// CORDIC 角度常数：`atan(2^-i)`（弧度）转 BAM，16 项 u16。
+pub fn gen_atan_cordic() -> Vec<u8> {
+    let mut out = Vec::with_capacity(16 * 2);
+    for i in 0..16i32 {
+        let rad = (2f64.powi(-i)).atan();
+        let bam = (rad / (2.0 * PI) * 65536.0).round_ties_even() as i64;
+        out.extend_from_slice(&(bam as u16).to_le_bytes());
+    }
+    out
+}
+
 /// 表生成器函数类型（消 clippy::type_complexity）。
 type TableGen = fn() -> Vec<u8>;
 
@@ -69,6 +80,7 @@ fn registry() -> Vec<(&'static str, TableGen)> {
     vec![
         ("sin_quarter.bin", gen_sin_quarter as TableGen),
         ("easing.bin", gen_easing as TableGen),
+        ("atan_cordic.bin", gen_atan_cordic as TableGen),
     ]
 }
 
