@@ -8,11 +8,12 @@
 # 调试符号 / 崩溃转储
 *.pdb
 
-# 编辑器 / IDE
+# 编辑器 / IDE / 工具 sidecar
 /.idea/
 /.vscode/
 *.swp
 *~
+*.tags
 
 # 操作系统
 .DS_Store

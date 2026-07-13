@@ -14,7 +14,7 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy (deny warnings)
@@ -46,7 +46,7 @@ jobs:
           - { os: ubuntu-24.04-arm, id: linux-aarch64 }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: build (debug —— 帧内断言/PhaseGuard 生效)
         run: cargo build --workspace
       - name: test
@@ -55,7 +55,7 @@ jobs:
         run: cargo run -p stg-harness -- verify-tables
       - name: 金向量逐帧校验和
         run: cargo run -p stg-harness -- golden --out checksums.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: checksums-${{ matrix.id }}
           path: checksums.txt
@@ -65,7 +65,7 @@ jobs:
     needs: vector
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: 断言所有平台校验和逐字节相同
@@ -92,7 +92,7 @@ jobs:
 #   vector-aarch64-qemu:
 #     runs-on: ubuntu-24.04
 #     steps:
-#       - uses: actions/checkout@v4
+#       - uses: actions/checkout@v7
 #       - uses: docker/setup-qemu-action@v3
 #       - name: 在 arm64 容器里跑金向量
 #         run: |
