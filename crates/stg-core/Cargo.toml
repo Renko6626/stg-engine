@@ -1,0 +1,23 @@
+[package]
+name         = "stg-core"
+version      = "0.0.0"
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+publish      = false
+description  = "弹幕 STG 引擎的确定性内核（断层线以下：定点数学 + 实体池 + World + step）"
+
+[dependencies]
+# ┌──────────────────────────── 确定性防火墙 ────────────────────────────┐
+# │ 此 [dependencies] 段【永远不得】出现：                                │
+# │   rand / getrandom  —— RNG 是 World 字段（I3），用 vendored PCG32     │
+# │   *time* / chrono   —— 逻辑时间是整数帧（I6），不读系统时钟          │
+# │   libm / 任何浮点库 —— I1 唯一标量是 Q16.16；超越函数一律查表        │
+# │   godot / gdext     —— 断层线以上才有表现层                          │
+# │ CI 有一步 `cargo tree -p stg-core` 断言这条防火墙（见 .github/ci.yml）│
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# M0 起将引入（编译期工具，非运行时依赖）：
+#   stg-derive.workspace = true   # #[derive(Checksum)]（D11 防漏单一真相源）
+
+[dev-dependencies]

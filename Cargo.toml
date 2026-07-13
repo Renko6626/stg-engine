@@ -1,0 +1,25 @@
+# 弹幕 STG 引擎 —— Cargo workspace 根
+#
+# 断层线由 Cargo 依赖图在编译期焊死（design_doc.md §1.1）：
+# stg-core 的 Cargo.toml 里【永远】没有 godot / std-time / rand / libm。
+# 其余 crate 皆为 stg-core 的消费者。
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition      = "2024"
+rust-version = "1.92"
+authors      = ["Renko6626 <108311284+Renko6626@users.noreply.github.com>"]
+
+[workspace.dependencies]
+stg-core   = { path = "crates/stg-core" }
+stg-derive = { path = "crates/stg-derive" }
+
+# 发布构建默认打开优化；确定性来自整数运算与烘焙表，与优化等级无关，
+# 但 8192 弹满池 < 0.5ms 的性能指标（design_doc.md §0）依赖 release。
+[profile.release]
+overflow-checks = false   # release 按 I1 走 wrapping + 帧内断言计数（debug 才 panic）
+
+[profile.dev]
+overflow-checks = true    # debug：溢出即 panic，让违约在案发现场爆炸（P4-c）

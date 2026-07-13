@@ -1,0 +1,7 @@
+# 统一行尾为 LF —— 跨平台确定性项目，避免 CRLF 漂移（CI 在 Linux 上 checkout）。
+* text=auto eol=lf
+
+# 烘焙表等二进制资产【绝不】做 EOL/文本转换：
+# M0 起 sin/cos/easing 表以【原始字节】commit（§2.1），字节必须逐位稳定、跨平台一致。
+*.bin binary
+*.png binary

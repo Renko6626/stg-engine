@@ -1,0 +1,7 @@
+# 钉死工具链版本 —— 目的是【构建可复现】，而非确定性来源本身。
+# 确定性来自：纯整数运算（I1）+ commit 进仓库的烘焙表字节（§2.1）+ vendored 校验和算法（D11）。
+# 但固定版本让 CI 与本地、x86_64 与 aarch64 用同一个编译器，排除工具链漂移这一变量。
+# 升级版本是一次刻意的评审动作（精神上等同 bump engine_ver）。
+[toolchain]
+channel    = "1.92.0"
+components = ["rustfmt", "clippy"]

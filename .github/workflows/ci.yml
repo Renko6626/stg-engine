@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 工具链版本由 rust-toolchain.toml 钉死（1.92.0），rustup 在首次 cargo 调用时自动装。
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── 代码风格 + 确定性防火墙 ────────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: 确定性防火墙 —— stg-core 不得依赖禁用 crate
+        shell: bash
+        run: |
+          set -euo pipefail
+          # I1/I3/I6 + 断层线：core 里不许出现浮点/时钟/宿主 RNG/godot。
+          forbidden='(^| )(rand|getrandom|chrono|time|libm|godot|gdext)( |$| v)'
+          tree=$(cargo tree -p stg-core --edges normal --prefix none)
+          echo "$tree"
+          if echo "$tree" | grep -Eiq "$forbidden"; then
+            echo "::error::stg-core 拉入了禁用依赖（确定性防火墙）"; exit 1
+          fi
+          echo "确定性防火墙通过 ✔"
+
+  # ── 三平台构建 + 金向量校验和 ──────────────────────────────────────────
+  vector:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest,   id: win-x86_64 }
+          - { os: ubuntu-24.04,     id: linux-x86_64 }
+          # aarch64：GitHub 原生 arm64 Linux runner。
+          # ⚠️ 私有仓注意：arm64 托管 runner 可能按大型 runner 计费 / 需付费计划。
+          #    若你的计划没有 arm 额度，把下面这行换成 QEMU 回退（见文末注释）。
+          - { os: ubuntu-24.04-arm, id: linux-aarch64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: build (debug —— 帧内断言/PhaseGuard 生效)
+        run: cargo build --workspace
+      - name: test
+        run: cargo test --workspace
+      - name: 烘焙表字节与 commit 一致
+        run: cargo run -p stg-harness -- verify-tables
+      - name: 金向量逐帧校验和
+        run: cargo run -p stg-harness -- golden --out checksums.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums-${{ matrix.id }}
+          path: checksums.txt
+
+  # ── 确定性闸门：三平台校验和必须逐字节全等 ─────────────────────────────
+  determinism-gate:
+    needs: vector
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 断言所有平台校验和逐字节相同
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(artifacts/checksums-*/checksums.txt)
+          echo "收到 ${#files[@]} 份校验和"
+          if [ "${#files[@]}" -lt 2 ]; then
+            echo "::error::校验和工件不足 2 份，无法对拍"; exit 1
+          fi
+          first="${files[0]}"
+          for f in "${files[@]}"; do
+            if ! diff -u "$first" "$f"; then
+              echo "::error::DESYNC —— $f 与 $first 分歧"; exit 1
+            fi
+          done
+          echo "所有平台逐帧校验和一致 ✔"
+
+# ── QEMU 回退（若私有仓无 arm64 原生 runner 额度）──────────────────────────
+# 把 vector 矩阵里的 ubuntu-24.04-arm 行删掉，另加一个 job：
+#
+#   vector-aarch64-qemu:
+#     runs-on: ubuntu-24.04
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: docker/setup-qemu-action@v3
+#       - name: 在 arm64 容器里跑金向量
+#         run: |
+#           docker run --rm --platform linux/arm64 -v "$PWD:/w" -w /w \
+#             rust:1.92 bash -c \
+#             "cargo run -p stg-harness -- golden --out checksums.txt"
+#       - uses: actions/upload-artifact@v4
+#         with: { name: checksums-linux-aarch64, path: checksums.txt }

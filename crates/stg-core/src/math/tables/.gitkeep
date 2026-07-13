@@ -1,0 +1,2 @@
+# 烘焙表原始字节（sin/cos/easing）于 M0 生成并 commit 到此目录，经 include_bytes! 嵌入。
+# 生成纪律见 §2.1 与 CLAUDE.md：生成一次 → commit 字节 → CI 再生成断言逐位相同。

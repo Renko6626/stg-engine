@@ -1,0 +1,19 @@
+# Rust 构建产物
+/target
+**/target
+
+# 【注意】Cargo.lock 【要提交】—— 确定性项目须锁定依赖版本以复现构建。
+# 故此处不忽略 Cargo.lock。
+
+# 调试符号 / 崩溃转储
+*.pdb
+
+# 编辑器 / IDE
+/.idea/
+/.vscode/
+*.swp
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db

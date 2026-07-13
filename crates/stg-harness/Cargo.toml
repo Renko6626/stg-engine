@@ -1,0 +1,18 @@
+[package]
+name         = "stg-harness"
+version      = "0.0.0"
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+publish      = false
+description  = "CLI：金向量逐帧对拍、烘焙表 bake/verify（断层线【以上】，允许浮点）"
+
+[[bin]]
+name = "stg-harness"
+path = "src/main.rs"
+
+[dependencies]
+stg-core.workspace = true
+# 注意：harness 在断层线【以上】，允许用 f64 —— 烘焙表生成器（bake-tables）正是在
+# 这里用 f64 算 sin/cos/easing，再把【原始字节】commit 进 stg-core。stg-core 自身
+# 只 include_bytes! 消费这些字节，永不现算（§2.1 烘焙表纪律）。

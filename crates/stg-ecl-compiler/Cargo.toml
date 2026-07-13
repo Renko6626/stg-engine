@@ -1,0 +1,13 @@
+[package]
+name         = "stg-ecl-compiler"
+version      = "0.0.0"
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+publish      = false
+description  = "离线/加载期 ECL 字节码编译器，产出 EclImage（字节码 + 常量）"
+
+[dependencies]
+# 允许依赖 stg-core 以共享字节码/opcode 类型定义（编译器在断层线【以上】运行，
+# 但产出物 EclImage 供 stg-core 的 VM 只读消费）。M1 起按需引入：
+#   stg-core.workspace = true

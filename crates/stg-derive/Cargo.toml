@@ -1,0 +1,17 @@
+[package]
+name         = "stg-derive"
+version      = "0.0.0"
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+publish      = false
+description  = "stg 引擎编译期过程宏（Rust 强制 proc-macro 独立成 crate）"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# M0 起引入：
+#   syn         —— 解析结构体字段
+#   quote       —— 生成 impl
+#   proc-macro2 —— token 流
