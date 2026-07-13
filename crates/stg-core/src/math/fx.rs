@@ -61,7 +61,12 @@ impl core::ops::Neg for Fx {
 
 impl core::ops::Mul for Fx {
     type Output = Fx;
-    /// 定点乘：i64 中间量 + 算术右移（向负无穷截断）。
+    /// 定点乘。`Q16.16 × Q16.16` 的 raw 积天然是 **Q32.32**（i64 中间量）；本函数 `>>16`
+    /// 把它归一化回 Q16.16（算术右移，向负无穷截断）。
+    ///
+    /// **代价**：结果须 ≤ ±32768，否则 `as i32` 溢出（debug panic / release wrap）——故仅在
+    /// 至少一个操作数 ≤ ~1.0 时安全。平方距离 / 模平方 / 点积等两个大坐标相乘的量【不要】用它，
+    /// 改用 [`crate::math::geom::len_sq`] 保留 Q32.32 于 i64（详见 CLAUDE.md 定点乘法规范）。
     #[inline]
     fn mul(self, rhs: Fx) -> Fx {
         let p = (self.0 as i64 * rhs.0 as i64) >> 16;
