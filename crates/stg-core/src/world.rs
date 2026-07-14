@@ -108,11 +108,98 @@ impl WorldBody {
     pub(crate) fn begin(&mut self) {
         self.phase_enter(PH_BEGIN); // 最小切片无输出缓冲可清；仅护栏推进
     }
-    pub(crate) fn decode_input(&mut self) {
-        self.phase_enter(PH_DECODE); // stub：无玩家
+    pub(crate) fn decode_input(&mut self, input: &crate::input::InputFrame) {
+        self.phase_enter(PH_DECODE);
+        for i in 0..crate::MAX_PLAYERS {
+            self.players[i].input = input.actions[i].buttons;
+        }
     }
     pub(crate) fn update_players(&mut self) {
-        self.phase_enter(PH_PLAYERS); // stub
+        self.phase_enter(PH_PLAYERS);
+        for i in 0..crate::MAX_PLAYERS {
+            if self.players[i].life_state == crate::player::LIFE_ABSENT {
+                continue;
+            }
+            self.move_player(i);
+            // 角色模块静态分发点（A8"shottype 类似物"）：现仅 character 0，将来各角色一臂。
+            #[allow(clippy::single_match)]
+            match self.players[i].character_id {
+                0 => self.char0_update_shot(i),
+                _ => {}
+            }
+        }
+    }
+
+    /// 移动（东方手感：方向 + 低速 + 对角归一 + 场界钳制）。
+    fn move_player(&mut self, i: usize) {
+        use crate::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SLOW, BTN_UP};
+        use crate::player::{HIGH_SPEED, INV_SQRT2, LOW_SPEED};
+        let inp = self.players[i].input;
+        let mut dx = 0i32;
+        let mut dy = 0i32;
+        if inp & BTN_LEFT != 0 {
+            dx -= 1;
+        }
+        if inp & BTN_RIGHT != 0 {
+            dx += 1;
+        }
+        if inp & BTN_UP != 0 {
+            dy -= 1; // y 向下为正，UP = 减 y
+        }
+        if inp & BTN_DOWN != 0 {
+            dy += 1;
+        }
+        let sp = if inp & BTN_SLOW != 0 {
+            LOW_SPEED
+        } else {
+            HIGH_SPEED
+        };
+        let axis = if dx != 0 && dy != 0 {
+            sp * INV_SQRT2
+        } else {
+            sp
+        }; // 对角归一
+        let p = &mut self.players[i];
+        if dx > 0 {
+            p.x = p.x + axis;
+        } else if dx < 0 {
+            p.x = p.x - axis;
+        }
+        if dy > 0 {
+            p.y = p.y + axis;
+        } else if dy < 0 {
+            p.y = p.y - axis;
+        }
+        // 场界钳制（自机不出场）
+        p.x = Fx::from_raw(p.x.raw().clamp(
+            Fx::from_int(-FIELD_HALF_W).raw(),
+            Fx::from_int(FIELD_HALF_W).raw(),
+        ));
+        p.y = Fx::from_raw(p.y.raw().clamp(0, Fx::from_int(FIELD_HEIGHT).raw()));
+    }
+
+    /// character-0 火力（"shottype 类似物"）：SHOT 按下且 CD 到 → 发一发直线上飞弹。
+    fn char0_update_shot(&mut self, i: usize) {
+        use crate::player::{SHOT_CD_FRAMES, SHOT_DAMAGE, SHOT_RADIUS, SHOT_SPEED};
+        if self.players[i].shot_cd > 0 {
+            self.players[i].shot_cd -= 1;
+            return;
+        }
+        if self.players[i].input & crate::input::BTN_SHOT != 0 {
+            let (px, py) = (self.players[i].x, self.players[i].y);
+            self.create_player_shot(ShotInit {
+                x: px,
+                y: py,
+                vx: Fx::ZERO,
+                vy: -SHOT_SPEED, // 上飞
+                damage: SHOT_DAMAGE,
+                radius: SHOT_RADIUS,
+                sprite: 0,
+                owner: i as u8,
+                flags: 0,
+            });
+            self.players[i].shot_cd = SHOT_CD_FRAMES;
+        }
     }
     pub(crate) fn run_transforms(&mut self) {
         self.phase_enter(PH_XFORM); // stub：无变换段池
@@ -136,6 +223,17 @@ impl WorldBody {
                 }
             }
         }
+        // 自机弹：pos += vel（无 delay/life）
+        let nw = self.shots.alive.len();
+        for w in 0..nw {
+            let mut bits = self.shots.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                self.shots.x[i] = self.shots.x[i] + self.shots.vx[i];
+                self.shots.y[i] = self.shots.y[i] + self.shots.vy[i];
+            }
+        }
     }
     pub(crate) fn collide(&mut self) {
         self.phase_enter(PH_COLLIDE); // stub：碰撞 D8 后续
@@ -155,6 +253,18 @@ impl WorldBody {
                     || Self::out_of_bounds(self.bullets.x[i], self.bullets.y[i]);
                 if dead {
                     self.bullets.free_index(i);
+                }
+            }
+        }
+        // 自机弹越界回收
+        let nw = self.shots.alive.len();
+        for w in 0..nw {
+            let mut bits = self.shots.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if Self::out_of_bounds(self.shots.x[i], self.shots.y[i]) {
+                    self.shots.free_index(i);
                 }
             }
         }

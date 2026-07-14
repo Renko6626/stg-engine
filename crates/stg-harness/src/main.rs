@@ -37,6 +37,7 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// 越界/寿命尽经 cleanup 回收（压掩码分配器 churn）。600 帧逐帧 World checksum 三平台逐点对拍。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::BulletInit;
+    use stg_core::input::InputFrame;
     use stg_core::math::{Angle, Fx, polar_to_vec};
     use stg_core::step::{World, step_with_director};
 
@@ -46,7 +47,8 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
     let mut lines = String::new();
 
     for frame in 0..FRAMES {
-        step_with_director(&mut world, |b| {
+        let input = InputFrame::empty(frame); // T4 换成脚本输入（自机走位+射击）
+        step_with_director(&mut world, &input, |b| {
             let base = (frame.wrapping_mul(797) & 0xFFFF) as u16; // 基角随帧旋转
             let n: u16 = 12;
             let astep = (65536u32 / n as u32) as u16; // 每发角步（避 65536 溢 u16）

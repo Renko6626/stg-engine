@@ -59,15 +59,19 @@ impl World {
 }
 
 /// 空导演 = 纯世界模拟（P2：空租户零次循环）。
-pub fn step(world: &mut World) {
-    step_with_director(world, |_| {});
+pub fn step(world: &mut World, input: &crate::input::InputFrame) {
+    step_with_director(world, input, |_| {});
 }
 
 /// §3.5 宪法顺序（导演槽在 step-3 跑一次）。相位由 world 出，顺序由此焊死，PhaseGuard 押运。
-pub fn step_with_director<F: FnMut(&mut WorldBody)>(world: &mut World, mut director: F) {
+pub fn step_with_director<F: FnMut(&mut WorldBody)>(
+    world: &mut World,
+    input: &crate::input::InputFrame,
+    mut director: F,
+) {
     let b = &mut world.body;
     b.begin(); // 0
-    b.decode_input(); // 1
+    b.decode_input(input); // 1
     b.phase_enter(PH_DIRECTOR); // 2：导演槽（护栏在组装层押）
     director(b);
     b.update_players(); // 3
@@ -84,6 +88,7 @@ pub fn step_with_director<F: FnMut(&mut WorldBody)>(world: &mut World, mut direc
 mod tests {
     use super::*;
     use crate::bullets::{BulletHandle, BulletInit, BulletPool};
+    use crate::input::InputFrame;
     use crate::math::{Angle, Fx};
     use crate::world::{POOL_BULLET, STATUS_POOL_FULL};
 
@@ -146,10 +151,60 @@ mod tests {
     }
 
     #[test]
+    fn player_moves_right_with_input() {
+        use crate::input::BTN_RIGHT;
+        let mut w = World::new(1);
+        let x0 = w.body.players[0].x.raw();
+        let mut f = InputFrame::empty(0);
+        f.actions[0].buttons = BTN_RIGHT;
+        step(&mut w, &f);
+        assert!(w.body.players[0].x.raw() > x0); // 右移
+    }
+
+    #[test]
+    fn player_shot_fires_on_button() {
+        use crate::input::BTN_SHOT;
+        let mut w = World::new(1);
+        let mut f = InputFrame::empty(0);
+        f.actions[0].buttons = BTN_SHOT;
+        step(&mut w, &f);
+        assert_eq!(w.body.shots.iter_alive().count(), 1); // shot_cd 从 0 → 发 1 发
+    }
+
+    #[test]
+    fn player_clamped_to_left_edge() {
+        use crate::input::BTN_LEFT;
+        let mut w = World::new(1);
+        let mut f = InputFrame::empty(0);
+        f.actions[0].buttons = BTN_LEFT;
+        for _ in 0..200 {
+            step(&mut w, &f); // 一直左移
+        }
+        assert_eq!(w.body.players[0].x, Fx::from_int(-192)); // 钳到左边界
+    }
+
+    #[test]
+    fn player_deterministic_with_scripted_input() {
+        use crate::input::{BTN_RIGHT, BTN_SHOT};
+        let run = || {
+            let mut w = World::new(9);
+            let mut cks = Vec::new();
+            for frame in 0..60u32 {
+                let mut f = InputFrame::empty(frame);
+                f.actions[0].buttons = BTN_RIGHT | BTN_SHOT;
+                step(&mut w, &f);
+                cks.push(w.checksum());
+            }
+            cks
+        };
+        assert_eq!(run(), run()); // 玩家 + 自机弹演化确定
+    }
+
+    #[test]
     fn integrate_moves_and_advances_frame() {
         let mut w = World::new(1);
         let h = w.body.create_bullet(straight(0, 0, 1, 2, 0xFFFF));
-        step(&mut w);
+        step(&mut w, &InputFrame::empty(0));
         let i = w.body.bullets.get(h).unwrap();
         assert_eq!(w.body.bullets.x[i], Fx::from_int(1));
         assert_eq!(w.body.bullets.y[i], Fx::from_int(2));
@@ -161,7 +216,7 @@ mod tests {
         let mut w = World::new(1);
         let h_far = w.body.create_bullet(straight(1000, 0, 0, 0, 0xFFFF)); // 越界
         let h_life = w.body.create_bullet(straight(0, 0, 0, 0, 1)); // 寿命 1
-        step(&mut w); // life:1→0(integrate)，cleanup 释放两者
+        step(&mut w, &InputFrame::empty(0)); // life:1→0(integrate)，cleanup 释放两者
         assert_eq!(w.body.bullets.get(h_far), None);
         assert_eq!(w.body.bullets.get(h_life), None);
     }
@@ -172,7 +227,7 @@ mod tests {
             let mut w = World::new(7);
             let mut cks = Vec::new();
             for _ in 0..50u32 {
-                step_with_director(&mut w, |b| {
+                step_with_director(&mut w, &InputFrame::empty(0), |b| {
                     let vx = b.rng.rand_range(5) as i32 - 2;
                     b.create_bullet(straight(0, 0, vx, 3, 100));
                 });
@@ -187,7 +242,7 @@ mod tests {
     fn snapshot_restore_roundtrip() {
         let mut w = World::new(3);
         for _ in 0..10 {
-            step_with_director(&mut w, |b| {
+            step_with_director(&mut w, &InputFrame::empty(0), |b| {
                 b.create_bullet(straight(0, 0, 1, 1, 200));
             });
         }
@@ -195,7 +250,7 @@ mod tests {
         let mut snap = World::new(3);
         w.copy_into(&mut snap);
         assert_eq!(snap.checksum(), snap_ck);
-        step(&mut w);
+        step(&mut w, &InputFrame::empty(0));
         assert_ne!(w.checksum(), snap_ck);
         snap.copy_into(&mut w); // 恢复
         assert_eq!(w.checksum(), snap_ck);
