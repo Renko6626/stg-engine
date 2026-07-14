@@ -97,6 +97,7 @@ design_doc.md  stg-world-design.md   权威设计（勿轻改，改动过评审�
 docs/superpowers/{specs,plans}/  brainstorm 产出的设计与实施计划
 docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
 docs/checksum-mechanism.md       校验和机制 + "新字段默认入校验" 保证
+docs/pool-memory-layout.md       池 SoA 布局与缓存精算（热路径驻 L2）
 .github/workflows/ci.yml         三平台矩阵 + 校验和对拍 + fmt/clippy + 依赖防火墙
 crates/
   stg-core/         确定性内核（现仅 checksum；math/pool/world/step 随 M0）
