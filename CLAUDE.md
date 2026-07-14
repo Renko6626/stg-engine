@@ -121,7 +121,7 @@ cargo run -p stg-harness -- verify-tables        # 断言烘焙表字节 == comm
 ## Milestone 地图（design_doc.md §11 / §1.3）
 
 - **M0** `stg-core` 数学核 + 池（`define_pool!`）+ step 骨架 + 快照/校验和 + `stg-derive` Checksum；
-  `stg-harness` 金向量逐帧对拍。**← 数学核/Checksum/池/World+step+纯弹幕金向量 已落；下一步 M1 ECL**
+  `stg-harness` 金向量逐帧对拍。**← M0 骨架 + M0-6 世界层（输入/自机移动/发弹/ShotPool）已落；世界层续（碰撞/结算/敌人）或 M1 ECL**
 - **M1** `stg-core` ECL VM + syscall 表；`stg-ecl-compiler` Rust DSL 拼字节码，跑通一张非平凡符卡。
 - **M2** `stg-godot`（gdext）WorldBridge + MultiMesh + 请求分发器 —— **phase 后续，暂不建 crate**。
 - **M3** 环形快照 + 本地回滚 harness（延迟/输入扰动/校验和风暴）。

@@ -37,7 +37,7 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// 越界/寿命尽经 cleanup 回收（压掩码分配器 churn）。600 帧逐帧 World checksum 三平台逐点对拍。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::BulletInit;
-    use stg_core::input::InputFrame;
+    use stg_core::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SHOT, BTN_SLOW, BTN_UP, InputFrame};
     use stg_core::math::{Angle, Fx, polar_to_vec};
     use stg_core::step::{World, step_with_director};
 
@@ -47,7 +47,20 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
     let mut lines = String::new();
 
     for frame in 0..FRAMES {
-        let input = InputFrame::empty(frame); // T4 换成脚本输入（自机走位+射击）
+        // 脚本化输入：自机走方框（每 30 帧换向）+ 持续射击 + 每 120 帧一段低速。
+        let mut input = InputFrame::empty(frame);
+        let dir = (frame / 30) % 4;
+        let mut btn = BTN_SHOT;
+        btn |= match dir {
+            0 => BTN_RIGHT,
+            1 => BTN_DOWN,
+            2 => BTN_LEFT,
+            _ => BTN_UP,
+        };
+        if (frame / 120) % 2 == 0 {
+            btn |= BTN_SLOW;
+        }
+        input.actions[0].buttons = btn;
         step_with_director(&mut world, &input, |b| {
             let base = (frame.wrapping_mul(797) & 0xFFFF) as u16; // 基角随帧旋转
             let n: u16 = 12;
