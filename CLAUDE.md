@@ -82,6 +82,7 @@ headless 高速模拟。核心性质是**确定性**——同一份 `(初始状�
 - **校验和**：**vendored FNV-1a 64**（`stg_core::checksum`，算法字节冻结，绝不走外部依赖）。
   **字段级、哈希全槽（不用 alive 掩码）、小端字节序**；`#[derive(Checksum)]`（stg-derive）从字段
   自动生成防漏。节奏：CI/金向量**逐帧**，联机随包每 **K=20** 帧采样。
+  机制详解（新字段默认入校验的保证 / 编译期 vs 运行时 / 性能）见 [`docs/checksum-mechanism.md`](docs/checksum-mechanism.md)。
 - **复用槽写满硬规则**：分配/复用池槽必须写满所有字段（`Init` 结构体升级为编译期事实），
   debug 断言复用槽无遗留值——支撑"哈希全槽不掩码"。
 
@@ -95,6 +96,7 @@ CLAUDE.md  README.md
 design_doc.md  stg-world-design.md   权威设计（勿轻改，改动过评审）
 docs/superpowers/{specs,plans}/  brainstorm 产出的设计与实施计划
 docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
+docs/checksum-mechanism.md       校验和机制 + "新字段默认入校验" 保证
 .github/workflows/ci.yml         三平台矩阵 + 校验和对拍 + fmt/clippy + 依赖防火墙
 crates/
   stg-core/         确定性内核（现仅 checksum；math/pool/world/step 随 M0）
