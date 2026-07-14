@@ -2,9 +2,28 @@
 //! M0-3 Task 3 在此填 `define_pool! { Bullet, cap = 8192, fields { ... } }`。
 //! 运动 / 双表示【逻辑】归 M0-4，本模块只落存储 / 分配 / 校验。
 
+use crate::define_pool;
+use crate::math::{Angle, Fx};
+
+// 弹池（D3 定稿，19 字段）。哑弹 / 变换弹 / 任务弹**共池**；变换【段】另存 XformSegPool（M0-4 手写）。
+// `transform_head == 0xFFFF` 即哑弹（无段、不付段内存，只付这几字节游标）。运动 / 双表示逻辑归 M0-4。
+define_pool! {
+    Bullet, cap = 8192,
+    fields {
+        x: Fx, y: Fx, vx: Fx, vy: Fx,
+        speed: Fx, angle: Angle,
+        ang_vel: i16, accel: Fx,
+        ax: Fx, ay: Fx,
+        sprite: u16, radius: Fx,
+        delay: u8, life: u16, flags: u8, grazed_by: u8,
+        transform_head: u16, xform_wait: u16, xform_next: u8
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::define_pool;
+    use super::*;
+    use crate::checksum::Checksum;
 
     // 小测试池：cap=130 故意非 64 倍数，验末字掩码（NW=3，末字有效位=2）。
     define_pool! { Tp, cap = 130, fields { a: u32, b: u16 } }
@@ -79,5 +98,58 @@ mod tests {
         let h2 = p.alloc(TpInit { a: 333, b: 444 }).unwrap();
         let i = p.get(h2).unwrap();
         assert_eq!((p.a[i], p.b[i]), (333, 444)); // 无陈旧遗留
+    }
+
+    // 一个哑弹的 Init（transform_head=0xFFFF）。
+    fn dumb_bullet(x: i32, y: i32) -> BulletInit {
+        BulletInit {
+            x: Fx::from_int(x),
+            y: Fx::from_int(y),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            ang_vel: 0,
+            accel: Fx::ZERO,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            sprite: 0,
+            radius: Fx::from_int(2),
+            delay: 0,
+            life: 0xFFFF,
+            flags: 0,
+            grazed_by: 0,
+            transform_head: 0xFFFF,
+            xform_wait: 0,
+            xform_next: 0,
+        }
+    }
+
+    #[test]
+    fn bullet_pool_checksum_reacts_to_state() {
+        let mut p = BulletPool::new();
+        let empty = p.checksum();
+        let h = p.alloc(dumb_bullet(10, 20)).unwrap();
+        assert_ne!(p.checksum(), empty); // 分配改变指纹
+        let before = p.checksum();
+        let i = p.get(h).unwrap();
+        p.x[i] = Fx::from_int(11);
+        assert_ne!(p.checksum(), before); // 改一个字段 → 指纹变
+    }
+
+    #[test]
+    fn bullet_pool_new_is_zero_and_deterministic() {
+        // 两个新池指纹相同（全零确定）——跨机金向量的基石。
+        let a = BulletPool::new();
+        let b = BulletPool::new();
+        assert_eq!(a.checksum(), b.checksum());
+    }
+
+    #[test]
+    fn bullet_dumb_is_transform_head_sentinel() {
+        let mut p = BulletPool::new();
+        let h = p.alloc(dumb_bullet(0, 0)).unwrap();
+        let i = p.get(h).unwrap();
+        assert_eq!(p.transform_head[i], 0xFFFF); // 哑弹哨兵
     }
 }
