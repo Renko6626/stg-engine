@@ -26,6 +26,7 @@ pub use stg_derive::define_pool;
 pub mod bullets;
 pub mod checksum;
 pub mod math;
+pub mod rng;
 
 // ── Phase 1 M0+ 起逐步落地（占位，勿在 scaffold 阶段实现）──────────────────
 //
