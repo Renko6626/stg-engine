@@ -11,6 +11,6 @@ description  = "stg 引擎编译期过程宏（Rust 强制 proc-macro 独立成 
 proc-macro = true
 
 [dependencies]
-syn = "2"
+syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"

@@ -21,6 +21,9 @@
 // 让 #[derive(Checksum)] 生成的 `::stg_core::…` 绝对路径在本 crate 内解析（serde 同款）。
 extern crate self as stg_core;
 
+pub use stg_derive::define_pool;
+
+pub mod bullets;
 pub mod checksum;
 pub mod math;
 

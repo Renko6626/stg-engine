@@ -6,8 +6,11 @@
 //! `extern crate self as stg_core;` 解析（serde 同款），下游 crate 走真实 extern crate。
 
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{Data, DeriveInput, Index, LitStr, parse_macro_input};
+use quote::{format_ident, quote};
+use syn::parse::{Parse, ParseStream};
+use syn::{
+    Data, DeriveInput, Ident, Index, LitInt, LitStr, Token, Type, braced, parse_macro_input,
+};
 
 #[proc_macro_derive(Checksum, attributes(checksum))]
 pub fn derive_checksum(input: TokenStream) -> TokenStream {
@@ -86,6 +89,196 @@ pub fn derive_checksum(input: TokenStream) -> TokenStream {
                 __v
             }
         }
+    }
+    .into()
+}
+
+// ───────────────────────── define_pool! （D2 池框架）─────────────────────────
+
+struct FieldDef {
+    name: Ident,
+    ty: Type,
+}
+impl Parse for FieldDef {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let name = input.parse()?;
+        input.parse::<Token![:]>()?;
+        let ty = input.parse()?;
+        Ok(FieldDef { name, ty })
+    }
+}
+
+struct PoolDef {
+    name: Ident,
+    cap: LitInt,
+    fields: Vec<FieldDef>,
+}
+impl Parse for PoolDef {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let cap_kw: Ident = input.parse()?;
+        if cap_kw != "cap" {
+            return Err(syn::Error::new(cap_kw.span(), "expected `cap`"));
+        }
+        input.parse::<Token![=]>()?;
+        let cap: LitInt = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let fields_kw: Ident = input.parse()?;
+        if fields_kw != "fields" {
+            return Err(syn::Error::new(fields_kw.span(), "expected `fields`"));
+        }
+        let content;
+        braced!(content in input);
+        let punct = content.parse_terminated(FieldDef::parse, Token![,])?;
+        Ok(PoolDef {
+            name,
+            cap,
+            fields: punct.into_iter().collect(),
+        })
+    }
+}
+
+/// 生成一个确定性实体池：`define_pool! { Bullet, cap = 8192, fields { x: Fx, ... } }`
+/// → `BulletPool` / `BulletHandle` / `BulletInit`。存活掩码即分配器（最低空位优先，无独立
+/// free-list）；每次 alloc `gen+1`；exhaustive Init；`#[derive(Checksum)]` 哈希全槽。见 M0-3 计划 / D2。
+#[proc_macro]
+pub fn define_pool(input: TokenStream) -> TokenStream {
+    let def = parse_macro_input!(input as PoolDef);
+    let cap_val: usize = match def.cap.base10_parse() {
+        Ok(v) => v,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let nw = cap_val.div_ceil(64);
+    let cap = &def.cap;
+
+    let pool = format_ident!("{}Pool", def.name);
+    let handle = format_ident!("{}Handle", def.name);
+    let init = format_ident!("{}Init", def.name);
+    let fnames: Vec<&Ident> = def.fields.iter().map(|f| &f.name).collect();
+    let ftypes: Vec<&Type> = def.fields.iter().map(|f| &f.ty).collect();
+
+    quote! {
+        #[repr(C)]
+        #[derive(Clone, ::stg_core::checksum::Checksum)]
+        pub struct #pool {
+            #( pub(crate) #fnames: [#ftypes; #cap], )*
+            pub(crate) generation: [u16; #cap],
+            pub(crate) alive: [u64; #nw],
+        }
+
+        /// 打包句柄（`index == 0xFFFF` 为 NULL）。
+        #[repr(C)]
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, ::stg_core::checksum::Checksum)]
+        pub struct #handle {
+            pub index: u16,
+            pub generation: u16,
+        }
+        impl #handle {
+            pub const NULL: #handle = #handle { index: 0xFFFF, generation: 0 };
+        }
+
+        /// 全字段初始化结构体（exhaustive；漏字段编译不过）。
+        #[derive(Clone, Copy)]
+        pub struct #init {
+            #( pub #fnames: #ftypes, )*
+        }
+
+        impl #pool {
+            pub const CAP: usize = #cap;
+            const NW: usize = #nw;
+
+            /// 全零初始化。
+            pub fn new() -> Self {
+                Self {
+                    #( #fnames: ::core::array::from_fn(|_| ::core::default::Default::default()), )*
+                    generation: [0u16; #cap],
+                    alive: [0u64; #nw],
+                }
+            }
+
+            /// 最低空位（末字按 cap%64 掩码，杜绝幽灵位）。
+            fn first_free(&self) -> ::core::option::Option<usize> {
+                for w in 0..Self::NW {
+                    let valid: u64 = if w == Self::NW - 1 && Self::CAP % 64 != 0 {
+                        (1u64 << (Self::CAP % 64)) - 1
+                    } else {
+                        !0u64
+                    };
+                    let free = !self.alive[w] & valid;
+                    if free != 0 {
+                        return ::core::option::Option::Some(w * 64 + free.trailing_zeros() as usize);
+                    }
+                }
+                ::core::option::Option::None
+            }
+
+            /// 分配：写满全字段 + gen+1；池满返回 None。
+            pub fn alloc(&mut self, init: #init) -> ::core::option::Option<#handle> {
+                let idx = self.first_free()?;
+                self.alive[idx / 64] |= 1u64 << (idx % 64);
+                self.generation[idx] = self.generation[idx].wrapping_add(1);
+                #( self.#fnames[idx] = init.#fnames; )*
+                ::core::option::Option::Some(#handle {
+                    index: idx as u16,
+                    generation: self.generation[idx],
+                })
+            }
+
+            /// 句柄 → 活槽索引（悬垂 / 越界 / 零句柄 → None）。
+            pub fn get(&self, h: #handle) -> ::core::option::Option<usize> {
+                let idx = h.index as usize;
+                if idx < Self::CAP
+                    && (self.alive[idx / 64] >> (idx % 64)) & 1 != 0
+                    && self.generation[idx] == h.generation
+                {
+                    ::core::option::Option::Some(idx)
+                } else {
+                    ::core::option::Option::None
+                }
+            }
+
+            /// 释放（清 alive 位）；句柄无效则 no-op 返回 false。
+            pub fn free(&mut self, h: #handle) -> bool {
+                match self.get(h) {
+                    ::core::option::Option::Some(idx) => {
+                        self.alive[idx / 64] &= !(1u64 << (idx % 64));
+                        true
+                    }
+                    ::core::option::Option::None => false,
+                }
+            }
+
+            pub fn is_alive(&self, idx: usize) -> bool {
+                idx < Self::CAP && (self.alive[idx / 64] >> (idx % 64)) & 1 != 0
+            }
+
+            /// 升序 alive 索引迭代（只读；相位内可变遍历用拷贝 alive 字 + 索引访问，见 M0-4）。
+            pub fn iter_alive(&self) -> impl ::core::iter::Iterator<Item = usize> + '_ {
+                (0..Self::NW).flat_map(move |w| {
+                    let mut bits = self.alive[w];
+                    ::core::iter::from_fn(move || {
+                        if bits == 0 {
+                            return ::core::option::Option::None;
+                        }
+                        let b = bits.trailing_zeros() as usize;
+                        bits &= bits - 1;
+                        ::core::option::Option::Some(w * 64 + b)
+                    })
+                })
+            }
+        }
+
+        impl ::core::default::Default for #pool {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        const _: () = ::core::assert!(
+            #cap <= 0xFFFE,
+            "pool cap 必须 ≤ 0xFFFE（index u16 + 0xFFFF 哨兵）"
+        );
     }
     .into()
 }

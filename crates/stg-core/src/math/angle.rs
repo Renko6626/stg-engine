@@ -3,7 +3,9 @@
 
 /// BAM 角度。`repr(transparent)` ⇒ 与裸 `u16` 同布局。
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, crate::checksum::Checksum)]
+#[derive(
+    Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, crate::checksum::Checksum,
+)]
 pub struct Angle(pub u16);
 
 impl Angle {
