@@ -31,6 +31,7 @@ impl World {
             Box::from_raw(ptr)
         };
         w.body.rng = Pcg32::new(seed, RNG_SEQ);
+        w.body.players[0] = crate::player::PlayerState::spawn(0); // 自机 1 出场；自机 2 保持全零=不在场
         w
     }
 
@@ -41,6 +42,8 @@ impl World {
         d.frame = s.frame;
         d.rng = s.rng;
         s.bullets.copy_into(&mut d.bullets);
+        d.players = s.players; // [PlayerState; N] 是 Copy
+        s.shots.copy_into(&mut d.shots);
         d.diag = s.diag;
         d.last_status = s.last_status;
         #[cfg(debug_assertions)]
@@ -130,6 +133,16 @@ mod tests {
     fn new_is_deterministic_and_seed_matters() {
         assert_eq!(World::new(42).checksum(), World::new(42).checksum());
         assert_ne!(World::new(1).checksum(), World::new(2).checksum()); // 种子入 rng 入校验和
+    }
+
+    #[test]
+    fn new_spawns_player0_alive() {
+        use crate::player::{LIFE_ABSENT, LIFE_ALIVE};
+        let w = World::new(1);
+        assert_eq!(w.body.players[0].life_state, LIFE_ALIVE);
+        assert_eq!(w.body.players[0].lives, 3);
+        assert_eq!(w.body.players[0].y, Fx::from_int(384));
+        assert_eq!(w.body.players[1].life_state, LIFE_ABSENT); // 第 2 人不在场
     }
 
     #[test]

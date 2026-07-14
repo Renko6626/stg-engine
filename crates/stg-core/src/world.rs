@@ -4,10 +4,13 @@
 
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
 use crate::math::Fx;
+use crate::player::PlayerState;
 use crate::rng::Pcg32;
+use crate::shots::{ShotHandle, ShotInit, ShotPool};
 
 // ── 常量：池 id / 错误码 / 场界（D7 中轴原点，384×448 + 越界边距）──────────
 pub const POOL_BULLET: usize = 0;
+pub const POOL_SHOT: usize = 1;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
 
@@ -47,6 +50,8 @@ pub struct WorldBody {
     pub frame: u32,
     pub rng: Pcg32,
     pub bullets: BulletPool,
+    pub players: [PlayerState; crate::MAX_PLAYERS],
+    pub shots: ShotPool,
     pub diag: DiagCounters,
     pub last_status: u16,
     #[cfg(debug_assertions)]
@@ -75,6 +80,18 @@ impl WorldBody {
                 self.diag.pool_full[POOL_BULLET] = self.diag.pool_full[POOL_BULLET].wrapping_add(1);
                 self.last_status = STATUS_POOL_FULL;
                 BulletHandle::NULL
+            }
+        }
+    }
+
+    /// 创建一发自机弹（P4-a：池满 → NULL + 诊断计数 + last_status）。
+    pub fn create_player_shot(&mut self, init: ShotInit) -> ShotHandle {
+        match self.shots.alloc(init) {
+            Some(h) => h,
+            None => {
+                self.diag.pool_full[POOL_SHOT] = self.diag.pool_full[POOL_SHOT].wrapping_add(1);
+                self.last_status = STATUS_POOL_FULL;
+                ShotHandle::NULL
             }
         }
     }
