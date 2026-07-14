@@ -172,6 +172,8 @@ WorldTables 清单（v1）：
 | 10 | `cleanup` | world | 越界（含边距）、寿命尽、已清除弹、死体回收入 free-list | "boss 阶段推进检查"移除（归 ECL） |
 | 11 | `advance` | world | `frame += 1`。通道 A 视图与通道 B 请求对表现层可读 | 不变 |
 
+> **M0-4 最小切片落地**：实现 begin / 导演槽 / integrate(`pos+=vel`+delay+life) / cleanup(越界+寿命) / advance，其余相位 **no-op stub**（均经 PhaseGuard 保序）；3 输出缓冲（`hits`/`frame_events`/`reqs`）随各自生产者（collide/settle/emit_req）再加。导演槽 = Rust 闭包（`step_with_director`）；快照 `copy_into` 安全逐字段（零 unsafe）；`World::new` 堆零构造（唯一 unsafe，POD 全零合法）。双表示 POLAR/CART + 极坐标 setter 待 shooter/ECL。金向量（M0-5）= 导演铺环 + rng 抖动 + churn，600 帧逐帧 World checksum 三平台对拍。
+
 ## A5 事件系统：两条缓冲、两种消费者
 
 | | `hits`（碰撞命中缓冲） | `frame_events`（世界大事记） |
