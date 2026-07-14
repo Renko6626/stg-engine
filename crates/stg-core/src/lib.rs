@@ -27,6 +27,10 @@ pub mod bullets;
 pub mod checksum;
 pub mod math;
 pub mod rng;
+pub mod step;
+pub mod world;
+
+pub use step::{World, step, step_with_director};
 
 // ── Phase 1 M0+ 起逐步落地（占位，勿在 scaffold 阶段实现）──────────────────
 //
