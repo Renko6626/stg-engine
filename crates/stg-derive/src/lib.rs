@@ -267,6 +267,18 @@ pub fn define_pool(input: TokenStream) -> TokenStream {
                     })
                 })
             }
+
+            /// 安全逐字段快照拷贝（每条 SoA 数组 copy_from_slice = memcpy，原地无临时量）。
+            pub fn copy_into(&self, dst: &mut Self) {
+                #( dst.#fnames.copy_from_slice(&self.#fnames); )*
+                dst.generation.copy_from_slice(&self.generation);
+                dst.alive.copy_from_slice(&self.alive);
+            }
+
+            /// 按索引释放（清 alive 位，无句柄校验）——供相位 cleanup 用。
+            pub(crate) fn free_index(&mut self, idx: usize) {
+                self.alive[idx / 64] &= !(1u64 << (idx % 64));
+            }
         }
 
         impl ::core::default::Default for #pool {

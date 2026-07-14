@@ -152,4 +152,19 @@ mod tests {
         let i = p.get(h).unwrap();
         assert_eq!(p.transform_head[i], 0xFFFF); // 哑弹哨兵
     }
+
+    #[test]
+    fn copy_into_roundtrip() {
+        let mut a = BulletPool::new();
+        let h = a.alloc(dumb_bullet(5, 6)).unwrap();
+        let snap = a.checksum();
+        let mut b = BulletPool::new();
+        a.copy_into(&mut b);
+        assert_eq!(b.checksum(), snap); // 拷贝后指纹相同
+        // 改 a 不影响 b
+        let i = a.get(h).unwrap();
+        a.x[i] = Fx::from_int(999);
+        assert_ne!(a.checksum(), snap);
+        assert_eq!(b.checksum(), snap);
+    }
 }
