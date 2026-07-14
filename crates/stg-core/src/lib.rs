@@ -23,10 +23,16 @@ extern crate self as stg_core;
 
 pub use stg_derive::define_pool;
 
+/// 最大自机数（共场 co-op 超集，§7.5）。
+pub const MAX_PLAYERS: usize = 2;
+
 pub mod bullets;
 pub mod checksum;
+pub mod input;
 pub mod math;
+pub mod player;
 pub mod rng;
+pub mod shots;
 pub mod step;
 pub mod world;
 
