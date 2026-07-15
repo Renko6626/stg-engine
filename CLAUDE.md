@@ -63,6 +63,8 @@ headless 高速模拟。核心性质是**确定性**——同一份 `(初始状�
 - **P6** 全量校验：住在 World 里的字段就参与校验和，无例外（含 `facing` 等"纯表现"字段）。
   唯一例外是三条纯输出缓冲（`reqs`/`hits`/`frame_events`）+ debug 的 `phase_guard`，每个 skip
   必须在 derive 属性里给理由字符串。
+  > **名字漂移警告**：设计文档叫 `frame_events`，**代码里的字段是 `events`**（`hits` 一致；
+  > `reqs` 尚未实现，属 M2）。拿设计去 grep `frame_events` 在代码里搜不到。见 `docs/follow-ups.md`。
 
 ## 确定性契约要点（细节见 D1/D11/§2.1）
 
@@ -99,7 +101,8 @@ rust-toolchain.toml              钉死 1.92.0 + rustfmt/clippy（可复现）
 Cargo.lock                       【提交】—— 确定性须锁依赖版本
 CLAUDE.md  README.md
 design_doc.md  stg-world-design.md   权威设计（勿轻改，改动过评审）
-docs/superpowers/{specs,plans}/  brainstorm 产出的设计与实施计划
+docs/follow-ups.md               【接手先读】技术债与待办（复审判定可延后的，逐条核实过）
+docs/superpowers/{specs,plans}/  brainstorm 产出的设计与实施计划（历史记录）
 docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
 docs/checksum-mechanism.md       校验和机制 + "新字段默认入校验" 保证
 docs/pool-memory-layout.md       池 SoA 布局与缓存精算（热路径驻 L2）
@@ -135,8 +138,11 @@ cargo run -p stg-harness -- verify-tables        # 断言烘焙表字节 == comm
 ## Milestone 地图（design_doc.md §11 / §1.3）
 
 - **M0** `stg-core` 数学核 + 池（`define_pool!`）+ step 骨架 + 快照/校验和 + `stg-derive` Checksum；
-  `stg-harness` 金向量逐帧对拍。**← M0 骨架 + M0-6（输入/自机/发弹/ShotPool）+ M0-7（EnemyPool/碰撞 D8 四行/结算 D9 三趟/生死状态机）
-  + M0-8（FieldPool 通用消弹区/行6-7/趟一消弹）已落；世界层续（bomb/道具/敌人 AI + move_to）或 M1 ECL**
+  `stg-harness` 金向量逐帧对拍。**← 已落**：M0 骨架 · M0-6（输入/自机/发弹/ShotPool）·
+  M0-7（EnemyPool/碰撞 D8 四行/结算 D9 三趟/生死状态机）· M0-8（FieldPool 通用消弹区/行6-7/趟一消弹）·
+  M0-9（world.rs 1593→546 模块拆分，**结构镜像相位骨架**）。
+  **下一步候选**：bomb（`FieldPool` 的首个真租户，闭合自机能力）· 敌人 AI + `move_to` 插值器 ·
+  道具池 · 变换系统(D4) · 或直接上 M1 ECL（世界层 API 已够它调）。**开工前先读 `docs/follow-ups.md`。**
 - **M1** `stg-core` ECL VM + syscall 表；`stg-ecl-compiler` Rust DSL 拼字节码，跑通一张非平凡符卡。
 - **M2** `stg-godot`（gdext）WorldBridge + MultiMesh + 请求分发器 —— **phase 后续，暂不建 crate**。
 - **M3** 环形快照 + 本地回滚 harness（延迟/输入扰动/校验和风暴）。
