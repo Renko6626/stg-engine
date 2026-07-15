@@ -68,3 +68,35 @@ impl WorldBody {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::input::InputFrame;
+    use crate::math::Fx;
+    use crate::world::test_support::bullet_at;
+
+    /// `delay` 门：delay 期弹只倒数、不移动；delay 尽后才开始积分。
+    ///
+    /// 走真实 `step`（而非直接调 `collide`）—— 这是唯一能触达 integrate 里那个 delay 门的路径：
+    /// M0-9 复审实测，既有的 delay 测试直接调 `collide()`，根本到不了相位 5。
+    #[test]
+    fn integrate_delay_gate_holds_bullet_then_releases() {
+        let mut w = crate::step::World::new(1);
+        bullet_at(&mut w, 0, 100);
+        w.body.bullets.vx[0] = Fx::from_int(3);
+        w.body.bullets.delay[0] = 2;
+
+        // delay 期：不动，只倒数
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.bullets.x[0], Fx::ZERO, "delay 期弹不该移动");
+        assert_eq!(w.body.bullets.delay[0], 1);
+
+        crate::step::step(&mut w, &InputFrame::empty(1));
+        assert_eq!(w.body.bullets.x[0], Fx::ZERO, "delay 期弹不该移动");
+        assert_eq!(w.body.bullets.delay[0], 0);
+
+        // delay 尽 → 开始积分
+        crate::step::step(&mut w, &InputFrame::empty(2));
+        assert_eq!(w.body.bullets.x[0], Fx::from_int(3), "delay 尽后应开始移动");
+    }
+}

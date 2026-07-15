@@ -77,7 +77,34 @@ impl WorldBody {
 #[cfg(test)]
 mod tests {
     use super::WorldBody;
+    use crate::input::InputFrame;
     use crate::math::Fx;
+    use crate::world::test_support::spawn_enemy;
+
+    /// 敌人越界回收 —— 金向量压不到这条路径（它的敌人静止在 y=80，全靠 `ENEMY_DYING` 死）。
+    ///
+    /// 敌人放 x=150（远离 x=0 的自机），故行 3 体碰不会介入；无输入 → 无自机弹 → 不会被打死。
+    /// 于是唯一能让它消失的就是本相位的越界判据。
+    #[test]
+    fn cleanup_frees_out_of_bounds_enemy() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 150, 100, 5);
+        let i = w.body.enemies.get(h).unwrap();
+        w.body.enemies.vy[i] = Fx::from_int(120); // 下行：y 100 →220→340→460→580
+
+        // 回收线 = FIELD_HEIGHT(448) + OOB_MARGIN(64) = 512。第 3 帧 y=460 仍在场内。
+        for f in 0..3 {
+            crate::step::step(&mut w, &InputFrame::empty(f));
+        }
+        assert!(
+            w.body.enemies.get(h).is_some(),
+            "y=460 未越界，不该被回收（若此处已亡说明是别的机制杀的，测试就失去意义）"
+        );
+
+        // 第 4 帧 y=580 > 512 → 越界回收
+        crate::step::step(&mut w, &InputFrame::empty(3));
+        assert_eq!(w.body.enemies.get(h), None, "越界敌人应被 cleanup 回收");
+    }
 
     #[test]
     fn oob_detects_margin() {

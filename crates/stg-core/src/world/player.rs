@@ -187,4 +187,37 @@ mod tests {
         }
         assert_eq!(w.body.players[0].life_state, LIFE_ALIVE);
     }
+
+    /// 命尽 → GAMEOVER（而非重生），且 GAMEOVER 后自机冻结（不移动、不发弹）。
+    ///
+    /// 金向量压不到这条路径 —— M0-9 复审实测：它的自机只死 2 次、`lives` 最低停在 1，
+    /// `commit_death` 的 GAMEOVER 分支一次都没跑过。上面那个测试走的是 3→2 的 RESPAWNING 臂。
+    /// 这里把 `lives` 设成 1，逼出 `lives==0` 那一支，并连同它的两个守卫一起钉住：
+    /// `match` 的 `LIFE_GAMEOVER => continue` 臂，以及 `commit_death` 之后的 GAMEOVER 复查。
+    #[test]
+    fn last_life_death_enters_gameover_and_freezes_player() {
+        use crate::input::{BTN_RIGHT, BTN_SHOT, InputFrame};
+        use crate::player::{DEATHBOMB_WINDOW, LIFE_DEATHWINDOW, LIFE_GAMEOVER};
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].lives = 1; // 最后一条命
+        w.body.players[0].life_state = LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = DEATHBOMB_WINDOW;
+        let x0 = w.body.players[0].x;
+
+        // 窗口耗尽 → commit_death → lives 0 → GAMEOVER（不是 RESPAWNING）
+        for f in 0..DEATHBOMB_WINDOW as u32 {
+            crate::step::step(&mut w, &InputFrame::empty(f));
+        }
+        assert_eq!(w.body.players[0].life_state, LIFE_GAMEOVER);
+        assert_eq!(w.body.players[0].lives, 0);
+
+        // GAMEOVER 后：给足输入也不该动、不该发弹
+        let mut f = InputFrame::empty(100);
+        f.actions[0].buttons = BTN_RIGHT | BTN_SHOT;
+        for _ in 0..10 {
+            crate::step::step(&mut w, &f);
+        }
+        assert_eq!(w.body.players[0].x, x0, "GAMEOVER 后不该移动");
+        assert_eq!(w.body.shots.iter_alive().count(), 0, "GAMEOVER 后不该发弹");
+    }
 }
