@@ -31,6 +31,10 @@ impl WorldBody {
                         self.bullets.angle[i].add_delta(self.bullets.ang_vel[i]);
                     self.bullets.speed[i] = self.bullets.speed[i] + self.bullets.accel[i];
                     self.refresh_vel_from_polar(i);
+                } else if fl & crate::bullets::BULLET_CART_FX != 0 {
+                    self.bullets.vx[i] = self.bullets.vx[i] + self.bullets.ax[i];
+                    self.bullets.vy[i] = self.bullets.vy[i] + self.bullets.ay[i];
+                    self.backfill_polar(i);
                 }
                 self.bullets.x[i] = self.bullets.x[i] + self.bullets.vx[i];
                 self.bullets.y[i] = self.bullets.y[i] + self.bullets.vy[i];
@@ -84,6 +88,7 @@ impl WorldBody {
 
 #[cfg(test)]
 mod tests {
+    use crate::bullets::BULLET_CART_FX;
     use crate::input::InputFrame;
     use crate::math::Angle;
     use crate::math::Fx;
@@ -174,5 +179,32 @@ mod tests {
             Angle(1024),
             "delay 尽后首帧推进一步"
         );
+    }
+
+    /// 重力弹判别式：上抛过顶点 vy 翻号、angle 每帧跟随 atan2 参考（几何可判对错）。
+    #[test]
+    fn cart_fx_gravity_parabola_flips_vy_and_tracks_angle() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 0, 200);
+        let i = w.body.bullets.get(h).unwrap();
+        w.body.bullets.vx[i] = Fx::from_int(1);
+        w.body.bullets.vy[i] = Fx::from_int(-3); // 上抛（y 向下为正）
+        w.body.set_gravity_at(i, Fx::ZERO, Fx::from_raw(16384)); // ay = 0.25 px/帧²
+        assert_ne!(
+            w.body.bullets.flags[i] & BULLET_CART_FX,
+            0,
+            "应已开 CART_FX"
+        );
+        for f in 0..20u32 {
+            crate::step::step(&mut w, &InputFrame::empty(f));
+        }
+        // vy = -3 + 20×0.25 = +2：过了顶点
+        assert_eq!(w.body.bullets.vy[i].raw(), -3 * 65536 + 20 * 16384);
+        assert!(w.body.bullets.vy[i].raw() > 0);
+        // angle/speed 每帧回填：与参考逐位相等
+        let (vx, vy) = (w.body.bullets.vx[i], w.body.bullets.vy[i]);
+        assert_eq!(w.body.bullets.angle[i], crate::math::cordic::atan2(vy, vx));
+        let sp = crate::math::isqrt::isqrt(crate::math::geom::len_sq(vx, vy) as u64) as i32;
+        assert_eq!(w.body.bullets.speed[i].raw(), sp);
     }
 }

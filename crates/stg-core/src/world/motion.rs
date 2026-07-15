@@ -4,7 +4,14 @@
 use super::WorldBody;
 use crate::bullets::{BULLET_CART_FX, BULLET_POLAR_FX};
 use crate::math::Fx;
-use crate::math::geom::polar_to_vec;
+use crate::math::cordic::atan2;
+use crate::math::geom::{len_sq, polar_to_vec};
+use crate::math::isqrt::isqrt;
+
+/// 低速回填阈值 = 1/16 px/帧。契约常量：`speed` 恒回填、`angle` 仅 `speed >= 此值` 时回填
+/// （近停冻结朝向：防 CORDIC 低幅垃圾角污染作者视图与 sprite 朝向）。
+/// 改值 = 确定性契约变更，须过评审（spec 2026-07-15）。
+pub const BACKFILL_MIN_SPEED: Fx = Fx::from_raw(4096);
 
 impl WorldBody {
     /// 极坐标 → 积分真相：`(vx,vy) = polar_to_vec(speed, angle)`。
@@ -16,9 +23,10 @@ impl WorldBody {
         self.bullets.vy[i] = vy;
     }
 
-    // D3 切片 Task 2：`refresh_vel_from_polar` 已被 integrate.rs 的 POLAR_FX 分支接入生产路径，
-    // 摘掉了 allow。以下四个 setter 仍只有测试调用点——`set_gravity_at` 等 Task 3 的 CART_FX 分支
-    // 接入，`set_ang_vel_at`/`set_accel_at`/`stop_fx_at` 等后续 ECL syscall 任务接入，届时逐个摘。
+    // D3 切片 Task 2/3：`refresh_vel_from_polar`/`backfill_polar` 已分别被 integrate.rs 的
+    // POLAR_FX/CART_FX 分支接入生产路径，摘掉了 allow。以下三个 setter 仍只有测试调用点——
+    // `set_gravity_at` 只设字段+模式位、integrate 直接读 ax/ay 不经它，故仍无生产调用点；
+    // `set_ang_vel_at`/`set_accel_at`/`stop_fx_at` 等后续 ECL syscall 任务接入，届时逐个摘。
 
     /// 开 POLAR_FX（清 CART_FX，互斥律）；只动两模式位。
     #[allow(dead_code)]
@@ -46,6 +54,18 @@ impl WorldBody {
     #[allow(dead_code)]
     pub(crate) fn stop_fx_at(&mut self, i: usize) {
         self.bullets.flags[i] &= !(BULLET_POLAR_FX | BULLET_CART_FX);
+    }
+
+    /// 笛卡尔 → 作者视图回填（阈值规则见 `BACKFILL_MIN_SPEED`）。
+    /// sqrt(Q32.32) = Q16.16，故 isqrt(len_sq) 的 raw 直接是 Fx raw。
+    pub(crate) fn backfill_polar(&mut self, i: usize) {
+        let vx = self.bullets.vx[i];
+        let vy = self.bullets.vy[i];
+        let sp = Fx::from_raw(isqrt(len_sq(vx, vy) as u64) as i32);
+        self.bullets.speed[i] = sp;
+        if sp.raw() >= BACKFILL_MIN_SPEED.raw() {
+            self.bullets.angle[i] = atan2(vy, vx);
+        }
     }
 }
 
@@ -99,5 +119,24 @@ mod tests {
         let (rvx, rvy) = polar_to_vec(Fx::from_int(3), Angle::QUARTER);
         assert_eq!(w.body.bullets.vx[0], rvx);
         assert_eq!(w.body.bullets.vy[0], rvy);
+    }
+
+    /// 阈值判别式：阈值下 speed 照回填、angle 冻结；阈值上 angle == atan2 参考。
+    #[test]
+    fn backfill_freezes_angle_below_threshold() {
+        let mut w = crate::step::World::new(1);
+        bullet_at(&mut w, 0, 100);
+        w.body.bullets.angle[0] = Angle::QUARTER; // 旧朝向
+        w.body.bullets.vx[0] = Fx::from_raw(2048); // < 4096 = 阈值
+        w.body.bullets.vy[0] = Fx::ZERO;
+        w.body.backfill_polar(0);
+        assert_eq!(w.body.bullets.speed[0].raw(), 2048, "speed 恒回填");
+        assert_eq!(w.body.bullets.angle[0], Angle::QUARTER, "低速角度冻结");
+        w.body.bullets.vx[0] = Fx::from_raw(8192); // ≥ 阈值
+        w.body.backfill_polar(0);
+        assert_eq!(
+            w.body.bullets.angle[0],
+            crate::math::cordic::atan2(Fx::ZERO, Fx::from_raw(8192))
+        );
     }
 }
