@@ -37,9 +37,15 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// 顶部中心铺一圈 10 发敌弹（rng 抖动 → 压 sincos + PCG32），每 150 帧全屏消弹一次
 /// （`FIELD_RADIUS_FULLSCREEN` 作用区，`life=1`）。脚本自机全程射击、90 帧周期
 /// 上冲吃弹/下退喘息，串联自机弹杀敌→dying→EnemyDied→cleanup 回收→导演补位、敌弹中弹→
-/// 决死窗口→死亡→重生、graze 累积等碰撞/结算全链路。600 帧 @ 60Hz。
+/// 决死窗口→死亡→重生、graze 累积等碰撞/结算全链路。
+///
+/// D3 加戏（每帧压运动双表示）：每 40 帧铺一圈 8 发螺旋弹（POLAR_FX，ang_vel 驱动逐帧
+/// sincos 回填 v）；每 90 帧发 3 发上抛重力弹（CART_FX，逐帧 CORDIC atan2 + isqrt 回填
+/// 作者视图，顶点前后扫过 `BACKFILL_MIN_SPEED` 阈值两侧）；每 75 帧对螺旋圈最近一发 setter
+/// 骚扰（turn/aim/set_vel 轮转，句柄可能已随生死回收变成悬垂——P4-b no-op 路径顺带入金向量）。
+/// 600 帧 @ 60Hz。
 fn cmd_golden(rest: &[String]) -> ExitCode {
-    use stg_core::bullets::BulletInit;
+    use stg_core::bullets::{BulletHandle, BulletInit};
     use stg_core::enemy::EnemyInit;
     use stg_core::field::{FIELD_CLEAR_BULLETS, FIELD_RADIUS_FULLSCREEN, FieldInit};
     use stg_core::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SHOT, BTN_SLOW, BTN_UP, InputFrame};
@@ -50,6 +56,8 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
     const SEED: u64 = 0x5147_4f4c_4445_4e00; // "GOLDEN"
     let mut world = World::new(SEED);
     let mut lines = String::new();
+    // D3 压力源状态：螺旋圈最近一发的句柄，供 setter 骚扰块追打（可能随生命周期死亡/回收）。
+    let mut spiral_h = BulletHandle::NULL;
 
     // 全字段 EnemyInit 助手（顶部三敌人固定位；move_to/挂钩惰性）。
     let enemy_at = |x: i32, y: i32| EnemyInit {
@@ -78,6 +86,29 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
         death_script: 0,
         drop_table: 0,
         score: 100,
+    };
+
+    // 全字段 BulletInit 助手（D3 压力源哑弹：静止、半径 3、life 走满、无变换挂钩）。
+    let bullet_at = |x: i32, y: i32| BulletInit {
+        x: Fx::from_int(x),
+        y: Fx::from_int(y),
+        vx: Fx::ZERO,
+        vy: Fx::ZERO,
+        speed: Fx::ZERO,
+        angle: Angle::ZERO,
+        ang_vel: 0,
+        accel: Fx::ZERO,
+        ax: Fx::ZERO,
+        ay: Fx::ZERO,
+        sprite: 0,
+        radius: Fx::from_int(3),
+        delay: 0,
+        life: 0xFFFF,
+        flags: 0,
+        grazed_by: 0,
+        transform_head: 0xFFFF,
+        xform_wait: 0,
+        xform_next: 0,
     };
 
     for frame in 0..FRAMES {
@@ -156,6 +187,32 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                     owner: 0,
                     flags: FIELD_CLEAR_BULLETS,
                 });
+            }
+            // ④ D3 压力源一：螺旋圈（POLAR_FX——每帧 sincos 查表路径）
+            if frame % 40 == 0 {
+                for k in 0..8u16 {
+                    let h = b.create_bullet(bullet_at(0, 60));
+                    b.set_bullet_speed(h, Fx::from_raw(98_304)); // 1.5 px/帧
+                    b.set_bullet_angle(h, Angle(k * 8192)); // 八方位
+                    b.set_bullet_ang_vel(h, if k % 2 == 0 { 512 } else { -512 });
+                    spiral_h = h;
+                }
+            }
+            // ⑤ D3 压力源二：上抛重力弹（CART_FX——每帧 CORDIC+isqrt 回填，顶点扫过阈值两侧）
+            if frame % 90 == 0 {
+                for k in 0..3i32 {
+                    let h = b.create_bullet(bullet_at(-60 + 60 * k, 200));
+                    b.set_bullet_vel(h, Fx::ZERO, Fx::from_int(-3));
+                    b.set_bullet_gravity(h, Fx::ZERO, Fx::from_raw(16_384)); // 0.25 px/帧²
+                }
+            }
+            // ⑥ D3 压力源三：setter 骚扰（句柄可能已死——P4-b 路径顺带入金向量，确定性无损）
+            if frame % 75 == 0 {
+                match (frame / 75) % 3 {
+                    0 => b.turn_bullet(spiral_h, Angle::QUARTER),
+                    1 => b.aim_bullet_at_player(spiral_h, Angle::ZERO),
+                    _ => b.set_bullet_vel(spiral_h, Fx::from_int(2), Fx::from_int(1)),
+                }
             }
         });
         lines.push_str(&format!("{frame} {:016x}\n", world.checksum()));

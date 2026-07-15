@@ -30,6 +30,7 @@ use crate::shots::{ShotHandle, ShotInit, ShotPool};
 mod cleanup;
 mod collide;
 mod integrate;
+mod motion;
 mod player;
 mod settle;
 
@@ -40,6 +41,7 @@ pub const POOL_ENEMY: usize = 2;
 pub const POOL_FIELD: usize = 3;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
+pub const STATUS_STALE_HANDLE: u16 = 2;
 
 /// 所有实体判定半径的写 API 上限（P4-b）。
 ///
@@ -265,7 +267,11 @@ pub(crate) mod test_support {
     use crate::math::Fx;
 
     /// 造一颗停在 (x,y) 的哑弹（半径 2）。
-    pub(crate) fn bullet_at(w: &mut crate::step::World, x: i32, y: i32) {
+    pub(crate) fn bullet_at(
+        w: &mut crate::step::World,
+        x: i32,
+        y: i32,
+    ) -> crate::bullets::BulletHandle {
         w.body.create_bullet(crate::bullets::BulletInit {
             x: Fx::from_int(x),
             y: Fx::from_int(y),
@@ -286,7 +292,7 @@ pub(crate) mod test_support {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
-        });
+        })
     }
 
     pub(crate) fn spawn_enemy(

@@ -61,7 +61,7 @@
 | `set_bullet_speed(h, speed)` | 写 speed → `polar_to_vec` 刷 `vx/vy` |
 | `set_bullet_angle(h, angle)` | 写 angle → 刷 |
 | `turn_bullet(h, delta)` | `angle += delta` → 刷 |
-| `aim_bullet_at_player(h, delta)` | 瞄最近**存活**自机（平方距离、并列取低索引，I4）+ delta → 刷；无存活自机 → no-op **不计数**（非违约，世界状态使然） |
+| `aim_bullet_at_player(h, delta)` | 瞄最近**存活**自机（可瞄 = 非 ABSENT 非 GAMEOVER，决死窗口/重生无敌照瞄——ZUN 语义，实现定稿）（平方距离、并列取低索引，I4）+ delta → 刷；无存活自机 → no-op **不计数**（非违约，世界状态使然） |
 | `set_bullet_vel(h, vx, vy)` | 写 `vx/vy` → 按回填规则反推极坐标 |
 | `set_bullet_ang_vel(h, w)` | 写 `ang_vel` + 开 `POLAR_FX` 清 `CART_FX` |
 | `set_bullet_accel(h, a)` | 写 `accel` + 开 `POLAR_FX` 清 `CART_FX` |
@@ -91,6 +91,7 @@
 导演新增三类压力源：每 40 帧一圈螺旋弹（`POLAR_FX`）· 每 90 帧三颗上抛重力弹
 （`CART_FX`，抛物线顶点扫过阈值两侧）· 每 75 帧对**最低索引的存活弹**（确定性选取，I4 口径）
 轮换 `turn`/`aim`/`set_vel` 骚扰
+（实施定稿：追打最新螺旋圈末发的句柄，容许悬垂——P4-b no-op 路径顺带入流；见 harness 注释）
 ——让查表/CORDIC/isqrt 在池 churn + 碰撞消弹的病态环境下跨三平台对拍。
 
 ### 收尾义务
