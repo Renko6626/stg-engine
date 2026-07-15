@@ -512,7 +512,19 @@ impl WorldBody {
                 _ => {}
             }
         }
-        // 趟三 · 计分/拾取 —— Task 6 填 graze。
+        // 趟三 · 计分/拾取
+        for k in 0..self.hits_len as usize {
+            let h = self.hits[k];
+            if h.row == crate::events::ROW_BULLET_PLAYER_GRAZE {
+                let b = h.active as usize;
+                let p = h.passive as usize;
+                let bit = 1u8 << p; // MAX_PLAYERS=2 → bit 0/1
+                if self.bullets.grazed_by[b] & bit == 0 {
+                    self.bullets.grazed_by[b] |= bit;
+                    self.players[p].graze = self.players[p].graze.wrapping_add(1);
+                }
+            }
+        }
     }
     pub(crate) fn cleanup(&mut self) {
         self.phase_enter(PH_CLEANUP);
@@ -914,6 +926,42 @@ mod tests {
         w.body.settle();
         assert_eq!(w.body.players[0].life_state, LIFE_DEATHWINDOW);
         assert_eq!(w.body.players[0].state_timer, DEATHBOMB_WINDOW);
+    }
+
+    #[test]
+    fn settle_graze_counts_once_per_bullet() {
+        use crate::input::InputFrame;
+        use crate::step::step;
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        // 一颗停在 graze 圈内、hit 圈外的弹（距 10px）
+        w.body.create_bullet(crate::bullets::BulletInit {
+            x: Fx::from_int(10),
+            y: Fx::from_int(384),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: crate::math::Angle::ZERO,
+            ang_vel: 0,
+            accel: Fx::ZERO,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            sprite: 0,
+            radius: Fx::from_int(2),
+            delay: 0,
+            life: 0xFFFF,
+            flags: 0,
+            grazed_by: 0,
+            transform_head: 0xFFFF,
+            xform_wait: 0,
+            xform_next: 0,
+        });
+        // 弹静止、贴着自机 → 连跑 3 帧，graze 只 +1（grazed_by 逐弹一次）
+        for _ in 0..3 {
+            step(&mut w, &InputFrame::empty(0));
+        }
+        assert_eq!(w.body.players[0].graze, 1);
     }
 
     #[test]
