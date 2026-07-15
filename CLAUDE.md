@@ -119,7 +119,7 @@ crates/
     src/{input,events}.rs                      输入抽象 / hits+events 缓冲类型
     src/world.rs     WorldBody 字段所有权 + 写 API + push_* + PhaseGuard + 场界常量
     src/world/       【模块结构镜像相位骨架】player(相1+3) / integrate(相5)
-                     / collide(相6) / settle(相7) / cleanup(相9)
+                     / collide(相6) / settle(相7) / cleanup(相9) / motion(D3 运动写 API)
     src/step.rs      P2 组装层：§3.5 宪法顺序的唯一持有者 + World + 快照
   stg-derive/       proc-macro：#[derive(Checksum)] + define_pool!
   stg-ecl-compiler/ 离线 ECL 编译器，产出 EclImage（M1）

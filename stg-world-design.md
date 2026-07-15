@@ -313,6 +313,8 @@ define_pool! {
 - **`speed/angle` = 作者视图缓存**：双向同步责任**全部封装在 setter 内**——脚本与变换 op 永远摸不到裸字段（P1 纪律），"忘了回填"的经典火药桶从"每个弹幕作者"收缩为"引擎内一个封闭 setter 集合"，一次写对 + 单测覆盖：
   - 极坐标 setter（`set_speed/set_angle/turn/aim_player`）→ 改后 `(vx,vy) = polar2vec(speed, angle)`（一次 sincos）；
   - 笛卡尔 setter（`set_vel`）→ 改后 CORDIC atan2 + isqrt 回填极坐标，**带速度阈值**（阈值规则钉死进契约，低速不回填防抖）；
+    （已定值：`BACKFILL_MIN_SPEED = Fx::from_raw(4096)` = 1/16 px/帧，speed 恒回填、
+    angle 仅达阈回填——见 specs/2026-07-15-d3-dual-representation-design.md）
 - **连续效果 = 模式位 + 字段**（变换 op 只负责在排程点把它们打开/改参，两机制正交）：
   - `POLAR_FX`：`angle += ang_vel; speed += accel;` 后刷 vx/vy（仅此类弹付查表税）；
   - `CART_FX`：`vx += ax; vy += ay;` 后按阈值回填极坐标（sprite 朝向不失真）；
