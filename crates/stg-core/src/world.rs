@@ -39,9 +39,11 @@ pub const POOL_BULLET: usize = 0;
 pub const POOL_SHOT: usize = 1;
 pub const POOL_ENEMY: usize = 2;
 pub const POOL_FIELD: usize = 3;
+pub const POOL_XFORM: usize = 4;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
 pub const STATUS_STALE_HANDLE: u16 = 2;
+pub const STATUS_BAD_ARGS: u16 = 3;
 
 /// 所有实体判定半径的写 API 上限（P4-b）。
 ///
@@ -106,6 +108,8 @@ pub struct WorldBody {
     pub shots: ShotPool,
     pub enemies: EnemyPool,
     pub fields: FieldPool,
+    /// 变换段池（D4）。手写 Checksum 全量入校验和（P6）；I7 inline 数组。
+    pub(crate) xforms: crate::xform::XformSegPool,
     #[checksum(skip = "纯输出缓冲，帧内私有，重演确定性再生（A5）")]
     pub(crate) hits: [Hit; HITS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 hits 一并 skip（A5）")]

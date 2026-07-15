@@ -46,6 +46,7 @@ impl World {
         s.shots.copy_into(&mut d.shots);
         s.enemies.copy_into(&mut d.enemies);
         s.fields.copy_into(&mut d.fields);
+        s.xforms.copy_into(&mut d.xforms);
         d.diag = s.diag;
         d.last_status = s.last_status;
         // 帧内私有输出缓冲（hits/events）checksum-skip、不随快照复制数组本体——安全性今天靠
@@ -271,5 +272,18 @@ mod tests {
     fn phase_guard_catches_out_of_order() {
         let mut w = World::new(1);
         w.body.advance(); // 不经 begin 直接 advance → 护栏 panic
+    }
+
+    #[test]
+    fn snapshot_roundtrip_covers_xform_pool() {
+        let mut w = World::new(3);
+        let seg = w.body.xforms.alloc().unwrap();
+        w.body.xforms.seg_slots_mut(seg)[0].args[0] = 42;
+        let ck = w.checksum();
+        let mut snap = World::new(3);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.checksum(), ck); // 段池随快照
+        snap.body.xforms.seg_slots_mut(seg)[0].args[0] = 43;
+        assert_ne!(snap.checksum(), ck); // 且真的在参与指纹
     }
 }
