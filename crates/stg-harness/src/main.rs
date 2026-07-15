@@ -37,6 +37,7 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// 越界/寿命尽经 cleanup 回收（压掩码分配器 churn）。600 帧逐帧 World checksum 三平台逐点对拍。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::BulletInit;
+    use stg_core::enemy::EnemyInit;
     use stg_core::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SHOT, BTN_SLOW, BTN_UP, InputFrame};
     use stg_core::math::{Angle, Fx, polar_to_vec};
     use stg_core::step::{World, step_with_director};
@@ -46,54 +47,99 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
     let mut world = World::new(SEED);
     let mut lines = String::new();
 
+    // 全字段 EnemyInit 助手（顶部三敌人固定位；move_to/挂钩惰性）。
+    let enemy_at = |x: i32, y: i32| EnemyInit {
+        x: Fx::from_int(x),
+        y: Fx::from_int(y),
+        vx: Fx::ZERO,
+        vy: Fx::ZERO,
+        mv_from_x: Fx::ZERO,
+        mv_from_y: Fx::ZERO,
+        mv_to_x: Fx::ZERO,
+        mv_to_y: Fx::ZERO,
+        mv_t: 0,
+        mv_dur: 0,
+        mv_easing: 0,
+        mv_active: 0,
+        hp: 5,
+        hp_max: 5,
+        radius: Fx::from_int(12),
+        hurtbox: Fx::from_int(16),
+        invuln: 0,
+        hit_flash: 0,
+        flags: 0,
+        sprite: 0,
+        anm_state: 0,
+        main_task: 0,
+        death_script: 0,
+        drop_table: 0,
+        score: 100,
+    };
+
     for frame in 0..FRAMES {
-        // 脚本化输入：自机走方框（每 30 帧换向）+ 持续射击 + 每 120 帧一段低速。
+        // 脚本化输入：多数时间上冲吃弹 + 全程射击（确定性触发中弹/擦弹/杀敌）。
         let mut input = InputFrame::empty(frame);
-        let dir = (frame / 30) % 4;
-        let mut btn = BTN_SHOT;
-        btn |= match dir {
-            0 => BTN_RIGHT,
-            1 => BTN_DOWN,
-            2 => BTN_LEFT,
-            _ => BTN_UP,
+        let mut btn = BTN_SHOT; // 全程射击 → 自机弹上飞杀顶部敌人（行 4）
+        // 每 90 帧一个周期：前 50 帧上冲（吃弹/擦弹/逼近敌体），后 40 帧下退（喘息）
+        let phase = frame % 90;
+        if phase < 50 {
+            btn |= BTN_UP;
+        } else {
+            btn |= BTN_DOWN;
+        }
+        // 左右缓移增加位形多样性
+        btn |= if (frame / 45) % 2 == 0 {
+            BTN_RIGHT
+        } else {
+            BTN_LEFT
         };
         if (frame / 120) % 2 == 0 {
             btn |= BTN_SLOW;
         }
         input.actions[0].buttons = btn;
         step_with_director(&mut world, &input, |b| {
-            let base = (frame.wrapping_mul(797) & 0xFFFF) as u16; // 基角随帧旋转
-            let n: u16 = 12;
-            let astep = (65536u32 / n as u32) as u16; // 每发角步（避 65536 溢 u16）
-            for k in 0..n {
-                let spread = b.rng.rand_range(512) as u16; // 抖动，消耗 RNG
-                let a = Angle(
-                    base.wrapping_add(k.wrapping_mul(astep))
-                        .wrapping_add(spread),
-                );
-                let (vx, vy) = polar_to_vec(Fx::from_int(3), a); // 压 sincos
-                let bi = BulletInit {
-                    x: Fx::ZERO,
-                    y: Fx::from_int(100),
-                    vx,
-                    vy,
-                    speed: Fx::from_int(3),
-                    angle: a,
-                    ang_vel: 0,
-                    accel: Fx::ZERO,
-                    ax: Fx::ZERO,
-                    ay: Fx::ZERO,
-                    sprite: 0,
-                    radius: Fx::from_int(2),
-                    delay: 0,
-                    life: 200,
-                    flags: 0,
-                    grazed_by: 0,
-                    transform_head: 0xFFFF,
-                    xform_wait: 0,
-                    xform_next: 0,
-                };
-                b.create_bullet(bi); // 池满时 P4-a 静默降级（计数入校验和）
+            // ① 每 60 帧把敌人补到 3 个（顶部固定三点；被自机弹打死→cleanup 回收→补位 churn）
+            if frame % 60 == 0 {
+                let alive = b.enemies.iter_alive().count();
+                let slots = [(-80, 80), (0, 80), (80, 80)];
+                for &(ex, ey) in slots.iter().skip(alive) {
+                    b.create_enemy(enemy_at(ex, ey));
+                }
+            }
+            // ② 每 8 帧从顶部中心铺一圈 10 发敌弹（rng 抖动；部分下行抵达自机 → 中弹/擦弹）
+            if frame % 8 == 0 {
+                let base = (frame.wrapping_mul(797) & 0xFFFF) as u16;
+                let n: u16 = 10;
+                let astep = (65536u32 / n as u32) as u16;
+                for k in 0..n {
+                    let spread = b.rng.rand_range(384) as u16;
+                    let a = Angle(
+                        base.wrapping_add(k.wrapping_mul(astep))
+                            .wrapping_add(spread),
+                    );
+                    let (vx, vy) = polar_to_vec(Fx::from_int(2), a);
+                    b.create_bullet(BulletInit {
+                        x: Fx::ZERO,
+                        y: Fx::from_int(100),
+                        vx,
+                        vy,
+                        speed: Fx::from_int(2),
+                        angle: a,
+                        ang_vel: 0,
+                        accel: Fx::ZERO,
+                        ax: Fx::ZERO,
+                        ay: Fx::ZERO,
+                        sprite: 0,
+                        radius: Fx::from_int(3),
+                        delay: 0,
+                        life: 300,
+                        flags: 0,
+                        grazed_by: 0,
+                        transform_head: 0xFFFF,
+                        xform_wait: 0,
+                        xform_next: 0,
+                    });
+                }
             }
         });
         lines.push_str(&format!("{frame} {:016x}\n", world.checksum()));

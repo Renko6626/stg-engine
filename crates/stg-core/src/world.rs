@@ -1,5 +1,5 @@
 //! 世界本体（stg_core::world）—— WorldBody 字段 + `pub(crate)` 相位函数 + 写 API + PhaseGuard。
-//! 最小切片（M0-4）：无 ECL/玩家/碰撞；3 输出缓冲随各自生产者再加。
+//! M0-7：collide（D8 行1/2/3/4，圆-圆平方距离，只收集）+ settle（D9 三趟）+ 生死状态机 + EnemyPool 已落。
 //! **构造只走 `step::World::new`（堆零初始化）**——WorldBody 无 `new()`，避免 ~450KB 栈临时量。
 
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
