@@ -309,6 +309,8 @@ impl WorldBody {
     pub(crate) fn collide(&mut self) {
         self.phase_enter(PH_COLLIDE);
         self.collide_bullets_player(); // 行 1/2：敌弹 × 自机
+        self.collide_body_player(); // 行 3：敌体 × 自机
+        self.collide_shot_enemy(); // 行 4：自机弹 × 敌人
     }
 
     /// 行 1（hit）+ 行 2（graze）：敌弹 × 自机。一次 len_sq 复用两半径。
@@ -343,6 +345,67 @@ impl WorldBody {
                         let hit_sum = (br + hit_r).raw() as i64;
                         if d2 <= hit_sum * hit_sum {
                             self.push_hit(ROW_BULLET_PLAYER_HIT, b as u16, p as u16);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    /// 行 3：敌体（enemy.radius）× 自机 hit_radius。
+    fn collide_body_player(&mut self) {
+        use crate::events::ROW_BODY_PLAYER_HIT;
+        use crate::math::geom::len_sq;
+        for p in 0..crate::MAX_PLAYERS {
+            if self.players[p].life_state != crate::player::LIFE_ALIVE
+                || self.players[p].invuln != 0
+            {
+                continue;
+            }
+            let (px, py) = (self.players[p].x, self.players[p].y);
+            let hit_r = self.players[p].hit_radius;
+            let nw = self.enemies.alive.len();
+            for w in 0..nw {
+                let mut bits = self.enemies.alive[w];
+                while bits != 0 {
+                    let e = w * 64 + bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    let dx = self.enemies.x[e] - px;
+                    let dy = self.enemies.y[e] - py;
+                    let d2 = len_sq(dx, dy);
+                    let sum = (self.enemies.radius[e] + hit_r).raw() as i64;
+                    if d2 <= sum * sum {
+                        self.push_hit(ROW_BODY_PLAYER_HIT, e as u16, p as u16);
+                    }
+                }
+            }
+        }
+    }
+
+    /// 行 4：自机弹（shot.radius）× 敌人 hurtbox（受击圈）。
+    /// 嵌套固定：shot 外层、enemy 内层（升序）→ settle 扣血序确定。无敌帧过滤留给 settle。
+    fn collide_shot_enemy(&mut self) {
+        use crate::events::ROW_SHOT_ENEMY;
+        use crate::math::geom::len_sq;
+        let ne = self.enemies.alive.len();
+        let nws = self.shots.alive.len();
+        for sw in 0..nws {
+            let mut sbits = self.shots.alive[sw];
+            while sbits != 0 {
+                let s = sw * 64 + sbits.trailing_zeros() as usize;
+                sbits &= sbits - 1;
+                let (sx, sy) = (self.shots.x[s], self.shots.y[s]);
+                let sr = self.shots.radius[s];
+                for ew in 0..ne {
+                    let mut ebits = self.enemies.alive[ew];
+                    while ebits != 0 {
+                        let e = ew * 64 + ebits.trailing_zeros() as usize;
+                        ebits &= ebits - 1;
+                        let dx = self.enemies.x[e] - sx;
+                        let dy = self.enemies.y[e] - sy;
+                        let d2 = len_sq(dx, dy);
+                        let sum = (sr + self.enemies.hurtbox[e]).raw() as i64;
+                        if d2 <= sum * sum {
+                            self.push_hit(ROW_SHOT_ENEMY, s as u16, e as u16);
                         }
                     }
                 }
@@ -593,5 +656,90 @@ mod tests {
         let i = w.body.enemies.get(h).unwrap();
         assert_eq!(w.body.enemies.x[i], Fx::from_int(1)); // 0+1
         assert_eq!(w.body.enemies.y[i], Fx::from_int(52)); // 50+2
+    }
+
+    fn spawn_enemy(
+        w: &mut crate::step::World,
+        x: i32,
+        y: i32,
+        hp: i32,
+    ) -> crate::enemy::EnemyHandle {
+        w.body.create_enemy(crate::enemy::EnemyInit {
+            x: Fx::from_int(x),
+            y: Fx::from_int(y),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            mv_from_x: Fx::ZERO,
+            mv_from_y: Fx::ZERO,
+            mv_to_x: Fx::ZERO,
+            mv_to_y: Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp,
+            hp_max: hp,
+            radius: Fx::from_int(12),
+            hurtbox: Fx::from_int(16),
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 0,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_table: 0,
+            score: 100,
+        })
+    }
+
+    #[test]
+    fn collide_enemy_body_on_player() {
+        use crate::events::ROW_BODY_PLAYER_HIT;
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(100);
+        spawn_enemy(&mut w, 0, 100, 5); // 敌体 radius 12 + 自机 hit 2.5 → 圆心重合必撞
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        let n = (0..w.body.hits_len as usize)
+            .filter(|&k| w.body.hits[k].row == ROW_BODY_PLAYER_HIT)
+            .count();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn collide_shot_on_enemy() {
+        use crate::events::ROW_SHOT_ENEMY;
+        let mut w = crate::step::World::new(1);
+        let e = spawn_enemy(&mut w, 0, 80, 5);
+        let ei = w.body.enemies.get(e).unwrap();
+        // 造一发压在敌人身上的自机弹
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: w.body.enemies.x[ei],
+            y: w.body.enemies.y[ei],
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 1,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        let hits: Vec<_> = (0..w.body.hits_len as usize)
+            .map(|k| w.body.hits[k])
+            .filter(|h| h.row == ROW_SHOT_ENEMY)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].active, 0); // shot 索引
+        assert_eq!(hits[0].passive as usize, ei); // enemy 索引
     }
 }
