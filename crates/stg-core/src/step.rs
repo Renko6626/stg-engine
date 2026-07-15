@@ -45,6 +45,7 @@ impl World {
         d.players = s.players; // [PlayerState; N] 是 Copy
         s.shots.copy_into(&mut d.shots);
         s.enemies.copy_into(&mut d.enemies);
+        s.fields.copy_into(&mut d.fields);
         d.diag = s.diag;
         d.last_status = s.last_status;
         // 帧内私有输出缓冲（hits/events）checksum-skip、不随快照复制数组本体——安全性今天靠

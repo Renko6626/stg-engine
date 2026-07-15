@@ -5,6 +5,11 @@
 use crate::define_pool;
 use crate::math::{Angle, Fx};
 
+/// `flags` 位：本帧被作用区清除（settle 趟一置、趟二读【中弹跳过=bomb 救命】、cleanup 回收）。
+///
+/// **生命只在同一帧的相位 7→9 之间**，从不跨帧——故 collide 无需检查此位（次帧看不到已清除的弹）。
+pub const BULLET_CLEARED: u8 = 1 << 0;
+
 // 弹池（D3 定稿，19 字段）。哑弹 / 变换弹 / 任务弹**共池**；变换【段】另存 XformSegPool（M0-4 手写）。
 // `transform_head == 0xFFFF` 即哑弹（无段、不付段内存，只付这几字节游标）。运动 / 双表示逻辑归 M0-4。
 define_pool! {

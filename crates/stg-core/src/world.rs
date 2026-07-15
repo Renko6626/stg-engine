@@ -5,6 +5,7 @@
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
 use crate::enemy::{ENEMY_DYING, EnemyHandle, EnemyInit, EnemyPool};
 use crate::events::{EVENTS_CAP, Event, HITS_CAP, Hit};
+use crate::field::{FIELD_MAX_RADIUS, FieldHandle, FieldInit, FieldPool};
 use crate::math::Fx;
 use crate::player::PlayerState;
 use crate::rng::Pcg32;
@@ -14,6 +15,7 @@ use crate::shots::{ShotHandle, ShotInit, ShotPool};
 pub const POOL_BULLET: usize = 0;
 pub const POOL_SHOT: usize = 1;
 pub const POOL_ENEMY: usize = 2;
+pub const POOL_FIELD: usize = 3;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
 
@@ -58,6 +60,7 @@ pub struct WorldBody {
     pub players: [PlayerState; crate::MAX_PLAYERS],
     pub shots: ShotPool,
     pub enemies: EnemyPool,
+    pub fields: FieldPool,
     #[checksum(skip = "纯输出缓冲，帧内私有，重演确定性再生（A5）")]
     pub(crate) hits: [Hit; HITS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 hits 一并 skip（A5）")]
@@ -118,6 +121,23 @@ impl WorldBody {
                 self.diag.pool_full[POOL_ENEMY] = self.diag.pool_full[POOL_ENEMY].wrapping_add(1);
                 self.last_status = STATUS_POOL_FULL;
                 EnemyHandle::NULL
+            }
+        }
+    }
+
+    /// 创建一个作用区（P4-a：池满 → NULL + 计数；P4-b：radius 超限 → 钳制 + 计数）。
+    pub fn create_field(&mut self, mut init: FieldInit) -> FieldHandle {
+        // P4-b：调用方违约 → 确定性安全结果。钳后 Fx 半径和永不溢出（见 field::FIELD_MAX_RADIUS）。
+        if init.radius.raw() > FIELD_MAX_RADIUS.raw() {
+            init.radius = FIELD_MAX_RADIUS;
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
+        match self.fields.alloc(init) {
+            Some(h) => h,
+            None => {
+                self.diag.pool_full[POOL_FIELD] = self.diag.pool_full[POOL_FIELD].wrapping_add(1);
+                self.last_status = STATUS_POOL_FULL;
+                FieldHandle::NULL
             }
         }
     }
@@ -360,6 +380,18 @@ impl WorldBody {
                 }
             }
         }
+        // 作用区：寿命倒数（照抄弹的模式；life=1 → 本帧减到 0，相位6 仍参与判定，相位9 回收）
+        let nw = self.fields.alive.len();
+        for w in 0..nw {
+            let mut bits = self.fields.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if self.fields.life[i] > 0 {
+                    self.fields.life[i] -= 1;
+                }
+            }
+        }
     }
     pub(crate) fn collide(&mut self) {
         self.phase_enter(PH_COLLIDE);
@@ -540,6 +572,7 @@ impl WorldBody {
                 let i = w * 64 + bits.trailing_zeros() as usize;
                 bits &= bits - 1;
                 let dead = (self.bullets.life[i] != 0xFFFF && self.bullets.life[i] == 0)
+                    || self.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0
                     || Self::out_of_bounds(self.bullets.x[i], self.bullets.y[i]);
                 if dead {
                     self.bullets.free_index(i);
@@ -569,6 +602,18 @@ impl WorldBody {
                     || Self::out_of_bounds(self.enemies.x[i], self.enemies.y[i]);
                 if dead {
                     self.enemies.free_index(i);
+                }
+            }
+        }
+        // 作用区：寿命尽回收（不做越界——field 是有意放置的静止圆，非飞行物）
+        let nw = self.fields.alive.len();
+        for w in 0..nw {
+            let mut bits = self.fields.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if self.fields.life[i] == 0 {
+                    self.fields.free_index(i);
                 }
             }
         }
@@ -1021,5 +1066,55 @@ mod tests {
             crate::step::step(&mut w, &InputFrame::empty(0));
         }
         assert_eq!(w.body.players[0].life_state, LIFE_ALIVE);
+    }
+
+    fn spawn_field(
+        w: &mut crate::step::World,
+        x: i32,
+        y: i32,
+        radius: i32,
+        flags: u8,
+        life: u16,
+    ) -> crate::field::FieldHandle {
+        w.body.create_field(crate::field::FieldInit {
+            x: Fx::from_int(x),
+            y: Fx::from_int(y),
+            radius: Fx::from_int(radius),
+            dmg_per_frame: 0,
+            life,
+            owner: 0,
+            flags,
+        })
+    }
+
+    #[test]
+    fn create_field_clamps_radius() {
+        use crate::field::FIELD_MAX_RADIUS;
+        let mut w = crate::step::World::new(1);
+        let h = spawn_field(&mut w, 0, 100, 30000, crate::field::FIELD_CLEAR_BULLETS, 1);
+        let i = w.body.fields.get(h).unwrap();
+        assert_eq!(w.body.fields.radius[i], FIELD_MAX_RADIUS); // P4-b 钳制
+        assert_eq!(w.body.diag.contract_viol, 1);
+    }
+
+    #[test]
+    fn field_life_one_lives_exactly_one_frame() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_field(&mut w, 0, 100, 20, crate::field::FIELD_CLEAR_BULLETS, 1);
+        assert!(w.body.fields.get(h).is_some());
+        crate::step::step(&mut w, &crate::input::InputFrame::empty(0));
+        assert_eq!(w.body.fields.get(h), None); // 活一帧后 cleanup 回收
+    }
+
+    #[test]
+    fn field_life_n_survives_n_frames() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_field(&mut w, 0, 100, 20, crate::field::FIELD_CLEAR_BULLETS, 3);
+        for _ in 0..2 {
+            crate::step::step(&mut w, &crate::input::InputFrame::empty(0));
+            assert!(w.body.fields.get(h).is_some()); // 前 2 帧仍在
+        }
+        crate::step::step(&mut w, &crate::input::InputFrame::empty(0));
+        assert_eq!(w.body.fields.get(h), None); // 第 3 帧尽
     }
 }

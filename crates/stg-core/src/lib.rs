@@ -30,6 +30,7 @@ pub mod bullets;
 pub mod checksum;
 pub mod enemy;
 pub mod events;
+pub mod field;
 pub mod input;
 pub mod math;
 pub mod player;
