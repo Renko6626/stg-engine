@@ -20,12 +20,15 @@ pub const FIELD_DAMAGE: u8 = 1 << 1;
 /// 到最远角 = √(256² + 288²) = √148480 ≈ 385.3 px < 400。给脚本算好的常量，免得各自猜。
 pub const FIELD_RADIUS_FULLSCREEN: Fx = Fx::from_int(400);
 
-/// `create_field` 的半径钳制上限（P4-b）。
+/// `create_field` 的半径钳制上限（P4-b）——即 `world::MAX_ENTITY_RADIUS`。
 ///
 /// `Fx` 上限 32767.99998。若调用方传 32767 表达"无限大"，`field.radius + bullet.radius` 的
 /// **Fx 加法会溢出** → debug panic / release 回绕成负数 → 平方后全场无条件判撞（debug/release 分歧）。
-/// 钳到 1024 后 `1024 + 16 ≪ 32767`，Fx 加法永不溢出，行 6/7 得以与行 1-4 写法完全一致。
-pub const FIELD_MAX_RADIUS: Fx = Fx::from_int(1024);
+/// 但只钳这一侧不构成完整证明——被动半径（弹/敌人/自机弹）若无上限，同样能把和推过
+/// `i32::MAX`。真正的证明是**双边都钳**：`create_bullet`/`create_enemy`/`create_player_shot`
+/// 与本 API 共用同一常量，各自把半径钳入 `[0, 1024]`，任意两半径之和 ≤ 2048 ≪ 32767，
+/// 六行碰撞的 Fx 加法方才对两个操作数都永不溢出。完整推导见 `world::MAX_ENTITY_RADIUS`。
+pub const FIELD_MAX_RADIUS: Fx = crate::world::MAX_ENTITY_RADIUS;
 
 define_pool! {
     Field, cap = 16,

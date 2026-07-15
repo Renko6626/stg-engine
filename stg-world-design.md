@@ -463,9 +463,13 @@ y∈[0,448]、越界边距 64，弹最远可在 (±256, −64..512)，场心 (0,
 = √(256²+288²) = √148480 ≈ 385.3 px < 400，给脚本一个算好的常量，免得各自去猜"多大算全屏"。
 `FIELD_MAX_RADIUS: Fx = 1024`（`create_field` 钳制上限，P4-b）——`Fx` 上限 32767.99998，若调用方
 传接近上限的值表达"无限大"，`field.radius + bullet.radius` 的 Fx 加法会溢出（debug panic /
-release 回绕成负数 → 平方后仍为正巨数 → 全场无条件判撞，这是 debug/release 分歧类）；钳到 1024 后
-`1024 + 16 ≪ 32767`，Fx 加法永不溢出，行 6/7 得以与行 1-4 保持完全一致的写法
-（`(a + b).raw() as i64`），不必为 field 特设 i64 加法。
+release 回绕成负数 → 平方后仍为正巨数 → 全场无条件判撞，这是 debug/release 分歧类）。**最终复审
+修正**：只钳 field 这一侧不构成完整证明——被动半径若无上限，同样能把和推过 `i32::MAX`（`create_bullet`
+/`create_enemy`/`create_player_shot` 当时全无钳制）。现改为共享常量 `world::MAX_ENTITY_RADIUS = 1024`，
+在 `create_bullet`（radius）、`create_enemy`（radius + hurtbox）、`create_player_shot`（radius）、
+`create_field`（radius）四个写 API 上统一双边钳入 `[0, 1024]`；`FIELD_MAX_RADIUS` 现为该常量的别名。
+两侧都钳后任意两半径之和 ≤ 2×1024 = 2048 ≪ 32767，行 6/7 得以与行 1-4 保持完全一致的写法
+（`(a + b).raw() as i64`），不必为 field 特设 i64 加法，且这次是对两个操作数都成立的完整证明。
 
 **静止**：世界层零 follow 逻辑。跟随 = 上层每帧在目标位重铺 `life=1`（`life=1` 恰好活一帧且当帧
 生效：相位5 减到 0、相位6 alive 位仍在照常参与判定、相位9 才回收）；静止爆炸 = 铺一次 `life=N`。
@@ -610,7 +614,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 
 回写时逐条核对：
 
-1. **§3.1**：`spawn_q` 字段删除（A6）；`events` 拆为 `hits` + `frame_events`，生命周期从"帧末必空"改为"存活至下帧 begin"（A5）；`stage: StageState` 替换为 `globals: [i32; 1024]` + `boss_ui`（A2）；新增 `signals / diag / last_status / bomb_fields`；
+1. **§3.1**：`spawn_q` 字段删除（A6）；`events` 拆为 `hits` + `frame_events`，生命周期从"帧末必空"改为"存活至下帧 begin"（A5）；`stage: StageState` 替换为 `globals: [i32; 1024]` + `boss_ui`（A2）；新增 `signals / diag / last_status / bomb_fields`（M0-8 落地时正名为 `fields: FieldPool`，见 D6）；
 2. **§3.2**：弹的运动模型改双表示（D3）；字段清单以 D3 为准（`layer` 删除、`delay/ax/ay` 等加入）；`transform_head` u8 → **u16**；
 3. **§3.2 vs §10.5 矛盾**：`MAX_XFORM_SLOTS` 统一为 **16**；canned op 清单已定稿 17 个（D4），§10.5 关闭；
 4. **§3.3**：`on_died` 回调构想否决（P5），替换为 `death_script` + 相位 9 挂钩（A7）；敌人字段以 D5 为准（双半径、move_to 插值器）；

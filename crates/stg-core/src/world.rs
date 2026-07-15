@@ -6,7 +6,7 @@
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
 use crate::enemy::{ENEMY_DYING, EnemyHandle, EnemyInit, EnemyPool};
 use crate::events::{EVENTS_CAP, Event, HITS_CAP, Hit};
-use crate::field::{FIELD_MAX_RADIUS, FieldHandle, FieldInit, FieldPool};
+use crate::field::{FieldHandle, FieldInit, FieldPool};
 use crate::math::Fx;
 use crate::player::PlayerState;
 use crate::rng::Pcg32;
@@ -19,6 +19,16 @@ pub const POOL_ENEMY: usize = 2;
 pub const POOL_FIELD: usize = 3;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
+
+/// 所有实体判定半径的写 API 上限（P4-b）。
+///
+/// 任意两半径之和 ≤ 2×1024 = 2048 ≪ `Fx` 上限 32767.99998 —— 故六行碰撞的
+/// `(r_active + r_passive)` **裸 i32 Fx 加法**（`Fx::Add`，debug panic / release wrap）
+/// 对**两个操作数**都可证安全。只钳一侧不构成证明：`i32::MAX - 1024*65536` ⇒
+/// 被动半径 > ~31744px 时和仍会溢出（负半径同理，和变负、平方后仍为正，判定行为诡异）。
+/// 故 `create_bullet`/`create_enemy`（radius + hurtbox）/`create_player_shot`/`create_field`
+/// 四个写 API 统一双边钳入 `[0, MAX_ENTITY_RADIUS]`——两侧都钳，证明才完整。
+pub const MAX_ENTITY_RADIUS: Fx = Fx::from_int(1024);
 
 const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
 const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
@@ -90,8 +100,32 @@ impl WorldBody {
     }
 
     // ── 写 API（P1：调用方只走这里，不摸池内存）──────────────────────────
-    /// 创建一颗弹（P4-a：池满 → NULL + 诊断计数 + last_status）。
-    pub fn create_bullet(&mut self, init: BulletInit) -> BulletHandle {
+
+    /// 把半径钳入 `[0, MAX_ENTITY_RADIUS]`（P4-b）；返回是否发生了钳制。
+    ///
+    /// 上界钳住是六行碰撞 `r_active + r_passive` 这个 Fx 加法不溢出的一半证明（另一半在对侧
+    /// 调用点也钳）；下界钳到 0 是因为负半径会让"和"变负、平方后却仍为正，判定行为诡异——
+    /// `radius = 0` 是良定义的退化点判定，非错误。调用方一次写 API 调用里即便有多个半径字段
+    /// 越界，也只应计一次 `contract_viol`（约定：调用方对多个字段的返回值做 `||`，不逐个累加）。
+    #[inline]
+    fn clamp_radius(r: &mut Fx) -> bool {
+        if r.raw() > MAX_ENTITY_RADIUS.raw() {
+            *r = MAX_ENTITY_RADIUS;
+            true
+        } else if r.raw() < 0 {
+            *r = Fx::ZERO;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 创建一颗弹（P4-a：池满 → NULL + 诊断计数 + last_status；P4-b：radius 双边钳入
+    /// `[0, MAX_ENTITY_RADIUS]` + 计数）。
+    pub fn create_bullet(&mut self, mut init: BulletInit) -> BulletHandle {
+        if Self::clamp_radius(&mut init.radius) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
         match self.bullets.alloc(init) {
             Some(h) => h,
             None => {
@@ -102,8 +136,12 @@ impl WorldBody {
         }
     }
 
-    /// 创建一发自机弹（P4-a：池满 → NULL + 诊断计数 + last_status）。
-    pub fn create_player_shot(&mut self, init: ShotInit) -> ShotHandle {
+    /// 创建一发自机弹（P4-a：池满 → NULL + 诊断计数 + last_status；P4-b：radius 双边钳入
+    /// `[0, MAX_ENTITY_RADIUS]` + 计数）。
+    pub fn create_player_shot(&mut self, mut init: ShotInit) -> ShotHandle {
+        if Self::clamp_radius(&mut init.radius) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
         match self.shots.alloc(init) {
             Some(h) => h,
             None => {
@@ -114,8 +152,14 @@ impl WorldBody {
         }
     }
 
-    /// 创建一个敌人（P4-a：池满 → NULL + 诊断计数 + last_status）。
-    pub fn create_enemy(&mut self, init: EnemyInit) -> EnemyHandle {
+    /// 创建一个敌人（P4-a：池满 → NULL + 诊断计数 + last_status；P4-b：`radius`（体碰）与
+    /// `hurtbox`（受击）各自双边钳入 `[0, MAX_ENTITY_RADIUS]`；两者同一调用内都越界也只计
+    /// 一次 `contract_viol`）。
+    pub fn create_enemy(&mut self, mut init: EnemyInit) -> EnemyHandle {
+        let viol = Self::clamp_radius(&mut init.radius) | Self::clamp_radius(&mut init.hurtbox);
+        if viol {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
         match self.enemies.alloc(init) {
             Some(h) => h,
             None => {
@@ -126,16 +170,12 @@ impl WorldBody {
         }
     }
 
-    /// 创建一个作用区（P4-a：池满 → NULL + 计数；P4-b：radius 双边钳入 `[0, FIELD_MAX_RADIUS]` + 计数）。
+    /// 创建一个作用区（P4-a：池满 → NULL + 计数；P4-b：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]` + 计数）。
     pub fn create_field(&mut self, mut init: FieldInit) -> FieldHandle {
-        // P4-b：调用方违约 → 确定性安全结果。上界钳后 Fx 半径和永不溢出（见 field::FIELD_MAX_RADIUS）；
-        // 下界钳到 0 是因为行 6/7 消费 `field.radius + passive.radius` 作"半径和"——负值会破坏这个
-        // 不变量（和可能变负，平方后仍为正，判定行为诡异）。radius=0 是良定义的退化点场，非错误。
-        if init.radius.raw() > FIELD_MAX_RADIUS.raw() {
-            init.radius = FIELD_MAX_RADIUS;
-            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
-        } else if init.radius.raw() < 0 {
-            init.radius = Fx::ZERO;
+        // P4-b：调用方违约 → 确定性安全结果。与 create_bullet/create_enemy/create_player_shot
+        // 共用同一 MAX_ENTITY_RADIUS——四个写 API 都双边钳，六行碰撞的 Fx 半径和才对两个操作数
+        // 都可证不溢出（完整推导见 `MAX_ENTITY_RADIUS` 文档）。
+        if Self::clamp_radius(&mut init.radius) {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
         match self.fields.alloc(init) {
@@ -1265,6 +1305,103 @@ mod tests {
         let h = spawn_field(&mut w, 0, 100, -5, crate::field::FIELD_CLEAR_BULLETS, 1);
         let i = w.body.fields.get(h).unwrap();
         assert_eq!(w.body.fields.radius[i], Fx::ZERO); // P4-b 下界钳制
+        assert_eq!(w.body.diag.contract_viol, 1);
+    }
+
+    // 造一颗停在原点、半径可指定的哑弹（同 bullet_at，多一个 radius 参数供钳制测试用）。
+    fn bullet_with_radius(w: &mut crate::step::World, radius: i32) -> crate::bullets::BulletHandle {
+        w.body.create_bullet(crate::bullets::BulletInit {
+            x: Fx::ZERO,
+            y: Fx::ZERO,
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: crate::math::Angle::ZERO,
+            ang_vel: 0,
+            accel: Fx::ZERO,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            sprite: 0,
+            radius: Fx::from_int(radius),
+            delay: 0,
+            life: 0xFFFF,
+            flags: 0,
+            grazed_by: 0,
+            transform_head: 0xFFFF,
+            xform_wait: 0,
+            xform_next: 0,
+        })
+    }
+
+    #[test]
+    fn create_bullet_clamps_radius() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_with_radius(&mut w, 30000);
+        let i = w.body.bullets.get(h).unwrap();
+        assert_eq!(w.body.bullets.radius[i], MAX_ENTITY_RADIUS); // P4-b 钳制
+        assert_eq!(w.body.diag.contract_viol, 1);
+    }
+
+    #[test]
+    fn create_bullet_clamps_negative_radius_to_zero() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_with_radius(&mut w, -5);
+        let i = w.body.bullets.get(h).unwrap();
+        assert_eq!(w.body.bullets.radius[i], Fx::ZERO); // P4-b 下界钳制
+        assert_eq!(w.body.diag.contract_viol, 1);
+    }
+
+    #[test]
+    fn create_enemy_clamps_hurtbox() {
+        let mut w = crate::step::World::new(1);
+        let h = w.body.create_enemy(crate::enemy::EnemyInit {
+            x: Fx::ZERO,
+            y: Fx::ZERO,
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            mv_from_x: Fx::ZERO,
+            mv_from_y: Fx::ZERO,
+            mv_to_x: Fx::ZERO,
+            mv_to_y: Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp: 1,
+            hp_max: 1,
+            radius: Fx::from_int(12),
+            hurtbox: Fx::from_int(30000), // 受击半径越界，体碰半径不越界
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 0,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_table: 0,
+            score: 0,
+        });
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.hurtbox[i], MAX_ENTITY_RADIUS); // P4-b 钳制
+        assert_eq!(w.body.diag.contract_viol, 1);
+    }
+
+    #[test]
+    fn create_player_shot_clamps_radius() {
+        let mut w = crate::step::World::new(1);
+        let h = w.body.create_player_shot(crate::shots::ShotInit {
+            x: Fx::ZERO,
+            y: Fx::ZERO,
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 1,
+            radius: Fx::from_int(30000),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        let i = w.body.shots.get(h).unwrap();
+        assert_eq!(w.body.shots.radius[i], MAX_ENTITY_RADIUS); // P4-b 钳制
         assert_eq!(w.body.diag.contract_viol, 1);
     }
 

@@ -230,3 +230,14 @@ M0-7 变异检验已实证）。
 - `stg-world-design.md` A5：events 生产者清单补 `FieldCleared`。
 - `stg-world-design.md` D10：容量表加 `FieldPool` 16 × ~18B + generation/alive ≈ **320 B**
   （SoA：x/y/radius 3×4B + dmg_per_frame 2B + life 2B + owner 1B + flags 1B = 18B/槽）。
+
+## 最终复审修正（2026-07-15）
+
+上面 `FIELD_MAX_RADIUS` 的推导只证了一半：只钳 `field.radius` 这一侧，约束的是碰撞和里的主动
+操作数；`Fx::Add` 是裸 `i32` 加法（debug panic / release 回绕），而被动半径当时完全无钳
+（`create_bullet`/`create_enemy`/`create_player_shot` 均无上下界限制），一旦被动半径超过
+~31744px，`field.radius + passive.radius` 依旧会溢出 `i32::MAX`（负被动半径同理会重现"和变负、
+平方仍为正"的病）。当前调用方半径都 ≤16px 不可达，但 M1 的 ECL syscall 会把半径开放给脚本设置，
+届时即可达。修正：改为共享常量 `MAX_ENTITY_RADIUS = 1024px`，在**每一个**带半径的写 API
+（`create_bullet`/`create_enemy`（radius+hurtbox）/`create_player_shot`/`create_field`）上双边
+钳制，使"和永不溢出"对六行碰撞的两个操作数都成立。
