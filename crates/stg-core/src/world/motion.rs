@@ -206,6 +206,20 @@ mod tests {
             w.body.bullets.flags[0] & (BULLET_POLAR_FX | BULLET_CART_FX),
             0
         );
+        // 判别腿：CART 已置位时再调 set_ang_vel_at，必须清 CART（此前从未在此状态下调用过它）。
+        w.body.set_gravity_at(0, Fx::ZERO, Fx::from_raw(6554));
+        assert_ne!(w.body.bullets.flags[0] & BULLET_CART_FX, 0);
+        w.body.set_ang_vel_at(0, 256);
+        assert_ne!(
+            w.body.bullets.flags[0] & BULLET_POLAR_FX,
+            0,
+            "开 POLAR 应置位"
+        );
+        assert_eq!(
+            w.body.bullets.flags[0] & BULLET_CART_FX,
+            0,
+            "开 POLAR 应清 CART"
+        );
     }
 
     /// refresh 核 = polar_to_vec 查表参考值逐位相等（判别式：换 sin/cos 即红）。
