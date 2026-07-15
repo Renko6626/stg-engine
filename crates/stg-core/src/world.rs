@@ -125,11 +125,16 @@ impl WorldBody {
         }
     }
 
-    /// 创建一个作用区（P4-a：池满 → NULL + 计数；P4-b：radius 超限 → 钳制 + 计数）。
+    /// 创建一个作用区（P4-a：池满 → NULL + 计数；P4-b：radius 双边钳入 `[0, FIELD_MAX_RADIUS]` + 计数）。
     pub fn create_field(&mut self, mut init: FieldInit) -> FieldHandle {
-        // P4-b：调用方违约 → 确定性安全结果。钳后 Fx 半径和永不溢出（见 field::FIELD_MAX_RADIUS）。
+        // P4-b：调用方违约 → 确定性安全结果。上界钳后 Fx 半径和永不溢出（见 field::FIELD_MAX_RADIUS）；
+        // 下界钳到 0 是因为行 6/7 消费 `field.radius + passive.radius` 作"半径和"——负值会破坏这个
+        // 不变量（和可能变负，平方后仍为正，判定行为诡异）。radius=0 是良定义的退化点场，非错误。
         if init.radius.raw() > FIELD_MAX_RADIUS.raw() {
             init.radius = FIELD_MAX_RADIUS;
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        } else if init.radius.raw() < 0 {
+            init.radius = Fx::ZERO;
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
         match self.fields.alloc(init) {
@@ -398,6 +403,8 @@ impl WorldBody {
         self.collide_bullets_player(); // 行 1/2：敌弹 × 自机
         self.collide_body_player(); // 行 3：敌体 × 自机
         self.collide_shot_enemy(); // 行 4：自机弹 × 敌人
+        self.collide_field_bullet(); // 行 6：作用区 × 敌弹（消弹）
+        self.collide_field_enemy(); // 行 7：作用区 × 敌人（伤敌）
     }
 
     /// 行 1（hit）+ 行 2（graze）：敌弹 × 自机。一次 len_sq 复用两半径。
@@ -499,6 +506,81 @@ impl WorldBody {
             }
         }
     }
+    /// 行 6：作用区（field.radius）× 敌弹（bullet.radius）→ 消弹。
+    /// 能力位在收集前 gate（未开 CLEAR 的 field 整行跳过，省 O(N×M)）。
+    fn collide_field_bullet(&mut self) {
+        use crate::events::ROW_FIELD_BULLET;
+        use crate::field::FIELD_CLEAR_BULLETS;
+        use crate::math::geom::len_sq;
+        let nwf = self.fields.alive.len();
+        let nwb = self.bullets.alive.len();
+        for fw in 0..nwf {
+            let mut fbits = self.fields.alive[fw];
+            while fbits != 0 {
+                let f = fw * 64 + fbits.trailing_zeros() as usize;
+                fbits &= fbits - 1;
+                if self.fields.flags[f] & FIELD_CLEAR_BULLETS == 0 {
+                    continue;
+                }
+                let (fx, fy) = (self.fields.x[f], self.fields.y[f]);
+                let fr = self.fields.radius[f];
+                for bw in 0..nwb {
+                    let mut bbits = self.bullets.alive[bw];
+                    while bbits != 0 {
+                        let b = bw * 64 + bbits.trailing_zeros() as usize;
+                        bbits &= bbits - 1;
+                        if self.bullets.delay[b] > 0 {
+                            continue; // delay 弹不参与
+                        }
+                        let dx = self.bullets.x[b] - fx;
+                        let dy = self.bullets.y[b] - fy;
+                        let d2 = len_sq(dx, dy);
+                        let sum = (fr + self.bullets.radius[b]).raw() as i64;
+                        if d2 <= sum * sum {
+                            self.push_hit(ROW_FIELD_BULLET, f as u16, b as u16);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 行 7：作用区（field.radius）× 敌人 hurtbox（受击圈，与行 4 同）→ 扣血。
+    /// **不查敌 invuln**（事件照收、结算时判，与行 4 同规）。
+    fn collide_field_enemy(&mut self) {
+        use crate::events::ROW_FIELD_ENEMY;
+        use crate::field::FIELD_DAMAGE;
+        use crate::math::geom::len_sq;
+        let nwf = self.fields.alive.len();
+        let nwe = self.enemies.alive.len();
+        for fw in 0..nwf {
+            let mut fbits = self.fields.alive[fw];
+            while fbits != 0 {
+                let f = fw * 64 + fbits.trailing_zeros() as usize;
+                fbits &= fbits - 1;
+                if self.fields.flags[f] & FIELD_DAMAGE == 0 {
+                    continue;
+                }
+                let (fx, fy) = (self.fields.x[f], self.fields.y[f]);
+                let fr = self.fields.radius[f];
+                for ew in 0..nwe {
+                    let mut ebits = self.enemies.alive[ew];
+                    while ebits != 0 {
+                        let e = ew * 64 + ebits.trailing_zeros() as usize;
+                        ebits &= ebits - 1;
+                        let dx = self.enemies.x[e] - fx;
+                        let dy = self.enemies.y[e] - fy;
+                        let d2 = len_sq(dx, dy);
+                        let sum = (fr + self.enemies.hurtbox[e]).raw() as i64;
+                        if d2 <= sum * sum {
+                            self.push_hit(ROW_FIELD_ENEMY, f as u16, e as u16);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn settle(&mut self) {
         self.phase_enter(PH_SETTLE);
         // 趟一 · 清除/防护：bomb 清弹（行 6）—— 本切片无 bomb，空。
@@ -1116,5 +1198,101 @@ mod tests {
         }
         crate::step::step(&mut w, &crate::input::InputFrame::empty(0));
         assert_eq!(w.body.fields.get(h), None); // 第 3 帧尽
+    }
+
+    #[test]
+    fn create_field_clamps_negative_radius_to_zero() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_field(&mut w, 0, 100, -5, crate::field::FIELD_CLEAR_BULLETS, 1);
+        let i = w.body.fields.get(h).unwrap();
+        assert_eq!(w.body.fields.radius[i], Fx::ZERO); // P4-b 下界钳制
+        assert_eq!(w.body.diag.contract_viol, 1);
+    }
+
+    #[test]
+    fn collide_field_bullet_discriminates_radius_sum() {
+        use crate::events::ROW_FIELD_BULLET;
+        use crate::field::FIELD_CLEAR_BULLETS;
+        // field 半径 20 + 弹半径 2 = 和 22 → 21px 撞、23px 不撞（判别式，非圆心重合）
+        let mut w = crate::step::World::new(1);
+        spawn_field(&mut w, 0, 100, 20, FIELD_CLEAR_BULLETS, 1);
+        bullet_at(&mut w, 21, 100); // 索引 0：内
+        bullet_at(&mut w, 23, 100); // 索引 1：外
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        let hits: Vec<_> = (0..w.body.hits_len as usize)
+            .map(|k| w.body.hits[k])
+            .filter(|h| h.row == ROW_FIELD_BULLET)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].active, 0); // field 索引
+        assert_eq!(hits[0].passive, 0); // 只有 21px 那颗
+    }
+
+    #[test]
+    fn collide_field_skips_bullets_without_clear_bit() {
+        use crate::events::ROW_FIELD_BULLET;
+        use crate::field::FIELD_DAMAGE;
+        // 只开 DAMAGE 位的 field 压着弹 → 不消弹
+        let mut w = crate::step::World::new(1);
+        spawn_field(&mut w, 0, 100, 20, FIELD_DAMAGE, 1);
+        bullet_at(&mut w, 0, 100);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        assert_eq!(
+            (0..w.body.hits_len as usize)
+                .filter(|&k| w.body.hits[k].row == ROW_FIELD_BULLET)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn collide_field_enemy_uses_hurtbox() {
+        use crate::events::ROW_FIELD_ENEMY;
+        use crate::field::FIELD_DAMAGE;
+        // field 半径 20 + 敌 hurtbox 16 = 和 36；若误用敌 radius 12 → 和 32
+        // 敌人放 34px：正确(≤36)撞；误用 radius(≤32) 则不撞 → 判别式
+        let mut w = crate::step::World::new(1);
+        spawn_field(&mut w, 0, 100, 20, FIELD_DAMAGE, 1);
+        spawn_enemy(&mut w, 34, 100, 5);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        assert_eq!(
+            (0..w.body.hits_len as usize)
+                .filter(|&k| w.body.hits[k].row == ROW_FIELD_ENEMY)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn collide_field_skips_enemy_without_damage_bit() {
+        use crate::events::ROW_FIELD_ENEMY;
+        use crate::field::FIELD_CLEAR_BULLETS;
+        // 只开 CLEAR 位的 field 压着敌人 → 不伤敌
+        let mut w = crate::step::World::new(1);
+        spawn_field(&mut w, 0, 100, 20, FIELD_CLEAR_BULLETS, 1);
+        spawn_enemy(&mut w, 0, 100, 5);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        assert_eq!(
+            (0..w.body.hits_len as usize)
+                .filter(|&k| w.body.hits[k].row == ROW_FIELD_ENEMY)
+                .count(),
+            0
+        );
     }
 }

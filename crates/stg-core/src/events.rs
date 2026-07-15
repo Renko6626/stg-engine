@@ -12,6 +12,8 @@ pub(crate) const ROW_BULLET_PLAYER_HIT: u8 = 1;
 pub(crate) const ROW_BULLET_PLAYER_GRAZE: u8 = 2;
 pub(crate) const ROW_BODY_PLAYER_HIT: u8 = 3;
 pub(crate) const ROW_SHOT_ENEMY: u8 = 4;
+pub(crate) const ROW_FIELD_BULLET: u8 = 6; // 作用区 × 敌弹 → 消弹
+pub(crate) const ROW_FIELD_ENEMY: u8 = 7; // 作用区 × 敌人 hurtbox → 扣血
 
 // ── 事件种类 ──────────────────────────────────────────────────────
 pub const EVT_ENEMY_DIED: u8 = 1;
