@@ -137,8 +137,7 @@ impl WorldBody {
     }
 
     /// 产出一条世界大事记（P4-a：满则丢弃 + 计数，不 panic）。
-    /// 生产端接入 settle/相位 3 是 Task 3/4/5；本任务仅测试直调，故暂 allow(dead_code)（届时可删）。
-    #[allow(dead_code)]
+    /// 生产端：settle 趟二（敌人致死/自机中弹→窗口）+ update_players 的 commit_death（自机死亡结算）。
     pub(crate) fn push_event(&mut self, ev: Event) {
         if (self.events_len as usize) < EVENTS_CAP {
             self.events[self.events_len as usize] = ev;
@@ -170,8 +169,39 @@ impl WorldBody {
     }
     pub(crate) fn update_players(&mut self) {
         self.phase_enter(PH_PLAYERS);
+        use crate::player::{
+            LIFE_ABSENT, LIFE_ALIVE, LIFE_DEATHWINDOW, LIFE_GAMEOVER, LIFE_RESPAWNING,
+        };
         for i in 0..crate::MAX_PLAYERS {
-            if self.players[i].life_state == crate::player::LIFE_ABSENT {
+            // 生死状态机计时（A4 相位 3 职责）
+            match self.players[i].life_state {
+                LIFE_ABSENT | LIFE_GAMEOVER => continue,
+                LIFE_DEATHWINDOW => {
+                    // bomb 救人 stub：本切片无 bomb 输入 → 窗口必耗尽。
+                    if self.players[i].state_timer > 0 {
+                        self.players[i].state_timer -= 1;
+                    }
+                    if self.players[i].state_timer == 0 {
+                        self.commit_death(i);
+                    }
+                }
+                LIFE_RESPAWNING => {
+                    if self.players[i].invuln > 0 {
+                        self.players[i].invuln -= 1;
+                    }
+                    if self.players[i].invuln == 0 {
+                        self.players[i].life_state = LIFE_ALIVE;
+                    }
+                }
+                LIFE_ALIVE => {
+                    if self.players[i].invuln > 0 {
+                        self.players[i].invuln -= 1; // bomb 无敌（本切片恒 0）
+                    }
+                }
+                _ => {}
+            }
+            // commit_death 可能刚把 lives 耗尽置 GAMEOVER → 再判一次跳过移动/发弹
+            if self.players[i].life_state == LIFE_GAMEOVER {
                 continue;
             }
             self.move_player(i);
@@ -181,6 +211,31 @@ impl WorldBody {
                 0 => self.char0_update_shot(i),
                 _ => {}
             }
+        }
+    }
+
+    /// 决死窗口耗尽的死亡连带结算（世界侧固定，D6）：lives−1、PlayerDied、重生或 game over。
+    fn commit_death(&mut self, i: usize) {
+        use crate::player::{LIFE_GAMEOVER, LIFE_RESPAWNING, RESPAWN_INVULN};
+        self.players[i].lives = self.players[i].lives.saturating_sub(1);
+        let ev = Event {
+            kind: crate::events::EVT_PLAYER_DIED,
+            a_index: i as u16,
+            a_gen: 0,
+            x: self.players[i].x,
+            y: self.players[i].y,
+            data: [self.players[i].lives as i32, 0],
+        };
+        self.push_event(ev);
+        // 掉 power / power 道具回撒 → 道具池切片（此处暂不动 power）。
+        if self.players[i].lives == 0 {
+            self.players[i].life_state = LIFE_GAMEOVER;
+        } else {
+            self.players[i].life_state = LIFE_RESPAWNING;
+            self.players[i].x = Fx::ZERO; // 场底中心（与 spawn 一致）
+            self.players[i].y = Fx::from_int(384);
+            self.players[i].invuln = RESPAWN_INVULN;
+            self.players[i].state_timer = 0;
         }
     }
 
@@ -413,7 +468,51 @@ impl WorldBody {
         }
     }
     pub(crate) fn settle(&mut self) {
-        self.phase_enter(PH_SETTLE); // stub
+        self.phase_enter(PH_SETTLE);
+        // 趟一 · 清除/防护：bomb 清弹（行 6）—— 本切片无 bomb，空。
+        // 趟二 · 伤害
+        for k in 0..self.hits_len as usize {
+            let h = self.hits[k];
+            match h.row {
+                crate::events::ROW_SHOT_ENEMY => {
+                    let s = h.active as usize;
+                    let e = h.passive as usize;
+                    if !self.enemies.is_alive(e) || self.enemies.flags[e] & ENEMY_DYING != 0 {
+                        continue; // 悬垂 / overkill：已死跳过，弹照消耗
+                    }
+                    if self.enemies.invuln[e] != 0 || !self.shots.is_alive(s) {
+                        continue; // 无敌帧跳伤害；悬垂弹跳过
+                    }
+                    self.enemies.hp[e] -= self.shots.damage[s] as i32;
+                    self.enemies.hit_flash[e] = 4;
+                    if self.enemies.hp[e] <= 0 {
+                        self.enemies.flags[e] |= ENEMY_DYING;
+                        let ev = Event {
+                            kind: crate::events::EVT_ENEMY_DIED,
+                            a_index: e as u16,
+                            a_gen: self.enemies.generation[e],
+                            x: self.enemies.x[e],
+                            y: self.enemies.y[e],
+                            data: [
+                                self.enemies.score[e] as i32,
+                                self.enemies.death_script[e] as i32,
+                            ],
+                        };
+                        self.push_event(ev);
+                    }
+                }
+                crate::events::ROW_BULLET_PLAYER_HIT | crate::events::ROW_BODY_PLAYER_HIT => {
+                    let p = h.passive as usize;
+                    if self.players[p].life_state != crate::player::LIFE_ALIVE {
+                        continue; // 已在窗口/无敌/重生 → 一次中弹只触发一次
+                    }
+                    self.players[p].life_state = crate::player::LIFE_DEATHWINDOW;
+                    self.players[p].state_timer = crate::player::DEATHBOMB_WINDOW;
+                }
+                _ => {}
+            }
+        }
+        // 趟三 · 计分/拾取 —— Task 6 填 graze。
     }
     pub(crate) fn cleanup(&mut self) {
         self.phase_enter(PH_CLEANUP);
@@ -741,5 +840,102 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].active, 0); // shot 索引
         assert_eq!(hits[0].passive as usize, ei); // enemy 索引
+    }
+
+    #[test]
+    fn settle_shot_kills_enemy_marks_dying_and_event() {
+        use crate::enemy::ENEMY_DYING;
+        use crate::events::EVT_ENEMY_DIED;
+        let mut w = crate::step::World::new(1);
+        let e = spawn_enemy(&mut w, 0, 80, 1); // hp 1
+        let ei = w.body.enemies.get(e).unwrap();
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: w.body.enemies.x[ei],
+            y: w.body.enemies.y[ei],
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 1,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        w.body.settle();
+        assert!(w.body.enemies.hp[ei] <= 0);
+        assert_ne!(w.body.enemies.flags[ei] & ENEMY_DYING, 0);
+        assert_eq!(w.body.events_len, 1);
+        assert_eq!(w.body.events[0].kind, EVT_ENEMY_DIED);
+    }
+
+    #[test]
+    fn settle_overkill_two_shots_one_death_event() {
+        let mut w = crate::step::World::new(1);
+        let e = spawn_enemy(&mut w, 0, 80, 1); // hp 1，两发都打中
+        let ei = w.body.enemies.get(e).unwrap();
+        for _ in 0..2 {
+            w.body.create_player_shot(crate::shots::ShotInit {
+                x: w.body.enemies.x[ei],
+                y: w.body.enemies.y[ei],
+                vx: Fx::ZERO,
+                vy: Fx::ZERO,
+                damage: 1,
+                radius: Fx::from_int(4),
+                sprite: 0,
+                owner: 0,
+                flags: 0,
+            });
+        }
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        w.body.settle();
+        assert_eq!(w.body.events_len, 1); // 只死一次
+    }
+
+    #[test]
+    fn settle_bullet_hit_triggers_deathwindow() {
+        use crate::player::{DEATHBOMB_WINDOW, LIFE_DEATHWINDOW};
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        bullet_at(&mut w, 0, 384);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        w.body.settle();
+        assert_eq!(w.body.players[0].life_state, LIFE_DEATHWINDOW);
+        assert_eq!(w.body.players[0].state_timer, DEATHBOMB_WINDOW);
+    }
+
+    #[test]
+    fn deathwindow_expires_to_respawn_after_window() {
+        use crate::input::InputFrame;
+        use crate::player::{LIFE_ALIVE, LIFE_RESPAWNING};
+        let mut w = crate::step::World::new(1);
+        // 手动置决死窗口（模拟已中弹）
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = crate::player::DEATHBOMB_WINDOW;
+        let lives0 = w.body.players[0].lives;
+        // 跑够窗口帧数 → Dead → Respawning
+        for _ in 0..crate::player::DEATHBOMB_WINDOW {
+            crate::step::step(&mut w, &InputFrame::empty(0));
+        }
+        assert_eq!(w.body.players[0].life_state, LIFE_RESPAWNING);
+        assert_eq!(w.body.players[0].lives, lives0 - 1);
+        assert!(w.body.players[0].invuln > 0);
+        // 再跑够无敌帧 → Alive
+        for _ in 0..crate::player::RESPAWN_INVULN {
+            crate::step::step(&mut w, &InputFrame::empty(0));
+        }
+        assert_eq!(w.body.players[0].life_state, LIFE_ALIVE);
     }
 }

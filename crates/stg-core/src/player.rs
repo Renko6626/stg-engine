@@ -5,6 +5,11 @@ use crate::math::Fx;
 // ── 生死状态（本块只用 ABSENT/ALIVE；其余待碰撞那块）──────────────────
 pub const LIFE_ABSENT: u8 = 0; // 全零默认 = 不在场
 pub const LIFE_ALIVE: u8 = 1;
+pub const LIFE_DEATHWINDOW: u8 = 2; // 决死窗口（中弹后可 bomb 救）
+pub const LIFE_RESPAWNING: u8 = 3; // 场底重生、无敌
+pub const LIFE_GAMEOVER: u8 = 4; // 命尽、不再重生
+pub const DEATHBOMB_WINDOW: u16 = 8; // 决死窗口帧
+pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
 
 // ── 角色配置（暂 const；WorldTables 角色配置表将来接管）────────────────
 pub const HIGH_SPEED: Fx = Fx::from_raw(294_912); // 4.5 px/帧
