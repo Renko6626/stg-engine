@@ -18,6 +18,10 @@ pub(crate) const ROW_FIELD_ENEMY: u8 = 7; // 作用区 × 敌人 hurtbox → 扣
 // ── 事件种类 ──────────────────────────────────────────────────────
 pub const EVT_ENEMY_DIED: u8 = 1;
 pub const EVT_PLAYER_DIED: u8 = 2;
+/// 作用区本帧消弹的聚合事实（每 field 每帧至多一条，`data[0]` = 本帧本 field 消了几颗）。
+///
+/// **聚合而非逐弹**：弹池 cap 8192 而 events cap 512，逐弹发在全屏消弹下必爆（溢出 16×）。
+pub const EVT_FIELD_CLEARED: u8 = 3;
 
 /// 一条碰撞命中（6 B）：矩阵行 + 主动/被动池索引。收集序天然按收集循环嵌套，无需排序。
 #[repr(C)]
