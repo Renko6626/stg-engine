@@ -441,7 +441,7 @@ impl WorldBody {
     fn collide_shot_enemy(&mut self) {
         use crate::events::ROW_SHOT_ENEMY;
         use crate::math::geom::len_sq;
-        let ne = self.enemies.alive.len();
+        let nwe = self.enemies.alive.len();
         let nws = self.shots.alive.len();
         for sw in 0..nws {
             let mut sbits = self.shots.alive[sw];
@@ -450,7 +450,7 @@ impl WorldBody {
                 sbits &= sbits - 1;
                 let (sx, sy) = (self.shots.x[s], self.shots.y[s]);
                 let sr = self.shots.radius[s];
-                for ew in 0..ne {
+                for ew in 0..nwe {
                     let mut ebits = self.enemies.alive[ew];
                     while ebits != 0 {
                         let e = ew * 64 + ebits.trailing_zeros() as usize;
@@ -470,6 +470,8 @@ impl WorldBody {
     pub(crate) fn settle(&mut self) {
         self.phase_enter(PH_SETTLE);
         // 趟一 · 清除/防护：bomb 清弹（行 6）—— 本切片无 bomb，空。
+        // bomb 切片落地时须先回答：被 bomb 清掉的弹还该不该算 graze？
+        // 若否，趟三（graze 计分）需对 b 加 is_alive(b) 门禁，避免给已被本趟清除的弹记 graze。
         // 趟二 · 伤害
         for k in 0..self.hits_len as usize {
             let h = self.hits[k];
@@ -513,6 +515,9 @@ impl WorldBody {
             }
         }
         // 趟三 · 计分/拾取
+        // grazed_by 是 u8 位掩码，每自机占 1 位；MAX_PLAYERS 超过 8 会静默溢出（release 下 wrap，
+        // 而非 panic），从而在跨自机间腐蚀 graze 位——编译期钉死上限，宁可编不过也不留隐患。
+        const _: () = assert!(crate::MAX_PLAYERS <= 8, "grazed_by 位掩码只容 8 自机");
         for k in 0..self.hits_len as usize {
             let h = self.hits[k];
             if h.row == crate::events::ROW_BULLET_PLAYER_GRAZE {
@@ -822,15 +827,46 @@ mod tests {
         assert_eq!(n, 1);
     }
 
+    // D8 双半径不对称的判别式测试：行 3（敌体×自机）必须用 enemy.radius（体碰，小），
+    // 不能用 enemy.hurtbox（受击，大）。圆心重合（d2=0）没法判别——任何正半径和都会命中；
+    // 必须选一个"卡在两个半径和之间"的距离才能让写反的代码露馅，所以这是新增负向测试而非
+    // 修改 collide_enemy_body_on_player（那个测试仍保留，用来证明行 3 本身会触发）。
+    //
+    // 几何：player.hit_radius=2.5，spawn_enemy 固定 radius=12 / hurtbox=16。
+    // 轴对齐偏移 15px → d2 = 15² = 225。
+    //   正确（radius）：sum = 12+2.5 = 14.5 → 14.5² = 210.25 < 225 → 不命中。
+    //   写反（hurtbox）：sum = 16+2.5 = 18.5 → 18.5² = 342.25 > 225 → 命中——测试就会失败。
+    #[test]
+    fn collide_body_uses_body_radius_not_hurtbox() {
+        use crate::events::ROW_BODY_PLAYER_HIT;
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(100);
+        spawn_enemy(&mut w, 15, 100, 5);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        let n = (0..w.body.hits_len as usize)
+            .filter(|&k| w.body.hits[k].row == ROW_BODY_PLAYER_HIT)
+            .count();
+        assert_eq!(n, 0);
+    }
+
+    // 几何同上一条判别式思路，但行 4（自机弹×敌人）用 enemy.hurtbox（受击，大），
+    // 用轴对齐 18px 偏移即可正向判别（不需要额外负向测试）：
+    //   正确（hurtbox）：sum = shot.radius(4)+16 = 20 → 20² = 400 > d2(18²=324) → 命中。
+    //   写反（radius）  ：sum = 4+12 = 16 → 16² = 256 < 324 → 不命中——测试就会失败。
     #[test]
     fn collide_shot_on_enemy() {
         use crate::events::ROW_SHOT_ENEMY;
         let mut w = crate::step::World::new(1);
         let e = spawn_enemy(&mut w, 0, 80, 5);
         let ei = w.body.enemies.get(e).unwrap();
-        // 造一发压在敌人身上的自机弹
+        // 自机弹与敌人轴对齐偏移 18px（不再圆心重合，见上方注释的判别式几何）。
         w.body.create_player_shot(crate::shots::ShotInit {
-            x: w.body.enemies.x[ei],
+            x: w.body.enemies.x[ei] + Fx::from_int(18),
             y: w.body.enemies.y[ei],
             vx: Fx::ZERO,
             vy: Fx::ZERO,
