@@ -9,6 +9,7 @@ use crate::math::Fx;
 use crate::math::cordic::atan2;
 use crate::math::geom::{len_sq, polar_to_vec};
 use crate::math::isqrt::isqrt;
+use crate::player::{LIFE_ABSENT, LIFE_GAMEOVER};
 use crate::world::STATUS_STALE_HANDLE;
 
 /// 低速回填阈值 = 1/16 px/帧。契约常量：`speed` 恒回填、`angle` 仅 `speed >= 此值` 时回填
@@ -134,6 +135,37 @@ impl WorldBody {
             self.stop_fx_at(i);
         }
     }
+
+    /// 最近可瞄自机：平方距离最小、并列取低索引（I4：升序遍历 + 严格小于才替换）。
+    /// 可瞄 = 非 ABSENT 且非 GAMEOVER（决死窗口/重生无敌期仍在场上，照瞄——ZUN 语义）。
+    pub(crate) fn nearest_aimable_player(&self, x: Fx, y: Fx) -> Option<usize> {
+        let mut best: Option<(usize, i64)> = None;
+        for p in 0..crate::MAX_PLAYERS {
+            let st = self.players[p].life_state;
+            if st == LIFE_ABSENT || st == LIFE_GAMEOVER {
+                continue;
+            }
+            let d2 = len_sq(self.players[p].x - x, self.players[p].y - y);
+            if best.is_none_or(|(_, bd)| d2 < bd) {
+                best = Some((p, d2));
+            }
+        }
+        best.map(|(p, _)| p)
+    }
+
+    /// 瞄最近可瞄自机 + delta 偏移，回填 v。无可瞄自机 → 纯 no-op（不计数）。
+    pub fn aim_bullet_at_player(&mut self, h: BulletHandle, delta: Angle) {
+        let Some(i) = self.bullet_index_checked(h) else {
+            return;
+        };
+        let Some(p) = self.nearest_aimable_player(self.bullets.x[i], self.bullets.y[i]) else {
+            return;
+        };
+        let dx = self.players[p].x - self.bullets.x[i];
+        let dy = self.players[p].y - self.bullets.y[i];
+        self.bullets.angle[i] = crate::math::cordic::atan2(dy, dx).add(delta);
+        self.refresh_vel_from_polar(i);
+    }
 }
 
 #[cfg(test)]
@@ -252,5 +284,42 @@ mod tests {
             w.body.bullets.angle[0],
             crate::math::cordic::atan2(Fx::ZERO, Fx::from_raw(8192))
         );
+    }
+
+    /// 瞄准判别式：angle == atan2(dy,dx)+delta 参考；可瞄状态 = 非 ABSENT 非 GAMEOVER。
+    #[test]
+    fn aim_targets_nearest_alive_player() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 100, 100); // 自机在 (0,384)
+        w.body.aim_bullet_at_player(h, Angle::ZERO);
+        let expect = crate::math::cordic::atan2(Fx::from_int(384 - 100), Fx::from_int(0 - 100));
+        assert_eq!(w.body.bullets.angle[0], expect);
+        // delta 偏移生效
+        w.body.aim_bullet_at_player(h, Angle::QUARTER);
+        assert_eq!(w.body.bullets.angle[0], expect.add(Angle::QUARTER));
+    }
+
+    /// 无可瞄自机 → 纯 no-op（不计数，非违约——世界状态使然）。
+    #[test]
+    fn aim_with_no_alive_player_is_silent_noop() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 100, 100);
+        w.body.bullets.angle[0] = Angle::QUARTER;
+        w.body.players[0].life_state = crate::player::LIFE_GAMEOVER; // players[1] 本就 ABSENT
+        let cv0 = w.body.diag.contract_viol;
+        w.body.aim_bullet_at_player(h, Angle::ZERO);
+        assert_eq!(w.body.bullets.angle[0], Angle::QUARTER, "角度不得变");
+        assert_eq!(w.body.diag.contract_viol, cv0, "不得计违约");
+    }
+
+    /// 悬垂句柄照常计数（与其余 setter 同律）。
+    #[test]
+    fn aim_stale_handle_counts() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 0, 100);
+        w.body.bullets.free(h);
+        let cv0 = w.body.diag.contract_viol;
+        w.body.aim_bullet_at_player(h, Angle::ZERO);
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
     }
 }
