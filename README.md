@@ -16,19 +16,34 @@ headless 高速模拟。核心性质是**跨平台 bit 级确定性**。
 step: world[n+1] = step(world[n], static_ecl, input_frame[n])
 ```
 
-## 当前状态：Phase 1 脚手架
+## 当前状态：Phase 1 · M0 世界层
 
 Phase 1 = `stg-core` + `stg-ecl-compiler` + `stg-harness`。DoD = 金向量在 x86_64 与 aarch64 上
-逐帧校验和一致。当前仅落地确定性契约最底层（vendored FNV-1a 校验和）与端到端 CI 流水线；
-数学核 / 池 / World / step 随 **M0** 逐模块 TDD 落地。
+逐帧校验和一致——**这条流水线从第一天起就是绿的，每个切片都过三平台对拍**。
+
+**已落地（M0-1 → M0-8）**：定点数学核（Q16.16 / BAM 查表 / CORDIC / 烘焙表）· 字段级校验和
+（`#[derive(Checksum)]` 防漏）· 池框架（`define_pool!`，存活掩码即分配器）· World + 11 相位 step
++ 整块快照 · 输入抽象 + 自机（东方手感移动/发弹）· 敌人池 · **碰撞矩阵四行 + 结算三趟 + 生死状态机**
+（决死窗口→死亡→重生）· **通用消弹区**（`FieldPool`，bomb 是它的首个租户）。
+
+**未落地**：bomb · 道具池 · 敌人 AI + `move_to` 插值器 · 变换系统 · ECL VM（M1）· Godot 前端（M2）。
 
 ```
 crates/
   stg-core/          确定性内核（断层线以下）
-  stg-derive/        proc-macro：#[derive(Checksum)]
-  stg-ecl-compiler/  离线 ECL 字节码编译器（M1）
+  stg-derive/        proc-macro：#[derive(Checksum)] + define_pool!
+  stg-ecl-compiler/  离线 ECL 字节码编译器（M1，未开工）
   stg-harness/       CLI：金向量对拍 + 烘焙表 bake/verify
 ```
+
+## 专题文档
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/fixed-point-corners.md`](./docs/fixed-point-corners.md) | `Fx`/`Angle` 的坑与规范速查（`Q(m).f × Q(m).f = Q(2m).(2f)`、累加器模式、Angle 回绕） |
+| [`docs/checksum-mechanism.md`](./docs/checksum-mechanism.md) | 校验和机制 + "新字段默认入校验"的保证是怎么来的 |
+| [`docs/pool-memory-layout.md`](./docs/pool-memory-layout.md) | 池 SoA 布局与缓存精算（热路径驻 L2） |
+| [`docs/superpowers/specs/`](./docs/superpowers/specs/) · [`plans/`](./docs/superpowers/plans/) | 各切片的设计 spec 与实施计划（历史记录） |
 
 ## 构建与测试
 
