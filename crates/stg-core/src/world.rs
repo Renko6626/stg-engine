@@ -4,6 +4,7 @@
 
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
 use crate::enemy::{ENEMY_DYING, EnemyHandle, EnemyInit, EnemyPool};
+use crate::events::{EVENTS_CAP, Event, HITS_CAP, Hit};
 use crate::math::Fx;
 use crate::player::PlayerState;
 use crate::rng::Pcg32;
@@ -43,6 +44,8 @@ pub(crate) const RNG_SEQ: u64 = 0xda3e_39cb_94b9_5bdb;
 pub struct DiagCounters {
     pub pool_full: [u32; 8], // 按池 id
     pub contract_viol: u32,
+    pub hits_overflow: u32,   // hits 满丢弃计数（P4-a）
+    pub events_overflow: u32, // events 满丢弃计数（P4-a）
 }
 
 /// 世界本体（最小切片）。构造走 `step::World::new`（堆零初始化 + 播种 rng）。
@@ -55,6 +58,14 @@ pub struct WorldBody {
     pub players: [PlayerState; crate::MAX_PLAYERS],
     pub shots: ShotPool,
     pub enemies: EnemyPool,
+    #[checksum(skip = "纯输出缓冲，帧内私有，重演确定性再生（A5）")]
+    pub(crate) hits: [Hit; HITS_CAP],
+    #[checksum(skip = "纯输出缓冲，len 随 hits 一并 skip（A5）")]
+    pub(crate) hits_len: u16,
+    #[checksum(skip = "纯输出缓冲，相位 8/表现层只读，重演确定性再生（A5）")]
+    pub events: [Event; EVENTS_CAP],
+    #[checksum(skip = "纯输出缓冲，len 随 events 一并 skip（A5）")]
+    pub events_len: u16,
     pub diag: DiagCounters,
     pub last_status: u16,
     #[cfg(debug_assertions)]
@@ -111,6 +122,34 @@ impl WorldBody {
         }
     }
 
+    /// 收集一条碰撞命中（P4-a：满则停收 + 计数，不 panic）。
+    /// 生产端接入 collide 相位是 Task 3/4；本任务仅测试直调，故暂 allow(dead_code)（届时可删）。
+    #[allow(dead_code)]
+    pub(crate) fn push_hit(&mut self, row: u8, active: u16, passive: u16) {
+        if (self.hits_len as usize) < HITS_CAP {
+            self.hits[self.hits_len as usize] = Hit {
+                row,
+                active,
+                passive,
+            };
+            self.hits_len += 1;
+        } else {
+            self.diag.hits_overflow = self.diag.hits_overflow.wrapping_add(1);
+        }
+    }
+
+    /// 产出一条世界大事记（P4-a：满则丢弃 + 计数，不 panic）。
+    /// 生产端接入 settle/相位 3 是 Task 3/4/5；本任务仅测试直调，故暂 allow(dead_code)（届时可删）。
+    #[allow(dead_code)]
+    pub(crate) fn push_event(&mut self, ev: Event) {
+        if (self.events_len as usize) < EVENTS_CAP {
+            self.events[self.events_len as usize] = ev;
+            self.events_len += 1;
+        } else {
+            self.diag.events_overflow = self.diag.events_overflow.wrapping_add(1);
+        }
+    }
+
     /// 越界判定（含边距）。
     fn out_of_bounds(x: Fx, y: Fx) -> bool {
         let xi = x.to_int_floor();
@@ -121,7 +160,9 @@ impl WorldBody {
 
     // ── 相位函数（pub(crate)，每个先 phase_enter 保序）────────────────────
     pub(crate) fn begin(&mut self) {
-        self.phase_enter(PH_BEGIN); // 最小切片无输出缓冲可清；仅护栏推进
+        self.phase_enter(PH_BEGIN);
+        self.hits_len = 0;
+        self.events_len = 0;
     }
     pub(crate) fn decode_input(&mut self, input: &crate::input::InputFrame) {
         self.phase_enter(PH_DECODE);
@@ -340,6 +381,40 @@ mod tests {
             Fx::from_int(-100)
         ));
         assert!(WorldBody::out_of_bounds(Fx::from_int(0), Fx::from_int(600)));
+    }
+
+    #[test]
+    fn hits_push_clear_and_overflow() {
+        use crate::events::HITS_CAP;
+        let mut w = crate::step::World::new(1);
+        w.body.push_hit(1, 3, 0);
+        w.body.push_hit(2, 4, 0);
+        assert_eq!(w.body.hits_len, 2);
+        // 溢出：填满后再推 → 停收 + 计数，不 panic
+        w.body.hits_len = HITS_CAP as u16;
+        w.body.push_hit(1, 0, 0);
+        assert_eq!(w.body.hits_len, HITS_CAP as u16); // 未增
+        assert_eq!(w.body.diag.hits_overflow, 1);
+        // begin 清空
+        w.body.begin();
+        assert_eq!(w.body.hits_len, 0);
+        assert_eq!(w.body.events_len, 0);
+    }
+
+    #[test]
+    fn events_push_records_fact() {
+        use crate::events::{EVT_PLAYER_DIED, Event};
+        let mut w = crate::step::World::new(1);
+        w.body.push_event(Event {
+            kind: EVT_PLAYER_DIED,
+            a_index: 0,
+            a_gen: 0,
+            x: Fx::ZERO,
+            y: Fx::from_int(384),
+            data: [2, 0],
+        });
+        assert_eq!(w.body.events_len, 1);
+        assert_eq!(w.body.events[0].kind, EVT_PLAYER_DIED);
     }
 
     #[test]
