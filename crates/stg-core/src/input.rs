@@ -28,32 +28,143 @@ impl InputFrame {
     }
 }
 
-// ── 按钮位约定（半冻结；表现层须同意）。坐标 y 向下为正，UP = 减 y。─────────
-pub const BTN_UP: u16 = 1 << 0;
-pub const BTN_DOWN: u16 = 1 << 1;
-pub const BTN_LEFT: u16 = 1 << 2;
-pub const BTN_RIGHT: u16 = 1 << 3;
-pub const BTN_SHOT: u16 = 1 << 4;
-pub const BTN_BOMB: u16 = 1 << 5;
-pub const BTN_SLOW: u16 = 1 << 6;
+// ── 动作词表注册处（唯一权威）────────────────────────────────────────
+//
+// 绑一对新「输入-效果」的全部动作：在下面的 `define_actions!` 里加一行 + 去声明的
+// 消费相位写效果逻辑（自机语义 → 相位 3）+ 测试。位约定半冻结（表现层须同意）；
+// **位=0 必须等价旧行为**——旧回放该位恒 0，加位才不是回放格式的 breaking change。
+//
+// 词表与玩家无关："玩家 1 左移" = `actions[0]` × `BTN_LEFT`——「哪个玩家」由
+// `InputFrame.actions[]` 的槽位表达；物理设备/联机 peer 绑到哪个槽是表现层/会话层
+// （M2/M4）的事，core 只见槽位。
+
+/// 动作的触发语义：消费端按此选择读位方式。
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ActionKind {
+    /// 电平：按住持续生效（移动/射击/低速）。
+    Level = 0,
+    /// 沿：一次按下=一次效果，消费端配 `prev_input` 沿检测（bomb）。
+    Edge = 1,
+}
+
+/// 词表描述表的一行：名字 + 位号 + 触发语义。
+pub struct ActionDesc {
+    pub name: &'static str,
+    pub bit: u8,
+    pub kind: ActionKind,
+}
+
+/// 声明动作词表，展开出：`pub const $名字: u16` 位常量、`EDGE_MASK`（沿触发位并集）、
+/// `ACTIONS` 描述表、位互不重叠的编译期断言。
+macro_rules! define_actions {
+    ( $( $(#[$doc:meta])* $name:ident = $bit:literal, $kind:ident; )+ ) => {
+        $( $(#[$doc])* pub const $name: u16 = 1 << $bit; )+
+
+        /// 全部沿触发位的并集——`prev_input` 沿检测的统一消费面。
+        pub const EDGE_MASK: u16 = 0 $( | ((ActionKind::$kind as u16) * (1 << $bit)) )+;
+
+        /// 动作词表总数。
+        pub const ACTION_COUNT: usize = { let a = [$($bit as u8),+]; a.len() };
+
+        /// 动作词表描述表（表即地图；`actions_vocab_hash` 的原料）。
+        pub static ACTIONS: [ActionDesc; ACTION_COUNT] = [
+            $( ActionDesc { name: stringify!($name), bit: $bit, kind: ActionKind::$kind }, )+
+        ];
+
+        // 位互不重叠（编译期钉死；重叠时并集 popcount < 词条数）。
+        const _: () = assert!(
+            (0u16 $( | (1 << $bit) )+).count_ones() as usize == ACTION_COUNT,
+            "动作位重叠"
+        );
+    };
+}
+
+define_actions! {
+    /// 上移。坐标 y 向下为正，UP = 减 y。
+    BTN_UP = 0, Level;
+    /// 下移。
+    BTN_DOWN = 1, Level;
+    /// 左移。
+    BTN_LEFT = 2, Level;
+    /// 右移。
+    BTN_RIGHT = 3, Level;
+    /// 射击（消费者：`world/player.rs::char0_update_shot`，`shot_cd` 整流为连发）。
+    BTN_SHOT = 4, Level;
+    /// bomb（沿触发；消费者待 bomb 切片，`EDGE_MASK` 的首个租户）。
+    BTN_BOMB = 5, Edge;
+    /// 低速（消费者：`world/player.rs::move_player`）。
+    BTN_SLOW = 6, Level;
+}
+
+/// 词表指纹：FNV-1a 遍历 (name, bit, kind)。将来进回放头/联机握手，
+/// 校验双方输入语义一致（烘焙表哈希同款纪律）。
+pub fn actions_vocab_hash() -> u64 {
+    let mut h = crate::checksum::Fnv1a64::new();
+    for a in &ACTIONS {
+        h.write_bytes(a.name.as_bytes());
+        h.write_u8(0xFF); // 名字定界，防拼接歧义
+        h.write_u8(a.bit);
+        h.write_u8(a.kind as u8);
+    }
+    h.finish()
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn buttons_distinct() {
-        let all = [
-            BTN_UP, BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SHOT, BTN_BOMB, BTN_SLOW,
-        ];
-        let or: u16 = all.iter().fold(0, |a, &b| a | b);
-        assert_eq!(or.count_ones() as usize, all.len()); // 互不重叠
-    }
+    // （原 buttons_distinct 运行时测试已被 define_actions! 的编译期断言取代。）
 
     #[test]
     fn empty_is_no_op() {
         let f = InputFrame::empty(5);
         assert_eq!(f.frame, 5);
         assert_eq!(f.actions[0].buttons, 0);
+    }
+
+    /// 位值冻结（回放契约）：位号是回放文件与将来网络包的语义坐标，注册表重排不得改值。
+    #[test]
+    fn action_bit_values_frozen() {
+        assert_eq!(BTN_UP, 1 << 0);
+        assert_eq!(BTN_DOWN, 1 << 1);
+        assert_eq!(BTN_LEFT, 1 << 2);
+        assert_eq!(BTN_RIGHT, 1 << 3);
+        assert_eq!(BTN_SHOT, 1 << 4);
+        assert_eq!(BTN_BOMB, 1 << 5);
+        assert_eq!(BTN_SLOW, 1 << 6);
+    }
+
+    /// `EDGE_MASK` = 全部沿触发位的并集；当前词表中只有 BOMB 是沿语义。
+    #[test]
+    fn edge_mask_is_exactly_bomb() {
+        assert_eq!(EDGE_MASK, BTN_BOMB);
+    }
+
+    /// ACTIONS 描述表与位常量逐项一致（表即地图：名字/位/语义三列齐全、顺序按位号）。
+    #[test]
+    fn actions_table_matches_constants() {
+        let expected: [(&str, u16, ActionKind); 7] = [
+            ("BTN_UP", BTN_UP, ActionKind::Level),
+            ("BTN_DOWN", BTN_DOWN, ActionKind::Level),
+            ("BTN_LEFT", BTN_LEFT, ActionKind::Level),
+            ("BTN_RIGHT", BTN_RIGHT, ActionKind::Level),
+            ("BTN_SHOT", BTN_SHOT, ActionKind::Level),
+            ("BTN_BOMB", BTN_BOMB, ActionKind::Edge),
+            ("BTN_SLOW", BTN_SLOW, ActionKind::Level),
+        ];
+        assert_eq!(ACTIONS.len(), expected.len());
+        for (a, (name, mask, kind)) in ACTIONS.iter().zip(expected) {
+            assert_eq!(a.name, name);
+            assert_eq!(1u16 << a.bit, mask);
+            assert_eq!(a.kind, kind);
+        }
+    }
+
+    /// 词表指纹钉死：对 (name, bit, kind) 的 FNV-1a。词表任何增删改都必须换值——
+    /// 这是将来回放头/联机握手校验"双方输入语义一致"的原料（烘焙表哈希同款纪律）。
+    #[test]
+    fn vocab_hash_pinned() {
+        assert_eq!(actions_vocab_hash(), 0x87A3_D673_0CCB_3796); // 词表变更须有意识地更新此值
     }
 }
