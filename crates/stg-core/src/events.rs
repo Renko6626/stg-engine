@@ -8,12 +8,10 @@ pub(crate) const HITS_CAP: usize = 8192;
 pub(crate) const EVENTS_CAP: usize = 512;
 
 // ── 碰撞矩阵行号（D8）─────────────────────────────────────────────
-// 本任务（Task 2）仅定义常量；消费方是 collide 相位（Task 3/4），故此处 allow(dead_code)
-// 是过渡态，Task 3/4 落地后这些常量即被引用，attribute 自然失去意义（届时可删）。
-#[allow(dead_code)]
 pub(crate) const ROW_BULLET_PLAYER_HIT: u8 = 1;
-#[allow(dead_code)]
 pub(crate) const ROW_BULLET_PLAYER_GRAZE: u8 = 2;
+// 消费方是 collide 相位（Task 4），故此处 allow(dead_code) 是过渡态，Task 4 落地后
+// 这些常量即被引用，attribute 自然失去意义（届时可删）。
 #[allow(dead_code)]
 pub(crate) const ROW_BODY_PLAYER_HIT: u8 = 3;
 #[allow(dead_code)]

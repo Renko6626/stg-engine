@@ -123,8 +123,6 @@ impl WorldBody {
     }
 
     /// 收集一条碰撞命中（P4-a：满则停收 + 计数，不 panic）。
-    /// 生产端接入 collide 相位是 Task 3/4；本任务仅测试直调，故暂 allow(dead_code)（届时可删）。
-    #[allow(dead_code)]
     pub(crate) fn push_hit(&mut self, row: u8, active: u16, passive: u16) {
         if (self.hits_len as usize) < HITS_CAP {
             self.hits[self.hits_len as usize] = Hit {
@@ -309,7 +307,47 @@ impl WorldBody {
         }
     }
     pub(crate) fn collide(&mut self) {
-        self.phase_enter(PH_COLLIDE); // stub：碰撞 D8 后续
+        self.phase_enter(PH_COLLIDE);
+        self.collide_bullets_player(); // 行 1/2：敌弹 × 自机
+    }
+
+    /// 行 1（hit）+ 行 2（graze）：敌弹 × 自机。一次 len_sq 复用两半径。
+    fn collide_bullets_player(&mut self) {
+        use crate::events::{ROW_BULLET_PLAYER_GRAZE, ROW_BULLET_PLAYER_HIT};
+        use crate::math::geom::len_sq;
+        for p in 0..crate::MAX_PLAYERS {
+            if self.players[p].life_state != crate::player::LIFE_ALIVE
+                || self.players[p].invuln != 0
+            {
+                continue; // 门禁：只 Alive 且非无敌参与
+            }
+            let (px, py) = (self.players[p].x, self.players[p].y);
+            let hit_r = self.players[p].hit_radius;
+            let graze_r = self.players[p].graze_radius;
+            let nw = self.bullets.alive.len();
+            for w in 0..nw {
+                let mut bits = self.bullets.alive[w];
+                while bits != 0 {
+                    let b = w * 64 + bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    if self.bullets.delay[b] > 0 {
+                        continue; // delay 弹不参与
+                    }
+                    let dx = self.bullets.x[b] - px;
+                    let dy = self.bullets.y[b] - py;
+                    let d2 = len_sq(dx, dy);
+                    let br = self.bullets.radius[b];
+                    let graze_sum = (br + graze_r).raw() as i64;
+                    if d2 <= graze_sum * graze_sum {
+                        self.push_hit(ROW_BULLET_PLAYER_GRAZE, b as u16, p as u16);
+                        let hit_sum = (br + hit_r).raw() as i64;
+                        if d2 <= hit_sum * hit_sum {
+                            self.push_hit(ROW_BULLET_PLAYER_HIT, b as u16, p as u16);
+                        }
+                    }
+                }
+            }
+        }
     }
     pub(crate) fn settle(&mut self) {
         self.phase_enter(PH_SETTLE); // stub
@@ -415,6 +453,107 @@ mod tests {
         });
         assert_eq!(w.body.events_len, 1);
         assert_eq!(w.body.events[0].kind, EVT_PLAYER_DIED);
+    }
+
+    // 造一颗停在 (x,y) 的哑弹（半径 2）。
+    fn bullet_at(w: &mut crate::step::World, x: i32, y: i32) {
+        w.body.create_bullet(crate::bullets::BulletInit {
+            x: Fx::from_int(x),
+            y: Fx::from_int(y),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: crate::math::Angle::ZERO,
+            ang_vel: 0,
+            accel: Fx::ZERO,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            sprite: 0,
+            radius: Fx::from_int(2),
+            delay: 0,
+            life: 0xFFFF,
+            flags: 0,
+            grazed_by: 0,
+            transform_head: 0xFFFF,
+            xform_wait: 0,
+            xform_next: 0,
+        });
+    }
+
+    #[test]
+    fn collide_bullet_on_player_collects_hit_and_graze() {
+        use crate::events::{ROW_BULLET_PLAYER_GRAZE, ROW_BULLET_PLAYER_HIT};
+        let mut w = crate::step::World::new(1);
+        // 自机在 (0,384)，hit_radius=2.5、graze_radius=16。弹压在自机身上 → 中弹+擦弹都收。
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        bullet_at(&mut w, 0, 384);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        let hit = (0..w.body.hits_len as usize)
+            .filter(|&k| w.body.hits[k].row == ROW_BULLET_PLAYER_HIT)
+            .count();
+        let graze = (0..w.body.hits_len as usize)
+            .filter(|&k| w.body.hits[k].row == ROW_BULLET_PLAYER_GRAZE)
+            .count();
+        assert_eq!(hit, 1);
+        assert_eq!(graze, 1);
+    }
+
+    #[test]
+    fn collide_near_bullet_grazes_only() {
+        use crate::events::{ROW_BULLET_PLAYER_GRAZE, ROW_BULLET_PLAYER_HIT};
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        bullet_at(&mut w, 10, 384); // 距 10px：在 graze 圈(≈18)内、hit 圈(≈4.5)外
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        let hit = (0..w.body.hits_len as usize)
+            .filter(|&k| w.body.hits[k].row == ROW_BULLET_PLAYER_HIT)
+            .count();
+        let graze = (0..w.body.hits_len as usize)
+            .filter(|&k| w.body.hits[k].row == ROW_BULLET_PLAYER_GRAZE)
+            .count();
+        assert_eq!(hit, 0);
+        assert_eq!(graze, 1);
+    }
+
+    #[test]
+    fn collide_skips_invuln_player() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        w.body.players[0].invuln = 60; // 无敌 → 不参与
+        bullet_at(&mut w, 0, 384);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        assert_eq!(w.body.hits_len, 0);
+    }
+
+    #[test]
+    fn collide_skips_delay_bullet() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        bullet_at(&mut w, 0, 384);
+        // 把刚造的弹设 delay>0（索引 0）
+        w.body.bullets.delay[0] = 5;
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        assert_eq!(w.body.hits_len, 0);
     }
 
     #[test]
