@@ -41,6 +41,7 @@ pub const POOL_ENEMY: usize = 2;
 pub const POOL_FIELD: usize = 3;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
+pub const STATUS_STALE_HANDLE: u16 = 2;
 
 /// 所有实体判定半径的写 API 上限（P4-b）。
 ///
