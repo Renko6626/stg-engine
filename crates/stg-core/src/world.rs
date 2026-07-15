@@ -1,6 +1,21 @@
-//! 世界本体（stg_core::world）—— WorldBody 字段 + `pub(crate)` 相位函数 + 写 API + PhaseGuard。
-//! M0-7：collide（D8 行1/2/3/4，圆-圆平方距离，只收集）+ settle（D9 三趟）+ 生死状态机 + EnemyPool 已落。
-//! M0-8：FieldPool（通用圆形作用区，静止哑原语）+ 行6 消弹/行7 伤敌 + settle 趟一（标记 + 聚合 FieldCleared）已落。
+//! 世界本体（stg_core::world）—— `WorldBody` 字段所有权 + 跨相位共用设施。
+//!
+//! **模块结构镜像 step 的相位骨架**（P2：相位顺序是宪法，由 `stg_core::step` 独占）。
+//! 有分量的相位各占一个子模块，本文件只留字段与共用面：
+//!
+//! | 相位 | 在哪 |
+//! |---|---|
+//! | 0 `begin` · 4 `run_transforms`(stub) · 10 `advance` | 本文件（各数行，不值得单开） |
+//! | 1 `decode_input` · 3 `update_players` | [`player`] —— 注意 `crate::player` 是 `PlayerState` **数据**模块，本模块是**相位逻辑** |
+//! | 5 `integrate` | [`integrate`] |
+//! | 6 `collide` | [`collide`] —— D8 矩阵四类六行，**只收集不改状态** |
+//! | 7 `settle` | [`settle`] —— D9 三趟，**唯一改状态者** |
+//! | 9 `cleanup` | [`cleanup`] —— 越界/寿命/已清除弹/dying 敌人在此收尸 |
+//!
+//! 本文件持有：`WorldBody` 结构（字段所有权集中处）· `phase_enter`（PhaseGuard 押运）·
+//! 4 个 `create_*` 写 API + `clamp_radius`（P1 边界，P4-b 半径钳制）· `push_hit`/`push_event`
+//! （纯输出缓冲的唯一入口）· 场界常量（`FIELD_*`/`OOB_MARGIN`，被 player 与 cleanup 共用）。
+//!
 //! **构造只走 `step::World::new`（堆零初始化）**——WorldBody 无 `new()`，避免 ~450KB 栈临时量。
 
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
