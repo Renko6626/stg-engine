@@ -38,6 +38,7 @@ pub mod rng;
 pub mod shots;
 pub mod step;
 pub mod world;
+pub mod xform;
 
 pub use step::{World, step, step_with_director};
 
