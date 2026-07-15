@@ -28,6 +28,7 @@ pub const MAX_PLAYERS: usize = 2;
 
 pub mod bullets;
 pub mod checksum;
+pub mod enemy;
 pub mod input;
 pub mod math;
 pub mod player;

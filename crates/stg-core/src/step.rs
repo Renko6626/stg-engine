@@ -44,6 +44,7 @@ impl World {
         s.bullets.copy_into(&mut d.bullets);
         d.players = s.players; // [PlayerState; N] 是 Copy
         s.shots.copy_into(&mut d.shots);
+        s.enemies.copy_into(&mut d.enemies);
         d.diag = s.diag;
         d.last_status = s.last_status;
         #[cfg(debug_assertions)]

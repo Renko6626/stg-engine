@@ -3,6 +3,7 @@
 //! **构造只走 `step::World::new`（堆零初始化）**——WorldBody 无 `new()`，避免 ~450KB 栈临时量。
 
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
+use crate::enemy::{ENEMY_DYING, EnemyHandle, EnemyInit, EnemyPool};
 use crate::math::Fx;
 use crate::player::PlayerState;
 use crate::rng::Pcg32;
@@ -11,6 +12,7 @@ use crate::shots::{ShotHandle, ShotInit, ShotPool};
 // ── 常量：池 id / 错误码 / 场界（D7 中轴原点，384×448 + 越界边距）──────────
 pub const POOL_BULLET: usize = 0;
 pub const POOL_SHOT: usize = 1;
+pub const POOL_ENEMY: usize = 2;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
 
@@ -52,6 +54,7 @@ pub struct WorldBody {
     pub bullets: BulletPool,
     pub players: [PlayerState; crate::MAX_PLAYERS],
     pub shots: ShotPool,
+    pub enemies: EnemyPool,
     pub diag: DiagCounters,
     pub last_status: u16,
     #[cfg(debug_assertions)]
@@ -92,6 +95,18 @@ impl WorldBody {
                 self.diag.pool_full[POOL_SHOT] = self.diag.pool_full[POOL_SHOT].wrapping_add(1);
                 self.last_status = STATUS_POOL_FULL;
                 ShotHandle::NULL
+            }
+        }
+    }
+
+    /// 创建一个敌人（P4-a：池满 → NULL + 诊断计数 + last_status）。
+    pub fn create_enemy(&mut self, init: EnemyInit) -> EnemyHandle {
+        match self.enemies.alloc(init) {
+            Some(h) => h,
+            None => {
+                self.diag.pool_full[POOL_ENEMY] = self.diag.pool_full[POOL_ENEMY].wrapping_add(1);
+                self.last_status = STATUS_POOL_FULL;
+                EnemyHandle::NULL
             }
         }
     }
@@ -234,6 +249,23 @@ impl WorldBody {
                 self.shots.y[i] = self.shots.y[i] + self.shots.vy[i];
             }
         }
+        // 敌人：pos += vel（move_to 插值器延后，mv_* 惰性）+ 计时器 tick
+        let nw = self.enemies.alive.len();
+        for w in 0..nw {
+            let mut bits = self.enemies.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                self.enemies.x[i] = self.enemies.x[i] + self.enemies.vx[i];
+                self.enemies.y[i] = self.enemies.y[i] + self.enemies.vy[i];
+                if self.enemies.invuln[i] > 0 {
+                    self.enemies.invuln[i] -= 1;
+                }
+                if self.enemies.hit_flash[i] > 0 {
+                    self.enemies.hit_flash[i] -= 1;
+                }
+            }
+        }
     }
     pub(crate) fn collide(&mut self) {
         self.phase_enter(PH_COLLIDE); // stub：碰撞 D8 后续
@@ -268,6 +300,20 @@ impl WorldBody {
                 }
             }
         }
+        // 敌人：dying 标记或越界 → 回收
+        let nw = self.enemies.alive.len();
+        for w in 0..nw {
+            let mut bits = self.enemies.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                let dead = (self.enemies.flags[i] & ENEMY_DYING != 0)
+                    || Self::out_of_bounds(self.enemies.x[i], self.enemies.y[i]);
+                if dead {
+                    self.enemies.free_index(i);
+                }
+            }
+        }
     }
     pub(crate) fn advance(&mut self) {
         self.phase_enter(PH_ADVANCE);
@@ -294,5 +340,44 @@ mod tests {
             Fx::from_int(-100)
         ));
         assert!(WorldBody::out_of_bounds(Fx::from_int(0), Fx::from_int(600)));
+    }
+
+    #[test]
+    fn create_enemy_and_integrate_moves() {
+        use crate::enemy::EnemyInit;
+        let mut w = crate::step::World::new(1);
+        let init = EnemyInit {
+            x: Fx::ZERO,
+            y: Fx::from_int(50),
+            vx: Fx::from_int(1),
+            vy: Fx::from_int(2),
+            mv_from_x: Fx::ZERO,
+            mv_from_y: Fx::ZERO,
+            mv_to_x: Fx::ZERO,
+            mv_to_y: Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp: 5,
+            hp_max: 5,
+            radius: Fx::from_int(12),
+            hurtbox: Fx::from_int(16),
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 0,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_table: 0,
+            score: 100,
+        };
+        let h = w.body.create_enemy(init);
+        assert_ne!(h, crate::enemy::EnemyHandle::NULL);
+        crate::step::step(&mut w, &crate::input::InputFrame::empty(0));
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.x[i], Fx::from_int(1)); // 0+1
+        assert_eq!(w.body.enemies.y[i], Fx::from_int(52)); // 50+2
     }
 }
