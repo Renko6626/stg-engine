@@ -105,9 +105,18 @@ docs/checksum-mechanism.md       校验和机制 + "新字段默认入校验" �
 docs/pool-memory-layout.md       池 SoA 布局与缓存精算（热路径驻 L2）
 .github/workflows/ci.yml         三平台矩阵 + 校验和对拍 + fmt/clippy + 依赖防火墙
 crates/
-  stg-core/         确定性内核（现仅 checksum；math/pool/world/step 随 M0）
-    src/math/tables/  烘焙表原始字节（M0 生成并 commit）
-  stg-derive/       proc-macro：#[derive(Checksum)]（M0）
+  stg-core/         确定性内核（断层线以下）
+    src/math/        定点核：fx/angle/trig/cordic/easing/geom/isqrt/codec
+    src/math/tables/ 烘焙表原始字节（harness 生成并 commit，core 只 include_bytes!）
+    src/checksum.rs  vendored FNV-1a 64（D11）
+    src/rng.rs       vendored PCG32（I3）
+    src/{bullets,shots,enemy,field,player}.rs  实体数据模块（前四个是 define_pool! 实例；池即层）
+    src/{input,events}.rs                      输入抽象 / hits+events 缓冲类型
+    src/world.rs     WorldBody 字段所有权 + 写 API + push_* + PhaseGuard + 场界常量
+    src/world/       【模块结构镜像相位骨架】player(相1+3) / integrate(相5)
+                     / collide(相6) / settle(相7) / cleanup(相9)
+    src/step.rs      P2 组装层：§3.5 宪法顺序的唯一持有者 + World + 快照
+  stg-derive/       proc-macro：#[derive(Checksum)] + define_pool!
   stg-ecl-compiler/ 离线 ECL 编译器，产出 EclImage（M1）
   stg-harness/      CLI：金向量对拍 + 烘焙表 bake/verify（允许浮点）
 ```
