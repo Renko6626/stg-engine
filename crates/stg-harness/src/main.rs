@@ -31,10 +31,12 @@ fn parse_out(rest: &[String]) -> Option<String> {
         .and_then(|i| rest.get(i + 1).cloned())
 }
 
-/// 金向量 —— 真实 step 演化的纯弹幕场景，逐帧 World 校验和（CI 跨平台对拍的数据源）。
+/// 金向量 —— 真实 step 演化的碰撞病态诊断场景，逐帧 World 校验和（CI 跨平台对拍的数据源）。
 ///
-/// 导演每帧从中心铺一圈 12 发（基角随帧旋转 + rng 抖动 → 压 sincos + PCG32），弹积分，
-/// 越界/寿命尽经 cleanup 回收（压掩码分配器 churn）。600 帧逐帧 World checksum 三平台逐点对拍。
+/// 导演每 60 帧把敌人补到顶部固定 3 位（静止靶——AI/move_to 插值留后续切片），每 8 帧从
+/// 顶部中心铺一圈 10 发敌弹（rng 抖动 → 压 sincos + PCG32）。脚本自机全程射击、90 帧周期
+/// 上冲吃弹/下退喘息，串联自机弹杀敌→dying→EnemyDied→cleanup 回收→导演补位、敌弹中弹→
+/// 决死窗口→死亡→重生、graze 累积等碰撞/结算全链路。600 帧 @ 60Hz。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::BulletInit;
     use stg_core::enemy::EnemyInit;
