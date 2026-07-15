@@ -82,6 +82,11 @@ headless 高速模拟。核心性质是**确定性**——同一份 `(初始状�
 - **校验和**：**vendored FNV-1a 64**（`stg_core::checksum`，算法字节冻结，绝不走外部依赖）。
   **字段级、哈希全槽（不用 alive 掩码）、小端字节序**；`#[derive(Checksum)]`（stg-derive）从字段
   自动生成防漏。节奏：CI/金向量**逐帧**，联机随包每 **K=20** 帧采样。
+- **金向量闸门的能力边界（重要，定测试策略）**：`determinism-gate` 只把三平台校验和流**互相比**
+  （`ci.yml` 的 `diff -u`），**仓库无 committed 基线** → 它抓的是**跨平台分歧**，抓不了**行为回归**：
+  改错行为会产出"三平台一致但都错"的流、闸门照绿。故**行为正确性只能靠单测守**，金向量守不了。
+  推论：任何"招牌不变量"（如 D8 体碰/受击双半径）必须有**判别式单测**（几何取值能区分对错），
+  圆心重合式测试对半径映射是瞎的——M0-7 变异检验已实证（对调 radius↔hurtbox，圆心重合测试仍绿）。
   机制详解（新字段默认入校验的保证 / 编译期 vs 运行时 / 性能）见 [`docs/checksum-mechanism.md`](docs/checksum-mechanism.md)。
 - **复用槽写满硬规则**：分配/复用池槽必须写满所有字段（exhaustive `Init` 编译期强制），
   配宏全覆写单测——支撑"哈希全槽不掩码"。`define_pool!` 是 stg-derive proc-macro，存活掩码即分配器。
@@ -121,7 +126,8 @@ cargo run -p stg-harness -- verify-tables        # 断言烘焙表字节 == comm
 ## Milestone 地图（design_doc.md §11 / §1.3）
 
 - **M0** `stg-core` 数学核 + 池（`define_pool!`）+ step 骨架 + 快照/校验和 + `stg-derive` Checksum；
-  `stg-harness` 金向量逐帧对拍。**← M0 骨架 + M0-6 世界层（输入/自机移动/发弹/ShotPool）已落；世界层续（碰撞/结算/敌人）或 M1 ECL**
+  `stg-harness` 金向量逐帧对拍。**← M0 骨架 + M0-6（输入/自机/发弹/ShotPool）+ M0-7（EnemyPool/碰撞 D8 四行/结算 D9 三趟/生死状态机）已落；
+  世界层续（bomb/道具/敌人 AI + move_to）或 M1 ECL**
 - **M1** `stg-core` ECL VM + syscall 表；`stg-ecl-compiler` Rust DSL 拼字节码，跑通一张非平凡符卡。
 - **M2** `stg-godot`（gdext）WorldBridge + MultiMesh + 请求分发器 —— **phase 后续，暂不建 crate**。
 - **M3** 环形快照 + 本地回滚 harness（延迟/输入扰动/校验和风暴）。
