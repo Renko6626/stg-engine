@@ -170,7 +170,7 @@ impl WorldBody {
 
 #[cfg(test)]
 mod tests {
-    use crate::bullets::{BULLET_CART_FX, BULLET_POLAR_FX};
+    use crate::bullets::{BULLET_CART_FX, BULLET_CLEARED, BULLET_POLAR_FX};
     use crate::math::geom::polar_to_vec;
     use crate::math::{Angle, Fx};
     use crate::world::STATUS_STALE_HANDLE;
@@ -181,6 +181,8 @@ mod tests {
     fn mode_bits_mutually_exclusive() {
         let mut w = crate::step::World::new(1);
         bullet_at(&mut w, 0, 100);
+        // 预置非模式位（BULLET_CLEARED + 位 3 D4 反弹计数预留）：全程必须原样存活。
+        w.body.bullets.flags[0] |= BULLET_CLEARED | (1 << 3);
         w.body.set_ang_vel_at(0, 256);
         assert_ne!(w.body.bullets.flags[0] & BULLET_POLAR_FX, 0);
         w.body.set_gravity_at(0, Fx::ZERO, Fx::from_raw(6554));
@@ -219,6 +221,12 @@ mod tests {
             w.body.bullets.flags[0] & BULLET_CART_FX,
             0,
             "开 POLAR 应清 CART"
+        );
+        // 其他位保真：模式切换（含 stop）全程不得误动 CLEARED / 位 3。
+        assert_eq!(
+            w.body.bullets.flags[0] & (BULLET_CLEARED | (1 << 3)),
+            BULLET_CLEARED | (1 << 3),
+            "模式切换不得误动其他位"
         );
     }
 
@@ -281,6 +289,52 @@ mod tests {
         assert_eq!((w.body.bullets.vx[0], w.body.bullets.vy[0]), (rvx, rvy));
     }
 
+    /// 转发层覆盖：4 个纯转发 setter（ang_vel/accel/gravity/stop）在合法句柄上
+    /// 字段落位 + 模式位切换均正确（此前只有互斥律测试间接覆盖，这里直打公开 API）。
+    #[test]
+    fn handle_setters_forwarding() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 0, 100);
+
+        w.body.set_bullet_ang_vel(h, 300);
+        assert_eq!(w.body.bullets.ang_vel[0], 300);
+        assert_ne!(
+            w.body.bullets.flags[0] & BULLET_POLAR_FX,
+            0,
+            "set_bullet_ang_vel 应开 POLAR"
+        );
+
+        w.body.set_bullet_accel(h, Fx::from_raw(777));
+        assert_eq!(w.body.bullets.accel[0].raw(), 777);
+        assert_ne!(
+            w.body.bullets.flags[0] & BULLET_POLAR_FX,
+            0,
+            "set_bullet_accel 应开 POLAR"
+        );
+
+        w.body
+            .set_bullet_gravity(h, Fx::from_raw(11), Fx::from_raw(22));
+        assert_eq!(w.body.bullets.ax[0].raw(), 11);
+        assert_eq!(w.body.bullets.ay[0].raw(), 22);
+        assert_ne!(
+            w.body.bullets.flags[0] & BULLET_CART_FX,
+            0,
+            "set_bullet_gravity 应开 CART"
+        );
+        assert_eq!(
+            w.body.bullets.flags[0] & BULLET_POLAR_FX,
+            0,
+            "set_bullet_gravity 应清 POLAR"
+        );
+
+        w.body.stop_bullet_fx(h);
+        assert_eq!(
+            w.body.bullets.flags[0] & (BULLET_POLAR_FX | BULLET_CART_FX),
+            0,
+            "stop_bullet_fx 应清两模式位"
+        );
+    }
+
     /// 阈值判别式：阈值下 speed 照回填、angle 冻结；阈值上 angle == atan2 参考。
     #[test]
     fn backfill_freezes_angle_below_threshold() {
@@ -297,6 +351,26 @@ mod tests {
         assert_eq!(
             w.body.bullets.angle[0],
             crate::math::cordic::atan2(Fx::ZERO, Fx::from_raw(8192))
+        );
+    }
+
+    /// 阈值边界值判别式：speed 恰好 == BACKFILL_MIN_SPEED 时也应回填（`>=` 语义，非 `>`）。
+    #[test]
+    fn backfill_boundary_speed_equals_threshold_backfills() {
+        let mut w = crate::step::World::new(1);
+        bullet_at(&mut w, 0, 100);
+        w.body.bullets.angle[0] = Angle::QUARTER; // 旧朝向，若冻结会残留
+        w.body.bullets.vx[0] = super::BACKFILL_MIN_SPEED; // 恰好等于阈值
+        w.body.bullets.vy[0] = Fx::ZERO;
+        w.body.backfill_polar(0);
+        assert_eq!(
+            w.body.bullets.speed[0].raw(),
+            super::BACKFILL_MIN_SPEED.raw()
+        );
+        assert_eq!(
+            w.body.bullets.angle[0],
+            crate::math::cordic::atan2(Fx::ZERO, super::BACKFILL_MIN_SPEED),
+            "阈值恰好等于 BACKFILL_MIN_SPEED 时角度也应回填（>= 语义）"
         );
     }
 
