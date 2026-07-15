@@ -8,7 +8,6 @@ use crate::checksum::{Checksum, Fnv1a64};
 pub(crate) const SEG_CAP: usize = 2048;
 pub(crate) const SLOTS_PER_SEG: usize = 16;
 /// 哑弹哨兵（与 `bullets.transform_head` 既用值一致）。
-#[allow(dead_code)] // M0-11a 只落数据模块；消费方（create_bullet_with_xform）留给 M0-11b
 pub(crate) const XFORM_NONE: u16 = 0xFFFF;
 
 // ── op 编号（冻结）─────────────────────────────────────────────
@@ -26,10 +25,9 @@ pub const OP_SET_GRAVITY: u8 = 10;
 pub const OP_STOP_FX: u8 = 11;
 pub const OP_LOOP: u8 = 12;
 /// 本刀已实现的最大 op 号；> 此值（或 13..=17 预留区）= 未知 op → P4-b 终止序列。
-#[allow(dead_code)] // M0-11a 只落数据模块；消费方（run_transforms 的 op 派发）留给 M0-11b
 pub(crate) const OP_MAX_IMPLEMENTED: u8 = OP_LOOP;
 /// 扩展槽数（游标步进 = 1 + ARITY[op]）。本刀全 0；11b 的 STEP_* 为 1。
-#[allow(dead_code)] // M0-11a 只落数据模块；消费方（run_transforms 的游标步进）留给 M0-11b
+#[allow(dead_code)] // 消费方（run_transforms 的游标步进）留给 Task 5，接入后删
 pub(crate) const ARITY: [u8; 13] = [0; 13];
 
 /// 一个变换槽（12 B，相对 wait 制：发射本 op 后等 wait 帧再执行下一槽）。
@@ -52,9 +50,7 @@ pub struct XformSegPool {
 impl XformSegPool {
     /// 最低空段（I4 确定性分配）。**不清零槽内容**——写满是调用方义务。
     ///
-    /// 本刀（M0-11a）只有测试调用；生产消费方（`create_bullet_with_xform`）留给 M0-11b，
-    /// 故非测试构建下判 dead_code，加 allow。
-    #[allow(dead_code)]
+    /// 生产消费方：`create_bullet_with_xform`（先段后弹的"先段"半边）。
     pub(crate) fn alloc(&mut self) -> Option<u16> {
         for (w, word) in self.occupied.iter_mut().enumerate() {
             if *word != u64::MAX {
@@ -72,8 +68,7 @@ impl XformSegPool {
 
     /// 还段。双 free / 越界属引擎 bug（P4-c debug 断言）；release 幂等清位。
     ///
-    /// 生产消费方（弹回收时还段）留给 M0-11b，本刀仅测试调用。
-    #[allow(dead_code)]
+    /// 生产消费方：`create_bullet_with_xform` 的弹池满回滚半边 + `cleanup` 的弹回收还段。
     pub(crate) fn free(&mut self, seg: u16) {
         let s = seg as usize;
         debug_assert!(s < SEG_CAP, "还段越界（引擎 bug）");
@@ -87,15 +82,14 @@ impl XformSegPool {
         self.occupied[s / 64] &= !(1 << (s % 64));
     }
 
-    /// 生产消费方（`run_transforms` 只读遍历）留给 M0-11b，本刀仅测试调用。
+    /// 生产消费方（`run_transforms` 的游标执行器只读遍历）留给 Task 5，接入后删；本刀仅测试调用。
     #[allow(dead_code)]
     pub(crate) fn seg_slots(&self, seg: u16) -> &[XformSlot] {
         let base = seg as usize * SLOTS_PER_SEG;
         &self.slots[base..base + SLOTS_PER_SEG]
     }
 
-    /// 生产消费方（`create_bullet_with_xform` 写满 16 槽）留给 M0-11b，本刀仅测试调用。
-    #[allow(dead_code)]
+    /// 生产消费方：`create_bullet_with_xform` 写满 16 槽（拷贝 + 尾零）。
     pub(crate) fn seg_slots_mut(&mut self, seg: u16) -> &mut [XformSlot] {
         let base = seg as usize * SLOTS_PER_SEG;
         &mut self.slots[base..base + SLOTS_PER_SEG]

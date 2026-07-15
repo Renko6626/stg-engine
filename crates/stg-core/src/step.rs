@@ -144,6 +144,112 @@ mod tests {
         assert_eq!(w.body.last_status, STATUS_POOL_FULL);
     }
 
+    fn slot(wait: u16, op: u8, a0: i32, a1: i32) -> crate::xform::XformSlot {
+        crate::xform::XformSlot {
+            wait,
+            op,
+            _pad: 0,
+            args: [a0, a1],
+        }
+    }
+
+    /// 成功路径：序列拷贝进段、尾部清零（复用段的陈值不可泄漏）、transform_head 被覆写。
+    #[test]
+    fn create_with_xform_copies_and_zero_fills_tail() {
+        let mut w = World::new(1);
+        // 先污染 0 号段（占用→写脏→还段），验证复用时尾零
+        let s0 = w.body.xforms.alloc().unwrap();
+        for sl in w.body.xforms.seg_slots_mut(s0) {
+            sl.args[0] = -1;
+        }
+        w.body.xforms.free(s0);
+        let seq = [slot(3, crate::xform::OP_SET_SPEED, 65536, 0)];
+        let h = w
+            .body
+            .create_bullet_with_xform(straight(0, 0, 0, 0, 0xFFFF), &seq);
+        assert_ne!(h, BulletHandle::NULL);
+        let i = w.body.bullets.get(h).unwrap();
+        let seg = w.body.bullets.transform_head[i];
+        assert_eq!(seg, 0, "最低空段");
+        let slots = w.body.xforms.seg_slots(seg);
+        assert_eq!(slots[0], seq[0]);
+        assert!(
+            slots[1..].iter().all(|s| *s == Default::default()),
+            "尾部必须清零 = 天然 END"
+        );
+    }
+
+    /// 坏参整体失败：>16 槽 / 含未知 op → NULL + BAD_ARGS 计数 + 零副作用（弹与段都不产生）。
+    #[test]
+    fn create_with_xform_bad_args_total_failure() {
+        let mut w = World::new(1);
+        let long = [slot(0, crate::xform::OP_SET_SPEED, 1, 0); 17];
+        assert_eq!(
+            w.body
+                .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &long),
+            BulletHandle::NULL
+        );
+        let unknown = [slot(0, 13, 0, 0)]; // 13 = 11b 预留区，本刀未知
+        assert_eq!(
+            w.body
+                .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &unknown),
+            BulletHandle::NULL
+        );
+        assert_eq!(w.body.diag.contract_viol, 2);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.body.bullets.iter_alive().count(), 0);
+        assert_eq!(w.body.xforms.alloc().unwrap(), 0, "无段泄漏");
+    }
+
+    /// 段满 → NULL + POOL_FULL(XFORM)，零副作用。
+    #[test]
+    fn create_with_xform_segpool_full() {
+        let mut w = World::new(1);
+        for _ in 0..crate::xform::SEG_CAP {
+            w.body.xforms.alloc().unwrap();
+        }
+        let seq = [slot(0, crate::xform::OP_SET_SPEED, 1, 0)];
+        assert_eq!(
+            w.body
+                .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &seq),
+            BulletHandle::NULL
+        );
+        assert_eq!(w.body.diag.pool_full[crate::world::POOL_XFORM], 1);
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            0,
+            "宁缺勿哑：弹也不产生"
+        );
+    }
+
+    /// 弹池满 → 还段回滚（先段后弹的另一半）。
+    #[test]
+    fn create_with_xform_bulletpool_full_rolls_back_segment() {
+        let mut w = World::new(1);
+        for _ in 0..BulletPool::CAP {
+            w.body.create_bullet(straight(0, 0, 0, 0, 0xFFFF));
+        }
+        let seq = [slot(0, crate::xform::OP_SET_SPEED, 1, 0)];
+        assert_eq!(
+            w.body
+                .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &seq),
+            BulletHandle::NULL
+        );
+        assert_eq!(w.body.diag.pool_full[POOL_BULLET], 1);
+        assert_eq!(w.body.xforms.alloc().unwrap(), 0, "段已回滚归还");
+    }
+
+    /// create_bullet（哑弹路径）覆写 transform_head——调用方伪造段号无效。
+    #[test]
+    fn create_bullet_overrides_forged_transform_head() {
+        let mut w = World::new(1);
+        let mut init = straight(0, 0, 0, 0, 0xFFFF);
+        init.transform_head = 7; // 伪造
+        let h = w.body.create_bullet(init);
+        let i = w.body.bullets.get(h).unwrap();
+        assert_eq!(w.body.bullets.transform_head[i], crate::xform::XFORM_NONE);
+    }
+
     #[test]
     fn new_is_deterministic_and_seed_matters() {
         assert_eq!(World::new(42).checksum(), World::new(42).checksum());

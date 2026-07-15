@@ -164,9 +164,54 @@ impl WorldBody {
         if Self::clamp_radius(&mut init.radius) {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
+        init.transform_head = crate::xform::XFORM_NONE; // 哑弹哨兵：调用方伪造段号无效
         match self.bullets.alloc(init) {
             Some(h) => h,
             None => {
+                self.diag.pool_full[POOL_BULLET] = self.diag.pool_full[POOL_BULLET].wrapping_add(1);
+                self.last_status = STATUS_POOL_FULL;
+                BulletHandle::NULL
+            }
+        }
+    }
+
+    /// 创建一颗带变换序列的弹（D4）。序列**拷贝**进弹自有段（尾部清零 = 天然 END）。
+    /// P4：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]`（与 `create_bullet` 对称）；坏参
+    /// （>16 槽 / 含未知 op）→ 整体失败 NULL + BAD_ARGS（宁缺勿哑）；
+    /// 先段后弹——段满 → NULL + POOL_FULL(XFORM)；弹池满 → 还段回滚 + POOL_FULL(BULLET)。
+    /// `init.transform_head` 恒被本函数覆写（调用方传值无效）。
+    pub fn create_bullet_with_xform(
+        &mut self,
+        mut init: BulletInit,
+        xform: &[crate::xform::XformSlot],
+    ) -> BulletHandle {
+        if Self::clamp_radius(&mut init.radius) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
+        let bad = xform.len() > crate::xform::SLOTS_PER_SEG
+            || xform
+                .iter()
+                .any(|s| s.op > crate::xform::OP_MAX_IMPLEMENTED);
+        if bad {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return BulletHandle::NULL;
+        }
+        let Some(seg) = self.xforms.alloc() else {
+            self.diag.pool_full[POOL_XFORM] = self.diag.pool_full[POOL_XFORM].wrapping_add(1);
+            self.last_status = STATUS_POOL_FULL;
+            return BulletHandle::NULL;
+        };
+        let dst = self.xforms.seg_slots_mut(seg);
+        dst[..xform.len()].copy_from_slice(xform);
+        dst[xform.len()..].fill(Default::default()); // 尾零 = 天然 END（复用段写满义务）
+        init.transform_head = seg;
+        init.xform_wait = 0;
+        init.xform_next = 0;
+        match self.bullets.alloc(init) {
+            Some(h) => h,
+            None => {
+                self.xforms.free(seg); // 先段后弹的回滚半边
                 self.diag.pool_full[POOL_BULLET] = self.diag.pool_full[POOL_BULLET].wrapping_add(1);
                 self.last_status = STATUS_POOL_FULL;
                 BulletHandle::NULL
