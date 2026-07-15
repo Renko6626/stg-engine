@@ -54,6 +54,22 @@ M0-8 最终复审的分诊：比较两侧都是精确的 i64 Q32.32 同域整数
 补测试只是钉住 `<=`（含边界即撞）这个**约定**，而非防任何精度风险。列在此仅为存档；
 真要做也就是几行，但别把它当"缺口"焦虑。
 
+### B6. integrate delay 门测试未断言 speed 冻结（accel=0 无判别力）（D3 终审分诊）
+
+delay 门测试只覆盖了 POLAR 弹 `angle`/位置冻结，`accel=0` 时 `speed` 冻不冻结两条路都过——
+无判别力。下次动 `integrate` 时补一条 `accel != 0` 的腿，让 speed 冻结成为可判别断言。
+
+### B7. 互斥 debug_assert 无 should_panic 覆盖（D3 终审分诊）
+
+模式位互斥的 debug 断言（若存在类似兜底）没有 `#[should_panic]` 测试触发；需 `pub(crate)`
+直写 `flags` 构造出违规状态才能测。`phase_guard` 已有先例（同样是 pub(crate) 直写触发），
+可照抄该模式补一条。
+
+### B8. `nearest_aimable_player` 并列取低索引（严格 `<`）无两人等距判别测试（D3 终审分诊）
+
+实现用严格小于（`d2 < bd`）保证并列时取低索引（I4 口径），但没有"两个自机等距"的判别测试
+去区分 `<` 与 `<=`。被 co-op 阻塞（`players[1]` 目前恒 `LIFE_ABSENT`），与 B3 同期做。
+
 ---
 
 ## C. 代码整洁（低优先，都是两可）
@@ -86,6 +102,12 @@ M0-8 最终复审的分诊：比较两侧都是精确的 i64 Q32.32 同域整数
 `field_life_one_lives_exactly_one_frame` / `field_life_n_survives_n_frames` 测的是
 「integrate 倒数 ↔ cleanup 回收」的跨相位时序，留在了既不拥有相位 5 也不拥有相位 9 的 `world.rs`。
 `step.rs` 有 step 级兜底，故低急。真要动就挪到 `cleanup.rs` 或 `step.rs`（后者拥有跨相位顺序）。
+
+### C6. `backfill_polar` 的 `isqrt(..) as i32` 理论回绕（D3 终审分诊）
+
+`|v|` 逼近 `Fx` 上限时 `isqrt(len_sq(vx,vy) as u64) as i32` 理论上可回绕为负 `speed`——
+确定性无损（跨平台仍逐位一致）、当帧越界回收兜底，纯理论风险。按 P4-c 对称性（引擎自身
+bug → debug 帧内断言）补一条 `debug_assert!(sp.raw() >= 0)` 之类的兜底。
 
 ---
 
