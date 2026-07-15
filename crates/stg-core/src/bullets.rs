@@ -9,6 +9,11 @@ use crate::math::{Angle, Fx};
 ///
 /// **生命只在同一帧的相位 7→9 之间**，从不跨帧——故 collide 无需检查此位（次帧看不到已清除的弹）。
 pub const BULLET_CLEARED: u8 = 1 << 0;
+/// `flags` 位：POLAR_FX 连续效果（integrate 每帧 `angle += ang_vel; speed += accel;` 后刷 v）。
+pub const BULLET_POLAR_FX: u8 = 1 << 1;
+/// `flags` 位：CART_FX 连续效果（integrate 每帧 `vx += ax; vy += ay;` 后按阈值回填极坐标）。
+/// 与 `BULLET_POLAR_FX` 互斥：置一清另一（TH16 `c68 &= ~0x9` 语义）。位 3-4 预留反弹计数（D4）。
+pub const BULLET_CART_FX: u8 = 1 << 2;
 
 // 弹池（D3 定稿，19 字段）。哑弹 / 变换弹 / 任务弹**共池**；变换【段】另存 XformSegPool（M0-4 手写）。
 // `transform_head == 0xFFFF` 即哑弹（无段、不付段内存，只付这几字节游标）。运动 / 双表示逻辑归 M0-4。
