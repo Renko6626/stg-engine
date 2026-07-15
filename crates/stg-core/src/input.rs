@@ -1,12 +1,14 @@
 //! 输入抽象（§5）—— 断层线边界类型（POD，无 godot/浮点）。键位绑定在表现层，模拟核只见动作位。
 //! Phase 1 住 stg-core；将来可拆 stg-input crate（同 stg-net@M4）。
 
-/// 一人一帧的量化动作位（4B）。`parameters` 数组待将来传参需求再加。
+/// 一人一帧的量化输入（8B，容量约定 v2）：32 动作位 + 32 预留位。
+/// `_pad` 恒 0、先占座后赋义（量化参数/更多位的第一块地）——预留与动作位同宽，
+/// 结构体无隐式填充，每个字节都有名字。
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct ActionInput {
-    pub buttons: u16,
-    pub _pad: u16,
+    pub buttons: u32,
+    pub _pad: u32,
 }
 
 /// 一帧的全体输入（§5）。**不进 World 校验和**（外部输入，非世界状态；
@@ -55,14 +57,14 @@ pub struct ActionDesc {
     pub kind: ActionKind,
 }
 
-/// 声明动作词表，展开出：`pub const $名字: u16` 位常量、`EDGE_MASK`（沿触发位并集）、
+/// 声明动作词表，展开出：`pub const $名字: u32` 位常量、`EDGE_MASK`（沿触发位并集）、
 /// `ACTIONS` 描述表、位互不重叠的编译期断言。
 macro_rules! define_actions {
     ( $( $(#[$doc:meta])* $name:ident = $bit:literal, $kind:ident; )+ ) => {
-        $( $(#[$doc])* pub const $name: u16 = 1 << $bit; )+
+        $( $(#[$doc])* pub const $name: u32 = 1 << $bit; )+
 
         /// 全部沿触发位的并集——`prev_input` 沿检测的统一消费面。
-        pub const EDGE_MASK: u16 = 0 $( | ((ActionKind::$kind as u16) * (1 << $bit)) )+;
+        pub const EDGE_MASK: u32 = 0 $( | ((ActionKind::$kind as u32) * (1 << $bit)) )+;
 
         /// 动作词表总数。
         pub const ACTION_COUNT: usize = { let a = [$($bit as u8),+]; a.len() };
@@ -74,7 +76,7 @@ macro_rules! define_actions {
 
         // 位互不重叠（编译期钉死；重叠时并集 popcount < 词条数）。
         const _: () = assert!(
-            (0u16 $( | (1 << $bit) )+).count_ones() as usize == ACTION_COUNT,
+            (0u32 $( | (1 << $bit) )+).count_ones() as usize == ACTION_COUNT,
             "动作位重叠"
         );
     };
@@ -123,6 +125,26 @@ mod tests {
         assert_eq!(f.actions[0].buttons, 0);
     }
 
+    /// 容量约定 v2：每人 32 动作位 + 32 预留位，字节布局全显式（无隐式填充）。
+    #[test]
+    fn action_input_layout_v2() {
+        use core::mem::size_of;
+        let a = ActionInput::default();
+        assert_eq!(core::mem::size_of_val(&a.buttons), 4, "动作位应为 u32");
+        assert_eq!(
+            core::mem::size_of_val(&a._pad),
+            4,
+            "预留位应为 u32（免隐式填充）"
+        );
+        assert_eq!(size_of::<ActionInput>(), 8, "8B/人，无编译器暗插填充");
+        assert_eq!(size_of::<InputFrame>(), 4 + 8 * crate::MAX_PLAYERS);
+        // 译码目的地必须同宽，否则位 16..32 在 decode 时被静默截断
+        assert_eq!(
+            core::mem::size_of_val(&crate::player::PlayerState::spawn(0).input),
+            4
+        );
+    }
+
     /// 位值冻结（回放契约）：位号是回放文件与将来网络包的语义坐标，注册表重排不得改值。
     #[test]
     fn action_bit_values_frozen() {
@@ -144,7 +166,7 @@ mod tests {
     /// ACTIONS 描述表与位常量逐项一致（表即地图：名字/位/语义三列齐全、顺序按位号）。
     #[test]
     fn actions_table_matches_constants() {
-        let expected: [(&str, u16, ActionKind); 7] = [
+        let expected: [(&str, u32, ActionKind); 7] = [
             ("BTN_UP", BTN_UP, ActionKind::Level),
             ("BTN_DOWN", BTN_DOWN, ActionKind::Level),
             ("BTN_LEFT", BTN_LEFT, ActionKind::Level),
@@ -156,7 +178,7 @@ mod tests {
         assert_eq!(ACTIONS.len(), expected.len());
         for (a, (name, mask, kind)) in ACTIONS.iter().zip(expected) {
             assert_eq!(a.name, name);
-            assert_eq!(1u16 << a.bit, mask);
+            assert_eq!(1u32 << a.bit, mask);
             assert_eq!(a.kind, kind);
         }
     }

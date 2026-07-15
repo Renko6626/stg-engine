@@ -44,7 +44,7 @@ pub struct PlayerState {
     pub facing: i8, // 纯表现，照样入校验和（P6）
     pub hit_radius: Fx,
     pub graze_radius: Fx,
-    pub input: u16,
+    pub input: u32,
     pub life_state: u8,
     pub state_timer: u16,
     pub invuln: u16,
