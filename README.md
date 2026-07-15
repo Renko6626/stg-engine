@@ -16,17 +16,12 @@ headless 高速模拟。核心性质是**跨平台 bit 级确定性**。
 step: world[n+1] = step(world[n], static_ecl, input_frame[n])
 ```
 
-## 当前状态：Phase 1 · M0 世界层
+## 当前状态
 
 Phase 1 = `stg-core` + `stg-ecl-compiler` + `stg-harness`。DoD = 金向量在 x86_64 与 aarch64 上
 逐帧校验和一致——**这条流水线从第一天起就是绿的，每个切片都过三平台对拍**。
 
-**已落地（M0-1 → M0-8）**：定点数学核（Q16.16 / BAM 查表 / CORDIC / 烘焙表）· 字段级校验和
-（`#[derive(Checksum)]` 防漏）· 池框架（`define_pool!`，存活掩码即分配器）· World + 11 相位 step
-+ 整块快照 · 输入抽象 + 自机（东方手感移动/发弹）· 敌人池 · **碰撞矩阵四行 + 结算三趟 + 生死状态机**
-（决死窗口→死亡→重生）· **通用消弹区**（`FieldPool`，bomb 是它的首个租户）。
-
-**未落地**：bomb · 道具池 · 敌人 AI + `move_to` 插值器 · 变换系统 · ECL VM（M1）· Godot 前端（M2）。
+当前位置 / 下一步 / 里程碑史见 [`PROGRESS.md`](./PROGRESS.md)（**唯一权威**，本节不复述以免漂移）。
 
 ```
 crates/
