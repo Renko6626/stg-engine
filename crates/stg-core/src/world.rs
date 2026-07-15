@@ -4,7 +4,7 @@
 //! **构造只走 `step::World::new`（堆零初始化）**——WorldBody 无 `new()`，避免 ~450KB 栈临时量。
 
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
-use crate::enemy::{ENEMY_DYING, EnemyHandle, EnemyInit, EnemyPool};
+use crate::enemy::{EnemyHandle, EnemyInit, EnemyPool};
 use crate::events::{EVENTS_CAP, Event, HITS_CAP, Hit};
 use crate::field::{FieldHandle, FieldInit, FieldPool};
 use crate::math::Fx;
@@ -12,7 +12,9 @@ use crate::player::PlayerState;
 use crate::rng::Pcg32;
 use crate::shots::{ShotHandle, ShotInit, ShotPool};
 
+mod cleanup;
 mod collide;
+mod integrate;
 mod player;
 mod settle;
 
@@ -228,14 +230,6 @@ impl WorldBody {
         }
     }
 
-    /// 越界判定（含边距）。
-    fn out_of_bounds(x: Fx, y: Fx) -> bool {
-        let xi = x.to_int_floor();
-        let yi = y.to_int_floor();
-        !(-FIELD_HALF_W - OOB_MARGIN..=FIELD_HALF_W + OOB_MARGIN).contains(&xi)
-            || !(-OOB_MARGIN..=FIELD_HEIGHT + OOB_MARGIN).contains(&yi)
-    }
-
     // ── 相位函数（pub(crate)，每个先 phase_enter 保序）────────────────────
     pub(crate) fn begin(&mut self) {
         self.phase_enter(PH_BEGIN);
@@ -244,121 +238,6 @@ impl WorldBody {
     }
     pub(crate) fn run_transforms(&mut self) {
         self.phase_enter(PH_XFORM); // stub：无变换段池
-    }
-    pub(crate) fn integrate(&mut self) {
-        self.phase_enter(PH_INTEGRATE);
-        let nw = self.bullets.alive.len();
-        for w in 0..nw {
-            let mut bits = self.bullets.alive[w];
-            while bits != 0 {
-                let i = w * 64 + bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                if self.bullets.delay[i] > 0 {
-                    self.bullets.delay[i] -= 1; // delay 期不动
-                    continue;
-                }
-                self.bullets.x[i] = self.bullets.x[i] + self.bullets.vx[i];
-                self.bullets.y[i] = self.bullets.y[i] + self.bullets.vy[i];
-                if self.bullets.life[i] != 0xFFFF && self.bullets.life[i] > 0 {
-                    self.bullets.life[i] -= 1;
-                }
-            }
-        }
-        // 自机弹：pos += vel（无 delay/life）
-        let nw = self.shots.alive.len();
-        for w in 0..nw {
-            let mut bits = self.shots.alive[w];
-            while bits != 0 {
-                let i = w * 64 + bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                self.shots.x[i] = self.shots.x[i] + self.shots.vx[i];
-                self.shots.y[i] = self.shots.y[i] + self.shots.vy[i];
-            }
-        }
-        // 敌人：pos += vel（move_to 插值器延后，mv_* 惰性）+ 计时器 tick
-        let nw = self.enemies.alive.len();
-        for w in 0..nw {
-            let mut bits = self.enemies.alive[w];
-            while bits != 0 {
-                let i = w * 64 + bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                self.enemies.x[i] = self.enemies.x[i] + self.enemies.vx[i];
-                self.enemies.y[i] = self.enemies.y[i] + self.enemies.vy[i];
-                if self.enemies.invuln[i] > 0 {
-                    self.enemies.invuln[i] -= 1;
-                }
-                if self.enemies.hit_flash[i] > 0 {
-                    self.enemies.hit_flash[i] -= 1;
-                }
-            }
-        }
-        // 作用区：寿命倒数（照抄弹的模式；life=1 → 本帧减到 0，相位6 仍参与判定，相位9 回收）
-        let nw = self.fields.alive.len();
-        for w in 0..nw {
-            let mut bits = self.fields.alive[w];
-            while bits != 0 {
-                let i = w * 64 + bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                if self.fields.life[i] > 0 {
-                    self.fields.life[i] -= 1;
-                }
-            }
-        }
-    }
-    pub(crate) fn cleanup(&mut self) {
-        self.phase_enter(PH_CLEANUP);
-        let nw = self.bullets.alive.len();
-        for w in 0..nw {
-            let mut bits = self.bullets.alive[w];
-            while bits != 0 {
-                let i = w * 64 + bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                let dead = (self.bullets.life[i] != 0xFFFF && self.bullets.life[i] == 0)
-                    || self.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0
-                    || Self::out_of_bounds(self.bullets.x[i], self.bullets.y[i]);
-                if dead {
-                    self.bullets.free_index(i);
-                }
-            }
-        }
-        // 自机弹越界回收
-        let nw = self.shots.alive.len();
-        for w in 0..nw {
-            let mut bits = self.shots.alive[w];
-            while bits != 0 {
-                let i = w * 64 + bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                if Self::out_of_bounds(self.shots.x[i], self.shots.y[i]) {
-                    self.shots.free_index(i);
-                }
-            }
-        }
-        // 敌人：dying 标记或越界 → 回收
-        let nw = self.enemies.alive.len();
-        for w in 0..nw {
-            let mut bits = self.enemies.alive[w];
-            while bits != 0 {
-                let i = w * 64 + bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                let dead = (self.enemies.flags[i] & ENEMY_DYING != 0)
-                    || Self::out_of_bounds(self.enemies.x[i], self.enemies.y[i]);
-                if dead {
-                    self.enemies.free_index(i);
-                }
-            }
-        }
-        // 作用区：寿命尽回收（不做越界——field 是有意放置的静止圆，非飞行物）
-        let nw = self.fields.alive.len();
-        for w in 0..nw {
-            let mut bits = self.fields.alive[w];
-            while bits != 0 {
-                let i = w * 64 + bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                if self.fields.life[i] == 0 {
-                    self.fields.free_index(i);
-                }
-            }
-        }
     }
     pub(crate) fn advance(&mut self) {
         self.phase_enter(PH_ADVANCE);
@@ -454,23 +333,6 @@ pub(crate) mod test_support {
 mod tests {
     use super::*;
     use crate::world::test_support::*;
-
-    #[test]
-    fn oob_detects_margin() {
-        assert!(!WorldBody::out_of_bounds(
-            Fx::from_int(0),
-            Fx::from_int(200)
-        ));
-        assert!(WorldBody::out_of_bounds(
-            Fx::from_int(1000),
-            Fx::from_int(0)
-        ));
-        assert!(WorldBody::out_of_bounds(
-            Fx::from_int(0),
-            Fx::from_int(-100)
-        ));
-        assert!(WorldBody::out_of_bounds(Fx::from_int(0), Fx::from_int(600)));
-    }
 
     #[test]
     fn hits_push_clear_and_overflow() {
