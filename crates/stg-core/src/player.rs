@@ -17,6 +17,18 @@ pub const LOW_SPEED: Fx = Fx::from_raw(131_072); // 2.0 px/帧
 pub const INV_SQRT2: Fx = Fx::from_raw(46_341); // 0.7071（对角归一）
 pub const HIT_RADIUS: Fx = Fx::from_raw(163_840); // 2.5 px
 pub const GRAZE_RADIUS: Fx = Fx::from_int(16);
+
+// 行 1/2/3（弹×自机中弹、弹×自机擦弹、敌体×自机中弹）的**被动**操作数就是上面两个半径。
+// 它们不经任何 `create_*` 写 API 的双边钳制——`PlayerState::spawn` 直接把引擎常量写进字段，
+// 而 `WorldBody.players`/`PlayerState` 的字段目前都是 `pub`，钳制无法在类型系统层面强制。
+// 于是"这两个半径 ≤ MAX_ENTITY_RADIUS"只是一条前提，不是写 API 强制出的结论——在此把它钉成
+// 编译期断言，至少保证常量本身不会漂移出六行碰撞 Fx 加法安全的证明所依赖的上限。
+const _: () = assert!(
+    HIT_RADIUS.raw() <= crate::world::MAX_ENTITY_RADIUS.raw()
+        && GRAZE_RADIUS.raw() <= crate::world::MAX_ENTITY_RADIUS.raw(),
+    "自机判定半径必须 ≤ MAX_ENTITY_RADIUS —— 否则行 1/2/3 的 (r_active + r_passive) Fx 加法失去证明"
+);
+
 pub const SHOT_SPEED: Fx = Fx::from_int(12);
 pub const SHOT_RADIUS: Fx = Fx::from_int(4);
 pub const SHOT_CD_FRAMES: u8 = 4;

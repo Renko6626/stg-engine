@@ -468,8 +468,18 @@ release 回绕成负数 → 平方后仍为正巨数 → 全场无条件判撞�
 /`create_enemy`/`create_player_shot` 当时全无钳制）。现改为共享常量 `world::MAX_ENTITY_RADIUS = 1024`，
 在 `create_bullet`（radius）、`create_enemy`（radius + hurtbox）、`create_player_shot`（radius）、
 `create_field`（radius）四个写 API 上统一双边钳入 `[0, 1024]`；`FIELD_MAX_RADIUS` 现为该常量的别名。
-两侧都钳后任意两半径之和 ≤ 2×1024 = 2048 ≪ 32767，行 6/7 得以与行 1-4 保持完全一致的写法
-（`(a + b).raw() as i64`），不必为 field 特设 i64 加法，且这次是对两个操作数都成立的完整证明。
+
+**复审 Important（第二轮）**：上面这句"四个写 API 统一双边钳入 ⇒ 六行碰撞对两个操作数都可证安全"
+仍是半个证明——行 1/2/3 的被动操作数是自机 `hit_radius`/`graze_radius`，它们不经任何 `create_*`
+写 API，而是 `PlayerState::spawn`（`player.rs`）直接从引擎常量赋值。四个写 API 钳的是**池侧**
+（弹/敌/自机弹/field 的 radius/hurtbox）；这四个池的 SoA 数组是 `pub(crate)`，"只能走写 API"是
+类型系统可强制的纪律。但**自机侧**没有对应的强制——`WorldBody.players` 与 `PlayerState` 的字段
+都是 `pub`，任何持 `&mut World` 的上层（stg-harness / 未来的 stg-godot、stg-py）都能绕过 `spawn`
+直接写这两个字段。今天安全只因"除 spawn 外无人写它"，是**前提**而非写 API 强制出的结论。现状：
+`player.rs` 加了编译期断言钉死 `HIT_RADIUS`/`GRAZE_RADIUS` ≤ `MAX_ENTITY_RADIUS`，防常量本身漂移；
+但字段可见性尚未收紧，留作后续。结论"两侧都 ≤1024 ⇒ 任意和 ≤2048 ≪ 32767"依然成立，但由
+**两条强度不同的保证**共同支撑——池侧可强制、自机侧是前提——而不是四个写 API 覆盖了全部六行。
+行 6/7 与行 1-4 仍共享同一写法（`(a + b).raw() as i64`），不必为任何一行特设 i64 加法。
 
 **静止**：世界层零 follow 逻辑。跟随 = 上层每帧在目标位重铺 `life=1`（`life=1` 恰好活一帧且当帧
 生效：相位5 减到 0、相位6 alive 位仍在照常参与判定、相位9 才回收）；静止爆炸 = 铺一次 `life=N`。

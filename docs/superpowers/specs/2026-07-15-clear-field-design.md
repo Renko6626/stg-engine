@@ -241,3 +241,11 @@ M0-7 变异检验已实证）。
 届时即可达。修正：改为共享常量 `MAX_ENTITY_RADIUS = 1024px`，在**每一个**带半径的写 API
 （`create_bullet`/`create_enemy`（radius+hurtbox）/`create_player_shot`/`create_field`）上双边
 钳制，使"和永不溢出"对六行碰撞的两个操作数都成立。
+
+**第二轮复审**：上一版补齐的是池侧——四个写 API 覆盖了弹/敌/自机弹/field 的 radius/hurtbox，
+但行 1/2/3 的被动操作数是 `player.hit_radius`/`graze_radius`，它们不在这四个 API 的覆盖范围内，
+由 `PlayerState::spawn` 直接赋值。`WorldBody.players` 与 `PlayerState` 的字段都是 `pub`，
+所以"这两个半径 ≤ MAX_ENTITY_RADIUS"是一条**前提**（除 spawn 外无人写它），不是写 API 强制出的
+结论——与本次要修正的"半个证明当整个"是同一类问题，只是挪到了自机这一侧。现已在 `player.rs`
+加编译期断言钉死 `HIT_RADIUS`/`GRAZE_RADIUS` 的上限，收紧 `players`/`PlayerState` 字段可见性
+（或改走访问器）列为后续候选项，本次不做。

@@ -22,12 +22,23 @@ pub const STATUS_POOL_FULL: u16 = 1;
 
 /// 所有实体判定半径的写 API 上限（P4-b）。
 ///
-/// 任意两半径之和 ≤ 2×1024 = 2048 ≪ `Fx` 上限 32767.99998 —— 故六行碰撞的
-/// `(r_active + r_passive)` **裸 i32 Fx 加法**（`Fx::Add`，debug panic / release wrap）
-/// 对**两个操作数**都可证安全。只钳一侧不构成证明：`i32::MAX - 1024*65536` ⇒
-/// 被动半径 > ~31744px 时和仍会溢出（负半径同理，和变负、平方后仍为正，判定行为诡异）。
-/// 故 `create_bullet`/`create_enemy`（radius + hurtbox）/`create_player_shot`/`create_field`
-/// 四个写 API 统一双边钳入 `[0, MAX_ENTITY_RADIUS]`——两侧都钳，证明才完整。
+/// 任意两半径之和 ≤ 2×1024 = 2048 ≪ `Fx` 上限 32767.99998 —— 只要六行碰撞两侧都 ≤1024，
+/// `(r_active + r_passive)` **裸 i32 Fx 加法**（`Fx::Add`，debug panic / release wrap）就不溢出。
+/// 只钳一侧不构成证明：`i32::MAX - 1024*65536` ⇒ 被动半径 > ~31744px 时和仍会溢出（负半径
+/// 同理，和变负、平方后仍为正，判定行为诡异）。但"两侧都 ≤1024"这句话背后是**两条强度不同的
+/// 保证**，不要读成"四个写 API 覆盖了全部六行"：
+///
+/// - **池侧**（六行里除自机半径外的全部操作数，即弹/敌/自机弹/field 的 radius/hurtbox）：
+///   经 `create_bullet`/`create_enemy`（radius + hurtbox）/`create_player_shot`/`create_field`
+///   四个写 API 双边钳入 `[0, MAX_ENTITY_RADIUS]`。这四个池的 SoA 数组是 `pub(crate)`，
+///   "只能走写 API"是类型系统**可强制**的纪律，不是约定。
+/// - **自机侧**（行 1/2/3 的被动操作数，`PlayerState::hit_radius`/`graze_radius`）：**不经任何
+///   写 API**——由 `PlayerState::spawn`（`crate::player`）直接从引擎常量赋值，上限由
+///   `player.rs` 里的编译期断言钉死（`HIT_RADIUS`/`GRAZE_RADIUS` ≤ `MAX_ENTITY_RADIUS`）。但
+///   `WorldBody.players` 与 `PlayerState` 的字段目前都是 `pub`，任何持 `&mut World` 的上层
+///   （今天是 stg-harness，将来是 stg-godot/stg-py）都能绕过 `spawn` 直接写这两个字段——这是
+///   **前提**，不是强制。安全性目前只因"除 spawn 外无人写它"成立；收紧可见性（或改走访问器）
+///   留待后续。
 pub const MAX_ENTITY_RADIUS: Fx = Fx::from_int(1024);
 
 const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
@@ -173,8 +184,8 @@ impl WorldBody {
     /// 创建一个作用区（P4-a：池满 → NULL + 计数；P4-b：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]` + 计数）。
     pub fn create_field(&mut self, mut init: FieldInit) -> FieldHandle {
         // P4-b：调用方违约 → 确定性安全结果。与 create_bullet/create_enemy/create_player_shot
-        // 共用同一 MAX_ENTITY_RADIUS——四个写 API 都双边钳，六行碰撞的 Fx 半径和才对两个操作数
-        // 都可证不溢出（完整推导见 `MAX_ENTITY_RADIUS` 文档）。
+        // 共用同一 MAX_ENTITY_RADIUS——四个写 API 都双边钳，覆盖池侧半径的证明（自机侧半径不
+        // 经写 API，另有编译期断言，见 `MAX_ENTITY_RADIUS` 文档的完整两段式推导）。
         if Self::clamp_radius(&mut init.radius) {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
