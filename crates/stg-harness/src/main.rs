@@ -34,12 +34,14 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// 金向量 —— 真实 step 演化的碰撞病态诊断场景，逐帧 World 校验和（CI 跨平台对拍的数据源）。
 ///
 /// 导演每 60 帧把敌人补到顶部固定 3 位（静止靶——AI/move_to 插值留后续切片），每 8 帧从
-/// 顶部中心铺一圈 10 发敌弹（rng 抖动 → 压 sincos + PCG32）。脚本自机全程射击、90 帧周期
+/// 顶部中心铺一圈 10 发敌弹（rng 抖动 → 压 sincos + PCG32），每 150 帧全屏消弹一次
+/// （`FIELD_RADIUS_FULLSCREEN` 作用区，`life=1`）。脚本自机全程射击、90 帧周期
 /// 上冲吃弹/下退喘息，串联自机弹杀敌→dying→EnemyDied→cleanup 回收→导演补位、敌弹中弹→
 /// 决死窗口→死亡→重生、graze 累积等碰撞/结算全链路。600 帧 @ 60Hz。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::BulletInit;
     use stg_core::enemy::EnemyInit;
+    use stg_core::field::{FIELD_CLEAR_BULLETS, FIELD_RADIUS_FULLSCREEN, FieldInit};
     use stg_core::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SHOT, BTN_SLOW, BTN_UP, InputFrame};
     use stg_core::math::{Angle, Fx, polar_to_vec};
     use stg_core::step::{World, step_with_director};
@@ -142,6 +144,18 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                         xform_next: 0,
                     });
                 }
+            }
+            // ③ 每 150 帧全屏消弹一次（压消弹标记/回收 churn + 聚合事件路径）
+            if frame % 150 == 0 && frame > 0 {
+                b.create_field(FieldInit {
+                    x: Fx::ZERO,
+                    y: Fx::from_int(224), // 场心
+                    radius: FIELD_RADIUS_FULLSCREEN,
+                    dmg_per_frame: 0,
+                    life: 1, // 只活本帧
+                    owner: 0,
+                    flags: FIELD_CLEAR_BULLETS,
+                });
             }
         });
         lines.push_str(&format!("{frame} {:016x}\n", world.checksum()));

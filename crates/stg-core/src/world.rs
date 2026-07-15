@@ -1,5 +1,6 @@
 //! 世界本体（stg_core::world）—— WorldBody 字段 + `pub(crate)` 相位函数 + 写 API + PhaseGuard。
 //! M0-7：collide（D8 行1/2/3/4，圆-圆平方距离，只收集）+ settle（D9 三趟）+ 生死状态机 + EnemyPool 已落。
+//! M0-8：FieldPool（通用圆形作用区，静止哑原语）+ 行6 消弹/行7 伤敌 + settle 趟一（标记 + 聚合 FieldCleared）已落。
 //! **构造只走 `step::World::new`（堆零初始化）**——WorldBody 无 `new()`，避免 ~450KB 栈临时量。
 
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
@@ -687,13 +688,15 @@ impl WorldBody {
         // ── 趟三 · 计分/拾取 ─────────────────────────────────────────────
         // graze **不**查已清除位：碰撞检测在相位 6 发生（那时弹活着、确实进了擦圈），
         // 清弹是相位 7 的事 —— 擦在先、清在后；且设计明写 graze 独立于中弹。
+        // grazed_by 是 u8 位掩码，每自机占 1 位；MAX_PLAYERS 超过 8 会静默溢出（release 下 wrap，
+        // 而非 panic），从而在跨自机间腐蚀 graze 位——编译期钉死上限，宁可编不过也不留隐患。
+        const _: () = assert!(crate::MAX_PLAYERS <= 8, "grazed_by 位掩码只容 8 自机");
         for k in 0..self.hits_len as usize {
             let h = self.hits[k];
             if h.row == crate::events::ROW_BULLET_PLAYER_GRAZE {
                 let b = h.active as usize;
                 let p = h.passive as usize;
                 let bit = 1u8 << p; // MAX_PLAYERS=2 → bit 0/1
-                const _: () = assert!(crate::MAX_PLAYERS <= 8, "grazed_by 位掩码只容 8 自机");
                 if self.bullets.grazed_by[b] & bit == 0 {
                     self.bullets.grazed_by[b] |= bit;
                     self.players[p].graze = self.players[p].graze.wrapping_add(1);

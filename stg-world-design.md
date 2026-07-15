@@ -111,7 +111,7 @@ pub struct WorldBody {
     shots:   ShotPool,                 // cap 1024
     enemies: EnemyPool,                // cap 256
     items:   ItemPool,                 // cap 512
-    bomb_fields: BombFieldPool,        // cap 16
+    fields: FieldPool,                 // cap 16（通用作用区，M0-8：BombFieldPool 正名为 FieldPool）
     hits:         HitBuf,              // 碰撞命中缓冲（帧内私有）  #[checksum(skip)]
     frame_events: FrameEventBuf,       // 世界大事记（挂钩相位+上层读）#[checksum(skip)]
     reqs:         RenderReqBuf,        // 通道 B                    #[checksum(skip)]
@@ -172,14 +172,14 @@ WorldTables 清单（v1）：
 | 10 | `cleanup` | world | 越界（含边距）、寿命尽、已清除弹、死体回收入 free-list | "boss 阶段推进检查"移除（归 ECL） |
 | 11 | `advance` | world | `frame += 1`。通道 A 视图与通道 B 请求对表现层可读 | 不变 |
 
-> **M0-4 最小切片落地**：实现 begin / 导演槽 / integrate(`pos+=vel`+delay+life) / cleanup(越界+寿命) / advance，其余相位 **no-op stub**（均经 PhaseGuard 保序）；3 输出缓冲（`hits`/`frame_events`/`reqs`）随各自生产者（collide/settle/emit_req）再加。导演槽 = Rust 闭包（`step_with_director`）；快照 `copy_into` 安全逐字段（零 unsafe）；`World::new` 堆零构造（唯一 unsafe，POD 全零合法）。双表示 POLAR/CART + 极坐标 setter 待 shooter/ECL。金向量（M0-5）= 导演铺环 + rng 抖动 + churn，600 帧逐帧 World checksum 三平台对拍。**M0-6 续**：输入抽象（`InputFrame`/`ActionInput`，`stg_core::input`）+ 自机（`PlayerState` D6 全字段、`decode_input`、`update_players` 东方手感移动【对角归一/低速/钳制】+ 角色模块 `match character_id`→character-0 直线发弹）+ `ShotPool`（PlayerShot 层，"池即层"）；`step` 加 `input` 参；金向量加脚本输入驱自机走位+射击。碰撞（D8）/生死状态机/bomb/敌人/角色配置表待后续。**M0-7**：`EnemyPool`（D5 全字段，move_to/主控 AI 惰性延后）+ `hits`/`events` 缓冲（A5，checksum-skip）+ collide（D8 行1/2/3/4，半径和 i64 平方距离不开根、暴力 O(N×M)、只收集不改状态）+ settle（D9 三趟：趟一空/趟二敌人扣血 dying+EnemyDied、自机中弹→DeathWindow/趟三 graze grazed_by 逐弹一次）+ 生死状态机（settle 触发、update_players 计时：DeathWindow→Dead→Respawning→Alive/GAMEOVER）。金向量扩为碰撞诊断场景（导演铺 3 敌 + 敌弹，自机上冲吃弹 + 全程射击杀敌）。bomb/道具/掉 power/move_to 插值器待后续。
+> **M0-4 最小切片落地**：实现 begin / 导演槽 / integrate(`pos+=vel`+delay+life) / cleanup(越界+寿命) / advance，其余相位 **no-op stub**（均经 PhaseGuard 保序）；3 输出缓冲（`hits`/`frame_events`/`reqs`）随各自生产者（collide/settle/emit_req）再加。导演槽 = Rust 闭包（`step_with_director`）；快照 `copy_into` 安全逐字段（零 unsafe）；`World::new` 堆零构造（唯一 unsafe，POD 全零合法）。双表示 POLAR/CART + 极坐标 setter 待 shooter/ECL。金向量（M0-5）= 导演铺环 + rng 抖动 + churn，600 帧逐帧 World checksum 三平台对拍。**M0-6 续**：输入抽象（`InputFrame`/`ActionInput`，`stg_core::input`）+ 自机（`PlayerState` D6 全字段、`decode_input`、`update_players` 东方手感移动【对角归一/低速/钳制】+ 角色模块 `match character_id`→character-0 直线发弹）+ `ShotPool`（PlayerShot 层，"池即层"）；`step` 加 `input` 参；金向量加脚本输入驱自机走位+射击。碰撞（D8）/生死状态机/bomb/敌人/角色配置表待后续。**M0-7**：`EnemyPool`（D5 全字段，move_to/主控 AI 惰性延后）+ `hits`/`events` 缓冲（A5，checksum-skip）+ collide（D8 行1/2/3/4，半径和 i64 平方距离不开根、暴力 O(N×M)、只收集不改状态）+ settle（D9 三趟：趟一空/趟二敌人扣血 dying+EnemyDied、自机中弹→DeathWindow/趟三 graze grazed_by 逐弹一次）+ 生死状态机（settle 触发、update_players 计时：DeathWindow→Dead→Respawning→Alive/GAMEOVER）。金向量扩为碰撞诊断场景（导演铺 3 敌 + 敌弹，自机上冲吃弹 + 全程射击杀敌）。bomb/道具/掉 power/move_to 插值器待后续。**M0-8**：`FieldPool`（D6 通用圆形作用区，`define_pool!` 第 4 个实例，cap 16，静止哑原语）+ `create_field`（P4-b 半径钳制）+ collide 行6/7（Field×EnemyBullet 消弹 / Field×EnemyBody 伤敌，按 `flags` 能力位 gate）+ settle 趟一（消弹标记 `BULLET_CLEARED` + 每 field 每帧聚合 `FieldCleared{count}`，先于趟二救命）+ 趟二行1 跳过已清除弹（bomb 救命）。金向量每 150 帧铺一次 `FIELD_RADIUS_FULLSCREEN` 全屏消弹（`life=1`），压消弹标记/回收 churn 与聚合事件路径。bomb 状态机本体/道具/掉 power/move_to 插值器待后续。
 
 ## A5 事件系统：两条缓冲、两种消费者
 
 | | `hits`（碰撞命中缓冲） | `frame_events`（世界大事记） |
 |---|---|---|
 | 记录 | `{ matrix_row: u8, active: u16, passive: u16 }`（6 B） | `{ kind: u8, a: Handle, x: Fx, y: Fx, data: [i32; 2] }`（~24 B） |
-| 生产者 | 相位 7 收集循环（天然按矩阵行序×索引序，无需排序） | 相位 8 结算期产出的**已确认事实**：`EnemyDied{x,y,appearance,death_script}`、`PlayerDied`、`PlayerBombed`、`ItemPicked`…… |
+| 生产者 | 相位 7 收集循环（天然按矩阵行序×索引序，无需排序） | 相位 8 结算期产出的**已确认事实**：`EnemyDied{x,y,appearance,death_script}`、`PlayerDied`、`PlayerBombed`、`ItemPicked`、`FieldCleared{field,count,x,y}`（趟一，每 field 每帧至多一条聚合事件，见 D9）…… |
 | 消费者 | 相位 8 三趟过滤扫描。**帧内私有，永不暴露** | 相位 9 ECL 挂钩；表现层/上层经 `WorldView` 只读 |
 | 容量 | 8192 | 512 |
 | 生命周期 | 存活到下一帧 `begin` 清空 | 同左（否则相位 9 与表现层无物可读） |
@@ -210,7 +210,7 @@ WorldTables 清单（v1）：
 
 - `PlayerState.character_id` 在相位 4 **静态分发**（`match`，编译进引擎的角色模块——不是函数指针，零 P5/I7 冲突）到各角色的 `update_shot / update_bomb / steer_shots` Rust 函数；
 - **世界管"身体与账本"**（角色无关的公共骨架）：移动积分、低速切换、场界钳制、中弹判定、决死窗口状态机、死亡/复活/无敌计时、bomb 触发仲裁（查库存、消库存、**触发帧立即无敌**）、残机/bomb/power/graze/score 账本；
-- **角色模块管"火力与个性"**：发弹模式（读 `players[i].input` 动作位）、homing 弹转向（逐帧扫最近敌人，转率为角色常量）、bomb 效果时间线（`bomb_phase/bomb_timer` 小状态机驱动，铺 BombField 实体、发演出请求）；
+- **角色模块管"火力与个性"**：发弹模式（读 `players[i].input` 动作位）、homing 弹转向（逐帧扫最近敌人，转率为角色常量）、bomb 效果时间线（`bomb_phase/bomb_timer` 小状态机驱动，铺 Field 实体、发演出请求）；
 - 多帧演出用 `PlayerState` 内的纯数据状态机字段驱动，随快照、参与校验和；
 - 跨层备注（输入层）：`ActionInput.buttons` 现为 u8，基础动作已占 7 位；**建议扩为 u16**，世界侧按位号消费、不关心按位语义——为将来"自机技能 A"这类扩展动作留空间。
 
@@ -445,9 +445,31 @@ Alive ──中弹(趟二)──► DeathWindow（决死窗口, DEATHBOMB_WINDOW
 ```
 
 - **死亡连带结算世界侧固定**（掉 power、power 道具回撒规则）：它是账本公平性的一部分，与中弹判定同级，不容每个关卡脚本重写；ECL 只收 `PlayerDied` 事件做演出。
-- **bomb 触发仲裁世界侧**（触发帧立即无敌——决死救人的帧精确性不依赖任何脚本/模块延迟）；bomb **效果**由角色模块经 `bomb_phase/bomb_timer` 状态机逐帧驱动（铺 BombField、发演出请求），晚一帧铺开在演出上不可见。
+- **bomb 触发仲裁世界侧**（触发帧立即无敌——决死救人的帧精确性不依赖任何脚本/模块延迟）；bomb **效果**由角色模块经 `bomb_phase/bomb_timer` 状态机逐帧驱动（铺 Field、发演出请求），晚一帧铺开在演出上不可见。
 
-**BombFieldPool**（bomb 判定场实体化，碰撞矩阵 6/7 行的主动方）：cap 16，字段 `x y: Fx, radius: Fx, dmg_per_frame: u16, owner: u8, life: u16`。角色模块创建，寿命尽自灭。
+**FieldPool**（通用圆形作用区原语，碰撞矩阵行 6/7 的主动方；`define_pool!` 第 4 个实例）：cap 16，
+字段 `x y: Fx, radius: Fx, dmg_per_frame: u16, life: u16, owner: u8, flags: u8`。任何持有
+`&mut WorldBody` 的租户都经 `create_field` 写 API 创建——**bomb 只是首个租户**，符卡切换清弹、
+ECL 阶段清场、敌人死亡脚本清弹（设计既定「敌人死亡默认不清弹」，须脚本显式要）与之平等，
+不借道 bomb 状态机。
+
+能力位（`flags`，collide 按位在收集前跳过未启用的行，省 O(N×M)）：`FIELD_CLEAR_BULLETS = 1<<0`
+（行 6 消弹）、`FIELD_DAMAGE = 1<<1`（行 7 伤敌）。保留双能力而非拆两个池——东方 bomb 本就同时
+消弹与打 boss，拆开会逼 bomb 每次铺两个同心圆并同步两份寿命；纯消弹区（符卡切换）只开
+`CLEAR_BULLETS` 位。
+
+半径常量：`FIELD_RADIUS_FULLSCREEN: Fx = 400`（覆盖全场含越界边距）——场界 x∈[-192,192]、
+y∈[0,448]、越界边距 64，弹最远可在 (±256, −64..512)，场心 (0,224) 到最远角距离
+= √(256²+288²) = √148480 ≈ 385.3 px < 400，给脚本一个算好的常量，免得各自去猜"多大算全屏"。
+`FIELD_MAX_RADIUS: Fx = 1024`（`create_field` 钳制上限，P4-b）——`Fx` 上限 32767.99998，若调用方
+传接近上限的值表达"无限大"，`field.radius + bullet.radius` 的 Fx 加法会溢出（debug panic /
+release 回绕成负数 → 平方后仍为正巨数 → 全场无条件判撞，这是 debug/release 分歧类）；钳到 1024 后
+`1024 + 16 ≪ 32767`，Fx 加法永不溢出，行 6/7 得以与行 1-4 保持完全一致的写法
+（`(a + b).raw() as i64`），不必为 field 特设 i64 加法。
+
+**静止**：世界层零 follow 逻辑。跟随 = 上层每帧在目标位重铺 `life=1`（`life=1` 恰好活一帧且当帧
+生效：相位5 减到 0、相位6 alive 位仍在照常参与判定、相位9 才回收）；静止爆炸 = 铺一次 `life=N`。
+同一原语两种用法、零分支。
 
 ## D7 自机弹池与道具池
 
@@ -479,19 +501,33 @@ Alive ──中弹(趟二)──► DeathWindow（决死窗口, DEATHBOMB_WINDOW
 | 3 | EnemyBody | PlayerHit | enemy.**radius**（体碰） | player.hit_radius | PlayerHitByBody |
 | 4 | PlayerShot | EnemyBody | shot.radius | enemy.**hurtbox**（受击） | EnemyDamaged |
 | 5 | Item | PlayerGraze | item 拾取半径（配置表） | player.graze_radius | ItemPicked |
-| 6 | BombField | EnemyBullet | field.radius | bullet.radius | BulletCleared |
-| 7 | BombField | EnemyBody | field.radius | enemy.**hurtbox** | EnemyDamaged |
+| 6 | Field | EnemyBullet | field.radius | bullet.radius | FieldCleared |
+| 7 | Field | EnemyBody | field.radius | enemy.**hurtbox** | EnemyDamaged |
 
+- 行 6/7 主动方按 `flags` 能力位（`FIELD_CLEAR_BULLETS`/`FIELD_DAMAGE`）选择性启用——未开启对应
+  能力位的 field，整行在收集前就跳过（省 O(N×M)，而非收集完到结算才发现无事可做）；
 - 全圆判定、i64 平方距离比较、不开根（I1）；
-- `delay > 0` 与已清除标记的弹**不参与检测**；无敌帧敌人跳过 4/7 行伤害（但事件照收、结算时判）；
+- `delay > 0` 的弹**不参与检测**；无敌帧敌人跳过 4/7 行伤害（但事件照收、结算时判）；
 - **只收集不改状态**硬规则不变（改状态会让前面的碰撞结果影响后面的判定）；
 - O(N×M) 直扫（敌弹×自机 = N×1，其余两侧皆小）；**broadphase 接口预留**：碰撞相位输入 = 各池位置切片、输出 = `hits`，未来加均匀网格只替换相位内部实现，接口零变化。
+
+注：原设计"与已清除标记的弹不参与检测"半句已删——`BULLET_CLEARED` 由趟一（相位7）置、由
+cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任何已清除的弹，该规则在当前相位序下
+**不可达**，写了就是死代码。若将来消弹改为延迟回收（例如为播消弹特效留几帧），这条会变为可达，
+届时需补。
 
 ## D9 结算三趟（相位 8）
 
 对 `hits` 按类别三趟过滤扫描（每趟内保持收集序，全程确定）：
 
-1. **趟一 · 清除/防护**：BombField 清弹（行 6）——被清弹打"已清除"标记 + `BulletCleared`。**先于中弹**，同帧 bomb 能救下本会命中的弹；
+1. **趟一 · 清除/防护**：Field 清弹（行 6）——被清弹打"已清除"标记（`BULLET_CLEARED`），
+   **每个 field 每帧聚合发一条 `FieldCleared{field, count, x, y}`**（不逐弹发）。**先于中弹**，
+   同帧 field 能救下本会命中的弹（bomb 救命）。聚合而非逐弹（原设计"逐弹 `BulletCleared`"）的
+   容量理由：全屏消弹最坏情形是 `bullets` 池 8192 颗同帧全在场、全部命中——若逐弹发一条事件，
+   `frame_events`（cap 512）溢出 **16×**（8192/512），丢 7680 条；field 池 cap 16 决定聚合事件
+   **≤16 条/帧，永不爆**。`count`（本 field 本帧消了几颗）是廉价且有用的事实，供将来消弹转分/
+   统计/表现层特效强度使用。多 field 同帧压同一颗弹按幂等处理（先到先得，只计一次）；聚合事件
+   按 field 索引升序产出（不依赖 collide 循环结构，将来换 broadphase 不会静默产出多条事件）；
 2. **趟二 · 伤害**：行 4/7 扣血（无敌帧过滤在此判）→ hp≤0 走 A7 死亡结算（标记、掉落直接分配、特效请求、`EnemyDied` 事件）；行 1/3 自机中弹（**跳过已清除的弹**）→ 生死状态机转移（Alive → DeathWindow）；
 3. **趟三 · 计分/拾取**：Graze（行 2，`grazed_by` 位掩码逐弹一次，独立于中弹）；ItemPicked（行 5）→ 按道具配置表入账本，power/残机蜡/bomb 蜡的进位规则世界侧固定。
 
@@ -506,7 +542,7 @@ Alive ──中弹(趟二)──► DeathWindow（决死窗口, DEATHBOMB_WINDOW
 | 自机弹池 | 1024 | ~28 B | 29 KB |
 | 敌人池 | 256 | ~64 B | 16 KB |
 | 道具池 | 512 | ~22 B | 11 KB |
-| Bomb 场池 | 16 | ~16 B | <1 KB |
+| FieldPool（通用作用区，M0-8） | 16 | ~18 B（x/y/radius 3×4B + dmg_per_frame 2B + life 2B + owner 1B + flags 1B） | ≈320 B（+ generation/alive） |
 | 任务池（ECL 类型，住组装层 World） | 512 | ~600 B | 307 KB |
 | globals | 1024 × i32 | | 4 KB |
 | hits | 8192 × 6 B | | 48 KB |
