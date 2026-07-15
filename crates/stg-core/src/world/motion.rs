@@ -6,9 +6,6 @@ use crate::bullets::{BULLET_CART_FX, BULLET_POLAR_FX};
 use crate::math::Fx;
 use crate::math::geom::polar_to_vec;
 
-// D3 切片 Task 1：本刀只落索引核，尚无非测试调用点——integrate.rs 的 POLAR_FX 分支
-// （同计划 Task 2/3）落地后即接入相位循环，届时应删除本行 allow。非孤儿代码，是分刀顺序的暂态。
-#[allow(dead_code)]
 impl WorldBody {
     /// 极坐标 → 积分真相：`(vx,vy) = polar_to_vec(speed, angle)`。
     /// 一切改动 speed/angle 的路径改完必须调它（"忘了回填"火药桶的唯一出口）。
@@ -19,19 +16,26 @@ impl WorldBody {
         self.bullets.vy[i] = vy;
     }
 
+    // D3 切片 Task 2：`refresh_vel_from_polar` 已被 integrate.rs 的 POLAR_FX 分支接入生产路径，
+    // 摘掉了 allow。以下四个 setter 仍只有测试调用点——`set_gravity_at` 等 Task 3 的 CART_FX 分支
+    // 接入，`set_ang_vel_at`/`set_accel_at`/`stop_fx_at` 等后续 ECL syscall 任务接入，届时逐个摘。
+
     /// 开 POLAR_FX（清 CART_FX，互斥律）；只动两模式位。
+    #[allow(dead_code)]
     pub(crate) fn set_ang_vel_at(&mut self, i: usize, w: i16) {
         self.bullets.ang_vel[i] = w;
         self.bullets.flags[i] = (self.bullets.flags[i] | BULLET_POLAR_FX) & !BULLET_CART_FX;
     }
 
     /// 沿向加速，开 POLAR_FX（清 CART_FX）。
+    #[allow(dead_code)]
     pub(crate) fn set_accel_at(&mut self, i: usize, a: Fx) {
         self.bullets.accel[i] = a;
         self.bullets.flags[i] = (self.bullets.flags[i] | BULLET_POLAR_FX) & !BULLET_CART_FX;
     }
 
     /// 笛卡尔加速（重力/漂移），开 CART_FX（清 POLAR_FX）。
+    #[allow(dead_code)]
     pub(crate) fn set_gravity_at(&mut self, i: usize, ax: Fx, ay: Fx) {
         self.bullets.ax[i] = ax;
         self.bullets.ay[i] = ay;
@@ -39,6 +43,7 @@ impl WorldBody {
     }
 
     /// 清两模式位（字段留陈值，确定性无损——ZUN 语义只关开关）。
+    #[allow(dead_code)]
     pub(crate) fn stop_fx_at(&mut self, i: usize) {
         self.bullets.flags[i] &= !(BULLET_POLAR_FX | BULLET_CART_FX);
     }
