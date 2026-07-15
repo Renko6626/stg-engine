@@ -39,6 +39,20 @@ impl InputFrame {
 // 词表与玩家无关："玩家 1 左移" = `actions[0]` × `BTN_LEFT`——「哪个玩家」由
 // `InputFrame.actions[]` 的槽位表达；物理设备/联机 peer 绑到哪个槽是表现层/会话层
 // （M2/M4）的事，core 只见槽位。
+//
+// ── 参数化输入预案（未实现；第一个真实参数出现时按此落地）──────────────
+// 1. 量化整数唯一制：参数在表现层量化成整数（BAM 角 / u8 强度 / 定点坐标）后才准
+//    过断层线，浮点/模拟量原值永不入内（I1 延伸到输入）。
+// 2. 存储台阶：第一块地 = `_pad` 32 位；不够 → `ActionInput` 加具名字段（M3 回放
+//    格式出生前免费，之后 = 格式变更 + engine_ver bump）；**永远定长**，不做变长参数
+//    （回放 = 帧数组 memcpy、rollback 重发窗口定长，此条不可让）。
+// 3. 标记 = 本注册表扩参数列：`BTN_AIM = 7, Level, params: [aim_angle: Bam16 @ 0..16]`，
+//    宏展开取参 accessor + `_pad` 位段不重叠编译期断言（动作位同款纪律）+ 参数描述
+//    进 `actions_vocab_hash`（参数布局变更 = 指纹变 = 有意识的契约动作）。
+// 4. 门位规则：每个参数隶属一个动作位，**位=0 时参数区必须为 0**——保住"全零帧 =
+//    无操作"与"0 = 旧行为"两条兼容律对参数区的自动延伸；debug 断言押运。
+// 5. 译码同构：参数解包进 PlayerState 具名字段（如 `aim: Angle`）→ 自动入校验和、
+//    随快照回滚 → 效果逻辑从 world 状态读。与动作位同一条生命周期，rollback 免费。
 
 /// 动作的触发语义：消费端按此选择读位方式。
 #[repr(u8)]
@@ -78,6 +92,30 @@ macro_rules! define_actions {
         const _: () = assert!(
             (0u32 $( | (1 << $bit) )+).count_ones() as usize == ACTION_COUNT,
             "动作位重叠"
+        );
+
+        /// 词表实际用到的最高位号（编译期求值，容量哨兵的观测量）。
+        pub const MAX_BIT_USED: u8 = {
+            let bits = [$($bit as u8),+];
+            let mut max = 0;
+            let mut i = 0;
+            while i < bits.len() {
+                if bits[i] > max {
+                    max = bits[i];
+                }
+                i += 1;
+            }
+            max
+        };
+
+        // ── 容量哨兵：词表溢出 u32 容器时在此编译失败。──────────────────
+        // **故意不自动加宽**——容器宽度是线上格式（回放/网络包）的一部分，按词表
+        // 自动派生会让"加一个动作"静默改格式。溢出必须是编译错误：升级容量 =
+        // 有意识的约定变更（v2→v3：buttons 加宽或加字，M3 后属格式变更须 bump
+        // engine_ver + 过评审）。
+        const _: () = assert!(
+            (MAX_BIT_USED as u32) < u32::BITS,
+            "动作词表溢出 u32 容器：升级容量约定属线上格式变更，须过评审（见注册处注释）"
         );
     };
 }
@@ -155,6 +193,14 @@ mod tests {
         assert_eq!(BTN_SHOT, 1 << 4);
         assert_eq!(BTN_BOMB, 1 << 5);
         assert_eq!(BTN_SLOW, 1 << 6);
+    }
+
+    /// 容量哨兵可观测面：词表当前最高位 = 6（BTN_SLOW），且在 u32 容器内。
+    /// （溢出情形无法用运行时测试压——那是编译失败，由宏内 const 断言把守。）
+    #[test]
+    fn max_bit_used_pinned() {
+        assert_eq!(MAX_BIT_USED, 6);
+        assert!((MAX_BIT_USED as u32) < u32::BITS);
     }
 
     /// `EDGE_MASK` = 全部沿触发位的并集；当前词表中只有 BOMB 是沿语义。
