@@ -628,12 +628,16 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 2. **§3.2**：弹的运动模型改双表示（D3）；字段清单以 D3 为准（`layer` 删除、`delay/ax/ay` 等加入）；`transform_head` u8 → **u16**；
 3. **§3.2 vs §10.5 矛盾**：`MAX_XFORM_SLOTS` 统一为 **16**；canned op 清单已定稿 17 个（D4），§10.5 关闭；
 4. **§3.3**：`on_died` 回调构想否决（P5），替换为 `death_script` + 相位 9 挂钩（A7）；敌人字段以 D5 为准（双半径、move_to 插值器）；
-5. **§3.5**：step 顺序以 A4 v2 为准（spawn_q flush 删除、新增相位 9 挂钩、"boss 阶段推进检查"移出 cleanup）；
-6. **§3.7**："世界向外暴露字段"的疑问由 `WorldView` + `globals` + `boss_ui` + `frame_events` 正式解答（A9）；
-7. **§4.4**：`create_bullet` 的 `task_script` 参数移到 syscall 绑定层组合（D12 注）；新增 syscall：`pulse_signal / last_status / nearest_enemy / drop_item`；变换序列 locals ABI 细化为每槽 3 字打包（D4）；
-8. **§5.1**：`ActionInput.buttons` 建议 u8 → **u16**（A8 跨层备注）;
-9. **static_ecl** 概念拆分为 **WorldTables + EclImage**（A3），合并内容哈希语义不变；
-10. **§10 待拍板清单**：#5（变换槽/op 清单）关闭；#4（容量）初值已钉（D10）、留实测调参；#6/#3 维持已决。
+5. **§3.4**（M0-7/M0-8 实施期新增）：**层不是运行时 u8 枚举字段，而是"池即层"**——静态的池身份（`BulletPool`=EnemyBullet / `ShotPool`=PlayerShot / `EnemyPool`=EnemyBody / `FieldPool`=Field），呼应第 2 条的"`layer` 删除"；层名与矩阵行 6/7 的主动方 `BombField` → **`Field`**（通用圆形作用区，bomb 只是首个租户），按 `flags` 能力位启用（D6/D8）；行 6 事件 `BulletCleared`（逐弹）→ **`FieldCleared`（聚合，每 field 每帧一条带 `count`）**——逐弹在全屏消弹下爆 cap 16×（弹池 8192 vs events 512）(D9)；**"事件按（矩阵行序, 主动索引, 被动索引）排序收集"不成立**——行 1/2 为共用一次 `len_sq` 而按 弹×自机 对交错推送，真实不变量是"嵌套固定 ⇒ 收集序确定；settle 按行过滤，跨行交错无影响"；
+6. **§3.5**：step 顺序以 A4 v2 为准（spawn_q flush 删除、新增相位 9 挂钩、"boss 阶段推进检查"移出 cleanup）；
+7. **§3.7**："世界向外暴露字段"的疑问由 `WorldView` + `globals` + `boss_ui` + `frame_events` 正式解答（A9）；
+8. **§4.4**：`create_bullet` 的 `task_script` 参数移到 syscall 绑定层组合（D12 注）；新增 syscall：`pulse_signal / last_status / nearest_enemy / drop_item`；变换序列 locals ABI 细化为每槽 3 字打包（D4）；
+9. **§5.1**：`ActionInput.buttons` 建议 u8 → **u16**（A8 跨层备注）;
+10. **static_ecl** 概念拆分为 **WorldTables + EclImage**（A3），合并内容哈希语义不变；
+11. **§10 待拍板清单**：#5（变换槽/op 清单）关闭；#4（容量）初值已钉（D10）、留实测调参；#6/#3 维持已决。
+
+> **回写状态**：本清单已于 M0-8 期整体索引进母文档开头的「⚠️ 阅读须知」表（母文档正文保持原貌
+> 作为历史记录）。**后续若再有推翻：先更新本清单，再同步母文档那张表。**
 
 # Part VI 遗留开放问题
 

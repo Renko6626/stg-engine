@@ -8,6 +8,46 @@
 
 ---
 
+## ⚠️ 阅读须知：本文是总纲，世界层细节以 `stg-world-design.md` 为准
+
+本文 **v0.3** 是**架构总纲**。世界层的实施蓝图 [`stg-world-design.md`](./stg-world-design.md)（v1.0，经 20 轮评审拍板）
+在若干处**推翻或细化**了本文的草案。冲突时**一律以后者为准**（见 `CLAUDE.md`）。
+
+**本文正文保持原貌**（它是历史设计的记录）。下表是**已被修订条目的索引**——读到这些地方时，
+别信正文，去查右栏指向的编号。
+
+| 本文处 | 本文的说法（**已过期**） | 以此为准 |
+|---|---|---|
+| **§3.1** world 布局 | `spawn_q` 字段 | **删除**（A6 创建即分配） |
+| | `events` 单缓冲、"帧末必空" | 拆为 **`hits` + `frame_events`**，生命周期改为"存活至下帧 `begin`"（A5） |
+| | `stage: StageState` | **`globals: [i32; 1024]` + `boss_ui`**（A2） |
+| | — | 新增 `signals` / `diag` / `last_status` / **`fields: FieldPool`**（D6） |
+| **§3.2** 弹幕三档 | 单一笛卡尔运动模型 | **双表示**（POLAR_FX / CART_FX）(D3) |
+| | 字段含 `layer: u8` | **`layer` 删除**——改"**池即层**"（见 §3.4 条）；`delay/ax/ay` 加入；字段以 **D3** 为准 |
+| | `transform_head: u8` | **u16**（D3） |
+| **§3.2 vs §10.5** | 两处 `MAX_XFORM_SLOTS` 自相矛盾 | 统一为 **16**；canned op 定稿 **17 个**（D4）；§10.5 关闭 |
+| **§3.3** 敌人与 Boss | **"建议加入可注册回调 `on_died`"** | **否决**（P5 无回调——回调=函数指针=破 I7 memcpy 快照）。改 **`death_script` + 相位挂钩**（A7） |
+| | 敌人字段草案 | 以 **D5** 为准（**双半径** `radius`(体碰)/`hurtbox`(受击)、`move_to` 插值器） |
+| **§3.4** 层（u8 枚举） | 层是运行时 `u8` 枚举字段 | **池即层**——层是**静态的池身份**：`BulletPool`=EnemyBullet、`ShotPool`=PlayerShot、`EnemyPool`=EnemyBody、`FieldPool`=Field（D2/D7） |
+| | 层名 `BombField` | **`Field`**——通用圆形作用区，**bomb 只是首个租户**（符卡清弹/阶段清场/死亡脚本清弹平权）(D6) |
+| **§3.4** 矩阵行 6/7 | 主动方 `BombField` | **`Field`**，按 `flags` 能力位（`CLEAR_BULLETS`/`DAMAGE`）启用（D8） |
+| | 行 6 事件 `BulletCleared`（逐弹） | **`FieldCleared`（聚合，每 field 每帧一条，带 `count`）**——逐弹在全屏消弹下爆 cap 16×（弹池 8192 vs events 512）(D9) |
+| **§3.4** 硬规则段 | "事件按（矩阵行序, 主动索引, 被动索引）**排序**收集" | **非严格行主序**：行 1/2 为共用一次 `len_sq` 而按 弹×自机 对交错推送。真实不变量是"**嵌套固定 → 收集序确定**；settle 按行过滤，故跨行交错无影响"(D8/D9) |
+| **§3.5** step 顺序 | v0.3 的相位序 | 以 **A4 v2** 为准（spawn_q flush 删除、新增相位挂钩、"boss 阶段推进检查"移出 cleanup） |
+| **§3.7** 世界向外暴露字段 | 遗留疑问 | 已解答：**`WorldView` + `globals` + `boss_ui` + `frame_events`**（A9） |
+| **§3.2.1 / §4.4** | `create_bullet(...)` 带 `task_script` 参数 | 移到 **syscall 绑定层组合**（世界不认识任务，P1/P2 推论：先 `world.create_bullet` 拿句柄，再 `ecl::spawn_task(script, owner=句柄)`）；§4.4 另新增 `pulse_signal`/`last_status`/`nearest_enemy`/`drop_item`；变换 locals ABI 每槽 3 字打包（D4） |
+| **`static_ecl`**（§1.x 架构图/表、§4.2、§4.5——**全文散布**） | `static_ecl` 单一概念 | 拆为 **WorldTables + EclImage**（A3，合并内容哈希语义不变）。全文凡见 `static_ecl` 皆读作这两者之和 |
+| **§5.1** ActionInput | `buttons: u8` | **u16**（A8） |
+| **§10** 待拍板 | #5 变换槽/op 清单未决 | **关闭**（D4）；#4 容量初值已钉（D10，留实测调参）；#6/#3 维持已决 |
+
+> **§2.4（池、句柄与分配）已于 M0-3 就地回写，与实现一致，不在此表。**
+>
+> 本表的权威来源是 `stg-world-design.md` 的 **Part V「对母文档的修订清单」**（其 10 条）
+> 外加 M0-7/M0-8 实施期新产生的 3 条（§3.4 的层/矩阵/收集序）。后续若再有推翻，
+> **先更新 Part V，再同步此表**。
+
+---
+
 ## 0. 设计目标与非目标
 
 **目标**
