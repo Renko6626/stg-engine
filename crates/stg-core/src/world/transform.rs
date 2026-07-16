@@ -8,6 +8,8 @@ use crate::xform::*;
 pub(crate) enum FireResult {
     Continue,
     Terminate,
+    /// LOOP 已跳（xform_next 已改写到 target）：护栏——本帧到此为止，不设 wait。
+    Jumped,
 }
 
 impl WorldBody {
@@ -55,6 +57,7 @@ impl WorldBody {
                     self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
                     return;
                 }
+                FireResult::Jumped => return, // LOOP 护栏：本帧到此为止
                 FireResult::Continue => {}
             }
             self.bullets.xform_wait[i] = slot.wait;
@@ -78,6 +81,13 @@ impl WorldBody {
             OP_AIM_PLAYER => self.aim_at_player_at(i, Angle(slot.args[0] as u16)),
             OP_SET_SPRITE => self.bullets.sprite[i] = slot.args[0] as u16,
             OP_SET_LIFE => self.bullets.life[i] = slot.args[0] as u16,
+            OP_SET_ANG_VEL => self.set_ang_vel_at(i, slot.args[0] as i16),
+            OP_SET_ACCEL => self.set_accel_at(i, Fx::from_raw(slot.args[0])),
+            OP_SET_GRAVITY => {
+                self.set_gravity_at(i, Fx::from_raw(slot.args[0]), Fx::from_raw(slot.args[1]))
+            }
+            OP_STOP_FX => self.stop_fx_at(i),
+            OP_LOOP => return self.fire_loop(i, slot),
             _ => {
                 // 13..=17 预留区与一切未编码值：P4-b——计数 + 序列终止（两机同样跳过）
                 self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
@@ -85,6 +95,26 @@ impl WorldBody {
             }
         }
         FireResult::Continue
+    }
+
+    /// LOOP（spec 三细则）：count 0=无限跳；1=耗尽不跳（永停 1，走正常步进）；N=写回 N-1 跳。
+    /// 跳转不设 wait、本帧到此为止（护栏）；target ≥ 16 → P4-b 终止。
+    fn fire_loop(&mut self, i: usize, slot: XformSlot) -> FireResult {
+        let target = slot.args[0];
+        if !(0..SLOTS_PER_SEG as i32).contains(&target) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            return FireResult::Terminate;
+        }
+        let next = self.bullets.xform_next[i] as usize;
+        let seg = self.bullets.transform_head[i];
+        let count = self.xforms.seg_slots(seg)[next].args[1];
+        match count {
+            0 => { /* 无限 */ }
+            1 => return FireResult::Continue, // 耗尽：不跳，落空走正常步进（wait 生效）
+            n => self.xforms.seg_slots_mut(seg)[next].args[1] = n - 1,
+        }
+        self.bullets.xform_next[i] = target as u8;
+        FireResult::Jumped
     }
 }
 
@@ -226,6 +256,94 @@ mod tests {
         assert_eq!(w.body.bullets.speed[i], Fx::ZERO, "delay 期不发射");
         crate::step::step(&mut w, &InputFrame::empty(2));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(3), "delay 尽后发射");
+    }
+
+    /// 连续开关 op：一帧内开 POLAR（SET_ANG_VEL）→ 开 CART（SET_GRAVITY 清 POLAR）→ STOP 清两位。
+    #[test]
+    fn continuous_ops_toggle_mode_bits() {
+        use crate::bullets::{BULLET_CART_FX, BULLET_POLAR_FX};
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_ANG_VEL, 512, 0),
+                slot(0, OP_SET_GRAVITY, 0, 16384),
+                slot(0, OP_STOP_FX, 0, 0),
+                slot(0, OP_SET_ACCEL, 3277, 0),
+            ],
+        );
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        let fl = w.body.bullets.flags[i];
+        assert_ne!(fl & BULLET_POLAR_FX, 0, "终态 SET_ACCEL 开 POLAR");
+        assert_eq!(fl & BULLET_CART_FX, 0);
+        assert_eq!(w.body.bullets.ang_vel[i], 512);
+        assert_eq!(w.body.bullets.ay[i].raw(), 16384);
+        assert_eq!(w.body.bullets.accel[i].raw(), 3277);
+    }
+
+    /// LOOP 地板判别式：count=2 ⇒ 循环体恰执行 2 次（TURN 两次 = 半圈），耗尽停 1、不再跳。
+    #[test]
+    fn loop_count_two_executes_body_exactly_twice() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(1, OP_TURN, 16384, 0),   // 槽0：+90°，wait 1
+                slot(1, OP_LOOP, 0, 2),       // 槽1：跳回槽0，count=2
+                slot(0, OP_SET_SPRITE, 5, 0), // 槽2：耗尽落空后发射
+            ],
+        );
+        for f in 0..10u32 {
+            crate::step::step(&mut w, &InputFrame::empty(f));
+        }
+        assert_eq!(w.body.bullets.angle[i], Angle::HALF, "TURN 恰两次 = 半圈");
+        assert_eq!(w.body.bullets.sprite[i], 5, "耗尽后落空到槽2");
+        let seg = w.body.bullets.transform_head[i];
+        assert_eq!(w.body.xforms.seg_slots(seg)[1].args[1], 1, "耗尽态永停 1");
+    }
+
+    /// LOOP count=0 无限：跑 60 帧角度持续推进、序列不终止。
+    #[test]
+    fn loop_count_zero_is_infinite() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(&mut w, &[slot(1, OP_TURN, 1024, 0), slot(0, OP_LOOP, 0, 0)]);
+        for f in 0..60u32 {
+            crate::step::step(&mut w, &InputFrame::empty(f));
+        }
+        assert!(w.body.bullets.xform_next[i] < 16, "无限循环不终止");
+        assert_ne!(w.body.bullets.angle[i], Angle::ZERO, "持续转向");
+    }
+
+    /// LOOP 护栏：wait=0 的循环体每帧至多推进一轮（帧内不自旋）。
+    #[test]
+    fn loop_guard_bounds_one_round_per_frame() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_TURN, 1024, 0), // wait=0
+                slot(0, OP_LOOP, 0, 0),    // 无限
+            ],
+        );
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(
+            w.body.bullets.angle[i],
+            Angle(1024),
+            "第一帧恰转一步——护栏生效"
+        );
+        crate::step::step(&mut w, &InputFrame::empty(1));
+        assert_eq!(w.body.bullets.angle[i], Angle(2048), "次帧恢复再转一步");
+    }
+
+    /// LOOP target 越界：P4-b——contract_viol + 序列终止。
+    #[test]
+    fn loop_bad_target_terminates() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(&mut w, &[slot(0, OP_LOOP, 16, 0)]);
+        let cv0 = w.body.diag.contract_viol;
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.bullets.xform_next[i], 16, "序列终止");
     }
 
     /// 瞬时 op 全家判别：ADD_SPEED 累加、SET_ANGLE 置角、AIM 指向自机、SET_LIFE 重设寿命。
