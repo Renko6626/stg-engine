@@ -46,6 +46,7 @@ impl World {
         s.shots.copy_into(&mut d.shots);
         s.enemies.copy_into(&mut d.enemies);
         s.fields.copy_into(&mut d.fields);
+        s.items.copy_into(&mut d.items);
         s.xforms.copy_into(&mut d.xforms);
         d.signals = s.signals;
         d.diag = s.diag;
@@ -460,6 +461,30 @@ mod tests {
         assert_eq!(snap.checksum(), ck); // 段池随快照
         snap.body.xforms.seg_slots_mut(seg)[0].args[0] = 43;
         assert_ne!(snap.checksum(), ck); // 且真的在参与指纹
+    }
+
+    #[test]
+    fn snapshot_covers_item_pool() {
+        let mut w = World::new(3);
+        w.body
+            .items
+            .alloc(crate::items::ItemInit {
+                x: Fx::from_int(5),
+                y: Fx::from_int(6),
+                vx: Fx::ZERO,
+                vy: Fx::ZERO,
+                item_type: crate::items::ITEM_POINT,
+                magnet_to: crate::items::MAGNET_NONE,
+                timer: 0,
+            })
+            .unwrap();
+        let ck = w.checksum();
+        let mut snap = World::new(3);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.checksum(), ck);
+        let i = 0;
+        snap.body.items.item_type[i] ^= 1;
+        assert_ne!(snap.checksum(), ck, "items 必须真的参与校验和");
     }
 
     #[test]

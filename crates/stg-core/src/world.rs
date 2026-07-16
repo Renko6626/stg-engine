@@ -42,6 +42,7 @@ pub const POOL_SHOT: usize = 1;
 pub const POOL_ENEMY: usize = 2;
 pub const POOL_FIELD: usize = 3;
 pub const POOL_XFORM: usize = 4;
+pub const POOL_ITEM: usize = 5;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
 pub const STATUS_STALE_HANDLE: u16 = 2;
@@ -74,6 +75,8 @@ pub const SIGNAL_CHANNELS: usize = 8;
 pub(crate) const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
 pub(crate) const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
 pub(crate) const OOB_MARGIN: i32 = 64; // 越界回收边距
+#[allow(dead_code)] // 待磁吸相位（后续切片）读取判定 ALIVE 自机是否低于回收线；本切片只搭常量
+pub(crate) const POC_LINE_Y: i32 = 128; // 回收线（PoC）：ALIVE 自机 y 低于此线 → 全场道具磁吸
 
 // ── 相位索引（A4 v2，0-based；PhaseGuard 押运）───────────────────────────
 pub(crate) const NUM_PHASES: u8 = 11;
@@ -113,6 +116,8 @@ pub struct WorldBody {
     pub shots: ShotPool,
     pub enemies: EnemyPool,
     pub fields: FieldPool,
+    /// 道具池（D7）。与四实体池同级 `pub`——表现层将来要读。
+    pub items: crate::items::ItemPool,
     /// 变换段池（D4）。手写 Checksum 全量入校验和（P6）；I7 inline 数组。
     pub(crate) xforms: crate::xform::XformSegPool,
     /// 信号黑板（D4 11b）：每通道存"最后脉冲帧号 + 1"，0 = 从未脉冲（零初始化合法）。
