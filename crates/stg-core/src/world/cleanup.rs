@@ -20,6 +20,9 @@ impl WorldBody {
                     || self.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0
                     || Self::out_of_bounds(self.bullets.x[i], self.bullets.y[i]);
                 if dead {
+                    if self.bullets.transform_head[i] != crate::xform::XFORM_NONE {
+                        self.xforms.free(self.bullets.transform_head[i]);
+                    }
                     self.bullets.free_index(i);
                 }
             }
@@ -104,6 +107,51 @@ mod tests {
         // 第 4 帧 y=580 > 512 → 越界回收
         crate::step::step(&mut w, &InputFrame::empty(3));
         assert_eq!(w.body.enemies.get(h), None, "越界敌人应被 cleanup 回收");
+    }
+
+    /// 弹越界回收 → 还段：直测 Task 4 的"还段接线"（弹死后段号可被复得）。
+    /// op 选 SET_SPRITE（运动无关）——Task 5 起 run_transforms 真跑，若选 SET_SPEED 会在帧 0
+    /// 就用极小 speed 回填 vx，吃掉本测试赖以越界的 vx=1000（与本测试意图无关的耦合）。
+    #[test]
+    fn oob_bullet_recycle_returns_segment() {
+        use crate::math::Angle;
+        let seq = [crate::xform::XformSlot {
+            wait: 0,
+            op: crate::xform::OP_SET_SPRITE,
+            _pad: 0,
+            args: [1, 0],
+        }];
+        let mut w = crate::step::World::new(1);
+        let init = crate::bullets::BulletInit {
+            x: Fx::ZERO,
+            y: Fx::ZERO,
+            vx: Fx::from_int(1000), // 快速飞出场外
+            vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            ang_vel: 0,
+            accel: Fx::ZERO,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            sprite: 0,
+            radius: Fx::from_int(2),
+            delay: 0,
+            life: 0xFFFF,
+            flags: 0,
+            grazed_by: 0,
+            transform_head: 0xFFFF, // 被覆写，值无关
+            xform_wait: 0,
+            xform_next: 0,
+        };
+        let h = w.body.create_bullet_with_xform(init, &seq);
+        let i = w.body.bullets.get(h).unwrap();
+        let seg = w.body.bullets.transform_head[i];
+        assert_ne!(seg, crate::xform::XFORM_NONE);
+
+        crate::step::step(&mut w, &InputFrame::empty(0));
+
+        assert_eq!(w.body.bullets.get(h), None, "越界弹应被回收");
+        assert_eq!(w.body.xforms.alloc().unwrap(), seg, "段应已还，复得原段号");
     }
 
     #[test]

@@ -5,8 +5,9 @@
 //!
 //! | 相位 | 在哪 |
 //! |---|---|
-//! | 0 `begin` · 4 `run_transforms`(stub) · 10 `advance` | 本文件（各数行，不值得单开） |
+//! | 0 `begin` · 10 `advance` | 本文件（各数行，不值得单开） |
 //! | 1 `decode_input` · 3 `update_players` | [`player`] —— 注意 `crate::player` 是 `PlayerState` **数据**模块，本模块是**相位逻辑** |
+//! | 4 `run_transforms` | [`transform`] —— D4 游标执行器：瞬时 7 op + wait 门 + END/未知 op 终止 |
 //! | 5 `integrate` | [`integrate`] |
 //! | 6 `collide` | [`collide`] —— D8 矩阵四类六行，**只收集不改状态** |
 //! | 7 `settle` | [`settle`] —— D9 三趟，**唯一改状态者** |
@@ -33,15 +34,18 @@ mod integrate;
 mod motion;
 mod player;
 mod settle;
+mod transform;
 
 // ── 常量：池 id / 错误码 / 场界（D7 中轴原点，384×448 + 越界边距）──────────
 pub const POOL_BULLET: usize = 0;
 pub const POOL_SHOT: usize = 1;
 pub const POOL_ENEMY: usize = 2;
 pub const POOL_FIELD: usize = 3;
+pub const POOL_XFORM: usize = 4;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
 pub const STATUS_STALE_HANDLE: u16 = 2;
+pub const STATUS_BAD_ARGS: u16 = 3;
 
 /// 所有实体判定半径的写 API 上限（P4-b）。
 ///
@@ -106,6 +110,8 @@ pub struct WorldBody {
     pub shots: ShotPool,
     pub enemies: EnemyPool,
     pub fields: FieldPool,
+    /// 变换段池（D4）。手写 Checksum 全量入校验和（P6）；I7 inline 数组。
+    pub(crate) xforms: crate::xform::XformSegPool,
     #[checksum(skip = "纯输出缓冲，帧内私有，重演确定性再生（A5）")]
     pub(crate) hits: [Hit; HITS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 hits 一并 skip（A5）")]
@@ -160,9 +166,54 @@ impl WorldBody {
         if Self::clamp_radius(&mut init.radius) {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
+        init.transform_head = crate::xform::XFORM_NONE; // 哑弹哨兵：调用方伪造段号无效
         match self.bullets.alloc(init) {
             Some(h) => h,
             None => {
+                self.diag.pool_full[POOL_BULLET] = self.diag.pool_full[POOL_BULLET].wrapping_add(1);
+                self.last_status = STATUS_POOL_FULL;
+                BulletHandle::NULL
+            }
+        }
+    }
+
+    /// 创建一颗带变换序列的弹（D4）。序列**拷贝**进弹自有段（尾部清零 = 天然 END）。
+    /// P4：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]`（与 `create_bullet` 对称）；坏参
+    /// （>16 槽 / 含未知 op）→ 整体失败 NULL + BAD_ARGS（宁缺勿哑）；
+    /// 先段后弹——段满 → NULL + POOL_FULL(XFORM)；弹池满 → 还段回滚 + POOL_FULL(BULLET)。
+    /// `init.transform_head` 恒被本函数覆写（调用方传值无效）。
+    pub fn create_bullet_with_xform(
+        &mut self,
+        mut init: BulletInit,
+        xform: &[crate::xform::XformSlot],
+    ) -> BulletHandle {
+        if Self::clamp_radius(&mut init.radius) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
+        let bad = xform.len() > crate::xform::SLOTS_PER_SEG
+            || xform
+                .iter()
+                .any(|s| s.op > crate::xform::OP_MAX_IMPLEMENTED);
+        if bad {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return BulletHandle::NULL;
+        }
+        let Some(seg) = self.xforms.alloc() else {
+            self.diag.pool_full[POOL_XFORM] = self.diag.pool_full[POOL_XFORM].wrapping_add(1);
+            self.last_status = STATUS_POOL_FULL;
+            return BulletHandle::NULL;
+        };
+        let dst = self.xforms.seg_slots_mut(seg);
+        dst[..xform.len()].copy_from_slice(xform);
+        dst[xform.len()..].fill(Default::default()); // 尾零 = 天然 END（复用段写满义务）
+        init.transform_head = seg;
+        init.xform_wait = 0;
+        init.xform_next = 0;
+        match self.bullets.alloc(init) {
+            Some(h) => h,
+            None => {
+                self.xforms.free(seg); // 先段后弹的回滚半边
                 self.diag.pool_full[POOL_BULLET] = self.diag.pool_full[POOL_BULLET].wrapping_add(1);
                 self.last_status = STATUS_POOL_FULL;
                 BulletHandle::NULL
@@ -252,9 +303,6 @@ impl WorldBody {
         self.phase_enter(PH_BEGIN);
         self.hits_len = 0;
         self.events_len = 0;
-    }
-    pub(crate) fn run_transforms(&mut self) {
-        self.phase_enter(PH_XFORM); // stub：无变换段池
     }
     pub(crate) fn advance(&mut self) {
         self.phase_enter(PH_ADVANCE);

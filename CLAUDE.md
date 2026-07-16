@@ -116,9 +116,10 @@ crates/
     src/checksum.rs  vendored FNV-1a 64（D11）
     src/rng.rs       vendored PCG32（I3）
     src/{bullets,shots,enemy,field,player}.rs  实体数据模块（前四个是 define_pool! 实例；池即层）
+    src/xform.rs      变换段池（D4；手写特例，段即分配单位）
     src/{input,events}.rs                      输入抽象 / hits+events 缓冲类型
     src/world.rs     WorldBody 字段所有权 + 写 API + push_* + PhaseGuard + 场界常量
-    src/world/       【模块结构镜像相位骨架】player(相1+3) / integrate(相5)
+    src/world/       【模块结构镜像相位骨架】player(相1+3) / transform(相4) / integrate(相5)
                      / collide(相6) / settle(相7) / cleanup(相9) / motion(D3 运动写 API)
     src/step.rs      P2 组装层：§3.5 宪法顺序的唯一持有者 + World + 快照
   stg-derive/       proc-macro：#[derive(Checksum)] + define_pool!

@@ -347,7 +347,7 @@ define_pool! {
 
 **设计基线（TH16 逆向的取舍结论）**：ZUN 的弹是 5.2 KB 的微型 VM，因为他没有任务弹这一档；我们有三档制，档二只收"**全屏级**"能力（几百颗弹同时要的），少数派行为归档三（任务弹）。据此**采纳**：wait 门相对时序、计数循环、信号触发（EX_REACT 对应物）、限时插值（EX_STEP 对应物）、弹生弹（瘦身为表引用）；**否决**：逐效果私有状态块（8192 × 5 KB = 40 MB，快照预算爆炸）、EX_SAVE、任意条件逻辑（档三伺候）。ZUN 的"效果并发"在我们这里等价成立：连续效果是**持久字段**，序列游标只负责排程——"之字 + 加速" = 循环里 TURN + 开局一次 SET_ACCEL，单游标天然并发。
 
-**段池**：`XformSegPool = [XformSlot; 2048 段 × 16 槽]`（384 KB，手写特例）。`create_bullet` 把序列**拷贝**进弹自有段（不共享、无引用计数），随弹回收。段池满 ⇒ `create_bullet` **整体失败**（`NULL + PoolFull`）——不做"退化成哑弹"的部分成功：弹出来了却不拐弯是最难查的静默错误，宁缺一颗弹（两者皆确定，选可诊断的）。
+**段池**：`XformSegPool = [XformSlot; 2048 段 × 16 槽]`（384 KB，手写特例）。`create_bullet` 把序列**拷贝**进弹自有段（不共享、无引用计数），随弹回收。段池满 ⇒ `create_bullet` **整体失败**（`NULL + PoolFull`）——不做"退化成哑弹"的部分成功：弹出来了却不拐弯是最难查的静默错误，宁缺一颗弹（两者皆确定，选可诊断的）。（实现定稿：先段后弹，弹池满回滚还段；坏参（>16 槽/未知 op）同为整体失败 BAD_ARGS——spec 2026-07-16）
 
 **槽格式（12 B，相对 wait 制）**：
 
@@ -379,14 +379,16 @@ struct XformSlot { wait: u16, op: u8, _pad: u8, args: [i32; 2] }
 | | `BOUNCE_ARM` | n≤3, walls | 1 | 反弹待命（flags 2 位计数） |
 | 插值 | `STEP_SPEED` | target, frames\|easing | **2** | 限时缓动到目标速率（scratch 在扩展槽） |
 | | `STEP_ANGLE` | target, frames\|easing | **2** | 限时缓动到目标角 |
-| 控制 | `LOOP` | target_slot, count | 1 | 游标跳回；count 就地递减，0 = 无限 |
+| 控制 | `LOOP` | target_slot, count | 1 | 游标跳回；count 就地递减，0 = 无限（count 地板 1：authored N=体执行 N 次、0=无限，耗尽停 1 不复活、嵌套归档三；scratch op 发射时重初始化——spec 2026-07-16） |
 | | `WAIT_SIGNAL` | ch | 1 | 停在此 op，`signals[ch] == 当前帧` 才放行 |
+
+**op 编号冻结**（spec 2026-07-16 定稿；改动=过评审+bump engine_ver）：`END`=0、`SET_SPEED`=1、`ADD_SPEED`=2、`SET_ANGLE`=3、`TURN`=4、`AIM_PLAYER`=5、`SET_SPRITE`=6、`SET_LIFE`=7、`SET_ANG_VEL`=8、`SET_ACCEL`=9、`SET_GRAVITY`=10、`STOP_FX`=11、`LOOP`=12；13-16 为 11b 的 `WAIT_SIGNAL`/`BOUNCE_ARM`/`STEP_SPEED`/`STEP_ANGLE`；17 预留 `SPAWN_PATTERN`。
 
 **执行算法（相位 5，每有段的活弹）**：
 
 ```
 if delay > 0 → 跳过（激活前变换不走）
-if xform_wait > 0 { xform_wait -= 1; return }
+if xform_wait > 0 { xform_wait -= 1; if xform_wait > 0 { return } }   // 勘误：递减归零当帧放行，否则 wait=1 变隔 2 帧（与散文"等 wait 帧"矛盾）（勘误，spec 2026-07-16）
 loop {
     if xform_next 越界 或 op == END → 序列终结，return
     if op == WAIT_SIGNAL 且 signals[ch] != frame → return   // 停驻等待

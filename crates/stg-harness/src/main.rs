@@ -43,6 +43,11 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// sincos 回填 v）；每 90 帧发 3 发上抛重力弹（CART_FX，逐帧 CORDIC atan2 + isqrt 回填
 /// 作者视图，顶点前后扫过 `BACKFILL_MIN_SPEED` 阈值两侧）；每 75 帧对螺旋圈最近一发 setter
 /// 骚扰（turn/aim/set_vel 轮转，句柄可能已随生死回收变成悬垂——P4-b no-op 路径顺带入金向量）。
+///
+/// D4 加戏（变换游标压段池/游标推进）：每 50 帧（`frame % 50 == 10`）发一对之字加速弹
+/// （LOOP 跳回 TURN ±90° 无限循环 + 开局 SET_ACCEL 常量加速，压单游标多 op 连发与段池长驻）；
+/// 每 70 帧（`frame % 70 == 30`）发一发 SET_LIFE 自爆弹——排程于相位 4，45 帧后寿命改判 1；
+/// 相位 5 integrate **同帧**减到 0；相位 9 cleanup **当帧**回收（不是"下一帧"）→还段路径入对拍。
 /// 600 帧 @ 60Hz。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::{BulletHandle, BulletInit};
@@ -51,6 +56,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SHOT, BTN_SLOW, BTN_UP, InputFrame};
     use stg_core::math::{Angle, Fx, polar_to_vec};
     use stg_core::step::{World, step_with_director};
+    use stg_core::xform::{OP_LOOP, OP_SET_ACCEL, OP_SET_LIFE, OP_SET_SPEED, OP_TURN, XformSlot};
 
     const FRAMES: u32 = 600; // 10 秒 @ 60Hz
     const SEED: u64 = 0x5147_4f4c_4445_4e00; // "GOLDEN"
@@ -213,6 +219,61 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                     1 => b.aim_bullet_at_player(spiral_h, Angle::ZERO),
                     _ => b.set_bullet_vel(spiral_h, Fx::from_int(2), Fx::from_int(1)),
                 }
+            }
+            // ⑦ D4 压力源一：之字加速弹——"单游标天然并发"招牌（LOOP TURN ±90° + 开局 SET_ACCEL）
+            if frame % 50 == 10 {
+                let zig = [
+                    XformSlot {
+                        wait: 0,
+                        op: OP_SET_SPEED,
+                        _pad: 0,
+                        args: [65_536, 0],
+                    },
+                    XformSlot {
+                        wait: 0,
+                        op: OP_SET_ACCEL,
+                        _pad: 0,
+                        args: [1_638, 0],
+                    },
+                    XformSlot {
+                        wait: 20,
+                        op: OP_TURN,
+                        _pad: 0,
+                        args: [16_384, 0],
+                    },
+                    XformSlot {
+                        wait: 20,
+                        op: OP_TURN,
+                        _pad: 0,
+                        args: [-16_384_i32, 0],
+                    },
+                    XformSlot {
+                        wait: 0,
+                        op: OP_LOOP,
+                        _pad: 0,
+                        args: [2, 0],
+                    }, // 无限之字
+                ];
+                b.create_bullet_with_xform(bullet_at(-100, 60), &zig);
+                b.create_bullet_with_xform(bullet_at(100, 60), &zig);
+            }
+            // ⑧ D4 压力源二：SET_LIFE 自爆弹——排程改寿命 + 弹死还段路径入流
+            if frame % 70 == 30 {
+                let fuse = [
+                    XformSlot {
+                        wait: 0,
+                        op: OP_SET_SPEED,
+                        _pad: 0,
+                        args: [131_072, 0],
+                    },
+                    XformSlot {
+                        wait: 45,
+                        op: OP_SET_LIFE,
+                        _pad: 0,
+                        args: [1, 0],
+                    },
+                ];
+                b.create_bullet_with_xform(bullet_at(0, 150), &fuse);
             }
         });
         lines.push_str(&format!("{frame} {:016x}\n", world.checksum()));

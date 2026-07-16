@@ -75,27 +75,42 @@ impl WorldBody {
         }
     }
 
+    /// 改速率并回填 v（索引核；D4 op SET_SPEED/ADD_SPEED 与公开 setter 共用）。
+    pub(crate) fn set_speed_at(&mut self, i: usize, speed: Fx) {
+        self.bullets.speed[i] = speed;
+        self.refresh_vel_from_polar(i);
+    }
+
+    /// 改朝向并回填 v（索引核；D4 op 与公开 setter 共用）。
+    pub(crate) fn set_angle_at(&mut self, i: usize, angle: Angle) {
+        self.bullets.angle[i] = angle;
+        self.refresh_vel_from_polar(i);
+    }
+
+    /// 相对转向（回绕加）并回填 v（索引核；D4 op 与公开 setter 共用）。
+    pub(crate) fn turn_at(&mut self, i: usize, delta: Angle) {
+        self.bullets.angle[i] = self.bullets.angle[i].add(delta);
+        self.refresh_vel_from_polar(i);
+    }
+
     /// 改速率并回填 v（D3 极坐标 setter）。悬垂句柄 no-op。
     pub fn set_bullet_speed(&mut self, h: BulletHandle, speed: Fx) {
         if let Some(i) = self.bullet_index_checked(h) {
-            self.bullets.speed[i] = speed;
-            self.refresh_vel_from_polar(i);
+            self.set_speed_at(i, speed);
         }
     }
 
     /// 改朝向并回填 v。
     pub fn set_bullet_angle(&mut self, h: BulletHandle, angle: Angle) {
         if let Some(i) = self.bullet_index_checked(h) {
-            self.bullets.angle[i] = angle;
-            self.refresh_vel_from_polar(i);
+            self.set_angle_at(i, angle);
         }
     }
 
     /// 相对转向（回绕加）并回填 v。
     pub fn turn_bullet(&mut self, h: BulletHandle, delta: Angle) {
         if let Some(i) = self.bullet_index_checked(h) {
-            self.bullets.angle[i] = self.bullets.angle[i].add(delta);
-            self.refresh_vel_from_polar(i);
+            self.turn_at(i, delta);
         }
     }
 
@@ -153,11 +168,9 @@ impl WorldBody {
         best.map(|(p, _)| p)
     }
 
-    /// 瞄最近可瞄自机 + delta 偏移，回填 v。无可瞄自机 → 纯 no-op（不计数）。
-    pub fn aim_bullet_at_player(&mut self, h: BulletHandle, delta: Angle) {
-        let Some(i) = self.bullet_index_checked(h) else {
-            return;
-        };
+    /// 瞄最近可瞄自机 + delta 偏移，回填 v（索引核；D4 op 与公开 setter 共用）。
+    /// 无可瞄自机 → 纯 no-op（不计数）。
+    pub(crate) fn aim_at_player_at(&mut self, i: usize, delta: Angle) {
         let Some(p) = self.nearest_aimable_player(self.bullets.x[i], self.bullets.y[i]) else {
             return;
         };
@@ -165,6 +178,14 @@ impl WorldBody {
         let dy = self.players[p].y - self.bullets.y[i];
         self.bullets.angle[i] = crate::math::cordic::atan2(dy, dx).add(delta);
         self.refresh_vel_from_polar(i);
+    }
+
+    /// 瞄最近可瞄自机 + delta 偏移，回填 v。无可瞄自机 → 纯 no-op（不计数）。
+    pub fn aim_bullet_at_player(&mut self, h: BulletHandle, delta: Angle) {
+        let Some(i) = self.bullet_index_checked(h) else {
+            return;
+        };
+        self.aim_at_player_at(i, delta);
     }
 }
 
