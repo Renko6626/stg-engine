@@ -75,7 +75,6 @@ pub const SIGNAL_CHANNELS: usize = 8;
 pub(crate) const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
 pub(crate) const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
 pub(crate) const OOB_MARGIN: i32 = 64; // 越界回收边距
-#[allow(dead_code)] // 待磁吸相位（后续切片）读取判定 ALIVE 自机是否低于回收线；本切片只搭常量
 pub(crate) const POC_LINE_Y: i32 = 128; // 回收线（PoC）：ALIVE 自机 y 低于此线 → 全场道具磁吸
 
 // ── 相位索引（A4 v2，0-based；PhaseGuard 押运）───────────────────────────
@@ -360,6 +359,29 @@ impl WorldBody {
             return crate::items::ItemHandle::NULL;
         }
         self.spawn_drop(x, y, item_type)
+    }
+
+    /// 全场磁吸（bomb / 导演 / 将来 ECL syscall 的通用入口）：全部未锁定道具锁定该自机。
+    /// P4-b：坏索引或目标非 ALIVE → no-op + 计数 + BAD_ARGS。
+    pub fn attract_all_items(&mut self, player: usize) {
+        if player >= crate::MAX_PLAYERS
+            || self.players[player].life_state != crate::player::LIFE_ALIVE
+        {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return;
+        }
+        let nw = self.items.alive.len();
+        for w in 0..nw {
+            let mut bits = self.items.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if self.items.magnet_to[i] == crate::items::MAGNET_NONE {
+                    self.items.magnet_to[i] = player as u8;
+                }
+            }
+        }
     }
 
     /// 脉冲一条信号通道（相位 4 前有效——导演槽/ECL；边沿语义见 `signals` 字段文档）。

@@ -24,7 +24,6 @@ pub const PIECES_PER_LIFE: u8 = 5;
 pub const PIECES_PER_BOMB: u8 = 5;
 
 /// 全局重力（≈0.15 px/帧²；未锁定道具 vy += 至终速钉住）。
-#[allow(dead_code)] // 待 world/integrate.rs 落地道具下坠积分（后续切片）才被读；本切片只搭数据
 pub(crate) const ITEM_GRAVITY: Fx = Fx::from_raw(9_830);
 
 /// 每类型配置（v0 引擎常量；金向量实测后调参）。
@@ -37,7 +36,6 @@ pub struct ItemTypeCfg {
     pub attract_radius: Fx,
 }
 
-#[allow(dead_code)] // 仅经 `..STD` struct-update 供 ITEM_CFG 逐行覆写；行内展开，非直接读
 const STD: ItemTypeCfg = ItemTypeCfg {
     score: 0, // 各行覆写
     eject_speed: Fx::from_int(3),

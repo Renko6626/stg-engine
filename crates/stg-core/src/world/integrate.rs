@@ -88,6 +88,80 @@ impl WorldBody {
                 }
             }
         }
+        // 道具（D7）：触发判定先于移动；物理即状态（磁吸=magnet_to、下落=重力到终速）。
+        let poc_player = (0..crate::MAX_PLAYERS).find(|&p| {
+            self.players[p].life_state == crate::player::LIFE_ALIVE
+                && self.players[p].y.raw() < Fx::from_int(super::POC_LINE_Y).raw()
+        });
+        let nw = self.items.alive.len();
+        for w in 0..nw {
+            let mut bits = self.items.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                self.integrate_item(i, poc_player);
+            }
+        }
+    }
+
+    /// 单颗道具的一帧：触发（PoC / 近距）→ 磁吸或下落移动。已拾取（0xFE）静置待回收。
+    fn integrate_item(&mut self, i: usize, poc_player: Option<usize>) {
+        use crate::items::{ITEM_CFG, ITEM_GRAVITY, MAGNET_NONE, MAGNET_PICKED};
+        let m = self.items.magnet_to[i];
+        if m == MAGNET_PICKED {
+            return;
+        }
+        let cfg = &ITEM_CFG[self.items.item_type[i] as usize];
+        if m == MAGNET_NONE {
+            if let Some(p) = poc_player {
+                self.items.magnet_to[i] = p as u8;
+            } else {
+                let r2 = (cfg.attract_radius.raw() as i64) * (cfg.attract_radius.raw() as i64);
+                for p in 0..crate::MAX_PLAYERS {
+                    if self.players[p].life_state != crate::player::LIFE_ALIVE {
+                        continue;
+                    }
+                    let d2 = crate::math::geom::len_sq(
+                        self.players[p].x - self.items.x[i],
+                        self.players[p].y - self.items.y[i],
+                    );
+                    if d2 <= r2 {
+                        self.items.magnet_to[i] = p as u8; // 升序首个 = 低索引（I4）
+                        break;
+                    }
+                }
+            }
+        }
+        let m = self.items.magnet_to[i];
+        if (m as usize) < crate::MAX_PLAYERS {
+            let p = m as usize;
+            if self.players[p].life_state != crate::player::LIFE_ALIVE {
+                // 解锁回落：vx 清零、vy 保持，本帧起按下落走
+                self.items.magnet_to[i] = MAGNET_NONE;
+                self.items.vx[i] = Fx::ZERO;
+            } else {
+                // 每帧重瞄直追（磁吸速度恒定）
+                let a = crate::math::cordic::atan2(
+                    self.players[p].y - self.items.y[i],
+                    self.players[p].x - self.items.x[i],
+                );
+                let (vx, vy) = crate::math::geom::polar_to_vec(cfg.magnet_speed, a);
+                self.items.vx[i] = vx;
+                self.items.vy[i] = vy;
+                self.items.x[i] = self.items.x[i] + vx;
+                self.items.y[i] = self.items.y[i] + vy;
+                return;
+            }
+        }
+        // 未锁定/刚解锁：重力到终速钉住
+        let nvy = self.items.vy[i] + ITEM_GRAVITY;
+        self.items.vy[i] = if nvy.raw() > cfg.terminal_vy.raw() {
+            cfg.terminal_vy
+        } else {
+            nvy
+        };
+        self.items.x[i] = self.items.x[i] + self.items.vx[i];
+        self.items.y[i] = self.items.y[i] + self.items.vy[i];
     }
 
     /// 场界折返镜像（D4 11b 拍板）。walls：bit0 左 / bit1 右 / bit2 上 / bit3 下。
@@ -384,5 +458,147 @@ mod tests {
         }
         assert!(bounced_once, "第一次必须反弹");
         assert!(!w.body.bullets.is_alive(i), "耗尽后必须穿出被回收");
+    }
+
+    /// 次帧首动 + 重力到终速钉住：vy 从 -1.0 逐帧 +0.15，越过 2.2 即恒 2.2。
+    #[test]
+    fn item_falls_with_gravity_clamped_at_terminal() {
+        let mut w = crate::step::World::new(1);
+        w.body
+            .items
+            .alloc(crate::items::ItemInit {
+                x: Fx::ZERO,
+                y: Fx::from_int(100),
+                vx: Fx::ZERO,
+                vy: Fx::from_int(-1),
+                item_type: crate::items::ITEM_POWER,
+                magnet_to: crate::items::MAGNET_NONE,
+                timer: 0,
+            })
+            .unwrap();
+        let mut prev_vy = w.body.items.vy[0];
+        for f in 0..40u32 {
+            crate::step::step(&mut w, &InputFrame::empty(f));
+            let vy = w.body.items.vy[0];
+            assert!(vy.raw() >= prev_vy.raw(), "重力单调");
+            assert!(
+                vy.raw() <= crate::items::ITEM_CFG[0].terminal_vy.raw(),
+                "永不超终速"
+            );
+            prev_vy = vy;
+        }
+        assert_eq!(
+            prev_vy,
+            crate::items::ITEM_CFG[0].terminal_vy,
+            "40 帧后必达终速"
+        );
+    }
+
+    /// 近距磁吸：道具进磁吸圈（40px）即锁定并每帧重瞄直追；圈外不锁。
+    #[test]
+    fn item_attracts_within_radius_only() {
+        let mut w = crate::step::World::new(1);
+        // 自机在 (0,384)；道具 A 在 (0, 350)（距 34 < 40）、B 在 (0, 300)（距 84 > 40）
+        for y in [350, 300] {
+            w.body
+                .items
+                .alloc(crate::items::ItemInit {
+                    x: Fx::ZERO,
+                    y: Fx::from_int(y),
+                    vx: Fx::ZERO,
+                    vy: Fx::ZERO,
+                    item_type: crate::items::ITEM_POINT,
+                    magnet_to: crate::items::MAGNET_NONE,
+                    timer: 0,
+                })
+                .unwrap();
+        }
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.items.magnet_to[0], 0, "圈内锁定自机 0");
+        assert_eq!(
+            w.body.items.magnet_to[1],
+            crate::items::MAGNET_NONE,
+            "圈外不锁"
+        );
+        // 锁定后向自机推进（y 增大、速率 = 磁吸速度）
+        let y0 = w.body.items.y[0];
+        crate::step::step(&mut w, &InputFrame::empty(1));
+        assert!(w.body.items.y[0].raw() > y0.raw(), "朝自机（下方）追");
+    }
+
+    /// PoC：自机 y < 128 → 全场未锁定道具锁定；已拾取（0xFE）不受扰。
+    #[test]
+    fn poc_line_attracts_all_unlocked() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].y = Fx::from_int(100); // 过线
+        for k in 0..3 {
+            w.body
+                .items
+                .alloc(crate::items::ItemInit {
+                    x: Fx::from_int(k * 50 - 50),
+                    y: Fx::from_int(200),
+                    vx: Fx::ZERO,
+                    vy: Fx::ZERO,
+                    item_type: crate::items::ITEM_POWER,
+                    magnet_to: crate::items::MAGNET_NONE,
+                    timer: 0,
+                })
+                .unwrap();
+        }
+        w.body.items.magnet_to[2] = crate::items::MAGNET_PICKED; // 已拾取哨兵
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.items.magnet_to[0], 0);
+        assert_eq!(w.body.items.magnet_to[1], 0);
+        assert_eq!(
+            w.body.items.magnet_to[2],
+            crate::items::MAGNET_PICKED,
+            "0xFE 不受扰"
+        );
+    }
+
+    /// 解锁回落：磁吸中目标死亡 → MAGNET_NONE + vx 清零，重力接管。
+    #[test]
+    fn magnet_unlocks_when_target_dies() {
+        let mut w = crate::step::World::new(1);
+        w.body
+            .items
+            .alloc(crate::items::ItemInit {
+                x: Fx::from_int(50),
+                y: Fx::from_int(200),
+                vx: Fx::ZERO,
+                vy: Fx::ZERO,
+                item_type: crate::items::ITEM_POWER,
+                magnet_to: 0, // 已锁定自机 0
+                timer: 0,
+            })
+            .unwrap();
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW; // 非 ALIVE
+        w.body.players[0].state_timer = 8;
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.items.magnet_to[0], crate::items::MAGNET_NONE, "解锁");
+        assert_eq!(w.body.items.vx[0], Fx::ZERO, "垂直续落");
+    }
+
+    /// attract_all_items：合法目标全场上锁；坏索引/非 ALIVE → P4-b no-op + 计数。
+    #[test]
+    fn attract_all_items_api_contract() {
+        let mut w = crate::step::World::new(1);
+        w.body
+            .items
+            .alloc(crate::items::ItemInit {
+                x: Fx::ZERO,
+                y: Fx::from_int(50),
+                vx: Fx::ZERO,
+                vy: Fx::ZERO,
+                item_type: crate::items::ITEM_POINT,
+                magnet_to: crate::items::MAGNET_NONE,
+                timer: 0,
+            })
+            .unwrap();
+        w.body.attract_all_items(0);
+        assert_eq!(w.body.items.magnet_to[0], 0);
+        let cv0 = w.body.diag.contract_viol;
+        w.body.attract_all_items(7); // 坏索引
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
     }
 }
