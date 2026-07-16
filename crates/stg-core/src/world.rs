@@ -68,6 +68,9 @@ pub const STATUS_BAD_ARGS: u16 = 3;
 ///   留待后续。
 pub const MAX_ENTITY_RADIUS: Fx = Fx::from_int(1024);
 
+/// 信号黑板通道数（D4 11b）。
+pub const SIGNAL_CHANNELS: usize = 8;
+
 pub(crate) const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
 pub(crate) const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
 pub(crate) const OOB_MARGIN: i32 = 64; // 越界回收边距
@@ -112,6 +115,9 @@ pub struct WorldBody {
     pub fields: FieldPool,
     /// 变换段池（D4）。手写 Checksum 全量入校验和（P6）；I7 inline 数组。
     pub(crate) xforms: crate::xform::XformSegPool,
+    /// 信号黑板（D4 11b）：每通道存"最后脉冲帧号 + 1"，0 = 从未脉冲（零初始化合法）。
+    /// 边沿消费：相位 4 只放行 `signals[ch] == frame + 1` 的停驻弹。
+    pub(crate) signals: [u32; SIGNAL_CHANNELS],
     #[checksum(skip = "纯输出缓冲，帧内私有，重演确定性再生（A5）")]
     pub(crate) hits: [Hit; HITS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 hits 一并 skip（A5）")]
@@ -269,6 +275,23 @@ impl WorldBody {
                 FieldHandle::NULL
             }
         }
+    }
+
+    /// 脉冲一条信号通道（相位 4 前有效——导演槽/ECL；边沿语义见 `signals` 字段文档）。
+    /// P4-b：坏通道 no-op + 计数。debug 断言相位窗口：相位 4 之后的脉冲当帧蒸发，
+    /// 正路是上层读事件、次帧经导演/ECL 转发。
+    pub fn pulse_signal(&mut self, ch: usize) {
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            self.phase_guard <= PH_XFORM,
+            "pulse_signal 晚于相位 4：本帧无人能听见（请次帧经导演/ECL 转发）"
+        );
+        if ch >= SIGNAL_CHANNELS {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return;
+        }
+        self.signals[ch] = self.frame.wrapping_add(1);
     }
 
     /// 收集一条碰撞命中（P4-a：满则停收 + 计数，不 panic）。

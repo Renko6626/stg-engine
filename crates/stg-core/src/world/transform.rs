@@ -61,13 +61,26 @@ impl WorldBody {
                 self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
                 return;
             }
-            match self.fire_op(i, slot) {
-                FireResult::Terminate => {
+            if slot.op == OP_WAIT_SIGNAL {
+                let ch = slot.args[0];
+                if !(0..crate::world::SIGNAL_CHANNELS as i32).contains(&ch) {
+                    self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
                     self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
                     return;
                 }
-                FireResult::Jumped => return, // LOOP 护栏：本帧到此为止
-                FireResult::Continue => {}
+                if self.signals[ch as usize] != self.frame.wrapping_add(1) {
+                    return; // 停驻：不步进、不设 wait，次帧再看
+                }
+                // 边沿命中：视同已发射，落到下方公共步进（本 op 的 wait 生效）
+            } else {
+                match self.fire_op(i, slot) {
+                    FireResult::Terminate => {
+                        self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
+                        return;
+                    }
+                    FireResult::Jumped => return, // LOOP 护栏：本帧到此为止
+                    FireResult::Continue => {}
+                }
             }
             self.bullets.xform_wait[i] = slot.wait;
             self.bullets.xform_next[i] = (next + 1 + ARITY[slot.op as usize] as usize) as u8;
@@ -400,5 +413,59 @@ mod tests {
             7 - 1,
             "SET_LIFE=7 且本帧 integrate 已倒数 1"
         );
+    }
+
+    /// 边沿语义三连：停驻不动 → 当帧脉冲放行（同帧转向）→ 次帧不重复放行。
+    #[test]
+    fn wait_signal_edge_release() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_SPEED, Fx::from_int(1).raw(), 0),
+                slot(0, OP_WAIT_SIGNAL, 3, 0),
+                slot(0, OP_TURN, 16384, 0),
+            ],
+        );
+        // 帧 0-1：无脉冲，停驻
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::step::step(&mut w, &InputFrame::empty(1));
+        assert_eq!(w.body.bullets.angle[i], Angle::ZERO, "无脉冲不得放行");
+        // 帧 2：导演槽脉冲（step_with_director 在相位 2 调闭包）→ 相位 4 同帧放行
+        crate::step::step_with_director(&mut w, &InputFrame::empty(2), |b| b.pulse_signal(3));
+        assert_eq!(w.body.bullets.angle[i], Angle::QUARTER, "当帧脉冲当帧放行");
+        // 帧 3：无新脉冲——已放行的弹不受影响，且新停驻弹听不到旧脉冲
+        let j = xf_bullet(
+            &mut w,
+            &[slot(0, OP_WAIT_SIGNAL, 3, 0), slot(0, OP_SET_SPRITE, 9, 0)],
+        );
+        crate::step::step(&mut w, &InputFrame::empty(3));
+        assert_eq!(
+            w.body.bullets.sprite[j], 0,
+            "旧脉冲是边沿不是电平：次帧不得放行"
+        );
+    }
+
+    /// 坏通道号：create 期放行（op 合法），运行期 P4-b——计数 + 序列终止。
+    #[test]
+    fn wait_signal_bad_channel_terminates() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(&mut w, &[slot(0, OP_WAIT_SIGNAL, 8, 0)]);
+        let cv0 = w.body.diag.contract_viol;
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.bullets.xform_next[i], 16, "坏通道终止序列");
+    }
+
+    /// pulse_signal 本体契约：写 frame+1；坏通道 no-op + 计数。
+    #[test]
+    fn pulse_signal_contract() {
+        let mut w = crate::step::World::new(1);
+        w.body.pulse_signal(2);
+        assert_eq!(w.body.signals[2], w.body.frame.wrapping_add(1));
+        let cv0 = w.body.diag.contract_viol;
+        w.body.pulse_signal(8); // 越界
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
     }
 }

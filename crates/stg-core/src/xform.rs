@@ -50,6 +50,7 @@ pub(crate) const fn op_implemented(op: u8) -> bool {
             | OP_SET_GRAVITY
             | OP_STOP_FX
             | OP_LOOP
+            | OP_WAIT_SIGNAL
     )
 }
 
@@ -174,7 +175,7 @@ mod tests {
         assert_eq!(OP_SPAWN_PATTERN, 60);
     }
 
-    /// 有效性按表查而非比大小：11a 已实现集恰为 13 个；未实现/垃圾值一律 false；
+    /// 有效性按表查而非比大小：11a+11b(WAIT_SIGNAL) 已实现集恰为 14 个；未实现/垃圾值一律 false；
     /// ARITY 全 u8 域可索引（终审 M-A#4 的脆弱性就此拆除）。
     #[test]
     fn op_implemented_table_and_arity_full_domain() {
@@ -192,6 +193,7 @@ mod tests {
             OP_SET_GRAVITY,
             OP_STOP_FX,
             OP_LOOP,
+            OP_WAIT_SIGNAL,
         ];
         for op in 0..=255u8 {
             assert_eq!(
@@ -200,9 +202,10 @@ mod tests {
                 "op {op} 的有效性判定错误"
             );
         }
-        // 11b 四 op 已有编号但未实现（创建期必须被拒）
-        assert!(!op_implemented(OP_WAIT_SIGNAL));
+        // 11b 剩余三 op 已有编号但未实现（创建期必须被拒）
         assert!(!op_implemented(OP_STEP_SPEED));
+        assert!(!op_implemented(OP_STEP_ANGLE));
+        assert!(!op_implemented(OP_BOUNCE_ARM));
         // ARITY 任意 u8 可索引；STEP 族预置 1，其余 0
         assert_eq!(ARITY[OP_STEP_SPEED as usize], 1);
         assert_eq!(ARITY[OP_STEP_ANGLE as usize], 1);
