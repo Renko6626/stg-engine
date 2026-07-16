@@ -14,6 +14,9 @@ pub const BULLET_POLAR_FX: u8 = 1 << 1;
 /// `flags` 位：CART_FX 连续效果（integrate 每帧 `vx += ax; vy += ay;` 后按阈值回填极坐标）。
 /// 与 `BULLET_POLAR_FX` 互斥：置一清另一（TH16 `c68 &= ~0x9` 语义）。位 3-4 预留反弹计数（D4）。
 pub const BULLET_CART_FX: u8 = 1 << 2;
+/// `flags` 位 3-4：反弹剩余次数（D4 `BOUNCE_ARM`，≤3）。walls 掩码不进弹本体——从弹自有段读。
+pub const BULLET_BOUNCE_SHIFT: u32 = 3;
+pub const BULLET_BOUNCE_MASK: u8 = 0b0001_1000;
 
 // 弹池（D3 定稿，19 字段）。哑弹 / 变换弹 / 任务弹**共池**；变换【段】另存 XformSegPool（M0-4 手写）。
 // `transform_head == 0xFFFF` 即哑弹（无段、不付段内存，只付这几字节游标）。运动 / 双表示逻辑归 M0-4。

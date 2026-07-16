@@ -156,6 +156,16 @@ impl WorldBody {
                 }
             }
             OP_LOOP => return self.fire_loop(i, slot),
+            OP_BOUNCE_ARM => {
+                let n = slot.args[1];
+                if !(0..=3).contains(&n) {
+                    self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+                }
+                let n = n.clamp(0, 3) as u8;
+                self.bullets.flags[i] = (self.bullets.flags[i]
+                    & !crate::bullets::BULLET_BOUNCE_MASK)
+                    | (n << crate::bullets::BULLET_BOUNCE_SHIFT);
+            }
             _ => {
                 // 未实现 op（11b 预留编号 / 族内空隙 / 一切垃圾值）：P4-b——计数 + 序列终止（两机同样跳过）
                 self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
@@ -241,6 +251,25 @@ impl WorldBody {
         } else {
             STEP_ACTIVE | elapsed as i32
         };
+    }
+
+    /// 武装墙掩码：扫弹自有段已发射区间的首个 BOUNCE_ARM（升序，I4），读 args[0] 低 4 位。
+    /// 只对 flags 位 3-4 非零的弹调用（调用方保证）；武装弹必然有段。
+    pub(crate) fn bounce_walls_of(&self, i: usize) -> u8 {
+        let seg = self.bullets.transform_head[i];
+        if seg as usize >= SEG_CAP {
+            return 0; // 伪造段号护栏同款：无段即无墙
+        }
+        let fired_end = (self.bullets.xform_next[i] as usize).min(SLOTS_PER_SEG);
+        let mut s = 0usize;
+        while s < fired_end {
+            let slot = self.xforms.seg_slots(seg)[s];
+            if slot.op == OP_BOUNCE_ARM {
+                return (slot.args[0] & 0xF) as u8;
+            }
+            s += 1 + ARITY[slot.op as usize] as usize;
+        }
+        0
     }
 }
 
