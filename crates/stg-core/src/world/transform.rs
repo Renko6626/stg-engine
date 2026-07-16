@@ -139,6 +139,11 @@ impl WorldBody {
                 } else {
                     // scratch 无条件重初始化（LOOP 重访 = 自动重新武装）
                     let idx = self.bullets.xform_next[i] as usize;
+                    if idx + 1 >= SLOTS_PER_SEG {
+                        // P4-b：末槽 STEP 无扩展槽空间（create 期空间校验属后续任务；此为发射期兜底）
+                        self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+                        return FireResult::Terminate;
+                    }
                     let seg = self.bullets.transform_head[i];
                     let start = if slot.op == OP_STEP_SPEED {
                         self.bullets.speed[i].raw()
@@ -214,6 +219,7 @@ impl WorldBody {
             let v = if done {
                 target // 终帧写精确终值（不吃插值舍入）
             } else {
+                // 负 i64 >> 为算术右移（向负无穷取整）——确定性，两平台一致
                 let d = ((target.raw() as i64 - start.raw() as i64) * e.raw() as i64) >> 16;
                 Fx::from_raw((start.raw() as i64 + d) as i32)
             };
@@ -224,6 +230,7 @@ impl WorldBody {
             let scaled = if done {
                 delta
             } else {
+                // 算术右移，同上
                 ((delta as i64 * e.raw() as i64) >> 16) as i16
             };
             self.set_angle_at(i, start.add_delta(scaled));
@@ -681,5 +688,44 @@ mod tests {
             Fx::from_int(5),
             "第二轮须从 5 重新插到 2 再 +3"
         );
+    }
+
+    /// P4-b 兜底：STEP 在第 15 槽（无扩展槽空间）——发射期计数 + 终止，不 panic。
+    /// （create 期的空间校验属后续任务；本护栏是 fire 侧的镜像兜底，与 fire_loop 同款。）
+    #[test]
+    fn step_at_last_slot_terminates_without_panic() {
+        let mut w = crate::step::World::new(1);
+        let mut seq = [slot(0, OP_SET_SPRITE, 0, 0); 16];
+        seq[15] = slot(0, OP_STEP_SPEED, Fx::from_int(2).raw(), 4);
+        let i = xf_bullet(&mut w, &seq);
+        let cv0 = w.body.diag.contract_viol;
+        crate::step::step(&mut w, &InputFrame::empty(0)); // 槽 0..15 全 wait=0 同帧连发
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "末槽 STEP 恰计一次");
+        assert_eq!(w.body.bullets.xform_next[i], 16, "序列终止");
+        crate::step::step(&mut w, &InputFrame::empty(1)); // 不再计数、不 panic
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+    }
+
+    /// easing id 经 STEP 通路的判别：QuadIn(id=1) 2 帧从 1.0 到 3.0——
+    /// t=0.5 时 QuadIn=0.25（烘焙表精确采样点），v = 1 + 2×0.25 = 1.5 逐位相等。
+    #[test]
+    fn step_speed_quadin_waypoint_exact() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_SPEED, Fx::from_int(1).raw(), 0),
+                slot(0, OP_STEP_SPEED, Fx::from_int(3).raw(), 2 | (1 << 16)), // frames=2, QuadIn
+            ],
+        );
+        crate::step::step(&mut w, &InputFrame::empty(0)); // 发射帧不 tick
+        crate::step::step(&mut w, &InputFrame::empty(1)); // t=0.5 → 0.25
+        assert_eq!(
+            w.body.bullets.speed[i].raw(),
+            98304,
+            "1 + 2×QuadIn(0.5) = 1.5"
+        );
+        crate::step::step(&mut w, &InputFrame::empty(2));
+        assert_eq!(w.body.bullets.speed[i], Fx::from_int(3), "终值精确");
     }
 }
