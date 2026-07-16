@@ -148,7 +148,15 @@ mod tests {
         let occ = w.body.xforms.checksum();
         assert_ne!(occ, base, "占用位图入校验和");
         w.body.xforms.seg_slots_mut(s)[7].args[1] = 1; // 未占用语义无关——哈希全槽
-        assert_ne!(w.body.xforms.checksum(), occ, "任意槽字节入校验和");
+        let after_slot = w.body.xforms.checksum();
+        assert_ne!(after_slot, occ, "任意槽字节入校验和");
+        // 段 5 全程未分配（本测试从未 alloc 到它）——"只哈希占用段"的变异体在此维度无从分辨。
+        w.body.xforms.seg_slots_mut(5)[0].args[0] = 99;
+        assert_ne!(
+            w.body.xforms.checksum(),
+            after_slot,
+            "未分配段的槽也必须入哈希（P6 哈希全槽不看占用）"
+        );
     }
 
     #[test]

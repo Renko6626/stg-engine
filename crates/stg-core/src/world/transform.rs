@@ -41,12 +41,21 @@ impl WorldBody {
 
     /// 游标推进：从 xform_next 起连发直到 wait 门/终止/LOOP 护栏。
     fn advance_cursor(&mut self, i: usize) {
+        if self.bullets.xform_next[i] as usize >= SLOTS_PER_SEG {
+            return; // 已终止（哨兵 16）——短路，含伪造段号已终止后的重复调用
+        }
+        let seg = self.bullets.transform_head[i];
+        if seg as usize >= SEG_CAP {
+            // P4-b：非哨兵越界段号（只能来自绕过写 API 的伪造）→ 计数 + 序列终止，不 panic
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
+            return;
+        }
         loop {
             let next = self.bullets.xform_next[i] as usize;
             if next >= SLOTS_PER_SEG {
                 return; // 已终止（哨兵 16）
             }
-            let seg = self.bullets.transform_head[i];
             let slot = self.xforms.seg_slots(seg)[next];
             if slot.op == OP_END {
                 self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
@@ -98,7 +107,7 @@ impl WorldBody {
     }
 
     /// LOOP（spec 三细则）：count 0=无限跳；1=耗尽不跳（永停 1，走正常步进）；N=写回 N-1 跳。
-    /// 跳转不设 wait、本帧到此为止（护栏）；target ≥ 16 → P4-b 终止。
+    /// 跳转不设 wait、本帧到此为止（护栏）；target 越界（<0 或 ≥16）→ P4-b 终止。
     fn fire_loop(&mut self, i: usize, slot: XformSlot) -> FireResult {
         let target = slot.args[0];
         if !(0..SLOTS_PER_SEG as i32).contains(&target) {
@@ -222,6 +231,25 @@ mod tests {
         }
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(1), "END 后不得再发射");
         assert!(w.body.bullets.is_alive(i), "终止 ≠ 弹死");
+    }
+
+    /// 伪造越界段号（绕过写 API 直接改 `transform_head`，非 XFORM_NONE 哨兵）：P4-b——
+    /// contract_viol + 序列终止，不 panic；终止哨兵短路使第二次 step 不重复计数。
+    #[test]
+    fn forged_out_of_range_segment_terminates_without_panic() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(&mut w, &[slot(0, OP_SET_SPRITE, 1, 0)]);
+        w.body.bullets.transform_head[i] = 3000;
+        let cv0 = w.body.diag.contract_viol;
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "伪造越界段号恰计一次");
+        assert_eq!(w.body.bullets.xform_next[i], 16, "序列终止（哨兵）");
+        crate::step::step(&mut w, &InputFrame::empty(1));
+        assert_eq!(
+            w.body.diag.contract_viol,
+            cv0 + 1,
+            "终止哨兵短路——第二次 step 不重复计数"
+        );
     }
 
     /// 未知 op（运行期段被涂改出 13）：P4-b——contract_viol + 序列终止，弹活着。
