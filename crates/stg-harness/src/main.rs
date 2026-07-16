@@ -48,6 +48,14 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// （LOOP 跳回 TURN ±90° 无限循环 + 开局 SET_ACCEL 常量加速，压单游标多 op 连发与段池长驻）；
 /// 每 70 帧（`frame % 70 == 30`）发一发 SET_LIFE 自爆弹——排程于相位 4，45 帧后寿命改判 1；
 /// 相位 5 integrate **同帧**减到 0；相位 9 cleanup **当帧**回收（不是"下一帧"）→还段路径入对拍。
+///
+/// 11b 加戏（三压力源，续 D4 编号）：每 40 帧偏移 25（`frame % 40 == 25`）停驻一发双重
+/// WAIT_SIGNAL 弹（两级 TURN 各挂一道信号门，形成"双重驻停链"）；每 120 帧偏移 60
+/// （`frame % 120 == 60`）在信号通道 0 上 `pulse_signal`——期间累积的全部停驻弹同帧
+/// 边沿放行、集体转向（黑板齐转语义压 signals 数组 + 边沿命中路径）。每 90 帧偏移 45
+/// （`frame % 90 == 45`）发一发 BOUNCE_ARM 三墙武装弹（左右上，`n=3`），POLAR 速度域入
+/// 墙反弹镜像对拍。每 65 帧偏移 20（`frame % 65 == 20`）发一发 STEP_SPEED 缓动弹——
+/// Smoothstep（easing id 7）40 帧从 0.5 缓到 3.0，压连续插值 scratch 与游标并发路径。
 /// 600 帧 @ 60Hz。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::{BulletHandle, BulletInit};
@@ -56,7 +64,10 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SHOT, BTN_SLOW, BTN_UP, InputFrame};
     use stg_core::math::{Angle, Fx, polar_to_vec};
     use stg_core::step::{World, step_with_director};
-    use stg_core::xform::{OP_LOOP, OP_SET_ACCEL, OP_SET_LIFE, OP_SET_SPEED, OP_TURN, XformSlot};
+    use stg_core::xform::{
+        OP_BOUNCE_ARM, OP_END, OP_LOOP, OP_SET_ACCEL, OP_SET_ANG_VEL, OP_SET_ANGLE, OP_SET_LIFE,
+        OP_SET_SPEED, OP_STEP_SPEED, OP_TURN, OP_WAIT_SIGNAL, XformSlot,
+    };
 
     const FRAMES: u32 = 600; // 10 秒 @ 60Hz
     const SEED: u64 = 0x5147_4f4c_4445_4e00; // "GOLDEN"
@@ -274,6 +285,114 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                     },
                 ];
                 b.create_bullet_with_xform(bullet_at(0, 150), &fuse);
+            }
+            // ⑨ 11b 压力源一：信号齐转——停驻弹群每 120 帧一声令下集体转向
+            if frame % 40 == 25 {
+                let h = b.create_bullet_with_xform(
+                    bullet_at(-120, 90),
+                    &[
+                        XformSlot {
+                            wait: 0,
+                            op: OP_SET_SPEED,
+                            _pad: 0,
+                            args: [49_152, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_WAIT_SIGNAL,
+                            _pad: 0,
+                            args: [0, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_TURN,
+                            _pad: 0,
+                            args: [32_768, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_WAIT_SIGNAL,
+                            _pad: 0,
+                            args: [0, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_TURN,
+                            _pad: 0,
+                            args: [32_768, 0],
+                        },
+                    ],
+                );
+                let _ = h;
+            }
+            if frame % 120 == 60 {
+                b.pulse_signal(0);
+            }
+            // ⑩ 11b 压力源二：三墙反弹弹（左右上，n=3）——POLAR 域镜像入对拍
+            if frame % 90 == 45 {
+                let h = b.create_bullet_with_xform(
+                    bullet_at(0, 120),
+                    &[
+                        XformSlot {
+                            wait: 0,
+                            op: OP_SET_SPEED,
+                            _pad: 0,
+                            args: [196_608, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_SET_ANGLE,
+                            _pad: 0,
+                            args: [6_000, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_SET_ANG_VEL,
+                            _pad: 0,
+                            args: [0, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_BOUNCE_ARM,
+                            _pad: 0,
+                            args: [0b0111, 3],
+                        },
+                    ],
+                );
+                let _ = h;
+            }
+            // ⑪ 11b 压力源三：STEP 缓动弹——Smoothstep 40 帧从 0.5 缓到 3.0
+            if frame % 65 == 20 {
+                let h = b.create_bullet_with_xform(
+                    bullet_at(60, 70),
+                    &[
+                        XformSlot {
+                            wait: 0,
+                            op: OP_SET_SPEED,
+                            _pad: 0,
+                            args: [32_768, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_SET_ANGLE,
+                            _pad: 0,
+                            args: [16_384, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_STEP_SPEED,
+                            _pad: 0,
+                            args: [196_608, 40 | (7 << 16)],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_END,
+                            _pad: 0,
+                            args: [0, 0],
+                        }, // 扩展槽占位
+                    ],
+                );
+                let _ = h;
             }
         });
         lines.push_str(&format!("{frame} {:016x}\n", world.checksum()));
