@@ -481,10 +481,15 @@ mod tests {
     }
 
     /// LOOP target 越界：P4-b——contract_viol + 序列终止。
+    /// create 期已挡 target 越界（A1-3 还债，见 `create_bullet_with_xform` 的边界位图校验）——
+    /// 这里改走"运行期段被涂改"绕过前门（create 期 target=0 合法：自环，同款自环已由
+    /// `loop_guard_bounds_one_round_per_frame` 钉住护栏行为），钉住 fire 侧兜底仍在。
     #[test]
     fn loop_bad_target_terminates() {
         let mut w = crate::step::World::new(1);
-        let i = xf_bullet(&mut w, &[slot(0, OP_LOOP, 16, 0)]);
+        let i = xf_bullet(&mut w, &[slot(0, OP_LOOP, 0, 0)]); // create 期合法：target=0 自环
+        let seg = w.body.bullets.transform_head[i];
+        w.body.xforms.seg_slots_mut(seg)[0].args[0] = 16; // 涂改成越界 target
         let cv0 = w.body.diag.contract_viol;
         crate::step::step(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.diag.contract_viol, cv0 + 1);
@@ -691,13 +696,17 @@ mod tests {
     }
 
     /// P4-b 兜底：STEP 在第 15 槽（无扩展槽空间）——发射期计数 + 终止，不 panic。
-    /// （create 期的空间校验属后续任务；本护栏是 fire 侧的镜像兜底，与 fire_loop 同款。）
+    /// create 期的空间校验已落地（A1-2 还债，见 `create_bullet_with_xform`）——这条路径
+    /// 经写 API 已到不了这里；本测试改走"运行期段被涂改"绕过前门，钉住 fire 侧兜底仍在
+    /// （与 `unknown_op_terminates_and_counts`/`loop_bad_target_terminates` 同款套路）。
     #[test]
     fn step_at_last_slot_terminates_without_panic() {
         let mut w = crate::step::World::new(1);
-        let mut seq = [slot(0, OP_SET_SPRITE, 0, 0); 16];
-        seq[15] = slot(0, OP_STEP_SPEED, Fx::from_int(2).raw(), 4);
-        let i = xf_bullet(&mut w, &seq);
+        let seq = [slot(0, OP_SET_SPRITE, 0, 0); 16];
+        let i = xf_bullet(&mut w, &seq); // create 期合法：16 槽全瞬时 op
+        let seg = w.body.bullets.transform_head[i];
+        // 运行期涂改末槽为 STEP——前门已挡不了这条路，只能靠段直写模拟。
+        w.body.xforms.seg_slots_mut(seg)[15] = slot(0, OP_STEP_SPEED, Fx::from_int(2).raw(), 4);
         let cv0 = w.body.diag.contract_viol;
         crate::step::step(&mut w, &InputFrame::empty(0)); // 槽 0..15 全 wait=0 同帧连发
         assert_eq!(w.body.diag.contract_viol, cv0 + 1, "末槽 STEP 恰计一次");

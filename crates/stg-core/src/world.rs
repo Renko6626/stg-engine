@@ -196,8 +196,52 @@ impl WorldBody {
         if Self::clamp_radius(&mut init.radius) {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
-        let bad = xform.len() > crate::xform::SLOTS_PER_SEG
-            || xform.iter().any(|s| !crate::xform::op_implemented(s.op));
+        // 坏参检查（A1-(2)(3)）：按 arity 走格——扩展槽是 scratch，字节不判 op。
+        // 第一遍：验 op/扩展槽空间/easing id，收集合法边界位图（zero-tail 全为 END = 合法边界）。
+        let mut bad = xform.len() > crate::xform::SLOTS_PER_SEG;
+        let mut boundaries: u16 = 0;
+        let mut k = 0usize;
+        while !bad && k < xform.len() {
+            let s = &xform[k];
+            if !crate::xform::op_implemented(s.op) {
+                bad = true;
+                break;
+            }
+            boundaries |= 1 << k;
+            let ar = crate::xform::ARITY[s.op as usize] as usize;
+            if ar > 0 {
+                if k + ar >= crate::xform::SLOTS_PER_SEG {
+                    bad = true; // 扩展槽越出段（如 STEP 在槽 15）
+                    break;
+                }
+                if ((s.args[1] >> 16) as u8) >= 8 {
+                    bad = true; // easing id 越界
+                    break;
+                }
+            }
+            k += 1 + ar;
+        }
+        // zero-tail（含恰好越出提供长度的走格终点）：全零 = END，合法边界
+        for t in xform.len()..crate::xform::SLOTS_PER_SEG {
+            boundaries |= 1 << t;
+        }
+        // 第二遍：LOOP target 必须落在边界上
+        if !bad {
+            let mut k = 0usize;
+            while k < xform.len() {
+                let s = &xform[k];
+                if s.op == crate::xform::OP_LOOP {
+                    let t = s.args[0];
+                    if !(0..crate::xform::SLOTS_PER_SEG as i32).contains(&t)
+                        || boundaries & (1 << t) == 0
+                    {
+                        bad = true;
+                        break;
+                    }
+                }
+                k += 1 + crate::xform::ARITY[s.op as usize] as usize;
+            }
+        }
         if bad {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             self.last_status = STATUS_BAD_ARGS;
