@@ -1,8 +1,11 @@
 //! 相位 5 · 积分（各池 `pos += vel` + 计时器倒数）。
 //!
+//! 冻结趟序（`stg-world-design.md:168`）：弹 → 自机弹 → 敌人 → 道具 → 作用区。
+//!
 //! 弹：delay 门 → 模式效果（POLAR/CART 互斥）→ `pos += vel` → life 倒数。
 //! 自机弹/敌人：`pos += vel`（敌人另 tick `invuln`/`hit_flash`；
 //! 敌人的 `move_to` 插值器待后续切片，`mv_*` 字段现为惰性）。
+//! 道具：触发判定（PoC / 近距磁吸）先于移动 —— 磁吸=直追终速、未锁定/解锁=重力到终速钉住。
 //! 作用区：`life` 倒数 —— `life=1` 本帧减到 0、相位 6 仍参与判定、相位 9 才回收（"每帧重铺=跟随"的时序基础）。
 
 use super::WorldBody;
@@ -76,18 +79,6 @@ impl WorldBody {
                 }
             }
         }
-        // 作用区：寿命倒数（照抄弹的模式；life=1 → 本帧减到 0，相位6 仍参与判定，相位9 回收）
-        let nw = self.fields.alive.len();
-        for w in 0..nw {
-            let mut bits = self.fields.alive[w];
-            while bits != 0 {
-                let i = w * 64 + bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                if self.fields.life[i] > 0 {
-                    self.fields.life[i] -= 1;
-                }
-            }
-        }
         // 道具（D7）：触发判定先于移动；物理即状态（磁吸=magnet_to、下落=重力到终速）。
         let poc_player = (0..crate::MAX_PLAYERS).find(|&p| {
             self.players[p].life_state == crate::player::LIFE_ALIVE
@@ -100,6 +91,18 @@ impl WorldBody {
                 let i = w * 64 + bits.trailing_zeros() as usize;
                 bits &= bits - 1;
                 self.integrate_item(i, poc_player);
+            }
+        }
+        // 作用区：寿命倒数（照抄弹的模式；life=1 → 本帧减到 0，相位6 仍参与判定，相位9 回收）
+        let nw = self.fields.alive.len();
+        for w in 0..nw {
+            let mut bits = self.fields.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if self.fields.life[i] > 0 {
+                    self.fields.life[i] -= 1;
+                }
             }
         }
     }
