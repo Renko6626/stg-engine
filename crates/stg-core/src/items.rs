@@ -48,7 +48,6 @@ const STD: ItemTypeCfg = ItemTypeCfg {
 };
 
 /// 索引 = 类型编号；数组类型使"表长 == 类型数"成为编译期事实。
-#[allow(dead_code)] // 待 world/settle.rs credit_item（后续切片）读取分值/物理参数才被消费
 pub(crate) const ITEM_CFG: [ItemTypeCfg; ITEM_TYPE_COUNT] = [
     ItemTypeCfg { score: 10, ..STD },  // POWER
     ItemTypeCfg { score: 100, ..STD }, // POINT
@@ -57,7 +56,6 @@ pub(crate) const ITEM_CFG: [ItemTypeCfg; ITEM_TYPE_COUNT] = [
 ];
 
 /// 掉落表 v0：表 id → [(类型, 数量)]。表 0 = 空（enemy.drop_table 零默认 = 不掉）。
-#[allow(dead_code)] // 待敌人死亡→掉落派生（后续切片，读 enemy.drop_table 索引本表）才被消费
 pub(crate) const DROP_TABLES: &[&[(u8, u8)]] = &[
     &[],
     &[(ITEM_POWER, 2), (ITEM_POINT, 1)], // 表 1：标准杂鱼

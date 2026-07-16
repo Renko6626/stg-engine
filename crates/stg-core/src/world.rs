@@ -327,6 +327,41 @@ impl WorldBody {
         }
     }
 
+    /// 掉落一颗道具（内部核；散布消耗世界 RNG——消耗序 = 调用序 = 结算序，A6）。
+    /// P4-a：池满 → NULL + 计数。类型合法性由调用方保证（settle 走表、公开壳已验）。
+    pub(crate) fn spawn_drop(&mut self, x: Fx, y: Fx, item_type: u8) -> crate::items::ItemHandle {
+        let cfg = &crate::items::ITEM_CFG[item_type as usize];
+        let vx = Fx::from_raw(self.rng.rand_range(131_073) as i32 - 65_536); // ±1.0
+        let vy = Fx::ZERO - cfg.eject_speed + Fx::from_raw(self.rng.rand_range(32_769) as i32);
+        match self.items.alloc(crate::items::ItemInit {
+            x,
+            y,
+            vx,
+            vy,
+            item_type,
+            magnet_to: crate::items::MAGNET_NONE,
+            timer: 0,
+        }) {
+            Some(h) => h,
+            None => {
+                self.diag.pool_full[POOL_ITEM] = self.diag.pool_full[POOL_ITEM].wrapping_add(1);
+                self.last_status = STATUS_POOL_FULL;
+                crate::items::ItemHandle::NULL
+            }
+        }
+    }
+
+    /// 掉落一颗道具（公开写 API；将来 ECL syscall `drop_item` 直通）。
+    /// P4-b：坏类型 → NULL + BAD_ARGS（散布 RNG **不**消耗——失败零副作用）。
+    pub fn drop_item(&mut self, x: Fx, y: Fx, item_type: u8) -> crate::items::ItemHandle {
+        if item_type as usize >= crate::items::ITEM_TYPE_COUNT {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return crate::items::ItemHandle::NULL;
+        }
+        self.spawn_drop(x, y, item_type)
+    }
+
     /// 脉冲一条信号通道（相位 4 前有效——导演槽/ECL；边沿语义见 `signals` 字段文档）。
     /// P4-b：坏通道 no-op + 计数。debug 断言相位窗口：相位 4 之后的脉冲当帧蒸发，
     /// 正路是上层读事件、次帧经导演/ECL 转发。

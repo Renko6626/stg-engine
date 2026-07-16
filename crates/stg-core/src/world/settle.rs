@@ -27,6 +27,18 @@ impl WorldBody {
         self.enemies.hit_flash[e] = 4;
         if self.enemies.hp[e] <= 0 {
             self.enemies.flags[e] |= ENEMY_DYING;
+            // 掉落直接分配（A6/A7）：按 drop_table 查表展开；越界表 → P4-b 计数 + 视同空表。
+            let table = self.enemies.drop_table[e] as usize;
+            if table >= crate::items::DROP_TABLES.len() {
+                self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            } else {
+                let (ex, ey) = (self.enemies.x[e], self.enemies.y[e]);
+                for &(ty, n) in crate::items::DROP_TABLES[table] {
+                    for _ in 0..n {
+                        self.spawn_drop(ex, ey, ty);
+                    }
+                }
+            }
             let ev = Event {
                 kind: crate::events::EVT_ENEMY_DIED,
                 a_index: e as u16,
@@ -313,6 +325,87 @@ mod tests {
         assert_eq!(w.body.players[0].life_state, LIFE_ALIVE); // 被救
         assert_ne!(w.body.players[0].life_state, LIFE_DEATHWINDOW);
         assert_eq!(w.body.players[0].graze, 1); // 但 graze 照算（擦在先、清在后）
+    }
+
+    /// 敌死按 drop_table 掉落：表 1 = 2 POWER + 1 POINT，落点 = 敌死位置（散布只改速度）。
+    /// 两敌同帧死 → 掉落顺序 = 结算序（低索引敌先掉，RNG 消耗序钉死）。
+    #[test]
+    fn settle_death_drops_by_table_in_settlement_order() {
+        use crate::items::{ITEM_POINT, ITEM_POWER};
+        let mut w = crate::step::World::new(7);
+        let enemy_at = |x: i32| crate::enemy::EnemyInit {
+            x: Fx::from_int(x),
+            y: Fx::from_int(80),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            mv_from_x: Fx::ZERO,
+            mv_from_y: Fx::ZERO,
+            mv_to_x: Fx::ZERO,
+            mv_to_y: Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp: 1,
+            hp_max: 1,
+            radius: Fx::from_int(12),
+            hurtbox: Fx::from_int(16),
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 0,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_table: 1,
+            score: 100,
+        };
+        let ea = w.body.create_enemy(enemy_at(-100));
+        let eb = w.body.create_enemy(enemy_at(100));
+        let eai = w.body.enemies.get(ea).unwrap();
+        let ebi = w.body.enemies.get(eb).unwrap();
+        for &(ex, ey) in &[
+            (w.body.enemies.x[eai], w.body.enemies.y[eai]),
+            (w.body.enemies.x[ebi], w.body.enemies.y[ebi]),
+        ] {
+            w.body.create_player_shot(crate::shots::ShotInit {
+                x: ex,
+                y: ey,
+                vx: Fx::ZERO,
+                vy: Fx::ZERO,
+                damage: 1,
+                radius: Fx::from_int(4),
+                sprite: 0,
+                owner: 0,
+                flags: 0,
+            });
+        }
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        w.body.settle();
+        assert_eq!(w.body.items.iter_alive().count(), 6, "两敌各掉 3 颗");
+        let ax = w.body.enemies.x[eai];
+        let bx = w.body.enemies.x[ebi];
+        for i in 0..3 {
+            assert_eq!(w.body.items.x[i], ax, "前 3 颗落在敌 A（低索引先掉）");
+        }
+        for i in 3..6 {
+            assert_eq!(w.body.items.x[i], bx, "后 3 颗落在敌 B");
+        }
+        for base in [0usize, 3] {
+            assert_eq!(
+                [
+                    w.body.items.item_type[base],
+                    w.body.items.item_type[base + 1],
+                    w.body.items.item_type[base + 2],
+                ],
+                [ITEM_POWER, ITEM_POWER, ITEM_POINT],
+                "表内序：2 POWER + 1 POINT"
+            );
+        }
     }
 
     #[test]

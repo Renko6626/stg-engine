@@ -502,4 +502,51 @@ mod tests {
             "signals 必须真的参与校验和（防未来误加 skip）"
         );
     }
+
+    /// 掉落散布消耗世界 RNG：同种子两跑逐位一致；不同颗速度不同（散布真的在动）。
+    #[test]
+    fn drop_item_scatter_deterministic() {
+        let run = || {
+            let mut w = World::new(11);
+            let a = w
+                .body
+                .drop_item(Fx::ZERO, Fx::from_int(100), crate::items::ITEM_POWER);
+            let b = w
+                .body
+                .drop_item(Fx::ZERO, Fx::from_int(100), crate::items::ITEM_POWER);
+            let (ia, ib) = (w.body.items.get(a).unwrap(), w.body.items.get(b).unwrap());
+            (
+                w.body.items.vx[ia],
+                w.body.items.vy[ia],
+                w.body.items.vx[ib],
+                w.body.items.vy[ib],
+            )
+        };
+        let (ax1, ay1, bx1, by1) = run();
+        let (ax2, ay2, bx2, by2) = run();
+        assert_eq!((ax1, ay1, bx1, by1), (ax2, ay2, bx2, by2), "同种子逐位一致");
+        assert!(ay1.raw() < 0, "弹出初速向上");
+        assert!((ax1, ay1) != (bx1, by1), "两颗散布不同（RNG 真的被消耗）");
+    }
+
+    /// P4：坏类型 → NULL + BAD_ARGS；池满 → NULL + pool_full[ITEM]（B1 道具池份额）。
+    #[test]
+    fn drop_item_bad_type_and_pool_full() {
+        let mut w = World::new(1);
+        assert_eq!(
+            w.body.drop_item(Fx::ZERO, Fx::ZERO, 9),
+            crate::items::ItemHandle::NULL
+        );
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        for _ in 0..crate::items::ItemPool::CAP {
+            w.body
+                .spawn_drop(Fx::ZERO, Fx::from_int(50), crate::items::ITEM_POINT);
+        }
+        assert_eq!(
+            w.body
+                .drop_item(Fx::ZERO, Fx::ZERO, crate::items::ITEM_POINT),
+            crate::items::ItemHandle::NULL
+        );
+        assert_eq!(w.body.diag.pool_full[crate::world::POOL_ITEM], 1);
+    }
 }
