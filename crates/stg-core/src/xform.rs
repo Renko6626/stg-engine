@@ -10,24 +10,58 @@ pub(crate) const SLOTS_PER_SEG: usize = 16;
 /// 哑弹哨兵（与 `bullets.transform_head` 既用值一致）。
 pub(crate) const XFORM_NONE: u16 = 0xFFFF;
 
-// ── op 编号（冻结）─────────────────────────────────────────────
+// ── op 编号（冻结；族号制 v2，2026-07-16 重排拍板——回放格式出生前的免费窗口）──
+// 十位 = 族号：1x 速率 / 2x 角度 / 3x 状态 / 4x 连续效果 / 5x 控制·事件 / 6x 派生 /
+// 7x 预留（笛卡尔族，若将来立项）。族内留空隙：新 op 落族内、永不乱序追加。
 pub const OP_END: u8 = 0;
-pub const OP_SET_SPEED: u8 = 1;
-pub const OP_ADD_SPEED: u8 = 2;
-pub const OP_SET_ANGLE: u8 = 3;
-pub const OP_TURN: u8 = 4;
-pub const OP_AIM_PLAYER: u8 = 5;
-pub const OP_SET_SPRITE: u8 = 6;
-pub const OP_SET_LIFE: u8 = 7;
-pub const OP_SET_ANG_VEL: u8 = 8;
-pub const OP_SET_ACCEL: u8 = 9;
-pub const OP_SET_GRAVITY: u8 = 10;
-pub const OP_STOP_FX: u8 = 11;
-pub const OP_LOOP: u8 = 12;
-/// 本刀已实现的最大 op 号；> 此值（或 13..=17 预留区）= 未知 op → P4-b 终止序列。
-pub(crate) const OP_MAX_IMPLEMENTED: u8 = OP_LOOP;
-/// 扩展槽数（游标步进 = 1 + ARITY[op]）。本刀全 0；11b 的 STEP_* 为 1。
-pub(crate) const ARITY: [u8; 13] = [0; 13];
+pub const OP_SET_SPEED: u8 = 10;
+pub const OP_ADD_SPEED: u8 = 11;
+pub const OP_STEP_SPEED: u8 = 12; // M0-11b
+pub const OP_SET_ANGLE: u8 = 20;
+pub const OP_TURN: u8 = 21;
+pub const OP_AIM_PLAYER: u8 = 22;
+pub const OP_STEP_ANGLE: u8 = 23; // M0-11b
+pub const OP_SET_SPRITE: u8 = 30;
+pub const OP_SET_LIFE: u8 = 31;
+pub const OP_SET_ANG_VEL: u8 = 40;
+pub const OP_SET_ACCEL: u8 = 41;
+pub const OP_SET_GRAVITY: u8 = 42;
+pub const OP_STOP_FX: u8 = 43;
+pub const OP_LOOP: u8 = 50;
+pub const OP_WAIT_SIGNAL: u8 = 51; // M0-11b
+pub const OP_BOUNCE_ARM: u8 = 52; // M0-11b
+pub const OP_SPAWN_PATTERN: u8 = 60; // 预留（随图样描述符表另立一刀）
+
+/// 本刀（M0-11a）已实现的 op 集——**按表查而非比大小**（族号制下编号非连续）。
+/// 创建期用它拒收未实现 op；11b 落地时把对应 op 加进来即可。
+pub(crate) const fn op_implemented(op: u8) -> bool {
+    matches!(
+        op,
+        OP_END
+            | OP_SET_SPEED
+            | OP_ADD_SPEED
+            | OP_SET_ANGLE
+            | OP_TURN
+            | OP_AIM_PLAYER
+            | OP_SET_SPRITE
+            | OP_SET_LIFE
+            | OP_SET_ANG_VEL
+            | OP_SET_ACCEL
+            | OP_SET_GRAVITY
+            | OP_STOP_FX
+            | OP_LOOP
+    )
+}
+
+/// 扩展槽数（游标步进 = 1 + ARITY[op]）。**全 u8 域**——任意 op 值可安全索引，
+/// `fire_op` 的未知臂不再是不越界的唯一屏障（终审 M-A#4 拆除）。
+/// STEP 族预置 1（11b 实现时游标步进直接正确）；其余 0。
+pub(crate) const ARITY: [u8; 256] = {
+    let mut a = [0u8; 256];
+    a[OP_STEP_SPEED as usize] = 1;
+    a[OP_STEP_ANGLE as usize] = 1;
+    a
+};
 
 /// 一个变换槽（12 B，相对 wait 制：发射本 op 后等 wait 帧再执行下一槽）。
 #[repr(C)]
@@ -120,6 +154,61 @@ impl Checksum for XformSegPool {
 mod tests {
     use super::*;
     use crate::checksum::Checksum;
+
+    /// 编号冻结钉死（族号制 v2：十位 = 族号——1x 速率 / 2x 角度 / 3x 状态 / 4x 连续 /
+    /// 5x 控制 / 6x 派生）。重排 = 契约变更，本测试逼改动者有意识确认。
+    #[test]
+    fn op_numbering_frozen_v2() {
+        assert_eq!(OP_END, 0);
+        assert_eq!((OP_SET_SPEED, OP_ADD_SPEED, OP_STEP_SPEED), (10, 11, 12));
+        assert_eq!(
+            (OP_SET_ANGLE, OP_TURN, OP_AIM_PLAYER, OP_STEP_ANGLE),
+            (20, 21, 22, 23)
+        );
+        assert_eq!((OP_SET_SPRITE, OP_SET_LIFE), (30, 31));
+        assert_eq!(
+            (OP_SET_ANG_VEL, OP_SET_ACCEL, OP_SET_GRAVITY, OP_STOP_FX),
+            (40, 41, 42, 43)
+        );
+        assert_eq!((OP_LOOP, OP_WAIT_SIGNAL, OP_BOUNCE_ARM), (50, 51, 52));
+        assert_eq!(OP_SPAWN_PATTERN, 60);
+    }
+
+    /// 有效性按表查而非比大小：11a 已实现集恰为 13 个；未实现/垃圾值一律 false；
+    /// ARITY 全 u8 域可索引（终审 M-A#4 的脆弱性就此拆除）。
+    #[test]
+    fn op_implemented_table_and_arity_full_domain() {
+        let implemented = [
+            OP_END,
+            OP_SET_SPEED,
+            OP_ADD_SPEED,
+            OP_SET_ANGLE,
+            OP_TURN,
+            OP_AIM_PLAYER,
+            OP_SET_SPRITE,
+            OP_SET_LIFE,
+            OP_SET_ANG_VEL,
+            OP_SET_ACCEL,
+            OP_SET_GRAVITY,
+            OP_STOP_FX,
+            OP_LOOP,
+        ];
+        for op in 0..=255u8 {
+            assert_eq!(
+                op_implemented(op),
+                implemented.contains(&op),
+                "op {op} 的有效性判定错误"
+            );
+        }
+        // 11b 四 op 已有编号但未实现（创建期必须被拒）
+        assert!(!op_implemented(OP_WAIT_SIGNAL));
+        assert!(!op_implemented(OP_STEP_SPEED));
+        // ARITY 任意 u8 可索引；STEP 族预置 1，其余 0
+        assert_eq!(ARITY[OP_STEP_SPEED as usize], 1);
+        assert_eq!(ARITY[OP_STEP_ANGLE as usize], 1);
+        assert_eq!(ARITY[255], 0);
+        assert_eq!(ARITY[OP_LOOP as usize], 0);
+    }
 
     #[test]
     fn alloc_is_lowest_free_and_deterministic() {

@@ -98,7 +98,7 @@ impl WorldBody {
             OP_STOP_FX => self.stop_fx_at(i),
             OP_LOOP => return self.fire_loop(i, slot),
             _ => {
-                // 13..=17 预留区与一切未编码值：P4-b——计数 + 序列终止（两机同样跳过）
+                // 未实现 op（11b 预留编号 / 族内空隙 / 一切垃圾值）：P4-b——计数 + 序列终止（两机同样跳过）
                 self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
                 return FireResult::Terminate;
             }
@@ -252,7 +252,7 @@ mod tests {
         );
     }
 
-    /// 未知 op（运行期段被涂改出 13）：P4-b——contract_viol + 序列终止，弹活着。
+    /// 未知 op（运行期段被涂改出垃圾值）：P4-b——contract_viol + 序列终止，弹活着。
     #[test]
     fn unknown_op_terminates_and_counts() {
         let mut w = crate::step::World::new(1);
@@ -264,7 +264,7 @@ mod tests {
             ],
         );
         let seg = w.body.bullets.transform_head[i];
-        w.body.xforms.seg_slots_mut(seg)[1].op = 13; // 涂改成未知
+        w.body.xforms.seg_slots_mut(seg)[1].op = 99; // 涂改成未知（族外垃圾值）
         let cv0 = w.body.diag.contract_viol;
         for f in 0..4u32 {
             crate::step::step(&mut w, &InputFrame::empty(f));

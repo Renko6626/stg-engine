@@ -191,9 +191,7 @@ impl WorldBody {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
         let bad = xform.len() > crate::xform::SLOTS_PER_SEG
-            || xform
-                .iter()
-                .any(|s| s.op > crate::xform::OP_MAX_IMPLEMENTED);
+            || xform.iter().any(|s| !crate::xform::op_implemented(s.op));
         if bad {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             self.last_status = STATUS_BAD_ARGS;

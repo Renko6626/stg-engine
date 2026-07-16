@@ -382,7 +382,8 @@ struct XformSlot { wait: u16, op: u8, _pad: u8, args: [i32; 2] }
 | 控制 | `LOOP` | target_slot, count | 1 | 游标跳回；count 就地递减，0 = 无限（count 地板 1：authored N=体执行 N 次、0=无限，耗尽停 1 不复活、嵌套归档三；scratch op 发射时重初始化——spec 2026-07-16） |
 | | `WAIT_SIGNAL` | ch | 1 | 停在此 op，`signals[ch] == 当前帧` 才放行 |
 
-**op 编号冻结**（spec 2026-07-16 定稿；改动=过评审+bump engine_ver）：`END`=0、`SET_SPEED`=1、`ADD_SPEED`=2、`SET_ANGLE`=3、`TURN`=4、`AIM_PLAYER`=5、`SET_SPRITE`=6、`SET_LIFE`=7、`SET_ANG_VEL`=8、`SET_ACCEL`=9、`SET_GRAVITY`=10、`STOP_FX`=11、`LOOP`=12；13-16 为 11b 的 `WAIT_SIGNAL`/`BOUNCE_ARM`/`STEP_SPEED`/`STEP_ANGLE`；17 预留 `SPAWN_PATTERN`。
+**op 编号冻结（族号制 v2，2026-07-16 重排拍板——回放格式出生前的免费窗口，此后改动=过评审+bump engine_ver）**：
+十位 = 族号，族内留空隙（新 op 落族内、永不乱序追加）。`END`=0；**1x 速率**：`SET_SPEED`=10、`ADD_SPEED`=11、`STEP_SPEED`=12(11b)；**2x 角度**：`SET_ANGLE`=20、`TURN`=21、`AIM_PLAYER`=22、`STEP_ANGLE`=23(11b)；**3x 状态**：`SET_SPRITE`=30、`SET_LIFE`=31；**4x 连续**：`SET_ANG_VEL`=40、`SET_ACCEL`=41、`SET_GRAVITY`=42、`STOP_FX`=43；**5x 控制·事件**：`LOOP`=50、`WAIT_SIGNAL`=51(11b)、`BOUNCE_ARM`=52(11b)；**6x 派生**：`SPAWN_PATTERN`=60（预留）；**7x 预留**（笛卡尔族，若立项）。有效性**按表查**（`xform.rs::op_implemented`），非比大小。
 
 **执行算法（相位 5，每有段的活弹）**：
 

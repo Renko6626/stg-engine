@@ -189,7 +189,7 @@ mod tests {
                 .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &long),
             BulletHandle::NULL
         );
-        let unknown = [slot(0, 13, 0, 0)]; // 13 = 11b 预留区，本刀未知
+        let unknown = [slot(0, 99, 0, 0)]; // 99 = 族外垃圾值，未实现
         assert_eq!(
             w.body
                 .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &unknown),

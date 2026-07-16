@@ -18,28 +18,28 @@
 - **`SPAWN_PATTERN` 出局**：依赖图样描述符表（WorldTables），随那一刀另做；op 号预留。
 - **cap 照 D10 原值**：2048 段 × 16 槽 × 12B = 384 KB，可接受（拍板）；实测后调参的门保留。
 
-## op 编号（本 spec 定稿即冻结；改动=过评审+bump engine_ver，CLAUDE.md 自检 3）
+## op 编号（族号制 v2，2026-07-16 重排拍板；十位=族号、族内留空隙；此后改动=过评审+bump engine_ver，CLAUDE.md 自检 3。有效性按表查：`xform.rs::op_implemented`）
 
 | # | op | args[0] | args[1] | 槽数 | 刀 |
 |---|---|---|---|---|---|
 | 0 | `END` | — | — | 1 | 11a（零初始化天然终止） |
-| 1 | `SET_SPEED` | speed(Fx raw) | — | 1 | 11a |
-| 2 | `ADD_SPEED` | Δspeed | — | 1 | 11a |
-| 3 | `SET_ANGLE` | angle(BAM, 低16位) | — | 1 | 11a |
-| 4 | `TURN` | Δangle(BAM as i16 语义) | — | 1 | 11a |
-| 5 | `AIM_PLAYER` | Δangle | — | 1 | 11a |
-| 6 | `SET_SPRITE` | sprite id | — | 1 | 11a |
-| 7 | `SET_LIFE` | life 帧数 | — | 1 | 11a（含"到时自爆"用法） |
-| 8 | `SET_ANG_VEL` | ω(BAM/帧, i16 语义) | — | 1 | 11a |
-| 9 | `SET_ACCEL` | a(Fx raw) | — | 1 | 11a |
-| 10 | `SET_GRAVITY` | ax(Fx raw) | ay(Fx raw) | 1 | 11a |
-| 11 | `STOP_FX` | — | — | 1 | 11a |
-| 12 | `LOOP` | target_slot | count | 1 | 11a |
-| 13 | `WAIT_SIGNAL` | ch(0..8) | — | 1 | 11b |
-| 14 | `BOUNCE_ARM` | walls 掩码(低4位:左/右/上/下) | n(≤3) | 1 | 11b |
-| 15 | `STEP_SPEED` | target(Fx raw) | frames(低16) \| easing id(高8) | **2** | 11b |
-| 16 | `STEP_ANGLE` | target(BAM) | 同上 | **2** | 11b |
-| 17 | `SPAWN_PATTERN` | （预留，不实现） | | | 出局 |
+| 10 | `SET_SPEED` | speed(Fx raw) | — | 1 | 11a |
+| 11 | `ADD_SPEED` | Δspeed | — | 1 | 11a |
+| 12 | `STEP_SPEED` | target(Fx raw) | frames(低16) \| easing id(高8) | **2** | 11b |
+| 20 | `SET_ANGLE` | angle(BAM, 低16位) | — | 1 | 11a |
+| 21 | `TURN` | Δangle(BAM as i16 语义) | — | 1 | 11a |
+| 22 | `AIM_PLAYER` | Δangle | — | 1 | 11a |
+| 23 | `STEP_ANGLE` | target(BAM) | 同上 | **2** | 11b |
+| 30 | `SET_SPRITE` | sprite id | — | 1 | 11a |
+| 31 | `SET_LIFE` | life 帧数 | — | 1 | 11a（含"到时自爆"用法） |
+| 40 | `SET_ANG_VEL` | ω(BAM/帧, i16 语义) | — | 1 | 11a |
+| 41 | `SET_ACCEL` | a(Fx raw) | — | 1 | 11a |
+| 42 | `SET_GRAVITY` | ax(Fx raw) | ay(Fx raw) | 1 | 11a |
+| 43 | `STOP_FX` | — | — | 1 | 11a |
+| 50 | `LOOP` | target_slot | count | 1 | 11a |
+| 51 | `WAIT_SIGNAL` | ch(0..8) | — | 1 | 11b |
+| 52 | `BOUNCE_ARM` | walls 掩码(低4位:左/右/上/下) | n(≤3) | 1 | 11b |
+| 60 | `SPAWN_PATTERN` | （预留，不实现） | | | 出局 |
 
 `ARITY` 静态表：`STEP_*` = 1（一个扩展槽），其余 = 0；游标步进 = `1 + ARITY[op]`。
 瞬时/连续 op 的执行体 = **D3 同名索引核的薄封装**（`set_speed_at` 等，M0-10 全部就位；
