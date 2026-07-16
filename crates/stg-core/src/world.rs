@@ -5,8 +5,9 @@
 //!
 //! | 相位 | 在哪 |
 //! |---|---|
-//! | 0 `begin` · 4 `run_transforms`(stub) · 10 `advance` | 本文件（各数行，不值得单开） |
+//! | 0 `begin` · 10 `advance` | 本文件（各数行，不值得单开） |
 //! | 1 `decode_input` · 3 `update_players` | [`player`] —— 注意 `crate::player` 是 `PlayerState` **数据**模块，本模块是**相位逻辑** |
+//! | 4 `run_transforms` | [`transform`] —— D4 游标执行器：瞬时 7 op + wait 门 + END/未知 op 终止 |
 //! | 5 `integrate` | [`integrate`] |
 //! | 6 `collide` | [`collide`] —— D8 矩阵四类六行，**只收集不改状态** |
 //! | 7 `settle` | [`settle`] —— D9 三趟，**唯一改状态者** |
@@ -33,6 +34,7 @@ mod integrate;
 mod motion;
 mod player;
 mod settle;
+mod transform;
 
 // ── 常量：池 id / 错误码 / 场界（D7 中轴原点，384×448 + 越界边距）──────────
 pub const POOL_BULLET: usize = 0;
@@ -301,9 +303,6 @@ impl WorldBody {
         self.phase_enter(PH_BEGIN);
         self.hits_len = 0;
         self.events_len = 0;
-    }
-    pub(crate) fn run_transforms(&mut self) {
-        self.phase_enter(PH_XFORM); // stub：无变换段池
     }
     pub(crate) fn advance(&mut self) {
         self.phase_enter(PH_ADVANCE);

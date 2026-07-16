@@ -110,12 +110,14 @@ mod tests {
     }
 
     /// 弹越界回收 → 还段：直测 Task 4 的"还段接线"（弹死后段号可被复得）。
+    /// op 选 SET_SPRITE（运动无关）——Task 5 起 run_transforms 真跑，若选 SET_SPEED 会在帧 0
+    /// 就用极小 speed 回填 vx，吃掉本测试赖以越界的 vx=1000（与本测试意图无关的耦合）。
     #[test]
     fn oob_bullet_recycle_returns_segment() {
         use crate::math::Angle;
         let seq = [crate::xform::XformSlot {
             wait: 0,
-            op: crate::xform::OP_SET_SPEED,
+            op: crate::xform::OP_SET_SPRITE,
             _pad: 0,
             args: [1, 0],
         }];

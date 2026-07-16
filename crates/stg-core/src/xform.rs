@@ -27,7 +27,6 @@ pub const OP_LOOP: u8 = 12;
 /// 本刀已实现的最大 op 号；> 此值（或 13..=17 预留区）= 未知 op → P4-b 终止序列。
 pub(crate) const OP_MAX_IMPLEMENTED: u8 = OP_LOOP;
 /// 扩展槽数（游标步进 = 1 + ARITY[op]）。本刀全 0；11b 的 STEP_* 为 1。
-#[allow(dead_code)] // 消费方（run_transforms 的游标步进）留给 Task 5，接入后删
 pub(crate) const ARITY: [u8; 13] = [0; 13];
 
 /// 一个变换槽（12 B，相对 wait 制：发射本 op 后等 wait 帧再执行下一槽）。
@@ -82,8 +81,7 @@ impl XformSegPool {
         self.occupied[s / 64] &= !(1 << (s % 64));
     }
 
-    /// 生产消费方（`run_transforms` 的游标执行器只读遍历）留给 Task 5，接入后删；本刀仅测试调用。
-    #[allow(dead_code)]
+    /// 生产消费方：`run_transforms` 的游标执行器只读遍历。
     pub(crate) fn seg_slots(&self, seg: u16) -> &[XformSlot] {
         let base = seg as usize * SLOTS_PER_SEG;
         &self.slots[base..base + SLOTS_PER_SEG]
