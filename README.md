@@ -38,6 +38,7 @@ crates/
 | [`docs/fixed-point-corners.md`](./docs/fixed-point-corners.md) | `Fx`/`Angle` 的坑与规范速查（`Q(m).f × Q(m).f = Q(2m).(2f)`、累加器模式、Angle 回绕） |
 | [`docs/checksum-mechanism.md`](./docs/checksum-mechanism.md) | 校验和机制 + "新字段默认入校验"的保证是怎么来的 |
 | [`docs/pool-memory-layout.md`](./docs/pool-memory-layout.md) | 池 SoA 布局与缓存精算（热路径驻 L2） |
+| [`docs/xform-ops.md`](./docs/xform-ops.md) | 弹变换 op 速查表（编号/效果/参数语义 + LOOP 等关键坑） |
 | [`docs/superpowers/specs/`](./docs/superpowers/specs/) · [`plans/`](./docs/superpowers/plans/) | 各切片的设计 spec 与实施计划（历史记录） |
 
 ## 构建与测试
