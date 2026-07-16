@@ -44,9 +44,10 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// 作者视图，顶点前后扫过 `BACKFILL_MIN_SPEED` 阈值两侧）；每 75 帧对螺旋圈最近一发 setter
 /// 骚扰（turn/aim/set_vel 轮转，句柄可能已随生死回收变成悬垂——P4-b no-op 路径顺带入金向量）。
 ///
-/// D4 加戏（变换游标压段池/游标推进）：每 50 帧发一对之字加速弹（LOOP 跳回 TURN ±90°
-/// 无限循环 + 开局 SET_ACCEL 常量加速，压单游标多 op 连发与段池长驻）；每 70 帧发一发
-/// SET_LIFE 自爆弹（45 帧后寿命改判 1，下一帧死亡回收→还段路径入对拍）。
+/// D4 加戏（变换游标压段池/游标推进）：每 50 帧（`frame % 50 == 10`）发一对之字加速弹
+/// （LOOP 跳回 TURN ±90° 无限循环 + 开局 SET_ACCEL 常量加速，压单游标多 op 连发与段池长驻）；
+/// 每 70 帧（`frame % 70 == 30`）发一发 SET_LIFE 自爆弹——排程于相位 4，45 帧后寿命改判 1；
+/// 相位 5 integrate **同帧**减到 0；相位 9 cleanup **当帧**回收（不是"下一帧"）→还段路径入对拍。
 /// 600 帧 @ 60Hz。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::{BulletHandle, BulletInit};
