@@ -68,6 +68,9 @@ pub const STATUS_BAD_ARGS: u16 = 3;
 ///   留待后续。
 pub const MAX_ENTITY_RADIUS: Fx = Fx::from_int(1024);
 
+/// 信号黑板通道数（D4 11b）。
+pub const SIGNAL_CHANNELS: usize = 8;
+
 pub(crate) const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
 pub(crate) const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
 pub(crate) const OOB_MARGIN: i32 = 64; // 越界回收边距
@@ -112,6 +115,9 @@ pub struct WorldBody {
     pub fields: FieldPool,
     /// 变换段池（D4）。手写 Checksum 全量入校验和（P6）；I7 inline 数组。
     pub(crate) xforms: crate::xform::XformSegPool,
+    /// 信号黑板（D4 11b）：每通道存"最后脉冲帧号 + 1"，0 = 从未脉冲（零初始化合法）。
+    /// 边沿消费：相位 4 只放行 `signals[ch] == frame + 1` 的停驻弹。
+    pub(crate) signals: [u32; SIGNAL_CHANNELS],
     #[checksum(skip = "纯输出缓冲，帧内私有，重演确定性再生（A5）")]
     pub(crate) hits: [Hit; HITS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 hits 一并 skip（A5）")]
@@ -179,7 +185,8 @@ impl WorldBody {
 
     /// 创建一颗带变换序列的弹（D4）。序列**拷贝**进弹自有段（尾部清零 = 天然 END）。
     /// P4：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]`（与 `create_bullet` 对称）；坏参
-    /// （>16 槽 / 含未知 op）→ 整体失败 NULL + BAD_ARGS（宁缺勿哑）；
+    /// （>16 槽 / 含未知 op / STEP 无扩展槽空间 / easing id ≥ 8 / LOOP target 非边界）
+    /// → 整体失败 NULL + BAD_ARGS（宁缺勿哑）；
     /// 先段后弹——段满 → NULL + POOL_FULL(XFORM)；弹池满 → 还段回滚 + POOL_FULL(BULLET)。
     /// `init.transform_head` 恒被本函数覆写（调用方传值无效）。
     pub fn create_bullet_with_xform(
@@ -190,8 +197,52 @@ impl WorldBody {
         if Self::clamp_radius(&mut init.radius) {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
-        let bad = xform.len() > crate::xform::SLOTS_PER_SEG
-            || xform.iter().any(|s| !crate::xform::op_implemented(s.op));
+        // 坏参检查（A1-(2)(3)）：按 arity 走格——扩展槽是 scratch，字节不判 op。
+        // 第一遍：验 op/扩展槽空间/easing id，收集合法边界位图（zero-tail 全为 END = 合法边界）。
+        let mut bad = xform.len() > crate::xform::SLOTS_PER_SEG;
+        let mut boundaries: u16 = 0;
+        let mut k = 0usize;
+        while !bad && k < xform.len() {
+            let s = &xform[k];
+            if !crate::xform::op_implemented(s.op) {
+                bad = true;
+                break;
+            }
+            boundaries |= 1 << k;
+            let ar = crate::xform::ARITY[s.op as usize] as usize;
+            if ar > 0 {
+                if k + ar >= crate::xform::SLOTS_PER_SEG {
+                    bad = true; // 扩展槽越出段（如 STEP 在槽 15）
+                    break;
+                }
+                if ((s.args[1] >> 16) as u8) >= 8 {
+                    bad = true; // easing id 越界
+                    break;
+                }
+            }
+            k += 1 + ar;
+        }
+        // zero-tail（含恰好越出提供长度的走格终点）：全零 = END，合法边界
+        for t in xform.len()..crate::xform::SLOTS_PER_SEG {
+            boundaries |= 1 << t;
+        }
+        // 第二遍：LOOP target 必须落在边界上
+        if !bad {
+            let mut k = 0usize;
+            while k < xform.len() {
+                let s = &xform[k];
+                if s.op == crate::xform::OP_LOOP {
+                    let t = s.args[0];
+                    if !(0..crate::xform::SLOTS_PER_SEG as i32).contains(&t)
+                        || boundaries & (1 << t) == 0
+                    {
+                        bad = true;
+                        break;
+                    }
+                }
+                k += 1 + crate::xform::ARITY[s.op as usize] as usize;
+            }
+        }
         if bad {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             self.last_status = STATUS_BAD_ARGS;
@@ -269,6 +320,23 @@ impl WorldBody {
                 FieldHandle::NULL
             }
         }
+    }
+
+    /// 脉冲一条信号通道（相位 4 前有效——导演槽/ECL；边沿语义见 `signals` 字段文档）。
+    /// P4-b：坏通道 no-op + 计数。debug 断言相位窗口：相位 4 之后的脉冲当帧蒸发，
+    /// 正路是上层读事件、次帧经导演/ECL 转发。
+    pub fn pulse_signal(&mut self, ch: usize) {
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            self.phase_guard <= PH_XFORM,
+            "pulse_signal 晚于相位 4：本帧无人能听见（请次帧经导演/ECL 转发）"
+        );
+        if ch >= SIGNAL_CHANNELS {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return;
+        }
+        self.signals[ch] = self.frame.wrapping_add(1);
     }
 
     /// 收集一条碰撞命中（P4-a：满则停收 + 计数，不 panic）。

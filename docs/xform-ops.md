@@ -24,11 +24,11 @@
 | 0 | `END` | — | — | 1 | 序列终止（零初始化段天然 END） | ✅ M0-11a |
 | 10 | `SET_SPEED` | speed (Fx raw) | — | 1 | 置速率，回填 `vx/vy` | ✅ |
 | 11 | `ADD_SPEED` | Δspeed (Fx raw) | — | 1 | 速率增量（可负） | ✅ |
-| 12 | `STEP_SPEED` | target (Fx raw) | frames (低16) \| easing id (高8) | **2** | 限时缓动到目标速率 | 🚧 M0-11b |
+| 12 | `STEP_SPEED` | target (Fx raw) | frames (低16) \| easing id (高8) | **2** | 限时缓动到目标速率 | ✅ M0-11b |
 | 20 | `SET_ANGLE` | angle (BAM) | — | 1 | 置朝向，回填 | ✅ |
 | 21 | `TURN` | Δangle (BAM，可负) | — | 1 | 相对转向 | ✅ |
 | 22 | `AIM_PLAYER` | Δangle (BAM) | — | 1 | 瞄最近可瞄自机 + 偏移（可瞄 = 非 ABSENT 非 GAMEOVER；无可瞄自机 → 静默 no-op） | ✅ |
-| 23 | `STEP_ANGLE` | target (BAM) | 同上 | **2** | 限时缓动到目标角（最短弧） | 🚧 M0-11b |
+| 23 | `STEP_ANGLE` | target (BAM) | 同上 | **2** | 限时缓动到目标角（最短弧） | ✅ M0-11b |
 | 30 | `SET_SPRITE` | sprite id | — | 1 | 换贴图 | ✅ |
 | 31 | `SET_LIFE` | 寿命帧 | — | 1 | 重设寿命（"到时自爆"惯用法） | ✅ |
 | 40 | `SET_ANG_VEL` | ω (BAM/帧, i16 语义) | — | 1 | 开 `POLAR_FX`（清 CART）——旋转弹 | ✅ |
@@ -36,8 +36,8 @@
 | 42 | `SET_GRAVITY` | ax (Fx raw/帧²) | ay (Fx raw/帧²) | 1 | 笛卡尔加速，开 `CART_FX`（清 POLAR）——重力/漂移 | ✅ |
 | 43 | `STOP_FX` | — | — | 1 | 清两模式位（连续效果全停） | ✅ |
 | 50 | `LOOP` | target_slot (0..16) | count | 1 | 游标跳回 target；count 语义见下 | ✅ |
-| 51 | `WAIT_SIGNAL` | ch (0..8) | — | 1 | 停驻等信号脉冲（边沿触发，"全场齐转向"） | 🚧 M0-11b |
-| 52 | `BOUNCE_ARM` | walls 掩码（低 4 位：左/右/上/下） | n (≤3) | 1 | 反弹待命（场界折返镜像） | 🚧 M0-11b |
+| 51 | `WAIT_SIGNAL` | ch (0..8) | — | 1 | 停驻等信号脉冲（边沿触发，"全场齐转向"） | ✅ M0-11b |
+| 52 | `BOUNCE_ARM` | walls 掩码（低 4 位：左/右/上/下） | n (≤3) | 1 | 反弹待命（场界折返镜像） | ✅ M0-11b |
 | 60 | `SPAWN_PATTERN` | pattern_id | Δangle | 1 | 按图样描述符表发一批子弹 | 📋 预留（随图样表另立一刀） |
 
 槽数 = `1 + ARITY[op]`；双槽 op 的第二槽是引擎 scratch（作者写 0 占位即可）。
@@ -55,6 +55,17 @@
   NULL（宁缺勿哑，弹和段都不产生）；段池满同。运行期撞未知 op / LOOP target 越界 →
   `contract_viol` 计数 + 该弹序列就地终止（弹本体照常飞）。
 - **序列终止 ≠ 弹死**：END 之后弹继续按当前状态飞；段随弹死（cleanup）才归还。
+- **信号边沿 + 脉冲窗口**：`WAIT_SIGNAL` 只放行"当帧新脉冲"（边沿，非电平）——`signals[ch] ==
+  frame+1` 才算数，脉冲过的帧一过就过，新停驻的弹听不到旧脉冲。`pulse_signal` 只在相位 4
+  （`PH_XFORM`/`run_transforms`，即 `WAIT_SIGNAL` 消费本身）为止调用有效——debug 帧内断言钉死
+  这条窗口；再晚脉冲当帧蒸发，正路是上层读事件、次帧经导演/ECL 转发。
+- **反弹 walls 位图与耗尽语义**：`BOUNCE_ARM` 的 walls 掩码从弹自有段读（升序首个 `BOUNCE_ARM`
+  槽的 `args[0]` 低 4 位：bit0=左/bit1=右/bit2=上/bit3=下），剩余次数住 `flags` 位 3-4（≤3）；
+  每帧每轴至多反弹一次，位移后同帧折返（`x' = 2·墙−x`）；未武装的墙或次数耗尽 = 直接穿出，
+  交由越界回收（cleanup）兜底，不会卡墙。
+- **STEP 发射帧不 tick + 精确终值**：`STEP_SPEED`/`STEP_ANGLE` 发射当帧只初始化 scratch（起点值
+  + active 位），不推进插值，从下一帧起才 tick；终帧（`elapsed == frames`）写精确目标值，不吃
+  插值舍入；`LOOP` 重访 STEP 视同重新发射，自动从当前值重新武装 scratch。
 
 ## 示例（金向量实况，`stg-harness/src/main.rs`）
 
@@ -74,6 +85,16 @@
 [0] SET_SPEED  wait=45  args[131072, 0]    // 2.0 px/帧，等 45 帧
 [1] SET_LIFE   wait=0   args[1, 0]         // 寿命置 1 → 同帧倒数归零 → 当帧回收
 ```
+
+**信号齐转**（全场停驻弹群听一声令下同帧转向，两槽最小形）：
+
+```text
+[0] WAIT_SIGNAL wait=0  args[0, 0]         // 停驻等 0 号信号通道
+[1] TURN        wait=0  args[16384, 0]     // 边沿命中：同帧转 +90°
+```
+
+导演/ECL 侧只需在合适帧调一次 `world.pulse_signal(0)`——所有停在槽 0 的弹当帧一起放行转向，
+新创建、尚未排到这个 `WAIT_SIGNAL` 的弹不受这条已过去的脉冲影响。
 
 ## 消费入口
 

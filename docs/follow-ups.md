@@ -7,29 +7,11 @@
 > **维护规矩**：解决一条就删一条（别留"已完成"的墓碑，git log 才是历史）。新增的复审 follow-up
 > 往这里写，别只写账本。**写之前先核实**——本清单每条都经过代码核对，不是复述当年的复审原文。
 >
-> 最后核实：2026-07-15（M0-9 + 补测试之后，main `0c9e42f`）
+> 最后核实：2026-07-16（M0-11b 终审分诊入库之后，分支 `d4-xform-b`）
 
 ---
 
 ## A. 有触发条件的（动到对应模块前先做）
-
-### A1. M0-11b 开工前须先补的四条先决缝（D4 终审点名）
-
-M0-11a 终审复审时点出：`ARITY` 全 0（本刀无双槽 op）与 `fire_op`/`fire_loop` 的越界护栏在
-11b（`STEP_*` 扩展槽落地）后会出现新的判别盲区，需在动 11b 之前补测试/校验：
-
-1. **ARITY 步进无判别测试**：游标推进用 `1 + ARITY[op]`，但本刀 `ARITY` 全 0，任何把它算错的
-   变异不可见——11b 引入非 0 项后需要一条双槽 op 的判别式测试（步进 2 而非 1）。
-2. **`create_bullet_with_xform` 坏参扫描逐槽验 op**：目前逐槽校验 op 合法性，11b 扩展槽的
-   "scratch 字节"（不是真 op，是双槽 op 的续槽负载）会被这套逐槽扫描误判为坏 op——11b 须按
-   `ARITY` 跳过扩展槽再验。
-3. **`fire_loop` 的 target 校验只挡 `0..16` 之外**：11b 起 target 可能指进双槽 op 的扩展槽
-   （数值范围合法但语义非法），需要按 op 边界（而非纯数值范围）校验。
-4. **`fire_op` 的 `_` 臂顺序是唯一屏障**：未知 op 兜底臂必须先于 `ARITY[op]` 索引出现，否则
-   重排 `fire_op` 分支或把 `ARITY` 扩到 `[u8; 256]` 不到位就会越界 panic；11b 若要动这块，
-   这条顺序依赖要显式保留或消解（例如改用不越界的查表方式）。
-
-**触发点**：动 M0-11b（`STEP_*`/双槽 op）代码前。
 
 > **判据**：某条债一旦满足"下一刀正好要改这块代码，而这块代码没有网"，就升到 A 组、开工前先还。
 > bomb 那刀要改 `world/player.rs` 的生死状态机 —— 这正是当初把 GAMEOVER 缺口升到 A 组的理由。
@@ -93,6 +75,11 @@ delay 门测试只覆盖了 POLAR 弹 `angle`/位置冻结，`accel=0` 时 `spee
 下次改动可能悄悄把它并成"整次调用最多计 1"而没人发现是语义变化。**建议**：补一条构造出同一
 调用内两类违规同时触发的测试，断言 `contract_viol` 恰 +2。
 
+### B10. 金向量⑨/STEP/LOOP 的"fired-region × LOOP 回跳"角落语义缺测试与文档句（11b 终审分诊）
+
+LOOP 跳回后 `[0, xform_next)` 收缩：活跃 STEP 冻结至重武装、武装反弹弹该窗口 walls 读 0
+暂时失效——均确定性且属 spec 字面执行，但缺一条判别式测试与一句设计文档明写这条角落语义。
+
 ---
 
 ## C. 代码整洁（低优先，都是两可）
@@ -131,6 +118,20 @@ delay 门测试只覆盖了 POLAR 弹 `angle`/位置冻结，`accel=0` 时 `spee
 `|v|` 逼近 `Fx` 上限时 `isqrt(len_sq(vx,vy) as u64) as i32` 理论上可回绕为负 `speed`——
 确定性无损（跨平台仍逐位一致）、当帧越界回收兜底，纯理论风险。按 P4-c 对称性（引擎自身
 bug → debug 帧内断言）补一条 `debug_assert!(sp.raw() >= 0)` 之类的兜底。
+
+### C7. `create_bullet_with_xform` 严格化两件（11b 终审分诊）
+
+STEP `args[1]` 位 24-31 未强制为零（reserved-must-be-zero 前向兼容纪律，未来扩展位若悄悄
+非零会被当前实现无声吞掉）；WAIT_SIGNAL 坏通道 / BOUNCE_ARM 坏 n 仅 fire 侧处置（运行期靠
+no-op/计数兜底），与 easing id 的 create 期拒收不对称——两条都安全无洞，只是作者体验不一致
+（有的坏参 create 时就打回，有的要等 fire 才看见）。
+
+### C8. `slot`/`xf_bullet` 测试助手三处复制（11b 终审分诊）
+
+`step.rs`/`world/transform.rs`/`world/integrate.rs` 各自维护一份结构相同的 `fn slot`
+（构造 `XformSlot`）+ `world/transform.rs`/`world/integrate.rs` 各一份 `fn xf_bullet`
+（挂变换序列造弹），三处复制。可归拢进 `world.rs` 的 `test_support`（`bullet_at` 已在
+那），非阻塞，两可。
 
 ---
 

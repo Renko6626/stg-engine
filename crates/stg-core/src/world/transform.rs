@@ -12,6 +12,23 @@ pub(crate) enum FireResult {
     Jumped,
 }
 
+/// STEP scratch 活跃位（扩展槽 args[1] bit31；低 16 位 = elapsed）。
+pub(crate) const STEP_ACTIVE: i32 = 1 << 31;
+
+fn easing_from_id(id: u8) -> crate::math::easing::Easing {
+    use crate::math::easing::Easing::*;
+    match id {
+        1 => QuadIn,
+        2 => QuadOut,
+        3 => QuadInOut,
+        4 => CubicIn,
+        5 => CubicOut,
+        6 => CubicInOut,
+        7 => Smoothstep,
+        _ => Linear, // 0 与一切越界值（create 期已拒 ≥8，此处兜底确定性）
+    }
+}
+
 impl WorldBody {
     pub(crate) fn run_transforms(&mut self) {
         self.phase_enter(super::PH_XFORM);
@@ -27,6 +44,7 @@ impl WorldBody {
                 if self.bullets.delay[i] > 0 {
                     continue; // 激活前变换不走（delay 递减归 integrate）
                 }
+                self.tick_steps(i); // 与游标并发：wait/WAIT_SIGNAL 期间插值照走
                 if self.bullets.xform_wait[i] > 0 {
                     self.bullets.xform_wait[i] -= 1;
                     if self.bullets.xform_wait[i] > 0 {
@@ -61,13 +79,26 @@ impl WorldBody {
                 self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
                 return;
             }
-            match self.fire_op(i, slot) {
-                FireResult::Terminate => {
+            if slot.op == OP_WAIT_SIGNAL {
+                let ch = slot.args[0];
+                if !(0..crate::world::SIGNAL_CHANNELS as i32).contains(&ch) {
+                    self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
                     self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
                     return;
                 }
-                FireResult::Jumped => return, // LOOP 护栏：本帧到此为止
-                FireResult::Continue => {}
+                if self.signals[ch as usize] != self.frame.wrapping_add(1) {
+                    return; // 停驻：不步进、不设 wait，次帧再看
+                }
+                // 边沿命中：视同已发射，落到下方公共步进（本 op 的 wait 生效）
+            } else {
+                match self.fire_op(i, slot) {
+                    FireResult::Terminate => {
+                        self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
+                        return;
+                    }
+                    FireResult::Jumped => return, // LOOP 护栏：本帧到此为止
+                    FireResult::Continue => {}
+                }
             }
             self.bullets.xform_wait[i] = slot.wait;
             self.bullets.xform_next[i] = (next + 1 + ARITY[slot.op as usize] as usize) as u8;
@@ -96,7 +127,45 @@ impl WorldBody {
                 self.set_gravity_at(i, Fx::from_raw(slot.args[0]), Fx::from_raw(slot.args[1]))
             }
             OP_STOP_FX => self.stop_fx_at(i),
+            OP_STEP_SPEED | OP_STEP_ANGLE => {
+                let frames = (slot.args[1] & 0xFFFF) as u32;
+                if frames == 0 {
+                    // 合法退化：瞬时 SET
+                    if slot.op == OP_STEP_SPEED {
+                        self.set_speed_at(i, Fx::from_raw(slot.args[0]));
+                    } else {
+                        self.set_angle_at(i, Angle(slot.args[0] as u16));
+                    }
+                } else {
+                    // scratch 无条件重初始化（LOOP 重访 = 自动重新武装）
+                    let idx = self.bullets.xform_next[i] as usize;
+                    if idx + 1 >= SLOTS_PER_SEG {
+                        // P4-b：末槽 STEP 无扩展槽空间（create 期空间校验属后续任务；此为发射期兜底）
+                        self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+                        return FireResult::Terminate;
+                    }
+                    let seg = self.bullets.transform_head[i];
+                    let start = if slot.op == OP_STEP_SPEED {
+                        self.bullets.speed[i].raw()
+                    } else {
+                        self.bullets.angle[i].raw() as i32
+                    };
+                    let ext = &mut self.xforms.seg_slots_mut(seg)[idx + 1];
+                    ext.args[0] = start;
+                    ext.args[1] = STEP_ACTIVE; // elapsed = 0
+                }
+            }
             OP_LOOP => return self.fire_loop(i, slot),
+            OP_BOUNCE_ARM => {
+                let n = slot.args[1];
+                if !(0..=3).contains(&n) {
+                    self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+                }
+                let n = n.clamp(0, 3) as u8;
+                self.bullets.flags[i] = (self.bullets.flags[i]
+                    & !crate::bullets::BULLET_BOUNCE_MASK)
+                    | (n << crate::bullets::BULLET_BOUNCE_SHIFT);
+            }
             _ => {
                 // 未实现 op（11b 预留编号 / 族内空隙 / 一切垃圾值）：P4-b——计数 + 序列终止（两机同样跳过）
                 self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
@@ -124,6 +193,83 @@ impl WorldBody {
         }
         self.bullets.xform_next[i] = target as u8;
         FireResult::Jumped
+    }
+
+    /// 推进本弹全部活跃 STEP 插值（升序，I4）。与游标并发：序列终止后插值照走完。
+    fn tick_steps(&mut self, i: usize) {
+        let seg = self.bullets.transform_head[i];
+        if seg as usize >= SEG_CAP {
+            // P4-b：伪造越界段号——advance_cursor 负责计数+终止，这里只需不 panic。
+            return;
+        }
+        let fired_end = (self.bullets.xform_next[i] as usize).min(SLOTS_PER_SEG);
+        let mut s = 0usize;
+        while s < fired_end {
+            let main = self.xforms.seg_slots(seg)[s];
+            let is_step = main.op == OP_STEP_SPEED || main.op == OP_STEP_ANGLE;
+            if is_step && s + 1 < SLOTS_PER_SEG {
+                let ext = self.xforms.seg_slots(seg)[s + 1];
+                if ext.args[1] & STEP_ACTIVE != 0 {
+                    self.tick_one_step(i, seg, s, main, ext);
+                }
+            }
+            s += 1 + ARITY[main.op as usize] as usize;
+        }
+    }
+
+    /// 单个活跃 STEP 的一帧推进。绝对插值（每帧从 start 重算，不累积误差）。
+    fn tick_one_step(&mut self, i: usize, seg: u16, s: usize, main: XformSlot, ext: XformSlot) {
+        let frames = (main.args[1] & 0xFFFF) as i64; // 发射时已保证 > 0
+        let elapsed = ((ext.args[1] & 0xFFFF) as i64 + 1).min(frames);
+        let done = elapsed == frames;
+        let t = crate::math::Fx::from_raw(((elapsed << 16) / frames) as i32);
+        let e = crate::math::easing::ease(easing_from_id((main.args[1] >> 16) as u8), t);
+        if main.op == OP_STEP_SPEED {
+            let (start, target) = (Fx::from_raw(ext.args[0]), Fx::from_raw(main.args[0]));
+            let v = if done {
+                target // 终帧写精确终值（不吃插值舍入）
+            } else {
+                // 负 i64 >> 为算术右移（向负无穷取整）——确定性，两平台一致
+                let d = ((target.raw() as i64 - start.raw() as i64) * e.raw() as i64) >> 16;
+                Fx::from_raw((start.raw() as i64 + d) as i32)
+            };
+            self.set_speed_at(i, v);
+        } else {
+            let start = Angle(ext.args[0] as u16);
+            let delta = (main.args[0] as u16).wrapping_sub(start.raw()) as i16; // 最短弧带方向
+            let scaled = if done {
+                delta
+            } else {
+                // 算术右移，同上
+                ((delta as i64 * e.raw() as i64) >> 16) as i16
+            };
+            self.set_angle_at(i, start.add_delta(scaled));
+        }
+        let ext_mut = &mut self.xforms.seg_slots_mut(seg)[s + 1];
+        ext_mut.args[1] = if done {
+            elapsed as i32 // 清 active
+        } else {
+            STEP_ACTIVE | elapsed as i32
+        };
+    }
+
+    /// 武装墙掩码：扫弹自有段已发射区间的首个 BOUNCE_ARM（升序，I4），读 args[0] 低 4 位。
+    /// 只对 flags 位 3-4 非零的弹调用（调用方保证）；武装弹必然有段。
+    pub(crate) fn bounce_walls_of(&self, i: usize) -> u8 {
+        let seg = self.bullets.transform_head[i];
+        if seg as usize >= SEG_CAP {
+            return 0; // 伪造段号护栏同款：无段即无墙
+        }
+        let fired_end = (self.bullets.xform_next[i] as usize).min(SLOTS_PER_SEG);
+        let mut s = 0usize;
+        while s < fired_end {
+            let slot = self.xforms.seg_slots(seg)[s];
+            if slot.op == OP_BOUNCE_ARM {
+                return (slot.args[0] & 0xF) as u8;
+            }
+            s += 1 + ARITY[slot.op as usize] as usize;
+        }
+        0
     }
 }
 
@@ -364,10 +510,15 @@ mod tests {
     }
 
     /// LOOP target 越界：P4-b——contract_viol + 序列终止。
+    /// create 期已挡 target 越界（A1-3 还债，见 `create_bullet_with_xform` 的边界位图校验）——
+    /// 这里改走"运行期段被涂改"绕过前门（create 期 target=0 合法：自环，同款自环已由
+    /// `loop_guard_bounds_one_round_per_frame` 钉住护栏行为），钉住 fire 侧兜底仍在。
     #[test]
     fn loop_bad_target_terminates() {
         let mut w = crate::step::World::new(1);
-        let i = xf_bullet(&mut w, &[slot(0, OP_LOOP, 16, 0)]);
+        let i = xf_bullet(&mut w, &[slot(0, OP_LOOP, 0, 0)]); // create 期合法：target=0 自环
+        let seg = w.body.bullets.transform_head[i];
+        w.body.xforms.seg_slots_mut(seg)[0].args[0] = 16; // 涂改成越界 target
         let cv0 = w.body.diag.contract_viol;
         crate::step::step(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.diag.contract_viol, cv0 + 1);
@@ -400,5 +551,219 @@ mod tests {
             7 - 1,
             "SET_LIFE=7 且本帧 integrate 已倒数 1"
         );
+    }
+
+    /// 边沿语义三连：停驻不动 → 当帧脉冲放行（同帧转向）→ 次帧不重复放行。
+    #[test]
+    fn wait_signal_edge_release() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_SPEED, Fx::from_int(1).raw(), 0),
+                slot(0, OP_WAIT_SIGNAL, 3, 0),
+                slot(0, OP_TURN, 16384, 0),
+            ],
+        );
+        // 帧 0-1：无脉冲，停驻
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::step::step(&mut w, &InputFrame::empty(1));
+        assert_eq!(w.body.bullets.angle[i], Angle::ZERO, "无脉冲不得放行");
+        // 帧 2：导演槽脉冲（step_with_director 在相位 2 调闭包）→ 相位 4 同帧放行
+        crate::step::step_with_director(&mut w, &InputFrame::empty(2), |b| b.pulse_signal(3));
+        assert_eq!(w.body.bullets.angle[i], Angle::QUARTER, "当帧脉冲当帧放行");
+        // 帧 3：无新脉冲——已放行的弹不受影响，且新停驻弹听不到旧脉冲
+        let j = xf_bullet(
+            &mut w,
+            &[slot(0, OP_WAIT_SIGNAL, 3, 0), slot(0, OP_SET_SPRITE, 9, 0)],
+        );
+        crate::step::step(&mut w, &InputFrame::empty(3));
+        assert_eq!(
+            w.body.bullets.sprite[j], 0,
+            "旧脉冲是边沿不是电平：次帧不得放行"
+        );
+    }
+
+    /// 坏通道号：create 期放行（op 合法），运行期 P4-b——计数 + 序列终止。
+    #[test]
+    fn wait_signal_bad_channel_terminates() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(&mut w, &[slot(0, OP_WAIT_SIGNAL, 8, 0)]);
+        let cv0 = w.body.diag.contract_viol;
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.bullets.xform_next[i], 16, "坏通道终止序列");
+    }
+
+    /// pulse_signal 本体契约：写 frame+1；坏通道 no-op + 计数。
+    #[test]
+    fn pulse_signal_contract() {
+        let mut w = crate::step::World::new(1);
+        w.body.pulse_signal(2);
+        assert_eq!(w.body.signals[2], w.body.frame.wrapping_add(1));
+        let cv0 = w.body.diag.contract_viol;
+        w.body.pulse_signal(8); // 越界
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+    }
+
+    /// STEP_SPEED 判别式：Linear 缓动 4 帧从 1.0 到 3.0——逐帧值与手算参考逐位相等，
+    /// 第 4 帧后恰为精确终值且 active 清零。
+    #[test]
+    fn step_speed_linear_hits_exact_waypoints() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_SPEED, Fx::from_int(1).raw(), 0),
+                slot(0, OP_STEP_SPEED, Fx::from_int(3).raw(), 4), // frames=4, easing=Linear(0)
+                slot(0, OP_SET_SPRITE, 0, 0), // scratch 扩展槽由步进跳过——这里是槽 3
+            ],
+        );
+        // 帧 0：SET_SPEED 发射 + STEP 发射（scratch 初始化，elapsed=0，本帧不 tick）
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.bullets.speed[i], Fx::from_int(1), "发射帧不 tick");
+        // 帧 1..4：每帧 +0.5（linear：1 + t×2，t = k/4）
+        for k in 1..=4u32 {
+            crate::step::step(&mut w, &InputFrame::empty(k));
+            let expect = Fx::from_raw(65536 + (k as i32 * 2 * 65536) / 4);
+            assert_eq!(w.body.bullets.speed[i], expect, "第 {k} tick");
+        }
+        // 完成：active 清零，速度停在精确终值
+        let seg = w.body.bullets.transform_head[i];
+        assert_eq!(
+            w.body.xforms.seg_slots(seg)[2].args[1] & (1 << 31),
+            0,
+            "active 应清"
+        );
+        crate::step::step(&mut w, &InputFrame::empty(5));
+        assert_eq!(w.body.bullets.speed[i], Fx::from_int(3), "完成后值冻结");
+    }
+
+    /// A1-(1) ARITY 步进判别：STEP 双槽——游标必须跳过扩展槽，直接发射其后的 op。
+    /// 若步进错成 1，游标会把 scratch 当 op 读（垃圾/END）→ SET_SPRITE 永不发射。
+    #[test]
+    fn arity_stepping_skips_extension_slot() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_STEP_SPEED, Fx::from_int(2).raw(), 8),
+                slot(0, OP_END, 0, 0), // 槽 1 = 扩展槽（发射时被 scratch 覆写）
+                slot(0, OP_SET_SPRITE, 7, 0), // 槽 2：STEP 之后的下一个真 op
+            ],
+        );
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.bullets.sprite[i], 7, "游标须按 1+ARITY 跳过扩展槽");
+    }
+
+    /// STEP_ANGLE 最短弧：从 350°(BAM 63715) 缓动到 10°(BAM 1820)——走 +20° 短弧而非 −340°。
+    #[test]
+    fn step_angle_shortest_arc_wraps() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_ANGLE, 63715, 0),
+                slot(0, OP_STEP_ANGLE, 1820, 2), // 2 帧, Linear
+            ],
+        );
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::step::step(&mut w, &InputFrame::empty(1)); // t=0.5：中点应在回绕缝上
+        let mid = w.body.bullets.angle[i].raw();
+        assert!(
+            !(1820..=63715).contains(&mid),
+            "中点须在短弧上（跨 0），实际 {mid}"
+        );
+        crate::step::step(&mut w, &InputFrame::empty(2));
+        assert_eq!(w.body.bullets.angle[i], Angle(1820), "终值精确");
+    }
+
+    /// frames=0 合法退化：视同瞬时 SET，不激活 scratch、不计数。
+    #[test]
+    fn step_zero_frames_is_instant_set() {
+        let mut w = crate::step::World::new(1);
+        let cv0;
+        let i = {
+            let i = xf_bullet(&mut w, &[slot(0, OP_STEP_SPEED, Fx::from_int(5).raw(), 0)]);
+            cv0 = w.body.diag.contract_viol;
+            i
+        };
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.bullets.speed[i], Fx::from_int(5));
+        assert_eq!(w.body.diag.contract_viol, cv0, "合法退化不计数");
+        let seg = w.body.bullets.transform_head[i];
+        assert_eq!(
+            w.body.xforms.seg_slots(seg)[1].args[1] & (1 << 31),
+            0,
+            "不激活"
+        );
+    }
+
+    /// LOOP 重访 STEP = 自动重新武装（scratch 重初始化纪律）：第二轮从新起点插值。
+    #[test]
+    fn loop_rearms_step_from_new_start() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(2, OP_STEP_SPEED, Fx::from_int(2).raw(), 2), // 槽0；wait 2 让插值先跑完
+                slot(0, OP_END, 0, 0), // 槽1：扩展槽占位（发射时被 scratch 覆写）
+                slot(0, OP_ADD_SPEED, Fx::from_int(3).raw(), 0), // 槽2：完成后猛加 3（起点被改变）
+                slot(1, OP_LOOP, 0, 2), // 槽3：跳回槽0，共 2 轮
+            ],
+        );
+        for f in 0..12u32 {
+            crate::step::step(&mut w, &InputFrame::empty(f));
+        }
+        // 第一轮：0→2（2帧）→ +3 = 5；第二轮重武装：5→2（2帧）→ +3 = 5；终态 5
+        assert_eq!(
+            w.body.bullets.speed[i],
+            Fx::from_int(5),
+            "第二轮须从 5 重新插到 2 再 +3"
+        );
+    }
+
+    /// P4-b 兜底：STEP 在第 15 槽（无扩展槽空间）——发射期计数 + 终止，不 panic。
+    /// create 期的空间校验已落地（A1-2 还债，见 `create_bullet_with_xform`）——这条路径
+    /// 经写 API 已到不了这里；本测试改走"运行期段被涂改"绕过前门，钉住 fire 侧兜底仍在
+    /// （与 `unknown_op_terminates_and_counts`/`loop_bad_target_terminates` 同款套路）。
+    #[test]
+    fn step_at_last_slot_terminates_without_panic() {
+        let mut w = crate::step::World::new(1);
+        let seq = [slot(0, OP_SET_SPRITE, 0, 0); 16];
+        let i = xf_bullet(&mut w, &seq); // create 期合法：16 槽全瞬时 op
+        let seg = w.body.bullets.transform_head[i];
+        // 运行期涂改末槽为 STEP——前门已挡不了这条路，只能靠段直写模拟。
+        w.body.xforms.seg_slots_mut(seg)[15] = slot(0, OP_STEP_SPEED, Fx::from_int(2).raw(), 4);
+        let cv0 = w.body.diag.contract_viol;
+        crate::step::step(&mut w, &InputFrame::empty(0)); // 槽 0..15 全 wait=0 同帧连发
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "末槽 STEP 恰计一次");
+        assert_eq!(w.body.bullets.xform_next[i], 16, "序列终止");
+        crate::step::step(&mut w, &InputFrame::empty(1)); // 不再计数、不 panic
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+    }
+
+    /// easing id 经 STEP 通路的判别：QuadIn(id=1) 2 帧从 1.0 到 3.0——
+    /// t=0.5 时 QuadIn=0.25（烘焙表精确采样点），v = 1 + 2×0.25 = 1.5 逐位相等。
+    #[test]
+    fn step_speed_quadin_waypoint_exact() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_SPEED, Fx::from_int(1).raw(), 0),
+                slot(0, OP_STEP_SPEED, Fx::from_int(3).raw(), 2 | (1 << 16)), // frames=2, QuadIn
+            ],
+        );
+        crate::step::step(&mut w, &InputFrame::empty(0)); // 发射帧不 tick
+        crate::step::step(&mut w, &InputFrame::empty(1)); // t=0.5 → 0.25
+        assert_eq!(
+            w.body.bullets.speed[i].raw(),
+            98304,
+            "1 + 2×QuadIn(0.5) = 1.5"
+        );
+        crate::step::step(&mut w, &InputFrame::empty(2));
+        assert_eq!(w.body.bullets.speed[i], Fx::from_int(3), "终值精确");
     }
 }

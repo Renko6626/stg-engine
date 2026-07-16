@@ -47,6 +47,7 @@ impl World {
         s.enemies.copy_into(&mut d.enemies);
         s.fields.copy_into(&mut d.fields);
         s.xforms.copy_into(&mut d.xforms);
+        d.signals = s.signals;
         d.diag = s.diag;
         d.last_status = s.last_status;
         // 帧内私有输出缓冲（hits/events）checksum-skip、不随快照复制数组本体——安全性今天靠
@@ -239,6 +240,74 @@ mod tests {
         assert_eq!(w.body.xforms.alloc().unwrap(), 0, "段已回滚归还");
     }
 
+    /// A1-(2)：扩展槽的字节不判 op——scratch 位置放任意垃圾值也必须过 create。
+    #[test]
+    fn create_validation_skips_extension_slots() {
+        let mut w = World::new(1);
+        let seq = [
+            slot(0, crate::xform::OP_STEP_SPEED, 65536, 4),
+            slot(0, 99, -1, -1), // 扩展槽：垃圾字节合法（会被 fire 时的 scratch 覆写）
+            slot(0, crate::xform::OP_SET_SPRITE, 1, 0),
+        ];
+        assert_ne!(
+            w.body
+                .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &seq),
+            BulletHandle::NULL,
+            "scratch 槽不得被当 op 判"
+        );
+    }
+
+    /// STEP 在末槽（槽 15）没有扩展槽空间 → BAD_ARGS 整体失败。
+    #[test]
+    fn create_rejects_step_without_extension_room() {
+        let mut w = World::new(1);
+        let mut seq = [slot(0, crate::xform::OP_SET_SPRITE, 0, 0); 16];
+        seq[15] = slot(0, crate::xform::OP_STEP_SPEED, 65536, 4);
+        assert_eq!(
+            w.body
+                .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &seq),
+            BulletHandle::NULL
+        );
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+    }
+
+    /// A1-(3)：LOOP target 指进扩展槽中间 → BAD_ARGS；指向 zero-tail（END）→ 合法。
+    #[test]
+    fn create_validates_loop_target_boundaries() {
+        let mut w = World::new(1);
+        let bad = [
+            slot(0, crate::xform::OP_STEP_SPEED, 65536, 4), // 槽0（扩展槽=1）
+            slot(0, 0, 0, 0),                               // 扩展槽
+            slot(0, crate::xform::OP_LOOP, 1, 0),           // target=1 = 扩展槽中间 → 拒
+        ];
+        assert_eq!(
+            w.body
+                .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &bad),
+            BulletHandle::NULL
+        );
+        let ok = [
+            slot(0, crate::xform::OP_SET_SPRITE, 1, 0),
+            slot(0, crate::xform::OP_LOOP, 10, 3), // target=10 在 zero-tail：落地即 END，合法
+        ];
+        assert_ne!(
+            w.body
+                .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &ok),
+            BulletHandle::NULL
+        );
+    }
+
+    /// easing id ≥ 8 → BAD_ARGS（作者错误 create 期就拒）。
+    #[test]
+    fn create_rejects_bad_easing_id() {
+        let mut w = World::new(1);
+        let seq = [slot(0, crate::xform::OP_STEP_SPEED, 65536, 4 | (8 << 16))];
+        assert_eq!(
+            w.body
+                .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &seq),
+            BulletHandle::NULL
+        );
+    }
+
     /// create_bullet（哑弹路径）覆写 transform_head——调用方伪造段号无效。
     #[test]
     fn create_bullet_overrides_forged_transform_head() {
@@ -391,5 +460,21 @@ mod tests {
         assert_eq!(snap.checksum(), ck); // 段池随快照
         snap.body.xforms.seg_slots_mut(seg)[0].args[0] = 43;
         assert_ne!(snap.checksum(), ck); // 且真的在参与指纹
+    }
+
+    #[test]
+    fn snapshot_covers_signals() {
+        let mut w = World::new(3);
+        w.body.pulse_signal(5);
+        let ck = w.checksum();
+        let mut snap = World::new(3);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.checksum(), ck, "signals 随快照且入校验和");
+        snap.body.signals[5] ^= 1;
+        assert_ne!(
+            snap.checksum(),
+            ck,
+            "signals 必须真的参与校验和（防未来误加 skip）"
+        );
     }
 }

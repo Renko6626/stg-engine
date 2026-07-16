@@ -376,9 +376,9 @@ struct XformSlot { wait: u16, op: u8, _pad: u8, args: [i32; 2] }
 | | `SET_ACCEL` | a | 1 | 沿向加速，开 POLAR_FX |
 | | `SET_GRAVITY` | ax, ay | 1 | 开 CART_FX（清 POLAR_FX） |
 | | `STOP_FX` | — | 1 | 清全部模式位 |
-| | `BOUNCE_ARM` | n≤3, walls | 1 | 反弹待命（flags 2 位计数） |
-| 插值 | `STEP_SPEED` | target, frames\|easing | **2** | 限时缓动到目标速率（scratch 在扩展槽） |
-| | `STEP_ANGLE` | target, frames\|easing | **2** | 限时缓动到目标角 |
+| | `BOUNCE_ARM` | walls（低4位：左/右/上/下）, n≤3 | 1 | 反弹待命（实现定稿：剩余次数住 `flags` 位 3-4；walls 从弹自有段读——升序首个 `BOUNCE_ARM` 槽的 `args[0]` 低 4 位；`integrate` 位移后同帧折返（`x' = 2·墙−x`），每帧每轴至多一次；POLAR 弹镜像 angle（垂直墙 `HALF−θ` / 水平墙 `ZERO−θ`）后回填 v，CART/哑弹翻 v 分量后回填极坐标——spec 2026-07-16 / 11b 实现定稿） |
+| 插值 | `STEP_SPEED` | target, frames\|easing | **2** | 限时缓动到目标速率（scratch 在扩展槽：实现定稿——`ext.args[0]`=起点值、`args[1]`=active(bit31)\|elapsed(低16)；发射帧只初始化不 tick，终帧写精确终值；easing id ≥8 create 期拒——spec 2026-07-16 / 11b 实现定稿） |
+| | `STEP_ANGLE` | target, frames\|easing | **2** | 限时缓动到目标角（scratch 布局同 STEP_SPEED；最短弧 `Δ=(target−start) as i16` 带方向；发射帧不 tick、终帧写精确终值——spec 2026-07-16 / 11b 实现定稿） |
 | 控制 | `LOOP` | target_slot, count | 1 | 游标跳回；count 就地递减，0 = 无限（count 地板 1：authored N=体执行 N 次、0=无限，耗尽停 1 不复活、嵌套归档三；scratch op 发射时重初始化——spec 2026-07-16） |
 | | `WAIT_SIGNAL` | ch | 1 | 停在此 op，`signals[ch] == 当前帧` 才放行 |
 
@@ -400,7 +400,7 @@ loop {
 }
 ```
 
-**信号通道（EX_REACT 对应物）**：`WorldBody.signals: [u32; 8]`，每条存最后脉冲帧号；ECL syscall `pulse_signal(ch)`（相位 3 写入）；`WAIT_SIGNAL` 相位 5 消费。**边沿触发**：只有正停驻在该 op 上的弹响应——"全场弹听号令齐转向"的符卡语义，零额外状态。
+**信号通道（EX_REACT 对应物）**：`WorldBody.signals: [u32; 8]`，每条存最后脉冲帧号；ECL syscall `pulse_signal(ch)`（相位 3 写入）；`WAIT_SIGNAL` 相位 5 消费。**边沿触发**：只有正停驻在该 op 上的弹响应——"全场弹听号令齐转向"的符卡语义，零额外状态。（实现定稿：`signals[ch]` 存 `frame.wrapping_add(1)`——`0` 天然表示"从未脉冲"，零初始化的 `WorldBody` 合法；`pulse_signal` 带 debug 帧内断言 `phase_guard <= PH_XFORM`，即相位 5（`run_transforms`，`WAIT_SIGNAL` 消费本身）为止有效——相位 6（`integrate`）起脉冲当帧蒸发，正路是上层读事件、次帧经导演/ECL 转发——spec 2026-07-16 / 11b 实现定稿）
 
 **ECL ABI 衔接**（既定丙方案的落地形态）：locals 区间引用 `(xform_off, xform_cnt)`；每槽占 3 个 locals 字——`word0 = (wait << 16) | (op << 8)`，`word1/2 = args`。16 槽 = 48 字 ≤ 64（Task.locals 容量自洽）。帧内断言守 `xform_off + xform_cnt×3 ≤ 64`。
 

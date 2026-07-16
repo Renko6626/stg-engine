@@ -6,6 +6,7 @@
 //! 作用区：`life` 倒数 —— `life=1` 本帧减到 0、相位 6 仍参与判定、相位 9 才回收（"每帧重铺=跟随"的时序基础）。
 
 use super::WorldBody;
+use crate::math::Fx;
 
 impl WorldBody {
     pub(crate) fn integrate(&mut self) {
@@ -38,6 +39,10 @@ impl WorldBody {
                 }
                 self.bullets.x[i] = self.bullets.x[i] + self.bullets.vx[i];
                 self.bullets.y[i] = self.bullets.y[i] + self.bullets.vy[i];
+                // D4 反弹：位移后同帧折返（每帧每轴至多一次；速度按模式全域一致更新）
+                if self.bullets.flags[i] & crate::bullets::BULLET_BOUNCE_MASK != 0 {
+                    self.bounce_bullet(i);
+                }
                 if self.bullets.life[i] != 0xFFFF && self.bullets.life[i] > 0 {
                     self.bullets.life[i] -= 1;
                 }
@@ -84,6 +89,56 @@ impl WorldBody {
             }
         }
     }
+
+    /// 场界折返镜像（D4 11b 拍板）。walls：bit0 左 / bit1 右 / bit2 上 / bit3 下。
+    fn bounce_bullet(&mut self, i: usize) {
+        use crate::bullets::{BULLET_BOUNCE_MASK, BULLET_BOUNCE_SHIFT, BULLET_POLAR_FX};
+        let walls = self.bounce_walls_of(i);
+        if walls == 0 {
+            return;
+        }
+        let left = Fx::from_int(-super::FIELD_HALF_W);
+        let right = Fx::from_int(super::FIELD_HALF_W);
+        let top = Fx::ZERO;
+        let bottom = Fx::from_int(super::FIELD_HEIGHT);
+        // x 轴（每帧至多一次）
+        let mut count = (self.bullets.flags[i] & BULLET_BOUNCE_MASK) >> BULLET_BOUNCE_SHIFT;
+        let x = self.bullets.x[i];
+        let hit_x = (walls & 0b0001 != 0 && x.raw() < left.raw())
+            .then_some(left)
+            .or((walls & 0b0010 != 0 && x.raw() > right.raw()).then_some(right));
+        if let (Some(wall), true) = (hit_x, count > 0) {
+            self.bullets.x[i] = Fx::from_raw(2 * wall.raw() - x.raw()); // 折返镜像
+            if self.bullets.flags[i] & BULLET_POLAR_FX != 0 {
+                let a = self.bullets.angle[i];
+                self.bullets.angle[i] = crate::math::Angle::HALF.sub(a); // 垂直墙：HALF−θ
+                self.refresh_vel_from_polar(i);
+            } else {
+                self.bullets.vx[i] = Fx::ZERO - self.bullets.vx[i];
+                self.backfill_polar(i);
+            }
+            count -= 1;
+        }
+        // y 轴（重读计数——角撞允许同帧双轴各一次）
+        let y = self.bullets.y[i];
+        let hit_y = (walls & 0b0100 != 0 && y.raw() < top.raw())
+            .then_some(top)
+            .or((walls & 0b1000 != 0 && y.raw() > bottom.raw()).then_some(bottom));
+        if let (Some(wall), true) = (hit_y, count > 0) {
+            self.bullets.y[i] = Fx::from_raw(2 * wall.raw() - y.raw());
+            if self.bullets.flags[i] & BULLET_POLAR_FX != 0 {
+                let a = self.bullets.angle[i];
+                self.bullets.angle[i] = crate::math::Angle::ZERO.sub(a); // 水平墙：−θ
+                self.refresh_vel_from_polar(i);
+            } else {
+                self.bullets.vy[i] = Fx::ZERO - self.bullets.vy[i];
+                self.backfill_polar(i);
+            }
+            count -= 1;
+        }
+        self.bullets.flags[i] =
+            (self.bullets.flags[i] & !BULLET_BOUNCE_MASK) | (count << BULLET_BOUNCE_SHIFT);
+    }
 }
 
 #[cfg(test)]
@@ -94,6 +149,46 @@ mod tests {
     use crate::math::Fx;
     use crate::math::geom::polar_to_vec;
     use crate::world::test_support::bullet_at;
+    use crate::xform::*;
+
+    // 与 transform.rs 测试同款助手
+    fn slot(wait: u16, op: u8, a0: i32, a1: i32) -> XformSlot {
+        XformSlot {
+            wait,
+            op,
+            _pad: 0,
+            args: [a0, a1],
+        }
+    }
+
+    // 与 transform.rs 测试同款助手：造一颗静止带段弹（远离自机），返回池索引（单弹场景恒 0）。
+    fn xf_bullet(w: &mut crate::step::World, seq: &[XformSlot]) -> usize {
+        let h = w.body.create_bullet_with_xform(
+            crate::bullets::BulletInit {
+                x: Fx::from_int(0),
+                y: Fx::from_int(100),
+                vx: Fx::ZERO,
+                vy: Fx::ZERO,
+                speed: Fx::ZERO,
+                angle: Angle::ZERO,
+                ang_vel: 0,
+                accel: Fx::ZERO,
+                ax: Fx::ZERO,
+                ay: Fx::ZERO,
+                sprite: 0,
+                radius: Fx::from_int(2),
+                delay: 0,
+                life: 0xFFFF,
+                flags: 0,
+                grazed_by: 0,
+                transform_head: 0,
+                xform_wait: 0,
+                xform_next: 0,
+            },
+            seq,
+        );
+        w.body.bullets.get(h).unwrap()
+    }
 
     /// `delay` 门：delay 期弹只倒数、不移动；delay 尽后才开始积分。
     ///
@@ -206,5 +301,88 @@ mod tests {
         assert_eq!(w.body.bullets.angle[i], crate::math::cordic::atan2(vy, vx));
         let sp = crate::math::isqrt::isqrt(crate::math::geom::len_sq(vx, vy) as u64) as i32;
         assert_eq!(w.body.bullets.speed[i].raw(), sp);
+    }
+
+    /// 右墙折返判别式（哑弹）：x 越界量镜像 + vx 翻号 + 计数递减。
+    /// 场界 x=+192；弹从 190 以 vx=+5 一帧到 195 → 折返到 189、vx=-5。
+    #[test]
+    fn bounce_right_wall_folds_position_and_flips_vx() {
+        use crate::bullets::BULLET_BOUNCE_MASK;
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_BOUNCE_ARM, 0b0010, 2), // walls=右；n=2
+            ],
+        );
+        w.body.bullets.x[i] = Fx::from_int(190);
+        w.body.bullets.y[i] = Fx::from_int(100);
+        w.body.bullets.vx[i] = Fx::from_int(5);
+        crate::step::step(&mut w, &InputFrame::empty(0)); // BOUNCE_ARM 发射 + 位移 195 → 折返
+        assert_eq!(w.body.bullets.x[i], Fx::from_int(189), "2·192−195 = 189");
+        assert_eq!(w.body.bullets.vx[i], Fx::from_int(-5));
+        assert_eq!(
+            (w.body.bullets.flags[i] & BULLET_BOUNCE_MASK) >> 3,
+            1,
+            "计数 2→1"
+        );
+    }
+
+    /// POLAR 弹镜像走角度域：右墙后 angle = HALF − θ，且 vx/vy 与查表参考一致。
+    #[test]
+    fn bounce_polar_bullet_mirrors_angle() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_SPEED, Fx::from_int(6).raw(), 0),
+                slot(0, OP_SET_ANGLE, 8192, 0), // 45°（右下）
+                slot(0, OP_SET_ANG_VEL, 0, 0),  // 开 POLAR（ω=0：只为进角度域）
+                slot(0, OP_BOUNCE_ARM, 0b0010, 1),
+            ],
+        );
+        w.body.bullets.x[i] = Fx::from_int(189);
+        w.body.bullets.y[i] = Fx::from_int(100);
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert_eq!(
+            w.body.bullets.angle[i],
+            Angle::HALF.sub(Angle(8192)),
+            "垂直墙：HALF−θ"
+        );
+        let (rvx, rvy) = polar_to_vec(Fx::from_int(6), Angle::HALF.sub(Angle(8192)));
+        assert_eq!((w.body.bullets.vx[i], w.body.bullets.vy[i]), (rvx, rvy));
+    }
+
+    /// 未武装的墙不反弹：只武装右墙的弹撞上墙照常越界、被 OOB 回收。
+    #[test]
+    fn unarmed_wall_does_not_bounce() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(&mut w, &[slot(0, OP_BOUNCE_ARM, 0b0010, 3)]); // 只右墙
+        w.body.bullets.x[i] = Fx::from_int(-190);
+        w.body.bullets.y[i] = Fx::from_int(100);
+        w.body.bullets.vx[i] = Fx::from_int(-8); // 左飞
+        for f in 0..12u32 {
+            crate::step::step(&mut w, &InputFrame::empty(f)); // −190−8k，越 OOB(−256) 即回收
+        }
+        assert!(!w.body.bullets.is_alive(i), "未武装左墙：照常越界回收");
+    }
+
+    /// 计数耗尽墙失效：n=1 弹第一次反弹后第二次撞墙直接穿出。
+    #[test]
+    fn bounce_count_exhausts() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(&mut w, &[slot(0, OP_BOUNCE_ARM, 0b0011, 1)]); // 左右墙 n=1
+        w.body.bullets.x[i] = Fx::from_int(190);
+        w.body.bullets.y[i] = Fx::from_int(100);
+        w.body.bullets.vx[i] = Fx::from_int(60); // 大步伐来回撞
+        let mut bounced_once = false;
+        for f in 0..20u32 {
+            crate::step::step(&mut w, &InputFrame::empty(f));
+            if w.body.bullets.is_alive(i) && w.body.bullets.vx[i].raw() < 0 {
+                bounced_once = true;
+            }
+        }
+        assert!(bounced_once, "第一次必须反弹");
+        assert!(!w.body.bullets.is_alive(i), "耗尽后必须穿出被回收");
     }
 }
