@@ -470,5 +470,11 @@ mod tests {
         let mut snap = World::new(3);
         w.copy_into(&mut snap);
         assert_eq!(snap.checksum(), ck, "signals 随快照且入校验和");
+        snap.body.signals[5] ^= 1;
+        assert_ne!(
+            snap.checksum(),
+            ck,
+            "signals 必须真的参与校验和（防未来误加 skip）"
+        );
     }
 }

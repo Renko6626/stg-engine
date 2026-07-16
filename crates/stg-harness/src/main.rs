@@ -50,9 +50,10 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// 相位 5 integrate **同帧**减到 0；相位 9 cleanup **当帧**回收（不是"下一帧"）→还段路径入对拍。
 ///
 /// 11b 加戏（三压力源，续 D4 编号）：每 40 帧偏移 25（`frame % 40 == 25`）停驻一发双重
-/// WAIT_SIGNAL 弹（两级 TURN 各挂一道信号门，形成"双重驻停链"）；每 120 帧偏移 60
-/// （`frame % 120 == 60`）在信号通道 0 上 `pulse_signal`——期间累积的全部停驻弹同帧
-/// 边沿放行、集体转向（黑板齐转语义压 signals 数组 + 边沿命中路径）。每 90 帧偏移 45
+/// WAIT_SIGNAL 弹（两级 TURN 各挂一道信号门，形成"双重驻停链"，第一道门后 `wait: 1` 隔开
+/// 同帧边沿的连锁放行）；每 120 帧偏移 60（`frame % 120 == 60`）在信号通道 0 上
+/// `pulse_signal`——两段停驻、两次脉冲各放行一段，真双停驻、轨迹可见变化（黑板齐转语义
+/// 压 signals 数组 + 边沿命中路径）。每 90 帧偏移 45
 /// （`frame % 90 == 45`）发一发 BOUNCE_ARM 三墙武装弹（左右上，`n=3`），POLAR 速度域入
 /// 墙反弹镜像对拍。每 65 帧偏移 20（`frame % 65 == 20`）发一发 STEP_SPEED 缓动弹——
 /// Smoothstep（easing id 7）40 帧从 0.5 缓到 3.0，压连续插值 scratch 与游标并发路径。
@@ -286,9 +287,9 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                 ];
                 b.create_bullet_with_xform(bullet_at(0, 150), &fuse);
             }
-            // ⑨ 11b 压力源一：信号齐转——停驻弹群每 120 帧一声令下集体转向
+            // ⑨ 11b 压力源一：真双停驻——两段信号门各自停驻，被两次不同脉冲分别放行
             if frame % 40 == 25 {
-                let h = b.create_bullet_with_xform(
+                b.create_bullet_with_xform(
                     bullet_at(-120, 90),
                     &[
                         XformSlot {
@@ -304,7 +305,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                             args: [0, 0],
                         },
                         XformSlot {
-                            wait: 0,
+                            wait: 1,
                             op: OP_TURN,
                             _pad: 0,
                             args: [32_768, 0],
@@ -323,14 +324,13 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                         },
                     ],
                 );
-                let _ = h;
             }
             if frame % 120 == 60 {
                 b.pulse_signal(0);
             }
             // ⑩ 11b 压力源二：三墙反弹弹（左右上，n=3）——POLAR 域镜像入对拍
             if frame % 90 == 45 {
-                let h = b.create_bullet_with_xform(
+                b.create_bullet_with_xform(
                     bullet_at(0, 120),
                     &[
                         XformSlot {
@@ -359,11 +359,10 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                         },
                     ],
                 );
-                let _ = h;
             }
             // ⑪ 11b 压力源三：STEP 缓动弹——Smoothstep 40 帧从 0.5 缓到 3.0
             if frame % 65 == 20 {
-                let h = b.create_bullet_with_xform(
+                b.create_bullet_with_xform(
                     bullet_at(60, 70),
                     &[
                         XformSlot {
@@ -392,7 +391,6 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                         }, // 扩展槽占位
                     ],
                 );
-                let _ = h;
             }
         });
         lines.push_str(&format!("{frame} {:016x}\n", world.checksum()));

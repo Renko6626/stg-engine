@@ -185,7 +185,8 @@ impl WorldBody {
 
     /// 创建一颗带变换序列的弹（D4）。序列**拷贝**进弹自有段（尾部清零 = 天然 END）。
     /// P4：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]`（与 `create_bullet` 对称）；坏参
-    /// （>16 槽 / 含未知 op）→ 整体失败 NULL + BAD_ARGS（宁缺勿哑）；
+    /// （>16 槽 / 含未知 op / STEP 无扩展槽空间 / easing id ≥ 8 / LOOP target 非边界）
+    /// → 整体失败 NULL + BAD_ARGS（宁缺勿哑）；
     /// 先段后弹——段满 → NULL + POOL_FULL(XFORM)；弹池满 → 还段回滚 + POOL_FULL(BULLET)。
     /// `init.transform_head` 恒被本函数覆写（调用方传值无效）。
     pub fn create_bullet_with_xform(
