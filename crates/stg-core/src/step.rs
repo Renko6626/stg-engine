@@ -320,6 +320,115 @@ mod tests {
         assert_eq!(w.body.bullets.transform_head[i], crate::xform::XFORM_NONE);
     }
 
+    /// 网格几何 + 迭代序判别：3 角 × 2 速——槽 idx = i×2+k，每颗 vx/vy 与
+    /// polar_to_vec(speed0+k·Δs, angle0+i·Δa) 参考逐位相等（角度外层速度内层的序被槽号钉死）。
+    #[test]
+    fn batch_grid_geometry_and_slot_order() {
+        use crate::math::geom::polar_to_vec;
+        let mut w = World::new(1);
+        let n = w.body.create_bullets_batch(
+            straight(0, 100, 0, 0, 0xFFFF),
+            &[],
+            3,
+            Angle(4096),
+            8192,
+            2,
+            Fx::from_int(1),
+            Fx::from_raw(32768), // 1.0 步进 0.5
+        );
+        assert_eq!(n, 6);
+        for i in 0..3u16 {
+            for k in 0..2u16 {
+                let slot = (i * 2 + k) as usize;
+                let ang = Angle(4096).add_delta((8192 * i as i32) as i16);
+                let spd = Fx::from_raw(65536 + 32768 * k as i32);
+                let (rvx, rvy) = polar_to_vec(spd, ang);
+                assert_eq!(w.body.bullets.vx[slot], rvx, "槽 {slot} vx（角外速内序）");
+                assert_eq!(w.body.bullets.vy[slot], rvy, "槽 {slot} vy");
+                assert_eq!(w.body.bullets.speed[slot], spd);
+                assert_eq!(w.body.bullets.angle[slot], ang);
+            }
+        }
+    }
+
+    /// 环回绕：8-way 整环从 61440 起步——第 2 颗角度过 65536 自动回绕闭合。
+    #[test]
+    fn batch_ring_wraps_full_circle() {
+        let mut w = World::new(1);
+        let n = w.body.create_bullets_batch(
+            straight(0, 100, 0, 0, 0xFFFF),
+            &[],
+            8,
+            Angle(61440),
+            8192,
+            1,
+            Fx::from_int(2),
+            Fx::ZERO,
+        );
+        assert_eq!(n, 8);
+        assert_eq!(
+            w.body.bullets.angle[1],
+            Angle(4096),
+            "61440+8192 回绕 = 4096"
+        );
+        assert_eq!(w.body.bullets.angle[7], Angle(53248));
+    }
+
+    /// 超量与零轴整体拒：实发 0 + BAD_ARGS + 零副作用。
+    #[test]
+    fn batch_rejects_oversize_and_zero_axis() {
+        let mut w = World::new(1);
+        let cv0 = w.body.diag.contract_viol;
+        assert_eq!(
+            w.body.create_bullets_batch(
+                straight(0, 0, 0, 0, 1),
+                &[],
+                100,
+                Angle::ZERO,
+                0,
+                100,
+                Fx::ONE,
+                Fx::ZERO
+            ),
+            0,
+            "100×100 > 8192 拒"
+        );
+        assert_eq!(
+            w.body.create_bullets_batch(
+                straight(0, 0, 0, 0, 1),
+                &[],
+                0,
+                Angle::ZERO,
+                0,
+                5,
+                Fx::ONE,
+                Fx::ZERO
+            ),
+            0,
+            "零轴拒"
+        );
+        assert_eq!(w.body.diag.contract_viol, cv0 + 2);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.body.bullets.iter_alive().count(), 0, "零副作用");
+    }
+
+    /// 模板 radius 钳制恰计一次（不逐颗累加）。
+    #[test]
+    fn batch_clamps_template_radius_once() {
+        let mut w = World::new(1);
+        let mut init = straight(0, 100, 0, 0, 0xFFFF);
+        init.radius = Fx::from_int(5000); // 越 MAX_ENTITY_RADIUS
+        let cv0 = w.body.diag.contract_viol;
+        let n = w
+            .body
+            .create_bullets_batch(init, &[], 4, Angle::ZERO, 1000, 1, Fx::ONE, Fx::ZERO);
+        assert_eq!(n, 4);
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "钳制恰计一次");
+        for s in 0..4 {
+            assert_eq!(w.body.bullets.radius[s], crate::world::MAX_ENTITY_RADIUS);
+        }
+    }
+
     #[test]
     fn new_is_deterministic_and_seed_matters() {
         assert_eq!(World::new(42).checksum(), World::new(42).checksum());

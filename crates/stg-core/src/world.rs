@@ -23,7 +23,7 @@ use crate::bullets::{BulletHandle, BulletInit, BulletPool};
 use crate::enemy::{EnemyHandle, EnemyInit, EnemyPool};
 use crate::events::{EVENTS_CAP, Event, HITS_CAP, Hit};
 use crate::field::{FieldHandle, FieldInit, FieldPool};
-use crate::math::Fx;
+use crate::math::{Angle, Fx};
 use crate::player::PlayerState;
 use crate::rng::Pcg32;
 use crate::shots::{ShotHandle, ShotInit, ShotPool};
@@ -282,6 +282,94 @@ impl WorldBody {
                 BulletHandle::NULL
             }
         }
+    }
+
+    /// N×K 网格批量发射器（性能语义原语；ECL syscall `create_bullets_batch` 直通）。
+    /// 环 = n_speed=1；列 = n_angle=1；多重环 = 双轴。迭代序 = 角度外层、速度内层 = 池槽
+    /// 分配序（I4 契约）。两轴累加器：角度 BAM 回绕、速度 Fx 裸加（溢出 P4-c 域）。
+    /// P4：轴零/超池 cap/坏 xform → BAD_ARGS 整体拒（实发 0 零副作用）；额度内池/段满 →
+    /// 尽力而为 + 满额短路（剩余批量计数，与逐颗试严格等价）。模板 radius 钳一次。
+    /// **段消耗账**：xform 非空时每颗自有段拷贝——一次吃 n_angle×n_speed 个段（段池 2048）。
+    /// 无 RNG（路线甲：生成器纯确定）。返回实发数。
+    #[allow(clippy::too_many_arguments)] // 批量原语的天然参数面；ECL 绑定层按位打包
+    pub fn create_bullets_batch(
+        &mut self,
+        mut init: BulletInit,
+        xform: &[crate::xform::XformSlot],
+        n_angle: u16,
+        angle0: Angle,
+        angle_step: i16,
+        n_speed: u16,
+        speed0: Fx,
+        speed_step: Fx,
+    ) -> u16 {
+        let total = n_angle as u32 * n_speed as u32;
+        if n_angle == 0 || n_speed == 0 || total > BulletPool::CAP as u32 {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return 0;
+        }
+        if !xform.is_empty() && !Self::xform_args_valid(xform) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return 0;
+        }
+        if Self::clamp_radius(&mut init.radius) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
+        let mut created: u16 = 0;
+        let mut cur_angle = angle0;
+        'grid: for _ in 0..n_angle {
+            let mut cur_speed = speed0;
+            for _ in 0..n_speed {
+                let (vx, vy) = crate::math::geom::polar_to_vec(cur_speed, cur_angle);
+                init.speed = cur_speed;
+                init.angle = cur_angle;
+                init.vx = vx;
+                init.vy = vy;
+                // 逐颗：哑/xform 两路（per-bullet P4-a 语义与单发 API 一致；先段后弹）
+                let fail_pool: usize = if xform.is_empty() {
+                    init.transform_head = crate::xform::XFORM_NONE;
+                    if self.bullets.alloc(init).is_some() {
+                        usize::MAX
+                    } else {
+                        POOL_BULLET
+                    }
+                } else {
+                    match self.xforms.alloc() {
+                        None => POOL_XFORM,
+                        Some(seg) => {
+                            let dst = self.xforms.seg_slots_mut(seg);
+                            dst[..xform.len()].copy_from_slice(xform);
+                            dst[xform.len()..].fill(Default::default());
+                            init.transform_head = seg;
+                            init.xform_wait = 0;
+                            init.xform_next = 0;
+                            if self.bullets.alloc(init).is_some() {
+                                usize::MAX
+                            } else {
+                                self.xforms.free(seg); // 先段后弹回滚（无泄漏）
+                                POOL_BULLET
+                            }
+                        }
+                    }
+                };
+                if fail_pool == usize::MAX {
+                    created += 1;
+                } else {
+                    // 满额短路：同相位无回收，后续必然同败——剩余（含本颗）批量计数，
+                    // 确定性严格等价于逐颗试（xform 批弹池满路径逐颗也是还段后计 BULLET）。
+                    let remaining = total - created as u32;
+                    self.diag.pool_full[fail_pool] =
+                        self.diag.pool_full[fail_pool].wrapping_add(remaining);
+                    self.last_status = STATUS_POOL_FULL;
+                    break 'grid;
+                }
+                cur_speed = cur_speed + speed_step;
+            }
+            cur_angle = cur_angle.add_delta(angle_step);
+        }
+        created
     }
 
     /// 创建一发自机弹（P4-a：池满 → NULL + 诊断计数 + last_status；P4-b：radius 双边钳入
