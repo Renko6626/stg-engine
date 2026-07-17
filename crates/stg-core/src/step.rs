@@ -429,6 +429,106 @@ mod tests {
         }
     }
 
+    /// 池满尽力而为：预占到只剩 3，请求 2×3=6 → 实发 3 + pool_full[BULLET] += 3。
+    #[test]
+    fn batch_partial_on_pool_full() {
+        let mut w = World::new(1);
+        for _ in 0..(BulletPool::CAP - 3) {
+            w.body.create_bullet(straight(0, 0, 0, 0, 0xFFFF));
+        }
+        let pf0 = w.body.diag.pool_full[POOL_BULLET];
+        let n = w.body.create_bullets_batch(
+            straight(0, 100, 0, 0, 0xFFFF),
+            &[],
+            2,
+            Angle::ZERO,
+            1000,
+            3,
+            Fx::from_int(1),
+            Fx::from_raw(16384),
+        );
+        assert_eq!(n, 3, "尽力而为发满剩余额度");
+        assert_eq!(
+            w.body.diag.pool_full[POOL_BULLET],
+            pf0 + 3,
+            "剩余 3 颗批量计数"
+        );
+        assert_eq!(w.body.last_status, crate::world::STATUS_POOL_FULL);
+    }
+
+    /// xform 批：每颗自有段（transform_head 互异、段内容 = 序列拷贝+尾零）。
+    #[test]
+    fn batch_with_xform_gives_each_own_segment() {
+        let mut w = World::new(1);
+        let seq = [slot(5, crate::xform::OP_SET_SPEED, 131072, 0)];
+        let n = w.body.create_bullets_batch(
+            straight(0, 100, 0, 0, 0xFFFF),
+            &seq,
+            2,
+            Angle::ZERO,
+            16384,
+            2,
+            Fx::from_int(1),
+            Fx::from_raw(32768),
+        );
+        assert_eq!(n, 4);
+        let heads: Vec<u16> = (0..4).map(|s| w.body.bullets.transform_head[s]).collect();
+        assert_eq!(heads, vec![0, 1, 2, 3], "每颗自有段、分配序 = 槽序");
+        for &seg in &heads {
+            assert_eq!(w.body.xforms.seg_slots(seg)[0], seq[0], "段内容 = 拷贝");
+            assert_eq!(w.body.xforms.seg_slots(seg)[1], Default::default(), "尾零");
+        }
+    }
+
+    /// xform 坏序列：开跑前整体拒（实发 0、无弹无段泄漏）。
+    #[test]
+    fn batch_bad_xform_rejected_upfront() {
+        let mut w = World::new(1);
+        let bad = [slot(0, 99, 0, 0)];
+        assert_eq!(
+            w.body.create_bullets_batch(
+                straight(0, 0, 0, 0, 1),
+                &bad,
+                4,
+                Angle::ZERO,
+                0,
+                1,
+                Fx::from_int(1),
+                Fx::ZERO
+            ),
+            0
+        );
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.body.bullets.iter_alive().count(), 0);
+        assert_eq!(w.body.xforms.alloc().unwrap(), 0, "无段泄漏");
+    }
+
+    /// 段满短路（xform 批）：段池只剩 2，请求 2×2 → 实发 2 + pool_full[XFORM] += 2。
+    #[test]
+    fn batch_partial_on_segpool_full() {
+        let mut w = World::new(1);
+        for _ in 0..(crate::xform::SEG_CAP - 2) {
+            w.body.xforms.alloc().unwrap();
+        }
+        let seq = [slot(0, crate::xform::OP_SET_SPRITE, 1, 0)];
+        let n = w.body.create_bullets_batch(
+            straight(0, 100, 0, 0, 0xFFFF),
+            &seq,
+            2,
+            Angle::ZERO,
+            1000,
+            2,
+            Fx::from_int(1),
+            Fx::ZERO,
+        );
+        assert_eq!(n, 2);
+        assert_eq!(
+            w.body.diag.pool_full[crate::world::POOL_XFORM],
+            2,
+            "剩余 2 颗计入段池计数"
+        );
+    }
+
     #[test]
     fn new_is_deterministic_and_seed_matters() {
         assert_eq!(World::new(42).checksum(), World::new(42).checksum());
