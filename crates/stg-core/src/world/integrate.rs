@@ -3,8 +3,9 @@
 //! 冻结趟序（`stg-world-design.md:168`）：弹 → 自机弹 → 敌人 → 道具 → 作用区。
 //!
 //! 弹：delay 门 → 模式效果（POLAR/CART 互斥）→ `pos += vel` → life 倒数。
-//! 自机弹/敌人：`pos += vel`（敌人另 tick `invuln`/`hit_flash`；
-//! 敌人的 `move_to` 插值器待后续切片，`mv_*` 字段现为惰性）。
+//! 自机弹：`pos += vel`。
+//! 敌人：move_to 插值器优先（D5）——`mv_active` 时绝对插值代替 `pos += vel`，到点即停清速；
+//! 否则照常 `pos += vel`（另 tick `invuln`/`hit_flash`，两个计时器分支外照常）。
 //! 道具：触发判定（PoC / 近距磁吸）先于移动 —— 磁吸=直追终速、未锁定/解锁=重力到终速钉住。
 //! 作用区：`life` 倒数 —— `life=1` 本帧减到 0、相位 6 仍参与判定、相位 9 才回收（"每帧重铺=跟随"的时序基础）。
 
@@ -62,15 +63,46 @@ impl WorldBody {
                 self.shots.y[i] = self.shots.y[i] + self.shots.vy[i];
             }
         }
-        // 敌人：pos += vel（move_to 插值器延后，mv_* 惰性）+ 计时器 tick
+        // 敌人：move_to 插值器优先（D5），否则 pos += vel；计时器 tick 分支外照常
         let nw = self.enemies.alive.len();
         for w in 0..nw {
             let mut bits = self.enemies.alive[w];
             while bits != 0 {
                 let i = w * 64 + bits.trailing_zeros() as usize;
                 bits &= bits - 1;
-                self.enemies.x[i] = self.enemies.x[i] + self.enemies.vx[i];
-                self.enemies.y[i] = self.enemies.y[i] + self.enemies.vy[i];
+                if self.enemies.mv_active[i] != 0 {
+                    // D5 插值器优先：绝对插值（每帧从 from 重算，不累积误差；e≤1.0 白名单乘法）
+                    self.enemies.mv_t[i] += 1;
+                    if self.enemies.mv_t[i] >= self.enemies.mv_dur[i] {
+                        // 到点即停（精确终点，不吃舍入；清速防残留漂移）
+                        self.enemies.x[i] = self.enemies.mv_to_x[i];
+                        self.enemies.y[i] = self.enemies.mv_to_y[i];
+                        self.enemies.vx[i] = Fx::ZERO;
+                        self.enemies.vy[i] = Fx::ZERO;
+                        self.enemies.mv_active[i] = 0;
+                    } else {
+                        let t = Fx::from_raw(
+                            (((self.enemies.mv_t[i] as i64) << 16) / self.enemies.mv_dur[i] as i64)
+                                as i32,
+                        );
+                        let e = crate::math::easing::ease(
+                            crate::math::easing::from_id(self.enemies.mv_easing[i]),
+                            t,
+                        );
+                        let fx = self.enemies.mv_from_x[i].raw() as i64;
+                        let fy = self.enemies.mv_from_y[i].raw() as i64;
+                        let dx = self.enemies.mv_to_x[i].raw() as i64 - fx;
+                        let dy = self.enemies.mv_to_y[i].raw() as i64 - fy;
+                        // dx/dy 可为负；`>>16` 对 i64 是算术右移——确定性（同 STEP 先例）
+                        self.enemies.x[i] =
+                            Fx::from_raw((fx + ((dx * e.raw() as i64) >> 16)) as i32);
+                        self.enemies.y[i] =
+                            Fx::from_raw((fy + ((dy * e.raw() as i64) >> 16)) as i32);
+                    }
+                } else {
+                    self.enemies.x[i] = self.enemies.x[i] + self.enemies.vx[i];
+                    self.enemies.y[i] = self.enemies.y[i] + self.enemies.vy[i];
+                }
                 if self.enemies.invuln[i] > 0 {
                     self.enemies.invuln[i] -= 1;
                 }
@@ -225,7 +257,7 @@ mod tests {
     use crate::math::Angle;
     use crate::math::Fx;
     use crate::math::geom::polar_to_vec;
-    use crate::world::test_support::bullet_at;
+    use crate::world::test_support::{bullet_at, spawn_enemy};
     use crate::xform::*;
 
     // 与 transform.rs 测试同款助手
@@ -617,5 +649,98 @@ mod tests {
         let cv0 = w.body.diag.contract_viol;
         w.body.attract_all_items(7); // 坏索引
         assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+    }
+
+    /// 线性中点判别：dur=4 从 (0,100) 到 (80,180)——每帧走 1/4 路程，逐位相等。
+    #[test]
+    fn move_to_linear_waypoints_exact() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        w.body
+            .move_enemy_to(h, Fx::from_int(80), Fx::from_int(180), 4, 0);
+        let i = w.body.enemies.get(h).unwrap();
+        for k in 1..=4i32 {
+            crate::step::step(&mut w, &InputFrame::empty(k as u32));
+            assert_eq!(
+                w.body.enemies.x[i].raw(),
+                (80 * 65536 * k) / 4,
+                "第 {k} 帧 x"
+            );
+            assert_eq!(
+                w.body.enemies.y[i].raw(),
+                100 * 65536 + (80 * 65536 * k) / 4,
+                "第 {k} 帧 y"
+            );
+        }
+    }
+
+    /// 到点即停：完成帧精确终点 + vx/vy 清零 + mv_active 清；此前残留速度不得泄漏。
+    #[test]
+    fn move_to_arrival_stops_dead() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        let i = w.body.enemies.get(h).unwrap();
+        w.body.enemies.vx[i] = Fx::from_int(7); // 残留速度——插值期必须被无视、到点必须被清
+        w.body
+            .move_enemy_to(h, Fx::from_int(50), Fx::from_int(150), 3, 2); // QuadOut
+        for f in 0..3u32 {
+            crate::step::step(&mut w, &InputFrame::empty(f));
+        }
+        assert_eq!(w.body.enemies.x[i], Fx::from_int(50), "精确到点");
+        assert_eq!(w.body.enemies.y[i], Fx::from_int(150));
+        assert_eq!(w.body.enemies.vx[i], Fx::ZERO, "到点清速");
+        assert_eq!(w.body.enemies.mv_active[i], 0);
+        crate::step::step(&mut w, &InputFrame::empty(3));
+        assert_eq!(w.body.enemies.x[i], Fx::from_int(50), "到点后不得漂移");
+    }
+
+    /// dur=0 瞬移（合法退化不计数）。
+    #[test]
+    fn move_to_zero_dur_teleports() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        let cv0 = w.body.diag.contract_viol;
+        w.body
+            .move_enemy_to(h, Fx::from_int(-30), Fx::from_int(40), 0, 0);
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.x[i], Fx::from_int(-30));
+        assert_eq!(w.body.enemies.mv_active[i], 0, "瞬移不置插值态");
+        assert_eq!(w.body.diag.contract_viol, cv0);
+    }
+
+    /// 进行中重下 = 覆盖重启（from 取当前位置）。
+    #[test]
+    fn move_to_reissue_restarts_from_current() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        w.body
+            .move_enemy_to(h, Fx::from_int(100), Fx::from_int(100), 10, 0);
+        crate::step::step(&mut w, &InputFrame::empty(0)); // 走 1/10 → x=10
+        let i = w.body.enemies.get(h).unwrap();
+        let mid_x = w.body.enemies.x[i];
+        w.body.move_enemy_to(h, Fx::ZERO, Fx::from_int(100), 2, 0); // 掉头回 x=0
+        assert_eq!(w.body.enemies.mv_from_x[i], mid_x, "重启 from = 当前位置");
+        for f in 1..=2u32 {
+            crate::step::step(&mut w, &InputFrame::empty(f));
+        }
+        assert_eq!(w.body.enemies.x[i], Fx::ZERO, "2 帧回到 0");
+    }
+
+    /// P4：悬垂句柄计数；easing≥8 拒绝 no-op。
+    #[test]
+    fn move_to_bad_args_contract() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        w.body.enemies.free(h);
+        let cv0 = w.body.diag.contract_viol;
+        w.body.move_enemy_to(h, Fx::ZERO, Fx::ZERO, 10, 0);
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_STALE_HANDLE);
+        let h2 = spawn_enemy(&mut w, 0, 100, 5);
+        let i2 = w.body.enemies.get(h2).unwrap();
+        w.body.move_enemy_to(h2, Fx::ZERO, Fx::ZERO, 10, 8); // easing 越界
+        assert_eq!(w.body.diag.contract_viol, cv0 + 2);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.body.enemies.mv_active[i2], 0, "拒绝即 no-op");
     }
 }

@@ -311,6 +311,37 @@ impl WorldBody {
         }
     }
 
+    /// 敌人限时缓动位移（D5；杂鱼"飘入-停-飘出"的世界侧状态机，将来 ECL syscall 直通）。
+    /// 语义：绝对插值、到点即停（精确终点 + 清 vx/vy）；进行中重下 = 覆盖重启；
+    /// dur=0 = 瞬移（合法退化）。P4-b：悬垂/easing 越界 → no-op + 计数。目标点不钳制场界。
+    pub fn move_enemy_to(&mut self, h: EnemyHandle, x: Fx, y: Fx, dur: u16, easing: u8) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        if easing >= 8 {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return;
+        }
+        if dur == 0 {
+            self.enemies.x[i] = x;
+            self.enemies.y[i] = y;
+            self.enemies.vx[i] = Fx::ZERO;
+            self.enemies.vy[i] = Fx::ZERO;
+            return;
+        }
+        self.enemies.mv_from_x[i] = self.enemies.x[i];
+        self.enemies.mv_from_y[i] = self.enemies.y[i];
+        self.enemies.mv_to_x[i] = x;
+        self.enemies.mv_to_y[i] = y;
+        self.enemies.mv_t[i] = 0;
+        self.enemies.mv_dur[i] = dur;
+        self.enemies.mv_easing[i] = easing;
+        self.enemies.mv_active[i] = 1;
+    }
+
     /// 创建一个作用区（P4-a：池满 → NULL + 计数；P4-b：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]` + 计数）。
     pub fn create_field(&mut self, mut init: FieldInit) -> FieldHandle {
         // P4-b：调用方违约 → 确定性安全结果。与 create_bullet/create_enemy/create_player_shot
