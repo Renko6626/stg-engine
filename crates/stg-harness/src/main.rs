@@ -64,6 +64,17 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// 拾取入账全部进对拍流。块 ⑫ 每 200 帧偏移 90（`frame % 200 == 90`）额外调一次全场磁吸
 /// （导演/bomb 入口），排在相位 3 `update_players` 之前——自机彼时若非 ALIVE（决死窗口/
 /// 等待重生），走确定性 P4-b no-op + 计数，与块 ⑥ setter 骚扰 `spiral_h` 悬垂同款哲学。
+///
+/// batch 压力源（续 ⑫ 编号，M0-14 `create_bullets_batch` 三态直通）：⑬ 每 90 帧偏移 35
+/// （`frame % 90 == 35`）铺一发 32-way 哑弹整环（`n_speed=1`，角步 2048=65536/32 整环闭合，
+/// 速 1.2px/帧）——压批量哑弹分配序、径向匀散必越界回收。⑭ 每 110 帧偏移 70
+/// （`frame % 110 == 70`）发一列 5 重速度正下弹（`n_angle=1`、`Angle(16384)` 竖直向下，
+/// 1.0→3.0px/帧步 0.5）——压批量单角度速度轴列、匀速直线必越界回收。⑮ 每 150 帧偏移 130
+/// （`frame % 150 == 130`）发 3 角 × 4 速 12 发扇形网格弹，每发自带两槽 xform
+/// （`SET_ANG_VEL(256)` + 隐式尾零 END）——段消耗账 12 段/次入对拍，压批量 xform 分支的
+/// 逐颗先段后弹路径；出生点刻意贴近下边界（常量角速度令轨迹趋近小半径圆弧，center-ish
+/// 出生半径不足以够到任一边界，靠近边界出生才能让扇面多数越界回收，慢速小半径个别残留
+/// 打转无损确定性）。
 /// 600 帧 @ 60Hz。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::{BulletHandle, BulletInit};
@@ -410,6 +421,57 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
             // spiral_h 悬垂同款哲学：坏时机调用不崩、结果确定、计数入校验和。
             if frame % 200 == 90 {
                 b.attract_all_items(0);
+            }
+            // ⑬ batch 压力源一：32-way 哑弹整环（create_bullets_batch 环路径——n_speed=1，
+            // 角步 2048=65536/32 整环闭合，速 1.2px/帧；32 发径向匀散，池分配序连号）。
+            if frame % 90 == 35 {
+                b.create_bullets_batch(
+                    bullet_at(0, 60),
+                    &[],
+                    32,
+                    Angle::ZERO,
+                    2048,
+                    1,
+                    Fx::from_raw(78_643), // 1.2px/帧
+                    Fx::ZERO,
+                );
+            }
+            // ⑭ batch 压力源二：5 重速度正下列（n_angle=1，Angle(16384) 竖直向下——
+            // 1.0→3.0px/帧步 0.5；压批量单角度速度轴列，匀速直线必越界回收）。
+            if frame % 110 == 70 {
+                b.create_bullets_batch(
+                    bullet_at(-150, 40),
+                    &[],
+                    1,
+                    Angle(16384),
+                    0,
+                    5,
+                    Fx::from_int(1),
+                    Fx::from_raw(32_768), // 步 0.5
+                );
+            }
+            // ⑮ batch 压力源三：3 角 × 4 速扇形网格（12 发/次，每发自带两槽 xform
+            // `SET_ANG_VEL(256)`+隐式尾零 END——段消耗账 12 段/次）。常量角速度令轨迹
+            // 趋近小半径圆弧（周期 65536/256=256 帧，半径∝speed/ang_vel，约 41~102px）——
+            // center-ish 出生点这半径够不到任何边界会永久打转；出生点故意贴近下边界
+            // （y=460）让扇面多数（高速/顺时针有利侧）仍能越界回收，最慢速的个别扇位
+            // 打转不影响确定性（无损、无池压力，仅 12×4=48 发上限）。
+            if frame % 150 == 130 {
+                b.create_bullets_batch(
+                    bullet_at(0, 460),
+                    &[XformSlot {
+                        wait: 0,
+                        op: OP_SET_ANG_VEL,
+                        _pad: 0,
+                        args: [256, 0],
+                    }],
+                    3,
+                    Angle(14_336),
+                    2048,
+                    4,
+                    Fx::from_int(1),
+                    Fx::from_raw(32_768), // 步 0.5
+                );
             }
         });
         lines.push_str(&format!("{frame} {:016x}\n", world.checksum()));
