@@ -190,20 +190,10 @@ impl WorldBody {
         }
     }
 
-    /// 创建一颗带变换序列的弹（D4）。序列**拷贝**进弹自有段（尾部清零 = 天然 END）。
-    /// P4：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]`（与 `create_bullet` 对称）；坏参
-    /// （>16 槽 / 含未知 op / STEP 无扩展槽空间 / easing id ≥ 8 / LOOP target 非边界）
-    /// → 整体失败 NULL + BAD_ARGS（宁缺勿哑）；
-    /// 先段后弹——段满 → NULL + POOL_FULL(XFORM)；弹池满 → 还段回滚 + POOL_FULL(BULLET)。
-    /// `init.transform_head` 恒被本函数覆写（调用方传值无效）。
-    pub fn create_bullet_with_xform(
-        &mut self,
-        mut init: BulletInit,
-        xform: &[crate::xform::XformSlot],
-    ) -> BulletHandle {
-        if Self::clamp_radius(&mut init.radius) {
-            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
-        }
+    /// xform 序列合法性（两遍 arity 走格）：长度 ≤16、逐 op 已实现（扩展槽 scratch 不判）、
+    /// STEP 扩展槽空间、easing id < 8、LOOP target 落边界（zero-tail = 合法 END 边界）。
+    /// 纯谓词——计数/status 处置留调用方（create_bullet_with_xform 与 create_bullets_batch 共用）。
+    fn xform_args_valid(xform: &[crate::xform::XformSlot]) -> bool {
         // 坏参检查（A1-(2)(3)）：按 arity 走格——扩展槽是 scratch，字节不判 op。
         // 第一遍：验 op/扩展槽空间/easing id，收集合法边界位图（zero-tail 全为 END = 合法边界）。
         let mut bad = xform.len() > crate::xform::SLOTS_PER_SEG;
@@ -250,7 +240,24 @@ impl WorldBody {
                 k += 1 + crate::xform::ARITY[s.op as usize] as usize;
             }
         }
-        if bad {
+        !bad
+    }
+
+    /// 创建一颗带变换序列的弹（D4）。序列**拷贝**进弹自有段（尾部清零 = 天然 END）。
+    /// P4：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]`（与 `create_bullet` 对称）；坏参
+    /// （>16 槽 / 含未知 op / STEP 无扩展槽空间 / easing id ≥ 8 / LOOP target 非边界）
+    /// → 整体失败 NULL + BAD_ARGS（宁缺勿哑）；
+    /// 先段后弹——段满 → NULL + POOL_FULL(XFORM)；弹池满 → 还段回滚 + POOL_FULL(BULLET)。
+    /// `init.transform_head` 恒被本函数覆写（调用方传值无效）。
+    pub fn create_bullet_with_xform(
+        &mut self,
+        mut init: BulletInit,
+        xform: &[crate::xform::XformSlot],
+    ) -> BulletHandle {
+        if Self::clamp_radius(&mut init.radius) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
+        if !Self::xform_args_valid(xform) {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             self.last_status = STATUS_BAD_ARGS;
             return BulletHandle::NULL;
