@@ -41,6 +41,7 @@ impl World {
         let d = &mut dst.body;
         d.frame = s.frame;
         d.rng = s.rng;
+        d.globals = s.globals;
         s.bullets.copy_into(&mut d.bullets);
         d.players = s.players; // [PlayerState; N] 是 Copy
         s.shots.copy_into(&mut d.shots);
@@ -787,5 +788,30 @@ mod tests {
             crate::items::ItemHandle::NULL
         );
         assert_eq!(w.body.diag.pool_full[crate::world::POOL_ITEM], 1);
+    }
+
+    /// globals 往返 + 坏槽 P4-b + 入校验和 + 快照往返（copy_into 漏拷即红）。
+    #[test]
+    fn globals_set_get_badslot_checksum_snapshot() {
+        let mut w = World::new(1);
+        let c0 = w.checksum();
+        w.body.set_var(0, 42);
+        w.body.set_var(1023, -7);
+        assert_eq!(w.body.get_var(0), 42);
+        assert_eq!(w.body.get_var(1023), -7);
+        assert_ne!(w.checksum(), c0, "globals 必须入校验和");
+        let cv0 = w.body.diag.contract_viol;
+        w.body.set_var(1024, 1); // 坏槽
+        assert_eq!(w.body.get_var(1024), 0); // 坏槽读 0
+        assert_eq!(w.body.diag.contract_viol, cv0 + 2, "set/get 各计一次");
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.body.globals[1023], -7, "坏槽写不得触碰任何真槽");
+        // 快照往返：copy_into 漏拷 globals 即红
+        let mut snap = World::new(2);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.body.get_var(0), 42);
+        w.body.set_var(0, 99);
+        snap.copy_into(&mut w);
+        assert_eq!(w.body.get_var(0), 42, "restore 必须还原 globals");
     }
 }

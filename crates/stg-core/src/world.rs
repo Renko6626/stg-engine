@@ -72,6 +72,9 @@ pub const MAX_ENTITY_RADIUS: Fx = Fx::from_int(1024);
 /// 信号黑板通道数（D4 11b）。
 pub const SIGNAL_CHANNELS: usize = 8;
 
+/// 全局变量竞技场槽数（D12/A2，M1 ECL 状态地基）。
+pub const GLOBALS_CAP: usize = 1024;
+
 pub(crate) const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
 pub(crate) const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
 pub(crate) const OOB_MARGIN: i32 = 64; // 越界回收边距
@@ -113,6 +116,9 @@ pub struct DiagCounters {
 pub struct WorldBody {
     pub frame: u32,
     pub rng: Pcg32,
+    /// 全局变量竞技场（A2）——纯 i32 槽，语义归脚本，世界自身不读不写；脚本写读走
+    /// `set_var`/`get_var`。零初始化合法。
+    pub globals: [i32; GLOBALS_CAP],
     pub bullets: BulletPool,
     pub players: [PlayerState; crate::MAX_PLAYERS],
     pub shots: ShotPool,
@@ -535,6 +541,29 @@ impl WorldBody {
             return;
         }
         self.signals[ch] = self.frame.wrapping_add(1);
+    }
+
+    /// ECL 全局变量槽写（D12）。slot ≥ 1024 → no-op + 计数（P4-b）。
+    pub fn set_var(&mut self, slot: u16, val: i32) {
+        if let Some(g) = self.globals.get_mut(slot as usize) {
+            *g = val;
+        } else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+        }
+    }
+
+    /// ECL 全局变量槽读（D12）。slot ≥ 1024 → 0 + 计数——取 &mut self 正是为了
+    /// 坏槽计数入校验和（两机必须一样错）。
+    pub fn get_var(&mut self, slot: u16) -> i32 {
+        match self.globals.get(slot as usize) {
+            Some(&v) => v,
+            None => {
+                self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+                self.last_status = STATUS_BAD_ARGS;
+                0
+            }
+        }
     }
 
     /// 最近敌查询（D7 预定的世界查询助手；homing / ECL 瞄敌共用）。
