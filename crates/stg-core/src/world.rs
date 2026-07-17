@@ -121,6 +121,8 @@ pub struct WorldBody {
     pub globals: [i32; GLOBALS_CAP],
     pub bullets: BulletPool,
     pub players: [PlayerState; crate::MAX_PLAYERS],
+    /// boss 公告板（A2）——脚本写（`boss_set`）、UI 读、世界自身不读。零初始化合法。
+    pub boss_ui: [crate::boss::BossUiSlot; crate::boss::MAX_BOSSES],
     pub shots: ShotPool,
     pub enemies: EnemyPool,
     pub fields: FieldPool,
@@ -563,6 +565,18 @@ impl WorldBody {
                 self.last_status = STATUS_BAD_ARGS;
                 0
             }
+        }
+    }
+
+    /// boss 公告板整槽写（D12）。slot ≥ MAX_BOSSES → no-op + 计数（P4-b）。
+    /// 整槽写入与"复用槽写满"纪律同构——脚本层想改单字段自行先读后写。
+    /// 不校验 `ui.enemy` 句柄有效性：世界不读公告板，悬垂由读方按"视同已失效"处置。
+    pub fn boss_set(&mut self, slot: u8, ui: crate::boss::BossUiSlot) {
+        if let Some(b) = self.boss_ui.get_mut(slot as usize) {
+            *b = ui;
+        } else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
         }
     }
 

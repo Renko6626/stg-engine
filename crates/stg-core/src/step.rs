@@ -44,6 +44,7 @@ impl World {
         d.globals = s.globals;
         s.bullets.copy_into(&mut d.bullets);
         d.players = s.players; // [PlayerState; N] 是 Copy
+        d.boss_ui = s.boss_ui;
         s.shots.copy_into(&mut d.shots);
         s.enemies.copy_into(&mut d.enemies);
         s.fields.copy_into(&mut d.fields);
@@ -813,5 +814,36 @@ mod tests {
         w.body.set_var(0, 99);
         snap.copy_into(&mut w);
         assert_eq!(w.body.get_var(0), 42, "restore 必须还原 globals");
+    }
+
+    /// boss_ui 整槽写读 + 坏槽 P4-b + 入校验和 + 快照往返（copy_into 漏拷即红）。
+    #[test]
+    fn boss_set_roundtrip_badslot_checksum_snapshot() {
+        use crate::boss::{BossUiSlot, MAX_BOSSES};
+        let mut w = World::new(1);
+        let c0 = w.checksum();
+        let ui = BossUiSlot {
+            enemy: crate::enemy::EnemyHandle::NULL,
+            hp_ratio: Fx::from_raw(32768),
+            spell_id: 7,
+            timer_frames: 3600,
+            phase_left: 2,
+            active: 1,
+        };
+        w.body.boss_set(0, ui);
+        assert_eq!(w.body.boss_ui[0], ui, "整槽写入可整槽读回");
+        assert_ne!(w.checksum(), c0, "boss_ui 必须入校验和");
+        let cv0 = w.body.diag.contract_viol;
+        w.body.boss_set(MAX_BOSSES as u8, ui); // 坏槽
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.body.boss_ui[1].active, 0, "坏槽写不得溢到别槽");
+        // 快照往返：copy_into 漏拷 boss_ui 即红
+        let mut snap = World::new(2);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.body.boss_ui[0], ui, "快照必须带 boss_ui");
+        w.body.boss_set(0, BossUiSlot::default());
+        snap.copy_into(&mut w);
+        assert_eq!(w.body.boss_ui[0], ui, "restore 必须还原 boss_ui");
     }
 }

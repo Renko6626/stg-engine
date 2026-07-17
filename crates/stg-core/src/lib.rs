@@ -26,6 +26,7 @@ pub use stg_derive::define_pool;
 /// 最大自机数（共场 co-op 超集，§7.5）。
 pub const MAX_PLAYERS: usize = 2;
 
+pub mod boss;
 pub mod bullets;
 pub mod checksum;
 pub mod enemy;
