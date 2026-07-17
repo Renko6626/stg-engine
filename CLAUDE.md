@@ -116,7 +116,7 @@ crates/
     src/math/tables/ 烘焙表原始字节（harness 生成并 commit，core 只 include_bytes!）
     src/checksum.rs  vendored FNV-1a 64（D11）
     src/rng.rs       vendored PCG32（I3）
-    src/{bullets,shots,enemy,field,player}.rs  实体数据模块（前四个是 define_pool! 实例；池即层）
+    src/{bullets,shots,enemy,field,items,player}.rs  实体数据模块（前五个是 define_pool! 实例；池即层）
     src/xform.rs      变换段池（D4；手写特例，段即分配单位）
     src/{input,events}.rs                      输入抽象 / hits+events 缓冲类型
     src/world.rs     WorldBody 字段所有权 + 写 API + push_* + PhaseGuard + 场界常量
