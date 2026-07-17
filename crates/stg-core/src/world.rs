@@ -42,6 +42,7 @@ pub const POOL_SHOT: usize = 1;
 pub const POOL_ENEMY: usize = 2;
 pub const POOL_FIELD: usize = 3;
 pub const POOL_XFORM: usize = 4;
+pub const POOL_ITEM: usize = 5;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
 pub const STATUS_STALE_HANDLE: u16 = 2;
@@ -74,6 +75,7 @@ pub const SIGNAL_CHANNELS: usize = 8;
 pub(crate) const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
 pub(crate) const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
 pub(crate) const OOB_MARGIN: i32 = 64; // 越界回收边距
+pub(crate) const POC_LINE_Y: i32 = 128; // 回收线（PoC）：ALIVE 自机 y 低于此线 → 全场道具磁吸
 
 // ── 相位索引（A4 v2，0-based；PhaseGuard 押运）───────────────────────────
 pub(crate) const NUM_PHASES: u8 = 11;
@@ -113,6 +115,8 @@ pub struct WorldBody {
     pub shots: ShotPool,
     pub enemies: EnemyPool,
     pub fields: FieldPool,
+    /// 道具池（D7）。与四实体池同级 `pub`——表现层将来要读。
+    pub items: crate::items::ItemPool,
     /// 变换段池（D4）。手写 Checksum 全量入校验和（P6）；I7 inline 数组。
     pub(crate) xforms: crate::xform::XformSegPool,
     /// 信号黑板（D4 11b）：每通道存"最后脉冲帧号 + 1"，0 = 从未脉冲（零初始化合法）。
@@ -318,6 +322,64 @@ impl WorldBody {
                 self.diag.pool_full[POOL_FIELD] = self.diag.pool_full[POOL_FIELD].wrapping_add(1);
                 self.last_status = STATUS_POOL_FULL;
                 FieldHandle::NULL
+            }
+        }
+    }
+
+    /// 掉落一颗道具（内部核；散布消耗世界 RNG——消耗序 = 调用序 = 结算序，A6）。
+    /// P4-a：池满 → NULL + 计数。类型合法性由调用方保证（settle 走表、公开壳已验）。
+    pub(crate) fn spawn_drop(&mut self, x: Fx, y: Fx, item_type: u8) -> crate::items::ItemHandle {
+        let cfg = &crate::items::ITEM_CFG[item_type as usize];
+        let vx = Fx::from_raw(self.rng.rand_range(131_073) as i32 - 65_536); // ±1.0
+        let vy = Fx::ZERO - cfg.eject_speed + Fx::from_raw(self.rng.rand_range(32_769) as i32);
+        match self.items.alloc(crate::items::ItemInit {
+            x,
+            y,
+            vx,
+            vy,
+            item_type,
+            magnet_to: crate::items::MAGNET_NONE,
+            timer: 0,
+        }) {
+            Some(h) => h,
+            None => {
+                self.diag.pool_full[POOL_ITEM] = self.diag.pool_full[POOL_ITEM].wrapping_add(1);
+                self.last_status = STATUS_POOL_FULL;
+                crate::items::ItemHandle::NULL
+            }
+        }
+    }
+
+    /// 掉落一颗道具（公开写 API；将来 ECL syscall `drop_item` 直通）。
+    /// P4-b：坏类型 → NULL + BAD_ARGS（散布 RNG **不**消耗——失败零副作用）。
+    pub fn drop_item(&mut self, x: Fx, y: Fx, item_type: u8) -> crate::items::ItemHandle {
+        if item_type as usize >= crate::items::ITEM_TYPE_COUNT {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return crate::items::ItemHandle::NULL;
+        }
+        self.spawn_drop(x, y, item_type)
+    }
+
+    /// 全场磁吸（bomb / 导演 / 将来 ECL syscall 的通用入口）：全部未锁定道具锁定该自机。
+    /// P4-b：坏索引或目标非 ALIVE → no-op + 计数 + BAD_ARGS。
+    pub fn attract_all_items(&mut self, player: usize) {
+        if player >= crate::MAX_PLAYERS
+            || self.players[player].life_state != crate::player::LIFE_ALIVE
+        {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return;
+        }
+        let nw = self.items.alive.len();
+        for w in 0..nw {
+            let mut bits = self.items.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if self.items.magnet_to[i] == crate::items::MAGNET_NONE {
+                    self.items.magnet_to[i] = player as u8;
+                }
             }
         }
     }

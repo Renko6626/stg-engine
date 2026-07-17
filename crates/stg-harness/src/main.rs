@@ -57,6 +57,12 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// （`frame % 90 == 45`）发一发 BOUNCE_ARM 三墙武装弹（左右上，`n=3`），POLAR 速度域入
 /// 墙反弹镜像对拍。每 65 帧偏移 20（`frame % 65 == 20`）发一发 STEP_SPEED 缓动弹——
 /// Smoothstep（easing id 7）40 帧从 0.5 缓到 3.0，压连续插值 scratch 与游标并发路径。
+///
+/// 道具趟加戏（续 11b 编号）：导演敌人 `drop_table` 由 0 改 1（标准杂鱼表），敌死走 settle
+/// 趟二自动按表掉落——散布 RNG、重力/终速下落物理、近距/PoC/`attract_all_items` 三源磁吸、
+/// 拾取入账全部进对拍流。块 ⑫ 每 200 帧偏移 90（`frame % 200 == 90`）额外调一次全场磁吸
+/// （导演/bomb 入口），排在相位 3 `update_players` 之前——自机彼时若非 ALIVE（决死窗口/
+/// 等待重生），走确定性 P4-b no-op + 计数，与块 ⑥ setter 骚扰 `spiral_h` 悬垂同款哲学。
 /// 600 帧 @ 60Hz。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::{BulletHandle, BulletInit};
@@ -102,7 +108,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
         anm_state: 0,
         main_task: 0,
         death_script: 0,
-        drop_table: 0,
+        drop_table: 1,
         score: 100,
     };
 
@@ -391,6 +397,13 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                         }, // 扩展槽占位
                     ],
                 );
+            }
+            // ⑫ 道具趟压力源：每 200 帧偏移 90 全场磁吸一次（导演/bomb 入口，drop_table=1
+            // 已令敌死掉落进流——散布 RNG、下落物理、拾取入账全部入对拍）。自机彼时非
+            // ALIVE（决死窗口/等待重生）→ 确定性 P4-b no-op + 计数，与 ⑥ setter 骚扰
+            // spiral_h 悬垂同款哲学：坏时机调用不崩、结果确定、计数入校验和。
+            if frame % 200 == 90 {
+                b.attract_all_items(0);
             }
         });
         lines.push_str(&format!("{frame} {:016x}\n", world.checksum()));

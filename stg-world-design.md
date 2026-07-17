@@ -505,6 +505,23 @@ release 回绕成负数 → 平方后仍为正巨数 → 全场无条件判撞�
   → 自机越过回收线(PoC) 或 进入拾取圈 → 磁吸至自机（magnet_to 锁定）→ 拾取结算
 ```
 
+**实现定稿补记**（spec 2026-07-16 / M0-12 实现定稿）：
+
+- **配置表 v0 落点**：`ItemTypeCfg`（`score`/`eject_speed`/`terminal_vy`/`magnet_speed`/
+  `pickup_radius`/`attract_radius` 六字段）以引擎常量 `ITEM_CFG: [ItemTypeCfg; ITEM_TYPE_COUNT]`
+  落在 `crates/stg-core/src/items.rs`（`player.rs` 同款先例）；WorldTables 建成后整表搬家、
+  结构体字段不动。
+- **磁吸圈列**：配置表字段清单补上 `attract_radius`（磁吸触发半径，近距磁吸判定用）——本文前述
+  "道具配置表"字段清单（弹出初速/终端速度/磁吸速度/拾取半径）之外新增一列；与拾取半径（D8 行 5
+  判定用，小得多）是两个不同量，不可混同。
+- **`magnet_to` 双哨兵**：`0xFF` = 未锁定（`MAGNET_NONE`）；`0..MAX_PLAYERS` = 已锁定目标自机
+  索引；`0xFE` = 已拾取待回收（`MAGNET_PICKED`，趟三首见即标，同帧多重碰撞只入账一次，回收留给
+  相位 9 cleanup）。
+- **满 power 转化规则**：`power` 已达 `POWER_MAX` 后再拾取 `ITEM_POWER`，不再累加，改按
+  `ITEM_POINT` 的分值转记 score（钱包满自动找零，杜绝道具消失或字段越界写）。
+- **扩展四步清单**：新增道具类型的标准动作详见模块文档 → `crates/stg-core/src/items.rs`
+  （①类型常量 ②`ITEM_CFG` 加行 ③`credit_item` 加 match 臂 ④按需加掉落表行）。
+
 计价 **v1 = 每类型固定分值**（WorldTables 道具配置表）；高度计价机制待考证后升级，升级点局限在"结算趟三读价值"单个函数内（Part IV）。
 
 **坐标系约定（全局）**：ZUN 式**中轴原点**——x ∈ [−half_w, +half_w]（场地中线 = 0），y ∈ [0, height] 自顶向下；逻辑场地 384×448，**1 Fx 整数位 = 1 逻辑像素**。对称弹幕（东方绝对主流）天然镜像（angle 取负即可）。场地尺寸/越界边距/回收线全在游戏配置段。

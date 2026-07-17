@@ -12,6 +12,7 @@ pub(crate) const ROW_BULLET_PLAYER_HIT: u8 = 1;
 pub(crate) const ROW_BULLET_PLAYER_GRAZE: u8 = 2;
 pub(crate) const ROW_BODY_PLAYER_HIT: u8 = 3;
 pub(crate) const ROW_SHOT_ENEMY: u8 = 4;
+pub(crate) const ROW_ITEM_PLAYER: u8 = 5; // 道具 × 自机拾取圈（graze_radius 兼拾取圈，D7）
 pub(crate) const ROW_FIELD_BULLET: u8 = 6; // 作用区 × 敌弹 → 消弹
 pub(crate) const ROW_FIELD_ENEMY: u8 = 7; // 作用区 × 敌人 hurtbox → 扣血
 
@@ -22,6 +23,8 @@ pub const EVT_PLAYER_DIED: u8 = 2;
 ///
 /// **聚合而非逐弹**：弹池 cap 8192 而 events cap 512，逐弹发在全屏消弹下必爆（溢出 16×）。
 pub const EVT_FIELD_CLEARED: u8 = 3;
+/// 一颗道具被拾取（行 5 结算）：`a_index/a_gen` = 道具句柄位，`data = [item_type, player]`。
+pub const EVT_ITEM_PICKED: u8 = 4;
 
 /// 一条碰撞命中（6 B）：矩阵行 + 主动/被动池索引。收集序天然按收集循环嵌套，无需排序。
 #[repr(C)]

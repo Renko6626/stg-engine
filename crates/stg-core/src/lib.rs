@@ -32,6 +32,7 @@ pub mod enemy;
 pub mod events;
 pub mod field;
 pub mod input;
+pub mod items;
 pub mod math;
 pub mod player;
 pub mod rng;

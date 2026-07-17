@@ -2,12 +2,12 @@
 //!
 //! **只收集不改状态硬规则**：本相位纯读，只经 `push_hit` 追加 `hits`；改状态一律在 settle（相位 7）。
 //! 半径映射见 D8：行1/2 弹×自机(hit/graze)、行3 敌体×自机(体碰 radius)、行4 自机弹×敌人(受击 hurtbox)、
-//! 行6 作用区×敌弹、行7 作用区×敌人(受击 hurtbox)。
+//! 行5 道具×自机(拾取半径+graze_radius)、行6 作用区×敌弹、行7 作用区×敌人(受击 hurtbox)。
 
 use super::WorldBody;
 use crate::events::{
     ROW_BODY_PLAYER_HIT, ROW_BULLET_PLAYER_GRAZE, ROW_BULLET_PLAYER_HIT, ROW_FIELD_BULLET,
-    ROW_FIELD_ENEMY, ROW_SHOT_ENEMY,
+    ROW_FIELD_ENEMY, ROW_ITEM_PLAYER, ROW_SHOT_ENEMY,
 };
 use crate::field::{FIELD_CLEAR_BULLETS, FIELD_DAMAGE};
 use crate::math::geom::len_sq;
@@ -18,6 +18,7 @@ impl WorldBody {
         self.collide_bullets_player(); // 行 1/2：敌弹 × 自机
         self.collide_body_player(); // 行 3：敌体 × 自机
         self.collide_shot_enemy(); // 行 4：自机弹 × 敌人
+        self.collide_item_player(); // 行 5：道具 × 自机拾取圈
         self.collide_field_bullet(); // 行 6：作用区 × 敌弹（消弹）
         self.collide_field_enemy(); // 行 7：作用区 × 敌人（伤敌）
     }
@@ -115,6 +116,32 @@ impl WorldBody {
             }
         }
     }
+    /// 行 5：道具 × 自机拾取圈（graze_radius 兼拾取圈，D7；主动半径查配置表）。
+    fn collide_item_player(&mut self) {
+        for p in 0..crate::MAX_PLAYERS {
+            if self.players[p].life_state != crate::player::LIFE_ALIVE {
+                continue;
+            }
+            let nw = self.items.alive.len();
+            for w in 0..nw {
+                let mut bits = self.items.alive[w];
+                while bits != 0 {
+                    let i = w * 64 + bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    let pr = crate::items::ITEM_CFG[self.items.item_type[i] as usize].pickup_radius;
+                    let r = pr + self.players[p].graze_radius;
+                    let d2 = len_sq(
+                        self.items.x[i] - self.players[p].x,
+                        self.items.y[i] - self.players[p].y,
+                    );
+                    if d2 <= (r.raw() as i64) * (r.raw() as i64) {
+                        self.push_hit(ROW_ITEM_PLAYER, i as u16, p as u16);
+                    }
+                }
+            }
+        }
+    }
+
     /// 行 6：作用区（field.radius）× 敌弹（bullet.radius）→ 消弹。
     /// 能力位在收集前 gate（未开 CLEAR 的 field 整行跳过，省 O(N×M)）。
     fn collide_field_bullet(&mut self) {
