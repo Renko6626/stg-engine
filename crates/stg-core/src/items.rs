@@ -105,6 +105,13 @@ mod tests {
     fn drop_tables_shape() {
         assert!(DROP_TABLES[0].is_empty());
         assert_eq!(DROP_TABLES[1], &[(ITEM_POWER, 2), (ITEM_POINT, 1)]);
+        assert!(
+            DROP_TABLES
+                .iter()
+                .flat_map(|t| t.iter())
+                .all(|&(ty, _)| (ty as usize) < ITEM_TYPE_COUNT),
+            "掉落表条目类型必须合法——扩展四步第④步的脚下网"
+        );
     }
 
     /// 池确定性 + 校验和敏感（与其余池同款纪律）。
