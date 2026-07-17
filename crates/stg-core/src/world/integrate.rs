@@ -498,6 +498,12 @@ mod tests {
     }
 
     /// 近距磁吸：道具进磁吸圈（40px）即锁定并每帧重瞄直追；圈外不锁。
+    ///
+    /// **直调 `integrate()`（相位 5）而非全量 `step()`**：行 5 拾取落地后（Task 5），
+    /// 拾取半径和 32 恰等于 attract_radius(40) − magnet_speed(8)，故任何本帧新锁定的道具，
+    /// 追一步后必然落进拾取圈——用全量 `step()` 会在同一帧里把"锁定"和"拾取"叠在一起，
+    /// 测不出本测试想孤立验证的纯粹磁吸触发/直追几何。直调本相位跳过 collide/settle，
+    /// 与 `collide.rs`/`settle.rs` 里"设 phase_guard 后直调单相位函数"的先例同构。
     #[test]
     fn item_attracts_within_radius_only() {
         let mut w = crate::step::World::new(1);
@@ -516,7 +522,11 @@ mod tests {
                 })
                 .unwrap();
         }
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = crate::world::PH_INTEGRATE;
+        }
+        w.body.integrate();
         assert_eq!(w.body.items.magnet_to[0], 0, "圈内锁定自机 0");
         assert_eq!(
             w.body.items.magnet_to[1],
@@ -525,7 +535,11 @@ mod tests {
         );
         // 锁定后向自机推进（y 增大、速率 = 磁吸速度）
         let y0 = w.body.items.y[0];
-        crate::step::step(&mut w, &InputFrame::empty(1));
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = crate::world::PH_INTEGRATE;
+        }
+        w.body.integrate();
         assert!(w.body.items.y[0].raw() > y0.raw(), "朝自机（下方）追");
     }
 

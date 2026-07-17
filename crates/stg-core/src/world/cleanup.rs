@@ -1,7 +1,8 @@
-//! 相位 9 · 回收（越界 / 寿命尽 / 已清除弹 / dying 敌人 / 寿命尽作用区）。
+//! 相位 9 · 回收（越界 / 寿命尽 / 已清除弹 / dying 敌人 / 寿命尽作用区 / 已拾取道具）。
 //!
 //! **敌人与已清除弹在此收尸**：settle（相位 7）只打标记，槽要活过相位 8（ECL 挂钩）供死亡脚本
-//! 与表现层读取死亡坐标，故回收统一延到本相位。
+//! 与表现层读取死亡坐标，故回收统一延到本相位。道具同款：settle 趟三只标 `MAGNET_PICKED`，
+//! 回收延到本相位（同弹回收骨架，另加越界判据——磁吸失败/未拾取的道具飞出场外也要收）。
 
 use super::WorldBody;
 use crate::enemy::ENEMY_DYING;
@@ -62,6 +63,20 @@ impl WorldBody {
                 bits &= bits - 1;
                 if self.fields.life[i] == 0 {
                     self.fields.free_index(i);
+                }
+            }
+        }
+        // 道具：已拾取（settle 趟三标记 MAGNET_PICKED）或越界 → 回收（同弹回收骨架）
+        let nw = self.items.alive.len();
+        for w in 0..nw {
+            let mut bits = self.items.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                let dead = self.items.magnet_to[i] == crate::items::MAGNET_PICKED
+                    || Self::out_of_bounds(self.items.x[i], self.items.y[i]);
+                if dead {
+                    self.items.free_index(i);
                 }
             }
         }
@@ -152,6 +167,28 @@ mod tests {
 
         assert_eq!(w.body.bullets.get(h), None, "越界弹应被回收");
         assert_eq!(w.body.xforms.alloc().unwrap(), seg, "段应已还，复得原段号");
+    }
+
+    /// 道具回收：MAGNET_PICKED（settle 趟三留下的拾取标记）当帧回收；越界（同弹 OOB 判据）回收。
+    #[test]
+    fn item_recycled_after_pick_and_when_oob() {
+        use crate::items::{ITEM_POWER, MAGNET_PICKED};
+        use crate::world::PH_CLEANUP;
+        let mut w = crate::step::World::new(1);
+        let picked = w.body.drop_item(Fx::ZERO, Fx::from_int(384), ITEM_POWER);
+        let pi = w.body.items.get(picked).unwrap();
+        w.body.items.magnet_to[pi] = MAGNET_PICKED; // 模拟 settle 趟三已标记
+
+        let oob = w.body.drop_item(Fx::from_int(2000), Fx::ZERO, ITEM_POWER); // 远出场外
+
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_CLEANUP;
+        }
+        w.body.cleanup();
+
+        assert_eq!(w.body.items.get(picked), None, "已拾取道具当帧回收");
+        assert_eq!(w.body.items.get(oob), None, "越界道具回收");
     }
 
     #[test]

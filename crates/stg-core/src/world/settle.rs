@@ -3,7 +3,8 @@
 //! 趟一 清除/防护：行6 消弹（**标记不回收**，回收在 cleanup 相位9）+ 按 field 索引升序发聚合
 //!   `FieldCleared`。**先于趟二** —— 故同帧作用区能救下本会命中自机的弹（bomb 救命）。
 //! 趟二 伤害：行4/7 敌人扣血（overkill/无敌帧门禁）；行1/3 自机中弹 → 决死窗口（行1 跳过已清除的弹）。
-//! 趟三 计分：graze（`grazed_by` 逐弹一次；**不查已清除位** —— 擦在相位6 已发生、清弹是相位7 的事）。
+//! 趟三 计分/拾取：graze（`grazed_by` 逐弹一次；**不查已清除位** —— 擦在相位6 已发生、清弹是相位7
+//!   的事）+ 行5 道具拾取（首见即标 `MAGNET_PICKED`，同帧多 hit 只入账一次，账本落 `credit_item`）。
 
 use super::WorldBody;
 use crate::enemy::ENEMY_DYING;
@@ -134,14 +135,75 @@ impl WorldBody {
         const _: () = assert!(crate::MAX_PLAYERS <= 8, "grazed_by 位掩码只容 8 自机");
         for k in 0..self.hits_len as usize {
             let h = self.hits[k];
-            if h.row == crate::events::ROW_BULLET_PLAYER_GRAZE {
-                let b = h.active as usize;
-                let p = h.passive as usize;
-                let bit = 1u8 << p; // MAX_PLAYERS=2 → bit 0/1
-                if self.bullets.grazed_by[b] & bit == 0 {
-                    self.bullets.grazed_by[b] |= bit;
-                    self.players[p].graze = self.players[p].graze.wrapping_add(1);
+            match h.row {
+                crate::events::ROW_BULLET_PLAYER_GRAZE => {
+                    let b = h.active as usize;
+                    let p = h.passive as usize;
+                    let bit = 1u8 << p; // MAX_PLAYERS=2 → bit 0/1
+                    if self.bullets.grazed_by[b] & bit == 0 {
+                        self.bullets.grazed_by[b] |= bit;
+                        self.players[p].graze = self.players[p].graze.wrapping_add(1);
+                    }
                 }
+                crate::events::ROW_ITEM_PLAYER => {
+                    let it = h.active as usize;
+                    if !self.items.is_alive(it)
+                        || self.items.magnet_to[it] == crate::items::MAGNET_PICKED
+                    {
+                        continue; // 首见即标：同帧多 hit 只入账一次
+                    }
+                    self.items.magnet_to[it] = crate::items::MAGNET_PICKED;
+                    let ty = self.items.item_type[it];
+                    self.credit_item(h.passive as usize, ty);
+                    let ev = Event {
+                        kind: crate::events::EVT_ITEM_PICKED,
+                        a_index: it as u16,
+                        a_gen: self.items.generation[it],
+                        x: self.items.x[it],
+                        y: self.items.y[it],
+                        data: [ty as i32, h.passive as i32],
+                    };
+                    self.push_event(ev);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 拾取入账（D9 趟三）——**唯一** per-type 逻辑居所（扩展四步第 ③ 步：新增类型在此加臂）。
+    /// 未知类型：P4-b 计数忽略（两机同弃，无副作用）。
+    fn credit_item(&mut self, p: usize, item_type: u8) {
+        use crate::items::*;
+        match item_type {
+            ITEM_POWER => {
+                let pl = &mut self.players[p];
+                if pl.power < POWER_MAX {
+                    pl.power += 1;
+                } else {
+                    pl.score += ITEM_CFG[ITEM_POINT as usize].score as u64; // 满 power 转化
+                }
+            }
+            ITEM_POINT => {
+                self.players[p].score += ITEM_CFG[ITEM_POINT as usize].score as u64;
+            }
+            ITEM_LIFE_PIECE => {
+                let pl = &mut self.players[p];
+                pl.life_pieces += 1;
+                if pl.life_pieces == PIECES_PER_LIFE {
+                    pl.life_pieces = 0;
+                    pl.lives += 1;
+                }
+            }
+            ITEM_BOMB_PIECE => {
+                let pl = &mut self.players[p];
+                pl.bomb_pieces += 1;
+                if pl.bomb_pieces == PIECES_PER_BOMB {
+                    pl.bomb_pieces = 0;
+                    pl.bombs += 1;
+                }
+            }
+            _ => {
+                self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             }
         }
     }
@@ -430,5 +492,121 @@ mod tests {
         w.body.collide();
         w.body.settle();
         assert_eq!(w.body.enemies.hp[ei], 3); // 5 - 2
+    }
+
+    /// 行 5 判别几何：拾取半径 16 + graze 16 = 32——道具距自机 30 拾、34 不拾（非圆心重合）。
+    #[test]
+    fn item_pickup_discriminates_radius_sum() {
+        use crate::events::EVT_ITEM_PICKED;
+        use crate::items::{ITEM_POWER, MAGNET_NONE, MAGNET_PICKED};
+        let mut w = crate::step::World::new(1);
+        // 自机在 (0,384)：一颗放在距 30（拾取和 32 内）、一颗放在距 34（拾取和外）。
+        let near = w
+            .body
+            .drop_item(Fx::ZERO, Fx::from_int(384 - 30), ITEM_POWER);
+        let far = w
+            .body
+            .drop_item(Fx::ZERO, Fx::from_int(384 + 34), ITEM_POWER);
+        let ni = w.body.items.get(near).unwrap();
+        let fi = w.body.items.get(far).unwrap();
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        w.body.settle();
+        assert_eq!(w.body.events_len, 1);
+        assert_eq!(w.body.events[0].kind, EVT_ITEM_PICKED);
+        assert_eq!(w.body.events[0].data[0], ITEM_POWER as i32);
+        assert_eq!(w.body.items.magnet_to[ni], MAGNET_PICKED, "30px 应拾中");
+        assert_eq!(w.body.items.magnet_to[fi], MAGNET_NONE, "34px 应仍未锁定");
+    }
+
+    /// 四类入账 + 满 power 转化：power=127 吃 POWER → 128；再吃 POWER → power 不动、score += 100。
+    #[test]
+    fn credit_power_caps_then_converts_to_point_score() {
+        use crate::items::{ITEM_CFG, ITEM_POINT, ITEM_POWER, POWER_MAX};
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].power = POWER_MAX - 1;
+        w.body.credit_item(0, ITEM_POWER);
+        assert_eq!(w.body.players[0].power, POWER_MAX);
+        assert_eq!(w.body.players[0].score, 0);
+        w.body.credit_item(0, ITEM_POWER);
+        assert_eq!(w.body.players[0].power, POWER_MAX, "满 power 不再涨");
+        assert_eq!(
+            w.body.players[0].score, ITEM_CFG[ITEM_POINT as usize].score as u64,
+            "满 power 转化为 POINT 分值"
+        );
+    }
+
+    /// 碎片进位跨界：life_pieces=4 再吃 1 → lives+1、pieces==0；bombs 同构。
+    #[test]
+    fn piece_carry_crosses_boundary_exactly() {
+        use crate::items::{ITEM_BOMB_PIECE, ITEM_LIFE_PIECE, PIECES_PER_BOMB, PIECES_PER_LIFE};
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].life_pieces = PIECES_PER_LIFE - 1;
+        let lives_before = w.body.players[0].lives;
+        w.body.credit_item(0, ITEM_LIFE_PIECE);
+        assert_eq!(w.body.players[0].lives, lives_before + 1);
+        assert_eq!(w.body.players[0].life_pieces, 0);
+
+        w.body.players[0].bomb_pieces = PIECES_PER_BOMB - 1;
+        let bombs_before = w.body.players[0].bombs;
+        w.body.credit_item(0, ITEM_BOMB_PIECE);
+        assert_eq!(w.body.players[0].bombs, bombs_before + 1);
+        assert_eq!(w.body.players[0].bomb_pieces, 0);
+    }
+
+    /// 同帧双拾取幂等：趟三首见即标 `MAGNET_PICKED`，二次 hit 遇标即跳过入账（手工双推 hits，
+    /// 复刻 `hits_push_clear_and_overflow` 一类手工构造 hits 的先例）。
+    #[test]
+    fn item_picked_only_once() {
+        use crate::events::{EVT_ITEM_PICKED, ROW_ITEM_PLAYER};
+        use crate::items::{ITEM_CFG, ITEM_POINT, MAGNET_PICKED};
+        let mut w = crate::step::World::new(1);
+        let h = w.body.drop_item(Fx::ZERO, Fx::from_int(384), ITEM_POINT);
+        let i = w.body.items.get(h).unwrap();
+        w.body.push_hit(ROW_ITEM_PLAYER, i as u16, 0);
+        w.body.push_hit(ROW_ITEM_PLAYER, i as u16, 0); // 同帧双 hit：收集层不会真产出，手工构造
+        // 直调 settle（不经 collide）：phase_guard 须直接押到 PH_SETTLE。
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = crate::world::PH_SETTLE;
+        }
+        w.body.settle();
+        assert_eq!(w.body.items.magnet_to[i], MAGNET_PICKED);
+        let picks = (0..w.body.events_len as usize)
+            .filter(|&k| w.body.events[k].kind == EVT_ITEM_PICKED)
+            .count();
+        assert_eq!(picks, 1, "同帧多 hit 只入账一次");
+        assert_eq!(
+            w.body.players[0].score, ITEM_CFG[ITEM_POINT as usize].score as u64,
+            "账本也只入一次"
+        );
+    }
+
+    /// 拾取入账事件字段：a_index/a_gen = 道具句柄位，data = [类型, 玩家号]。
+    #[test]
+    fn item_picked_event_shape() {
+        use crate::events::EVT_ITEM_PICKED;
+        use crate::items::ITEM_BOMB_PIECE;
+        let mut w = crate::step::World::new(1);
+        let h = w
+            .body
+            .drop_item(Fx::ZERO, Fx::from_int(384), ITEM_BOMB_PIECE);
+        let i = w.body.items.get(h).unwrap();
+        let item_gen = w.body.items.generation[i];
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        w.body.settle();
+        assert_eq!(w.body.events_len, 1);
+        let ev = w.body.events[0];
+        assert_eq!(ev.kind, EVT_ITEM_PICKED);
+        assert_eq!(ev.a_index, i as u16);
+        assert_eq!(ev.a_gen, item_gen);
+        assert_eq!(ev.data, [ITEM_BOMB_PIECE as i32, 0]);
     }
 }
