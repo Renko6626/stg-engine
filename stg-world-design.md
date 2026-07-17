@@ -615,6 +615,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | | xform 区间越界 locals | `NULL` | `BAD_ARGS(xform)` | `diag.contract_viol` |
 | | appearance 越表 | `NULL` | `BAD_ARGS(appearance)` | `diag.contract_viol` |
 | `create_bullets_batch` | 中途池满 | 已成部分保留，返回成功数 | `POOL_FULL(BULLET)` | `diag.pool_full[BULLET]` |
+| | 轴零 / N×K 超弹池 cap / 坏 xform | 整体拒（实发 0） | `BAD_ARGS` | `diag.contract_viol` |
 | `create_player_shot` | 池满 | `NULL` | `POOL_FULL(SHOT)` | `diag.pool_full[SHOT]` |
 | `spawn_enemy` | 池满 | `NULL` | `POOL_FULL(ENEMY)` | `diag.pool_full[ENEMY]` |
 | `drop_item` | 池满 | `NULL` | `POOL_FULL(ITEM)` | `diag.pool_full[ITEM]` |
@@ -626,6 +627,11 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | `emit_req` | reqs 满 | 丢弃 | `TRUNCATED` | `diag.reqs_dropped` |
 | （内部）hits 满 | — | 丢弃（**debug panic**） | — | `diag.hits_dropped` |
 | （内部）frame_events 满 | — | 丢弃 | — | `diag.events_dropped` |
+
+注：`create_bullets_batch` 世界侧已落地（M0-14，spec 2026-07-17）：N×K 网格（角度外层×速度内层
+= 池槽序）、步长直给（张角/端点推导属作者层语法糖，归 M1 ECL DSL：`ring(n)`/`fan(spread, n)`
+编译期算步长）、超量整体拒 + 额度内尽力而为 + 满额短路批量计数；xform 非空时每颗自有段
+（段消耗 = N×K）。
 
 注：`create_bullet` 的 `task_script` 参数**不属于世界 API**——世界不认识任务。ECL syscall 绑定层自行组合：先调 `world.create_bullet(...)` 拿句柄，再调 `ecl::spawn_task(script, owner = 句柄)`。这是 P1/P2 边界的直接推论。
 

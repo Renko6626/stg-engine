@@ -99,5 +99,9 @@
 ## 消费入口
 
 - **世界侧（现在）**：`WorldBody::create_bullet_with_xform(init, &[XformSlot]) -> BulletHandle`。
+- **批量（M0-14）**：`WorldBody::create_bullets_batch(init, &[XformSlot], n_angle, angle0,
+  angle_step, n_speed, speed0, speed_step) -> u16`——N×K 网格发射器（环/列/多重环）；xform
+  非空时**每颗自有段拷贝，一次吃 N×K 个段**（段池 2048：60-way 三重环带变换 = 180 段），
+  段满按尽力而为降级计 `pool_full[XFORM]`。
 - **ECL 侧（M1）**：丙方案 locals 区间引用——每槽 3 字，`word0 = (wait << 16) | (op << 8)`、
   `word1/2 = args`；16 槽 = 48 字 ≤ Task.locals[64]。
