@@ -439,6 +439,32 @@ impl WorldBody {
         self.signals[ch] = self.frame.wrapping_add(1);
     }
 
+    /// 最近敌查询（D7 预定的世界查询助手；homing / ECL 瞄敌共用）。
+    /// 契约：纯查询零副作用；候选 = 存活且非 dying；平方距离（i64）；并列取低索引（I4）；
+    /// 空集 None 不计数（合法世界状态非违约）；返回带 generation 句柄（P1）。
+    pub fn nearest_enemy(&self, x: Fx, y: Fx) -> Option<EnemyHandle> {
+        let mut best: Option<(usize, i64)> = None;
+        let nw = self.enemies.alive.len();
+        for w in 0..nw {
+            let mut bits = self.enemies.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if self.enemies.flags[i] & crate::enemy::ENEMY_DYING != 0 {
+                    continue;
+                }
+                let d2 = crate::math::geom::len_sq(self.enemies.x[i] - x, self.enemies.y[i] - y);
+                if best.is_none_or(|(_, bd)| d2 < bd) {
+                    best = Some((i, d2));
+                }
+            }
+        }
+        best.map(|(i, _)| EnemyHandle {
+            index: i as u16,
+            generation: self.enemies.generation[i],
+        })
+    }
+
     /// 收集一条碰撞命中（P4-a：满则停收 + 计数，不 panic）。
     pub(crate) fn push_hit(&mut self, row: u8, active: u16, passive: u16) {
         if (self.hits_len as usize) < HITS_CAP {
@@ -758,6 +784,37 @@ mod tests {
         let i = w.body.enemies.get(h).unwrap();
         assert_eq!(w.body.enemies.hurtbox[i], MAX_ENTITY_RADIUS); // P4-b 钳制
         assert_eq!(w.body.diag.contract_viol, 1);
+    }
+
+    /// 四口径：三敌取最近（非圆心重合）/ 等距取低索引 / dying 跳过 / 空场 None。
+    #[test]
+    fn nearest_enemy_contract() {
+        let mut w = crate::step::World::new(1);
+        assert!(
+            w.body.nearest_enemy(Fx::ZERO, Fx::ZERO).is_none(),
+            "空场 None"
+        );
+        let _a = spawn_enemy(&mut w, 0, 100, 5); // 距 (0,0) = 100
+        let b = spawn_enemy(&mut w, 0, 60, 5); // 距 60 ← 最近
+        let _c = spawn_enemy(&mut w, 80, 0, 5); // 距 80
+        assert_eq!(w.body.nearest_enemy(Fx::ZERO, Fx::ZERO), Some(b), "取最近");
+        // dying 跳过：把 b 标 dying → 次近 c 当选
+        let ib = w.body.enemies.get(b).unwrap();
+        w.body.enemies.flags[ib] |= crate::enemy::ENEMY_DYING;
+        let c_again = w.body.nearest_enemy(Fx::ZERO, Fx::ZERO).unwrap();
+        assert_eq!(
+            w.body.enemies.get(c_again).map(|i| w.body.enemies.x[i]),
+            Some(Fx::from_int(80))
+        );
+        // 等距取低索引：清场后摆两个等距敌
+        let mut w2 = crate::step::World::new(1);
+        let d = spawn_enemy(&mut w2, -50, 0, 5);
+        let _e = spawn_enemy(&mut w2, 50, 0, 5);
+        assert_eq!(
+            w2.body.nearest_enemy(Fx::ZERO, Fx::ZERO),
+            Some(d),
+            "等距取低索引"
+        );
     }
 
     #[test]
