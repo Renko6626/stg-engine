@@ -12,7 +12,9 @@ pub const ITEM_POWER: u8 = 0;
 pub const ITEM_POINT: u8 = 1;
 pub const ITEM_LIFE_PIECE: u8 = 2;
 pub const ITEM_BOMB_PIECE: u8 = 3;
-pub const ITEM_TYPE_COUNT: usize = 4;
+/// 小星星（M0-15）：**只由消弹转化产生**（D9 趟一，不进掉落表），出生即磁吸，少量分数。
+pub const ITEM_STAR: u8 = 4;
+pub const ITEM_TYPE_COUNT: usize = 5;
 
 /// `magnet_to` 哨兵：未锁定 / 已拾取（等待 cleanup 回收）。0..MAX_PLAYERS = 锁定目标。
 pub const MAGNET_NONE: u8 = 0xFF;
@@ -51,6 +53,7 @@ pub(crate) const ITEM_CFG: [ItemTypeCfg; ITEM_TYPE_COUNT] = [
     ItemTypeCfg { score: 100, ..STD }, // POINT
     ItemTypeCfg { score: 50, ..STD },  // LIFE_PIECE
     ItemTypeCfg { score: 50, ..STD },  // BOMB_PIECE
+    ItemTypeCfg { score: 30, ..STD },  // STAR（消弹转化；grill 2026-07-18 拍板 30 分）
 ];
 
 /// 掉落表 v0：表 id → [(类型, 数量)]。表 0 = 空（enemy.drop_table 零默认 = 不掉）。
@@ -77,10 +80,16 @@ mod tests {
     #[test]
     fn item_type_numbering_frozen() {
         assert_eq!(
-            (ITEM_POWER, ITEM_POINT, ITEM_LIFE_PIECE, ITEM_BOMB_PIECE),
-            (0, 1, 2, 3)
+            (
+                ITEM_POWER,
+                ITEM_POINT,
+                ITEM_LIFE_PIECE,
+                ITEM_BOMB_PIECE,
+                ITEM_STAR
+            ),
+            (0, 1, 2, 3, 4)
         );
-        assert_eq!(ITEM_TYPE_COUNT, 4);
+        assert_eq!(ITEM_TYPE_COUNT, 5);
         assert_eq!((MAGNET_NONE, MAGNET_PICKED), (0xFF, 0xFE));
     }
 

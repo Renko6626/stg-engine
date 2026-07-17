@@ -494,6 +494,29 @@ impl WorldBody {
         }
     }
 
+    /// 消弹转星星的生成核（D9 趟一，M0-15）：原弹位、零初速、出生即磁吸（调用方给
+    /// `magnet_to`——存活自机或 `MAGNET_NONE`）；**无散布无 RNG**（与 `spawn_drop` 的
+    /// 关键区别——星星不喷射，直接飞向自机或原地下落）。
+    /// P4-a：池满 → 该颗不生成 + 逐颗计数（消弹循环有界，不短路）。
+    pub(crate) fn spawn_star_at(&mut self, x: Fx, y: Fx, magnet_to: u8) {
+        if self
+            .items
+            .alloc(crate::items::ItemInit {
+                x,
+                y,
+                vx: Fx::ZERO,
+                vy: Fx::ZERO,
+                item_type: crate::items::ITEM_STAR,
+                magnet_to,
+                timer: 0,
+            })
+            .is_none()
+        {
+            self.diag.pool_full[POOL_ITEM] = self.diag.pool_full[POOL_ITEM].wrapping_add(1);
+            self.last_status = STATUS_POOL_FULL;
+        }
+    }
+
     /// 掉落一颗道具（公开写 API；将来 ECL syscall `drop_item` 直通）。
     /// P4-b：坏类型 → NULL + BAD_ARGS（散布 RNG **不**消耗——失败零副作用）。
     pub fn drop_item(&mut self, x: Fx, y: Fx, item_type: u8) -> crate::items::ItemHandle {

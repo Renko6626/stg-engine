@@ -1,6 +1,7 @@
 //! 相位 7 · 结算三趟（D9）——**唯一改状态者**。
 //!
-//! 趟一 清除/防护：行6 消弹（**标记不回收**，回收在 cleanup 相位9）+ 按 field 索引升序发聚合
+//! 趟一 清除/防护：行6 消弹（**标记不回收**，回收在 cleanup 相位9）+ 逐弹原位转星星
+//!   （M0-15 一律转化：出生即磁吸存活自机，30 分经济回流）+ 按 field 索引升序发聚合
 //!   `FieldCleared`。**先于趟二** —— 故同帧作用区能救下本会命中自机的弹（bomb 救命）。
 //! 趟二 伤害：行4/7 敌人扣血（overkill/无敌帧门禁）；行1/3 自机中弹 → 决死窗口（行1 跳过已清除的弹）。
 //! 趟三 计分/拾取：graze（`grazed_by` 逐弹一次；**不查已清除位** —— 擦在相位6 已发生、清弹是相位7
@@ -61,6 +62,12 @@ impl WorldBody {
         // **只标记不回收**（趟二/趟三随后按索引读这颗弹；回收在相位 9 cleanup）。
         // **先于趟二**——故同帧作用区能救下本会命中自机的弹（bomb 救命）。
         let mut cleared_counts = [0i32; FieldPool::CAP];
+        // 消弹转星星（M0-15，一律转化）：磁吸目标趟外算一次——升序首个 ALIVE 自机（I4），
+        // 无则 MAGNET_NONE 正常下落。目标自机趟内不变，逐弹查与一次查确定性等价。
+        let star_target = (0..crate::MAX_PLAYERS)
+            .find(|&p| self.players[p].life_state == crate::player::LIFE_ALIVE)
+            .map(|p| p as u8)
+            .unwrap_or(crate::items::MAGNET_NONE);
         for k in 0..self.hits_len as usize {
             let h = self.hits[k];
             if h.row != crate::events::ROW_FIELD_BULLET {
@@ -72,6 +79,8 @@ impl WorldBody {
             }
             self.bullets.flags[b] |= crate::bullets::BULLET_CLEARED;
             cleared_counts[h.active as usize] += 1;
+            // 每颗被消的弹在原位转一颗星星（30 分经济回流；池满 P4-a 逐颗降级计数）。
+            self.spawn_star_at(self.bullets.x[b], self.bullets.y[b], star_target);
         }
         // 聚合事件：按 field 索引升序产出（不依赖 hits 的分组连续性 → 与 collide 循环结构解耦）
         for (f, &count) in cleared_counts.iter().enumerate() {
@@ -201,6 +210,9 @@ impl WorldBody {
                     pl.bomb_pieces = 0;
                     pl.bombs += 1;
                 }
+            }
+            ITEM_STAR => {
+                self.players[p].score += ITEM_CFG[ITEM_STAR as usize].score as u64;
             }
             _ => {
                 self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
@@ -346,6 +358,102 @@ mod tests {
         assert_eq!(w.body.events_len, 1);
         assert_eq!(w.body.events[0].kind, EVT_FIELD_CLEARED);
         assert_eq!(w.body.events[0].data[0], 2);
+    }
+
+    /// 消弹转星星（M0-15）：3 弹异位被消 → 恰 3 星、槽序=消弹序、各在原弹位、
+    /// 零初速、出生即磁吸 P0（ALIVE）。
+    #[test]
+    fn clear_converts_bullets_to_stars_at_positions() {
+        use crate::field::FIELD_CLEAR_BULLETS;
+        use crate::items::ITEM_STAR;
+        let mut w = crate::step::World::new(1);
+        spawn_field(&mut w, 0, 100, 40, FIELD_CLEAR_BULLETS, 1);
+        bullet_at(&mut w, -10, 100);
+        bullet_at(&mut w, 0, 100);
+        bullet_at(&mut w, 10, 90);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        w.body.settle();
+        let expect = [(-10, 100), (0, 100), (10, 90)];
+        assert_eq!(w.body.items.iter_alive().count(), 3, "恰 3 星");
+        for (i, &(x, y)) in expect.iter().enumerate() {
+            assert_eq!(w.body.items.item_type[i], ITEM_STAR, "槽 {i} 类型");
+            assert_eq!(w.body.items.x[i], Fx::from_int(x), "槽 {i} 原弹位 x");
+            assert_eq!(w.body.items.y[i], Fx::from_int(y), "槽 {i} 原弹位 y");
+            assert_eq!(w.body.items.magnet_to[i], 0, "槽 {i} 出生即磁吸 P0");
+            assert_eq!(
+                w.body.items.vx[i],
+                Fx::ZERO,
+                "槽 {i} 零初速（无散布无 RNG）"
+            );
+        }
+    }
+
+    /// 无 ALIVE 自机（决死窗口）→ 星星 MAGNET_NONE 正常下落。
+    #[test]
+    fn star_without_alive_player_falls_unmagnetized() {
+        use crate::field::FIELD_CLEAR_BULLETS;
+        use crate::items::MAGNET_NONE;
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
+        spawn_field(&mut w, 0, 100, 20, FIELD_CLEAR_BULLETS, 1);
+        bullet_at(&mut w, 0, 100);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        w.body.settle();
+        assert_eq!(w.body.items.iter_alive().count(), 1);
+        assert_eq!(w.body.items.magnet_to[0], MAGNET_NONE, "无存活自机不磁吸");
+    }
+
+    /// 星星拾取入账 +30（全 step 管线：消弹→星生于自机位→次帧行 5 拾取）。
+    #[test]
+    fn star_pickup_credits_30_score() {
+        use crate::field::FIELD_CLEAR_BULLETS;
+        use crate::input::InputFrame;
+        use crate::step::step;
+        let mut w = crate::step::World::new(1);
+        // 弹贴自机位；同帧 field 消掉（趟一先于趟二 → 不中弹）→ 星生于自机位 → 次帧拾取
+        spawn_field(&mut w, 0, 384, 20, FIELD_CLEAR_BULLETS, 1);
+        bullet_at(&mut w, 0, 384);
+        let s0 = w.body.players[0].score;
+        for _ in 0..3 {
+            step(&mut w, &InputFrame::empty(0));
+        }
+        assert_eq!(w.body.players[0].score, s0 + 30, "星星入账恰 +30");
+    }
+
+    /// 道具池满 → 少生成 + pool_full[ITEM] 逐颗计数（P4-a）。
+    #[test]
+    fn star_pool_full_degrades_counted() {
+        use crate::field::FIELD_CLEAR_BULLETS;
+        let mut w = crate::step::World::new(1);
+        for _ in 0..(crate::items::ItemPool::CAP - 1) {
+            w.body
+                .drop_item(Fx::ZERO, Fx::from_int(200), crate::items::ITEM_POWER);
+        }
+        let pf0 = w.body.diag.pool_full[crate::world::POOL_ITEM];
+        spawn_field(&mut w, 0, 100, 40, FIELD_CLEAR_BULLETS, 1);
+        bullet_at(&mut w, -10, 100);
+        bullet_at(&mut w, 0, 100);
+        bullet_at(&mut w, 10, 100);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide();
+        w.body.settle();
+        assert_eq!(
+            w.body.diag.pool_full[crate::world::POOL_ITEM],
+            pf0 + 2,
+            "3 消弹只剩 1 位 → 1 星 + 2 计数"
+        );
+        assert_eq!(w.body.last_status, crate::world::STATUS_POOL_FULL);
     }
 
     #[test]
