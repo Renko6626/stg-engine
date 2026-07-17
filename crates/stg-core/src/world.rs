@@ -75,6 +75,9 @@ pub const SIGNAL_CHANNELS: usize = 8;
 pub(crate) const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
 pub(crate) const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
 pub(crate) const OOB_MARGIN: i32 = 64; // 越界回收边距
+/// 敌人专用越界边距（回收兜底）。系统性宽于飞行物的 64px：入场/绕场编排要在场外起舞，
+/// 回收主导靠纪律（M1 起敌人主协程返回即自燃——ZUN ECL 语义；本常量只是防泄漏安全网）。
+pub(crate) const ENEMY_OOB_MARGIN: i32 = 256;
 pub(crate) const POC_LINE_Y: i32 = 128; // 回收线（PoC）：ALIVE 自机 y 低于此线 → 全场道具磁吸
 
 // ── 相位索引（A4 v2，0-based；PhaseGuard 押运）───────────────────────────
@@ -308,6 +311,41 @@ impl WorldBody {
         }
     }
 
+    /// 敌人限时缓动位移（D5；杂鱼"飘入-停-飘出"的世界侧状态机，将来 ECL syscall 直通）。
+    /// 语义：绝对插值、到点即停（精确终点 + 清 vx/vy）；进行中重下 = 覆盖重启；
+    /// dur=0 = 瞬移（合法退化）。P4-b：悬垂/easing 越界 → no-op + 计数。目标点不钳制场界。
+    pub fn move_enemy_to(&mut self, h: EnemyHandle, x: Fx, y: Fx, dur: u16, easing: u8) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        if easing >= 8 {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return;
+        }
+        if dur == 0 {
+            // 瞬移=硬停（清在飞插值）：即便当前正处于上一次 move_to 的插值中途，
+            // 也要清 mv_active——否则 integrate 相下一帧仍走插值分支，用陈旧
+            // mv_from/to 把这里刚写的新位置覆盖回旧轨迹上（"瞬移=硬停覆盖"契约破裂）。
+            self.enemies.x[i] = x;
+            self.enemies.y[i] = y;
+            self.enemies.vx[i] = Fx::ZERO;
+            self.enemies.vy[i] = Fx::ZERO;
+            self.enemies.mv_active[i] = 0;
+            return;
+        }
+        self.enemies.mv_from_x[i] = self.enemies.x[i];
+        self.enemies.mv_from_y[i] = self.enemies.y[i];
+        self.enemies.mv_to_x[i] = x;
+        self.enemies.mv_to_y[i] = y;
+        self.enemies.mv_t[i] = 0;
+        self.enemies.mv_dur[i] = dur;
+        self.enemies.mv_easing[i] = easing;
+        self.enemies.mv_active[i] = 1;
+    }
+
     /// 创建一个作用区（P4-a：池满 → NULL + 计数；P4-b：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]` + 计数）。
     pub fn create_field(&mut self, mut init: FieldInit) -> FieldHandle {
         // P4-b：调用方违约 → 确定性安全结果。与 create_bullet/create_enemy/create_player_shot
@@ -399,6 +437,32 @@ impl WorldBody {
             return;
         }
         self.signals[ch] = self.frame.wrapping_add(1);
+    }
+
+    /// 最近敌查询（D7 预定的世界查询助手；homing / ECL 瞄敌共用）。
+    /// 契约：纯查询零副作用；候选 = 存活且非 dying；平方距离（i64）；并列取低索引（I4）；
+    /// 空集 None 不计数（合法世界状态非违约）；返回带 generation 句柄（P1）。
+    pub fn nearest_enemy(&self, x: Fx, y: Fx) -> Option<EnemyHandle> {
+        let mut best: Option<(usize, i64)> = None;
+        let nw = self.enemies.alive.len();
+        for w in 0..nw {
+            let mut bits = self.enemies.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if self.enemies.flags[i] & crate::enemy::ENEMY_DYING != 0 {
+                    continue;
+                }
+                let d2 = crate::math::geom::len_sq(self.enemies.x[i] - x, self.enemies.y[i] - y);
+                if best.is_none_or(|(_, bd)| d2 < bd) {
+                    best = Some((i, d2));
+                }
+            }
+        }
+        best.map(|(i, _)| EnemyHandle {
+            index: i as u16,
+            generation: self.enemies.generation[i],
+        })
     }
 
     /// 收集一条碰撞命中（P4-a：满则停收 + 计数，不 panic）。
@@ -720,6 +784,37 @@ mod tests {
         let i = w.body.enemies.get(h).unwrap();
         assert_eq!(w.body.enemies.hurtbox[i], MAX_ENTITY_RADIUS); // P4-b 钳制
         assert_eq!(w.body.diag.contract_viol, 1);
+    }
+
+    /// 四口径：三敌取最近（非圆心重合）/ 等距取低索引 / dying 跳过 / 空场 None。
+    #[test]
+    fn nearest_enemy_contract() {
+        let mut w = crate::step::World::new(1);
+        assert!(
+            w.body.nearest_enemy(Fx::ZERO, Fx::ZERO).is_none(),
+            "空场 None"
+        );
+        let _a = spawn_enemy(&mut w, 0, 100, 5); // 距 (0,0) = 100
+        let b = spawn_enemy(&mut w, 0, 60, 5); // 距 60 ← 最近
+        let _c = spawn_enemy(&mut w, 80, 0, 5); // 距 80
+        assert_eq!(w.body.nearest_enemy(Fx::ZERO, Fx::ZERO), Some(b), "取最近");
+        // dying 跳过：把 b 标 dying → 次近 c 当选
+        let ib = w.body.enemies.get(b).unwrap();
+        w.body.enemies.flags[ib] |= crate::enemy::ENEMY_DYING;
+        let c_again = w.body.nearest_enemy(Fx::ZERO, Fx::ZERO).unwrap();
+        assert_eq!(
+            w.body.enemies.get(c_again).map(|i| w.body.enemies.x[i]),
+            Some(Fx::from_int(80))
+        );
+        // 等距取低索引：清场后摆两个等距敌
+        let mut w2 = crate::step::World::new(1);
+        let d = spawn_enemy(&mut w2, -50, 0, 5);
+        let _e = spawn_enemy(&mut w2, 50, 0, 5);
+        assert_eq!(
+            w2.body.nearest_enemy(Fx::ZERO, Fx::ZERO),
+            Some(d),
+            "等距取低索引"
+        );
     }
 
     #[test]

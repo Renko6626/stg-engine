@@ -33,7 +33,8 @@ fn parse_out(rest: &[String]) -> Option<String> {
 
 /// 金向量 —— 真实 step 演化的碰撞病态诊断场景，逐帧 World 校验和（CI 跨平台对拍的数据源）。
 ///
-/// 导演每 60 帧把敌人补到顶部固定 3 位（静止靶——AI/move_to 插值留后续切片），每 8 帧从
+/// 导演每 60 帧把敌人补到顶部固定 3 位（场外 (ex, -100) 生 + `move_enemy_to` 40 帧 QuadOut
+/// 飘入原位——压大边界内存活 + move_to 插值路径，飘入途中同样可被自机弹打中/体碰），每 8 帧从
 /// 顶部中心铺一圈 10 发敌弹（rng 抖动 → 压 sincos + PCG32），每 150 帧全屏消弹一次
 /// （`FIELD_RADIUS_FULLSCREEN` 作用区，`life=1`）。脚本自机全程射击、90 帧周期
 /// 上冲吃弹/下退喘息，串联自机弹杀敌→dying→EnemyDied→cleanup 回收→导演补位、敌弹中弹→
@@ -157,12 +158,17 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
         }
         input.actions[0].buttons = btn;
         step_with_director(&mut world, &input, |b| {
-            // ① 每 60 帧把敌人补到 3 个（顶部固定三点；被自机弹打死→cleanup 回收→补位 churn）
+            // ① 每 60 帧把敌人补到 3 个（顶部固定三点；被自机弹打死→cleanup 回收→补位 churn）。
+            // 场外飘入：出生在 (ex, -100)——旧共用界（y∈[-64,512]）外必死、新敌人大边界
+            // （y∈[-256,704]，ENEMY_OOB_MARGIN=256）内存活——再 `move_enemy_to` 40 帧
+            // QuadOut 飘到原位 (ex, 80)。到位时序因此推迟：补位帧起飞入途中一切照旧参与
+            // 演化（可被自机弹打中/体碰/擦弹），只是 40 帧后才真正落在旧的静止靶位。
             if frame % 60 == 0 {
                 let alive = b.enemies.iter_alive().count();
                 let slots = [(-80, 80), (0, 80), (80, 80)];
                 for &(ex, ey) in slots.iter().skip(alive) {
-                    b.create_enemy(enemy_at(ex, ey));
+                    let h = b.create_enemy(enemy_at(ex, -100));
+                    b.move_enemy_to(h, Fx::from_int(ex), Fx::from_int(ey), 40, 2); // QuadOut
                 }
             }
             // ② 每 8 帧从顶部中心铺一圈 10 发敌弹（rng 抖动；部分下行抵达自机 → 中弹/擦弹）

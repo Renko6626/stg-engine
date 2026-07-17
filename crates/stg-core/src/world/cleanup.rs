@@ -3,6 +3,8 @@
 //! **敌人与已清除弹在此收尸**：settle（相位 7）只打标记，槽要活过相位 8（ECL 挂钩）供死亡脚本
 //! 与表现层读取死亡坐标，故回收统一延到本相位。道具同款：settle 趟三只标 `MAGNET_PICKED`，
 //! 回收延到本相位（同弹回收骨架，另加越界判据——磁吸失败/未拾取的道具飞出场外也要收）。
+//! 敌人越界判据用 `ENEMY_OOB_MARGIN`（大边界兜底）：主导回收靠纪律（M1 起敌人协程返回即自燃），
+//! 本判据只防脚本失手导致的泄漏。
 
 use super::WorldBody;
 use crate::enemy::ENEMY_DYING;
@@ -48,7 +50,7 @@ impl WorldBody {
                 let i = w * 64 + bits.trailing_zeros() as usize;
                 bits &= bits - 1;
                 let dead = (self.enemies.flags[i] & ENEMY_DYING != 0)
-                    || Self::out_of_bounds(self.enemies.x[i], self.enemies.y[i]);
+                    || Self::out_of_bounds_enemy(self.enemies.x[i], self.enemies.y[i]);
                 if dead {
                     self.enemies.free_index(i);
                 }
@@ -90,6 +92,17 @@ impl WorldBody {
             .contains(&xi)
             || !(-super::OOB_MARGIN..=super::FIELD_HEIGHT + super::OOB_MARGIN).contains(&yi)
     }
+
+    /// 敌人专用越界判定（大边界兜底；主导回收靠纪律，见 `ENEMY_OOB_MARGIN` 文档）。
+    fn out_of_bounds_enemy(x: Fx, y: Fx) -> bool {
+        let xi = x.to_int_floor();
+        let yi = y.to_int_floor();
+        !(-super::FIELD_HALF_W - super::ENEMY_OOB_MARGIN
+            ..=super::FIELD_HALF_W + super::ENEMY_OOB_MARGIN)
+            .contains(&xi)
+            || !(-super::ENEMY_OOB_MARGIN..=super::FIELD_HEIGHT + super::ENEMY_OOB_MARGIN)
+                .contains(&yi)
+    }
 }
 
 #[cfg(test)]
@@ -108,20 +121,42 @@ mod tests {
         let mut w = crate::step::World::new(1);
         let h = spawn_enemy(&mut w, 150, 100, 5);
         let i = w.body.enemies.get(h).unwrap();
-        w.body.enemies.vy[i] = Fx::from_int(120); // 下行：y 100 →220→340→460→580
+        w.body.enemies.vy[i] = Fx::from_int(120); // 下行：y 100→220→340→460→580→700→820
 
-        // 回收线 = FIELD_HEIGHT(448) + OOB_MARGIN(64) = 512。第 3 帧 y=460 仍在场内。
-        for f in 0..3 {
+        // 回收线 = FIELD_HEIGHT(448) + ENEMY_OOB_MARGIN(256) = 704。第 5 帧 y=700 仍在场内。
+        for f in 0..5 {
             crate::step::step(&mut w, &InputFrame::empty(f));
         }
         assert!(
             w.body.enemies.get(h).is_some(),
-            "y=460 未越界，不该被回收（若此处已亡说明是别的机制杀的，测试就失去意义）"
+            "y=700 未越界，不该被回收（若此处已亡说明是别的机制杀的，测试就失去意义）"
         );
 
-        // 第 4 帧 y=580 > 512 → 越界回收
-        crate::step::step(&mut w, &InputFrame::empty(3));
+        // 第 6 帧 y=820 > 704 → 越界回收
+        crate::step::step(&mut w, &InputFrame::empty(5));
         assert_eq!(w.body.enemies.get(h), None, "越界敌人应被 cleanup 回收");
+    }
+
+    /// 大边界判别：y=600 在旧共用界（448+64=512）外、新敌人界（448+256=704）内 → 必须存活。
+    /// （y=500 两界皆内无判别力——spec 值勘误，见计划 Global Constraints。）
+    #[test]
+    fn enemy_survives_beyond_old_margin_within_new() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 600, 5);
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert!(
+            w.body.enemies.get(h).is_some(),
+            "600 < 704：大边界内必须存活"
+        );
+    }
+
+    /// 越新界必收：y=720 > 704。
+    #[test]
+    fn enemy_recycled_beyond_enemy_margin() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 720, 5);
+        crate::step::step(&mut w, &InputFrame::empty(0));
+        assert!(w.body.enemies.get(h).is_none(), "720 > 704：越大边界必收");
     }
 
     /// 弹越界回收 → 还段：直测 Task 4 的"还段接线"（弹死后段号可被复得）。
