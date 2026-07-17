@@ -411,7 +411,7 @@ SoA，~64 B/敌，256 敌 ≈ 16 KB：
 | 组 | 字段 | 说明 |
 |---|---|---|
 | 运动 | `x y vx vy: Fx×4` | 与弹同构（笛卡尔执行面） |
-| 移动插值器 | `mv_from_x/y, mv_to_x/y: Fx×4, mv_t: u16, mv_dur: u16, mv_easing: u8, mv_active: u8` | `move_to(t, x, y, easing)` 的世界侧状态机 |
+| 移动插值器 | `mv_from_x/y, mv_to_x/y: Fx×4, mv_t: u16, mv_dur: u16, mv_easing: u8, mv_active: u8` | `move_to(t, x, y, easing)` 的世界侧状态机——到点即停（精确终点+清 vx/vy）、绝对插值防漂移、dur=0 瞬移=硬停（清在飞插值）、进行中重下=覆盖重启（spec 2026-07-17 / M0-13 实现定稿） |
 | 生命 | `hp: i32, hp_max: i32` | max 供 boss_ui 血条比例 |
 | 判定 | `radius: Fx`（体碰）, `hurtbox: Fx`（受击） | **双半径**，映射见 D8 |
 | 状态 | `invuln: u16, hit_flash: u8, flags: u8` | 无敌帧、受击闪计时、位标记（dying 预留位） |
@@ -422,6 +422,11 @@ SoA，~64 B/敌，256 敌 ≈ 16 KB：
 **`move_to` 语义（拍板）**：插值器激活期间**完全接管位置**（`pos = from + (to−from)·ease(t/dur)`），vx/vy 冻结不积分；到期 `mv_active = 0` 且 **vx/vy 清零**——到点即悬停（ZUN boss 移动语义）。easing 查 D1 烘焙表。
 
 **双半径动机**：真东方"自机贴着 boss 擦而不撞死、自机弹却打得中"依赖受击圈（大）≠ 体碰圈（小）的区分；本质是同一实体在**不同碰撞矩阵行**中扮演不同大小的角色（D8 的半径映射列）。
+
+**敌人越界回收（spec 2026-07-17 / M0-13 实现定稿）**：敌人越界判据系统性放宽为
+`ENEMY_OOB_MARGIN = 256`（弹/道具 `OOB_MARGIN = 64` 的 4 倍）——入场/绕场编排要在场外起舞，
+这只是防泄漏的大边界兜底，回收**不**由它主导：主导回收靠纪律——M1 起敌人主协程返回即自燃
+（forward pointer，协程终止触发消亡，不依赖越界判据）。
 
 ## D6 自机
 
