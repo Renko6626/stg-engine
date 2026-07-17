@@ -326,10 +326,14 @@ impl WorldBody {
             return;
         }
         if dur == 0 {
+            // 瞬移=硬停（清在飞插值）：即便当前正处于上一次 move_to 的插值中途，
+            // 也要清 mv_active——否则 integrate 相下一帧仍走插值分支，用陈旧
+            // mv_from/to 把这里刚写的新位置覆盖回旧轨迹上（"瞬移=硬停覆盖"契约破裂）。
             self.enemies.x[i] = x;
             self.enemies.y[i] = y;
             self.enemies.vx[i] = Fx::ZERO;
             self.enemies.vy[i] = Fx::ZERO;
+            self.enemies.mv_active[i] = 0;
             return;
         }
         self.enemies.mv_from_x[i] = self.enemies.x[i];

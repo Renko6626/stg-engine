@@ -708,6 +708,23 @@ mod tests {
         assert_eq!(w.body.diag.contract_viol, cv0);
     }
 
+    /// 瞬移必须硬停在飞插值：进行中 dur=0 瞬移后，旧轨迹不得次帧复活盖掉新位置。
+    #[test]
+    fn move_to_teleport_overrides_inflight_interpolation() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        w.body
+            .move_enemy_to(h, Fx::from_int(100), Fx::from_int(100), 10, 0);
+        crate::step::step(&mut w, &InputFrame::empty(0)); // 在飞
+        w.body
+            .move_enemy_to(h, Fx::from_int(-80), Fx::from_int(30), 0, 0); // 瞬移
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.mv_active[i], 0, "瞬移清除在飞插值");
+        crate::step::step(&mut w, &InputFrame::empty(1));
+        assert_eq!(w.body.enemies.x[i], Fx::from_int(-80), "旧轨迹不得复活");
+        assert_eq!(w.body.enemies.y[i], Fx::from_int(30));
+    }
+
     /// 进行中重下 = 覆盖重启（from 取当前位置）。
     #[test]
     fn move_to_reissue_restarts_from_current() {
