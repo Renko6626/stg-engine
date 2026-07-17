@@ -503,6 +503,36 @@ mod tests {
         assert_eq!(w.body.xforms.alloc().unwrap(), 0, "无段泄漏");
     }
 
+    /// 验证序判别（轴→xform→radius）：同时坏 radius + 坏 xform 时 xform 拒先短路，
+    /// contract_viol 恰 +1——若有人把 radius 钳挪到 xform 检查前（对齐单发 API）会变 +2 变红。
+    #[test]
+    fn batch_bad_radius_plus_bad_xform_counts_once() {
+        let mut w = World::new(1);
+        let mut init = straight(0, 100, 0, 0, 0xFFFF);
+        init.radius = Fx::from_int(5000); // 越 MAX_ENTITY_RADIUS
+        let bad = [slot(0, 99, 0, 0)];
+        let cv0 = w.body.diag.contract_viol;
+        assert_eq!(
+            w.body.create_bullets_batch(
+                init,
+                &bad,
+                2,
+                Angle::ZERO,
+                0,
+                2,
+                Fx::from_int(1),
+                Fx::ZERO
+            ),
+            0
+        );
+        assert_eq!(
+            w.body.diag.contract_viol,
+            cv0 + 1,
+            "xform 拒先短路，radius 钳不再计"
+        );
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+    }
+
     /// 段满短路（xform 批）：段池只剩 2，请求 2×2 → 实发 2 + pool_full[XFORM] += 2。
     #[test]
     fn batch_partial_on_segpool_full() {

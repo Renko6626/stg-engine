@@ -614,7 +614,8 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | | 变换段池满 | `NULL`（**整体失败**，不产弹） | `POOL_FULL(XFORM)` | `diag.pool_full[XFORM]` |
 | | xform 区间越界 locals | `NULL` | `BAD_ARGS(xform)` | `diag.contract_viol` |
 | | appearance 越表 | `NULL` | `BAD_ARGS(appearance)` | `diag.contract_viol` |
-| `create_bullets_batch` | 中途池满 | 已成部分保留，返回成功数 | `POOL_FULL(BULLET)` | `diag.pool_full[BULLET]` |
+| `create_bullets_batch` | 中途弹池满 | 已成部分保留，返回成功数 | `POOL_FULL(BULLET)` | `diag.pool_full[BULLET]` |
+| | 中途段池满（xform 批） | 已成部分保留，返回成功数 | `POOL_FULL(XFORM)` | `diag.pool_full[XFORM]` |
 | | 轴零 / N×K 超弹池 cap / 坏 xform | 整体拒（实发 0） | `BAD_ARGS` | `diag.contract_viol` |
 | `create_player_shot` | 池满 | `NULL` | `POOL_FULL(SHOT)` | `diag.pool_full[SHOT]` |
 | `spawn_enemy` | 池满 | `NULL` | `POOL_FULL(ENEMY)` | `diag.pool_full[ENEMY]` |
