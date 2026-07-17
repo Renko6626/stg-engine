@@ -526,6 +526,8 @@ release 回绕成负数 → 平方后仍为正巨数 → 全场无条件判撞�
   `ITEM_POINT` 的分值转记 score（钱包满自动找零，杜绝道具消失或字段越界写）。
 - **扩展四步清单**：新增道具类型的标准动作详见模块文档 → `crates/stg-core/src/items.rs`
   （①类型常量 ②`ITEM_CFG` 加行 ③`credit_item` 加 match 臂 ④按需加掉落表行）。
+- **`ITEM_STAR`（类型 4，M0-15）**：消弹转化专属（D9 趟一产生，不进掉落表），30 分纯计分，
+  出生即磁吸——四步清单的首个走完全程的扩展实例（第④步为"不加"）。
 
 计价 **v1 = 每类型固定分值**（WorldTables 道具配置表）；高度计价机制待考证后升级，升级点局限在"结算趟三读价值"单个函数内（Part IV）。
 
@@ -569,6 +571,9 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
    **≤16 条/帧，永不爆**。`count`（本 field 本帧消了几颗）是廉价且有用的事实，供将来消弹转分/
    统计/表现层特效强度使用。多 field 同帧压同一颗弹按幂等处理（先到先得，只计一次）；聚合事件
    按 field 索引升序产出（不依赖 collide 循环结构，将来换 broadphase 不会静默产出多条事件）；
+   **消弹一律转星星**（M0-15 落地，grill 2026-07-18）：每颗被消的弹在**原位**转一颗
+   `ITEM_STAR`（30 分，不进掉落表），出生即磁吸升序首个 ALIVE 自机（无则 `MAGNET_NONE`
+   正常下落）；无散布无 RNG；道具池满 → 该颗不生成 + `pool_full[ITEM]` 逐颗计数（P4-a）；
 2. **趟二 · 伤害**：行 4/7 扣血（无敌帧过滤在此判）→ hp≤0 走 A7 死亡结算（标记、掉落直接分配、特效请求、`EnemyDied` 事件）；行 1/3 自机中弹（**跳过已清除的弹**）→ 生死状态机转移（Alive → DeathWindow）；
 3. **趟三 · 计分/拾取**：Graze（行 2，`grazed_by` 位掩码逐弹一次，独立于中弹）；ItemPicked（行 5）→ 按道具配置表入账本，power/残机蜡/bomb 蜡的进位规则世界侧固定。
 
@@ -628,6 +633,10 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | `emit_req` | reqs 满 | 丢弃 | `TRUNCATED` | `diag.reqs_dropped` |
 | （内部）hits 满 | — | 丢弃（**debug panic**） | — | `diag.hits_dropped` |
 | （内部）frame_events 满 | — | 丢弃 | — | `diag.events_dropped` |
+
+注：`set_var / get_var / boss_set` 世界侧已落地（M0-15）：`globals: [i32; 1024]` +
+`boss_ui: [BossUiSlot; 2]` 照 A2 形状入 WorldBody（自动入校验和 + `copy_into` 快照）；
+坏槽 P4-b 照本表；`get_var` 取 `&mut self`（坏槽计数入校验和）。`emit_req` 仍属 M2。
 
 注：`create_bullets_batch` 世界侧已落地（M0-14，spec 2026-07-17）：N×K 网格（角度外层×速度内层
 = 池槽序）、步长直给（张角/端点推导属作者层语法糖，归 M1 ECL DSL：`ring(n)`/`fan(spread, n)`
