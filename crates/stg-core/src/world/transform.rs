@@ -15,20 +15,6 @@ pub(crate) enum FireResult {
 /// STEP scratch 活跃位（扩展槽 args[1] bit31；低 16 位 = elapsed）。
 pub(crate) const STEP_ACTIVE: i32 = 1 << 31;
 
-fn easing_from_id(id: u8) -> crate::math::easing::Easing {
-    use crate::math::easing::Easing::*;
-    match id {
-        1 => QuadIn,
-        2 => QuadOut,
-        3 => QuadInOut,
-        4 => CubicIn,
-        5 => CubicOut,
-        6 => CubicInOut,
-        7 => Smoothstep,
-        _ => Linear, // 0 与一切越界值（create 期已拒 ≥8，此处兜底确定性）
-    }
-}
-
 impl WorldBody {
     pub(crate) fn run_transforms(&mut self) {
         self.phase_enter(super::PH_XFORM);
@@ -223,7 +209,8 @@ impl WorldBody {
         let elapsed = ((ext.args[1] & 0xFFFF) as i64 + 1).min(frames);
         let done = elapsed == frames;
         let t = crate::math::Fx::from_raw(((elapsed << 16) / frames) as i32);
-        let e = crate::math::easing::ease(easing_from_id((main.args[1] >> 16) as u8), t);
+        let e =
+            crate::math::easing::ease(crate::math::easing::from_id((main.args[1] >> 16) as u8), t);
         if main.op == OP_STEP_SPEED {
             let (start, target) = (Fx::from_raw(ext.args[0]), Fx::from_raw(main.args[0]));
             let v = if done {

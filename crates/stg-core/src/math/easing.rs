@@ -51,6 +51,21 @@ pub fn ease(curve: Easing, t: Fx) -> Fx {
     Fx::from_raw(v as i32)
 }
 
+/// id → 曲线（D4 STEP / D5 move_to 共用）。越界值 fallback Linear（create 期已拒 ≥8，
+/// 此处兜底确定性——涂改段/字段的运行期防线）。
+pub(crate) fn from_id(id: u8) -> Easing {
+    match id {
+        1 => Easing::QuadIn,
+        2 => Easing::QuadOut,
+        3 => Easing::QuadInOut,
+        4 => Easing::CubicIn,
+        5 => Easing::CubicOut,
+        6 => Easing::CubicInOut,
+        7 => Easing::Smoothstep,
+        _ => Easing::Linear,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
