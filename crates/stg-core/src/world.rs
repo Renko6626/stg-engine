@@ -303,6 +303,9 @@ impl WorldBody {
         speed0: Fx,
         speed_step: Fx,
     ) -> u16 {
+        // 验证序（轴→xform→radius 钳）按 spec 直书，故意不同于 create_bullet_with_xform
+        // 的 radius→xform 序：同时坏 radius+坏 xform 时这里 contract_viol 只 +1（xform 拒
+        // 先短路）。语义已定案入测试，勿"修正"成对齐单发 API。
         let total = n_angle as u32 * n_speed as u32;
         if n_angle == 0 || n_speed == 0 || total > BulletPool::CAP as u32 {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
