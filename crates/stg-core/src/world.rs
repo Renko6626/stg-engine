@@ -75,6 +75,9 @@ pub const SIGNAL_CHANNELS: usize = 8;
 pub(crate) const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
 pub(crate) const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
 pub(crate) const OOB_MARGIN: i32 = 64; // 越界回收边距
+/// 敌人专用越界边距（回收兜底）。系统性宽于飞行物的 64px：入场/绕场编排要在场外起舞，
+/// 回收主导靠纪律（M1 起敌人主协程返回即自燃——ZUN ECL 语义；本常量只是防泄漏安全网）。
+pub(crate) const ENEMY_OOB_MARGIN: i32 = 256;
 pub(crate) const POC_LINE_Y: i32 = 128; // 回收线（PoC）：ALIVE 自机 y 低于此线 → 全场道具磁吸
 
 // ── 相位索引（A4 v2，0-based；PhaseGuard 押运）───────────────────────────
