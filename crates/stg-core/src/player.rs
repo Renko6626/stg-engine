@@ -51,6 +51,7 @@ pub struct PlayerState {
     pub bomb_phase: u8,
     pub bomb_timer: u16,
     pub shot_cd: u8,
+    /// 火力，单位 = 0.01（厘火力）：0..=`POWER_MAX`(400) ↔ 显示 0.00-4.00（M0-16 定标）。
     pub power: u16,
     pub lives: u8,
     pub bombs: u8,
@@ -85,5 +86,34 @@ impl PlayerState {
             score: 0,
             graze: 0,
         }
+    }
+
+    /// 火力整数档位 0..=4（M0-16 定标：`power`/100 向下取整）。换弹幕形态/张数的
+    /// 阈值语义——0.99 仍是 0 档、1.00 起跳 1 档、满 4.00 = 4 档。世界侧唯一
+    /// 授权的档位换算入口（表现层/将来的火力接线都从这走，不自行除 100）。
+    #[inline]
+    pub fn power_tier(&self) -> u8 {
+        (self.power / 100) as u8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 火力定标钉死（M0-16）：满 4.00、一格 0.01、档位边界 0.99/1.00 判别。
+    #[test]
+    fn power_scale_and_tier_boundaries() {
+        assert_eq!(crate::items::POWER_MAX, 400, "满火力 = 4.00（一格 0.01）");
+        let mut p = PlayerState::spawn(0);
+        assert_eq!(p.power_tier(), 0);
+        p.power = 99; // 0.99
+        assert_eq!(p.power_tier(), 0, "0.99 仍 0 档");
+        p.power = 100; // 1.00
+        assert_eq!(p.power_tier(), 1, "1.00 起跳 1 档");
+        p.power = 399; // 3.99
+        assert_eq!(p.power_tier(), 3);
+        p.power = crate::items::POWER_MAX; // 4.00
+        assert_eq!(p.power_tier(), 4, "满火力 4 档");
     }
 }

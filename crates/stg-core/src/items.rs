@@ -21,7 +21,10 @@ pub const MAGNET_NONE: u8 = 0xFF;
 pub const MAGNET_PICKED: u8 = 0xFE;
 
 // ── 入账常数（账本规则世界侧固定，D7/D9）────────────────────────────
-pub const POWER_MAX: u16 = 128;
+/// 火力上限（M0-16 定标：**1 单位 = 0.01 火力**，显示域 0.00-4.00，满 = 4.00）。
+/// 一颗 `ITEM_POWER` = +1 单位（+0.01）；整数档位（0..=4，换弹幕形态用）见
+/// `PlayerState::power_tier`。世界侧只存整数单位，除以 100 是表现层的事（I1）。
+pub const POWER_MAX: u16 = 400;
 pub const PIECES_PER_LIFE: u8 = 5;
 pub const PIECES_PER_BOMB: u8 = 5;
 
