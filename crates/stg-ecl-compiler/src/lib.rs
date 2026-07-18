@@ -40,6 +40,8 @@
 //! assert_eq!(image.subs[main_id.0 as usize], 0);
 //! ```
 
+pub mod lang;
+
 use stg_core::ecl::image::EclImage;
 use stg_core::ecl::ops::{
     OP_ADD, OP_CALL, OP_COSB, OP_DIV, OP_DIVF, OP_DUP, OP_END, OP_EQ, OP_GE, OP_GT, OP_JMP, OP_JZ,
