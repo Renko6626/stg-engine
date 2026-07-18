@@ -31,7 +31,11 @@ impl World {
             Box::from_raw(ptr)
         };
         w.body.rng = Pcg32::new(seed, RNG_SEQ);
-        w.body.players[0] = crate::player::PlayerState::spawn(0); // 自机 1 出场；自机 2 保持全零=不在场
+        // 自机 1 出场（角色 0，取 `TABLES_V0.characters[0]`——v0 妥协：`World::new(seed)` 不带
+        // `&WorldTables` 参，避免百处调用点改签名；多表时代加 `new_with_tables`，见
+        // `docs/follow-ups.md`）；自机 2 保持全零=不在场。
+        w.body.players[0] =
+            crate::player::PlayerState::spawn(0, &crate::tables::TABLES_V0.characters[0]);
         w
     }
 
@@ -96,7 +100,7 @@ pub fn step_with_director<F: FnMut(&mut WorldBody)>(
     b.decode_input(input); // 1
     b.phase_enter(PH_DIRECTOR); // 2：导演槽（护栏在组装层押）
     director(b);
-    b.update_players(); // 3
+    b.update_players(tables); // 3
     b.run_transforms(); // 4
     b.integrate(tables); // 5
     b.collide(tables); // 6

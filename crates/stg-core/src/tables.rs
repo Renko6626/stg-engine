@@ -11,7 +11,6 @@
 
 use crate::items::{ITEM_POINT, ITEM_POWER, ITEM_TYPE_COUNT};
 use crate::math::{Angle, Fx};
-use crate::player::{GRAZE_RADIUS, HIGH_SPEED, HIT_RADIUS, INV_SQRT2, LOW_SPEED};
 use crate::world::MAX_ENTITY_RADIUS;
 
 /// 全局静态数据层（A3 骨架）。见模块文档「传递形态」。
@@ -193,15 +192,23 @@ const CHARACTER0_SHOT: ShotTypeCfg = ShotTypeCfg {
     ],
 };
 
+// ── character-0 移动/判定参数（M0-17 T3 从 player.rs 迁入；逐字节抄现值，零行为搬家）──
+
+const CHAR0_HIGH_SPEED: Fx = Fx::from_raw(294_912); // 4.5 px/帧
+const CHAR0_LOW_SPEED: Fx = Fx::from_raw(131_072); // 2.0 px/帧
+const CHAR0_INV_SQRT2: Fx = Fx::from_raw(46_341); // 0.7071（对角归一）
+const CHAR0_HIT_RADIUS: Fx = Fx::from_raw(163_840); // 2.5 px
+const CHAR0_GRAZE_RADIUS: Fx = Fx::from_int(16);
+
 /// v0 全内容表（编译进二进制；`content_hash` 占位 0）。角色参数/道具三件逐字节抄现值。
 pub static TABLES_V0: WorldTables = WorldTables {
     content_hash: 0,
     characters: [CharacterCfg {
-        high_speed: HIGH_SPEED,
-        low_speed: LOW_SPEED,
-        inv_sqrt2: INV_SQRT2,
-        hit_radius: HIT_RADIUS,
-        graze_radius: GRAZE_RADIUS,
+        high_speed: CHAR0_HIGH_SPEED,
+        low_speed: CHAR0_LOW_SPEED,
+        inv_sqrt2: CHAR0_INV_SQRT2,
+        hit_radius: CHAR0_HIT_RADIUS,
+        graze_radius: CHAR0_GRAZE_RADIUS,
         shot: CHARACTER0_SHOT,
     }],
     item_cfg: ITEM_CFG_V0,

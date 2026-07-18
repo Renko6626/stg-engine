@@ -178,7 +178,10 @@ mod tests {
         assert_eq!(size_of::<InputFrame>(), 4 + 8 * crate::MAX_PLAYERS);
         // 译码目的地必须同宽，否则位 16..32 在 decode 时被静默截断
         assert_eq!(
-            core::mem::size_of_val(&crate::player::PlayerState::spawn(0).input),
+            core::mem::size_of_val(
+                &crate::player::PlayerState::spawn(0, &crate::tables::TABLES_V0.characters[0])
+                    .input
+            ),
             4
         );
     }

@@ -12,11 +12,11 @@ use crate::events::Event;
 use crate::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SLOW, BTN_UP};
 use crate::math::Fx;
 use crate::player::{
-    HIGH_SPEED, INV_SQRT2, LIFE_ABSENT, LIFE_ALIVE, LIFE_DEATHWINDOW, LIFE_GAMEOVER,
-    LIFE_RESPAWNING, LOW_SPEED, RESPAWN_INVULN, SHOT_CD_FRAMES, SHOT_DAMAGE, SHOT_RADIUS,
-    SHOT_SPEED,
+    LIFE_ABSENT, LIFE_ALIVE, LIFE_DEATHWINDOW, LIFE_GAMEOVER, LIFE_RESPAWNING, RESPAWN_INVULN,
+    SHOT_CD_FRAMES, SHOT_DAMAGE, SHOT_RADIUS, SHOT_SPEED,
 };
 use crate::shots::ShotInit;
+use crate::tables::WorldTables;
 
 impl WorldBody {
     pub(crate) fn decode_input(&mut self, input: &crate::input::InputFrame) {
@@ -25,7 +25,7 @@ impl WorldBody {
             self.players[i].input = input.actions[i].buttons;
         }
     }
-    pub(crate) fn update_players(&mut self) {
+    pub(crate) fn update_players(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_PLAYERS);
         for i in 0..crate::MAX_PLAYERS {
             // 生死状态机计时（A4 相位 3 职责）
@@ -59,7 +59,7 @@ impl WorldBody {
             if self.players[i].life_state == LIFE_GAMEOVER {
                 continue;
             }
-            self.move_player(i);
+            self.move_player(i, tables);
             // 角色模块静态分发点（A8"shottype 类似物"）：现仅 character 0，将来各角色一臂。
             #[allow(clippy::single_match)]
             match self.players[i].character_id {
@@ -93,8 +93,10 @@ impl WorldBody {
         }
     }
 
-    /// 移动（东方手感：方向 + 低速 + 对角归一 + 场界钳制）。
-    fn move_player(&mut self, i: usize) {
+    /// 移动（东方手感：方向 + 低速 + 对角归一 + 场界钳制）。移速三值读角色配置表
+    /// （M0-17 T3：`tables.characters[character_id]`，迁自 player.rs 原 HIGH_SPEED/LOW_SPEED/
+    /// INV_SQRT2 常量，零行为搬家）。
+    fn move_player(&mut self, i: usize, tables: &WorldTables) {
         let inp = self.players[i].input;
         let mut dx = 0i32;
         let mut dy = 0i32;
@@ -110,13 +112,14 @@ impl WorldBody {
         if inp & BTN_DOWN != 0 {
             dy += 1;
         }
+        let cfg = &tables.characters[self.players[i].character_id as usize];
         let sp = if inp & BTN_SLOW != 0 {
-            LOW_SPEED
+            cfg.low_speed
         } else {
-            HIGH_SPEED
+            cfg.high_speed
         };
         let axis = if dx != 0 && dy != 0 {
-            sp * INV_SQRT2
+            sp * cfg.inv_sqrt2
         } else {
             sp
         }; // 对角归一

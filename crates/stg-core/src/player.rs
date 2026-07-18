@@ -11,23 +11,12 @@ pub const LIFE_GAMEOVER: u8 = 4; // 命尽、不再重生
 pub const DEATHBOMB_WINDOW: u16 = 8; // 决死窗口帧
 pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
 
-// ── 角色配置（暂 const；WorldTables 角色配置表将来接管）────────────────
-pub const HIGH_SPEED: Fx = Fx::from_raw(294_912); // 4.5 px/帧
-pub const LOW_SPEED: Fx = Fx::from_raw(131_072); // 2.0 px/帧
-pub const INV_SQRT2: Fx = Fx::from_raw(46_341); // 0.7071（对角归一）
-pub const HIT_RADIUS: Fx = Fx::from_raw(163_840); // 2.5 px
-pub const GRAZE_RADIUS: Fx = Fx::from_int(16);
-
-// 行 1/2/3（弹×自机中弹、弹×自机擦弹、敌体×自机中弹）的**被动**操作数就是上面两个半径。
-// 它们不经任何 `create_*` 写 API 的双边钳制——`PlayerState::spawn` 直接把引擎常量写进字段，
-// 而 `WorldBody.players`/`PlayerState` 的字段目前都是 `pub`，钳制无法在类型系统层面强制。
-// 于是"这两个半径 ≤ MAX_ENTITY_RADIUS"只是一条前提，不是写 API 强制出的结论——在此把它钉成
-// 编译期断言，至少保证常量本身不会漂移出六行碰撞 Fx 加法安全的证明所依赖的上限。
-const _: () = assert!(
-    HIT_RADIUS.raw() <= crate::world::MAX_ENTITY_RADIUS.raw()
-        && GRAZE_RADIUS.raw() <= crate::world::MAX_ENTITY_RADIUS.raw(),
-    "自机判定半径必须 ≤ MAX_ENTITY_RADIUS —— 否则行 1/2/3 的 (r_active + r_passive) Fx 加法失去证明"
-);
+// ── 角色配置：M0-17 T3 起移速/半径五常量已迁 `crate::tables::CharacterCfg`
+// （`TABLES_V0.characters[..]`）；`PlayerState::spawn` 从表取值，`update_players` 移动逻辑
+// 读 `tables.characters[character_id]`。行 1/2/3（弹×自机中弹、弹×自机擦弹、敌体×自机中弹）
+// 的**被动**操作数就是 `hit_radius`/`graze_radius` 两半径——它们不经任何 `create_*` 写 API
+// 的双边钳制，上限校验已由 `WorldTables::validate()`（`radius_in_range`）接管，取代原编译期
+// 断言（T1 起）。
 
 pub const SHOT_SPEED: Fx = Fx::from_int(12);
 pub const SHOT_RADIUS: Fx = Fx::from_int(4);
@@ -62,15 +51,16 @@ pub struct PlayerState {
 }
 
 impl PlayerState {
-    /// 出场初值（场底中心，Alive，3 命 3 弹）。
-    pub fn spawn(character_id: u8) -> Self {
+    /// 出场初值（场底中心，Alive，3 命 3 弹）。判定/擦弹半径从角色配置表取
+    /// （M0-17 T3：迁表零行为搬家，值逐位同源）。
+    pub fn spawn(character_id: u8, cfg: &crate::tables::CharacterCfg) -> Self {
         PlayerState {
             x: Fx::ZERO,
             y: Fx::from_int(384),
             character_id,
             facing: 0,
-            hit_radius: HIT_RADIUS,
-            graze_radius: GRAZE_RADIUS,
+            hit_radius: cfg.hit_radius,
+            graze_radius: cfg.graze_radius,
             input: 0,
             life_state: LIFE_ALIVE,
             state_timer: 0,
@@ -105,7 +95,7 @@ mod tests {
     #[test]
     fn power_scale_and_tier_boundaries() {
         assert_eq!(crate::items::POWER_MAX, 400, "满火力 = 4.00（一格 0.01）");
-        let mut p = PlayerState::spawn(0);
+        let mut p = PlayerState::spawn(0, &crate::tables::TABLES_V0.characters[0]);
         assert_eq!(p.power_tier(), 0);
         p.power = 99; // 0.99
         assert_eq!(p.power_tier(), 0, "0.99 仍 0 档");
@@ -115,5 +105,15 @@ mod tests {
         assert_eq!(p.power_tier(), 3);
         p.power = crate::items::POWER_MAX; // 4.00
         assert_eq!(p.power_tier(), 4, "满火力 4 档");
+    }
+
+    /// 迁表回归（M0-17 T3）：`spawn` 判定/擦弹半径与 `TABLES_V0` 表值逐位相等——
+    /// 零行为搬家的判别腿（若 `spawn` 漏接表值/接错角色槽，本测试就会红）。
+    #[test]
+    fn spawn_radii_match_tables_v0_bitwise() {
+        let cfg = &crate::tables::TABLES_V0.characters[0];
+        let p = PlayerState::spawn(0, cfg);
+        assert_eq!(p.hit_radius, cfg.hit_radius, "hit_radius 逐位同源");
+        assert_eq!(p.graze_radius, cfg.graze_radius, "graze_radius 逐位同源");
     }
 }
