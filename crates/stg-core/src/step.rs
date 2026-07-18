@@ -5,11 +5,16 @@ use std::alloc::{Layout, alloc_zeroed, handle_alloc_error};
 use crate::rng::Pcg32;
 use crate::world::{PH_DIRECTOR, PH_ECL_HOOK, RNG_SEQ, WorldBody};
 
-/// 权威可变状态。M1 起加 `pub tasks: TaskPool`。
+/// 权威可变状态。
+///
+/// `tasks`（M1 T1 起）：ECL 任务池物理住组装层以满足 memcpy 快照（P1：world 不知道"任务"
+/// 存在，`WorldBody` 内不 import `ecl::*`）。T1 版**无任何相位驱动它**——纯地基，金向量
+/// 因而逐位不变；协程调度接入相位 2 导演槽是 T2 的事。
 #[repr(C)]
 #[derive(crate::checksum::Checksum)]
 pub struct World {
     pub body: WorldBody,
+    pub tasks: crate::ecl::task::TaskPool,
 }
 
 impl World {
@@ -68,6 +73,7 @@ impl World {
         {
             d.phase_guard = s.phase_guard;
         }
+        self.tasks.copy_into(&mut dst.tasks);
     }
 
     #[inline]
@@ -748,6 +754,28 @@ mod tests {
         let i = 0;
         snap.body.items.item_type[i] ^= 1;
         assert_ne!(snap.checksum(), ck, "items 必须真的参与校验和");
+    }
+
+    /// M1 T1：`World.tasks` 快照往返 + 校验和敏感（M0-15 同款判别）——写一个从未 `spawn`
+    /// 过的槽字段，checksum 必须变（P6 哈希全槽不看存活位）；`copy_into` 漏拷 `tasks` 即红。
+    #[test]
+    fn snapshot_covers_tasks_pool() {
+        let mut w = World::new(3);
+        let ck0 = w.checksum();
+        w.tasks.slots[5].pc = 42; // 槽 5 从未 spawn 过——专挑"只哈希占用槽"的变异体
+        let ck1 = w.checksum();
+        assert_ne!(ck1, ck0, "tasks 池必须入校验和（哈希全槽不看 alive）");
+
+        let mut snap = World::new(3);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.checksum(), ck1, "快照必须带 tasks 池全部字节");
+        w.tasks.slots[5].pc = 0;
+        snap.copy_into(&mut w); // 恢复
+        assert_eq!(
+            w.checksum(),
+            ck1,
+            "restore 必须还原 tasks 池（copy_into 漏拷即红）"
+        );
     }
 
     #[test]

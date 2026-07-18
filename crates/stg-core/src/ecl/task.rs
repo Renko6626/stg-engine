@@ -1,0 +1,257 @@
+//! Task 池（M1 地基）—— 手写特例池（`xform.rs` 先例：存活位图即分配器，最低空位，无逐槽
+//! generation——任务句柄 = (index, birth_frame) 由调度层管；对外只 spawn/kill/iter）。
+//!
+//! 容量全为编译期常量（spec 拍板 3）：求值栈 32 字 / locals 64 字 / 调用栈 8 帧 / 池 cap 256——
+//! `Task` ≈ 460B、`TaskPool` ≈ 118KB（World ~1.04MB，校验和 +12%）。全部编译期常量，
+//! 金向量实测不够再调。
+//!
+//! **为何手写而非 `define_pool!`**：`define_pool!` 把每个字段展开成独立 SoA 数组
+//! （`[T; CAP]` per field），适合"细粒度字段各自成阵列"的场景；`Task` 本身已是一块含定长
+//! 栈/locals 的扁平内存（I5：协程完整状态 ip+栈+局部位于可 memcpy 内存），拆成 SoA 对它
+//! 无意义，故 AoS（`slots: [Task; TASK_CAP]`）手写特例，仿 `xform.rs` 段池。
+
+pub const TASK_CAP: usize = 256;
+pub const EVAL_DEPTH: usize = 32;
+pub const CALL_DEPTH: usize = 8;
+pub const LOCALS: usize = 64;
+
+/// owner 三态：0=关卡（恒有效）/1=敌/2=弹；index+gen 仅 kind≠0 时有意义。
+pub const OWNER_STAGE: u8 = 0;
+pub const OWNER_ENEMY: u8 = 1;
+pub const OWNER_BULLET: u8 = 2;
+
+/// 一个 ECL 任务（协程）的完整可 memcpy 状态（I5：模拟协程完整状态位于可 memcpy 的扁平内存）。
+#[repr(C)]
+#[derive(Clone, Copy, crate::checksum::Checksum)]
+pub struct Task {
+    /// `EclImage.subs` 入口索引（T1 未穿线 `EclImage`，字段先占位）。
+    pub script: u16,
+    /// 程序计数器：`VmCtx.code` 的字（word）索引。
+    pub pc: u32,
+    /// 剩余等待帧数；>0 时调度层门禁跳过本任务（次帧递减，T2 接线）。
+    pub wait: u16,
+    /// 出生帧号：`== 当前帧` 则本帧跳过（次帧首跑，T2 接线）。
+    pub born_frame: u32,
+    pub owner_kind: u8,
+    pub owner_index: u16,
+    pub owner_gen: u16,
+    /// 任务池索引 + 1；0 = 无父（仅 `kill_children` 遍历用，T2）。
+    pub parent: u16,
+    /// 求值栈栈顶（0..=EVAL_DEPTH）。
+    pub sp: u8,
+    /// 调用栈栈顶（0..=CALL_DEPTH）。
+    pub csp: u8,
+    pub stack: [i32; EVAL_DEPTH],
+    pub calls: [u32; CALL_DEPTH],
+    pub locals: [i32; LOCALS],
+}
+
+impl Default for Task {
+    /// 全零任务——与池 `alloc_zeroed`（`step::World::new`）天然一致：`owner_kind=0`
+    /// (`OWNER_STAGE`)、`pc/wait/born_frame=0`、栈/调用栈/locals 全零。
+    fn default() -> Self {
+        Task {
+            script: 0,
+            pc: 0,
+            wait: 0,
+            born_frame: 0,
+            owner_kind: OWNER_STAGE,
+            owner_index: 0,
+            owner_gen: 0,
+            parent: 0,
+            sp: 0,
+            csp: 0,
+            stack: [0; EVAL_DEPTH],
+            calls: [0; CALL_DEPTH],
+            locals: [0; LOCALS],
+        }
+    }
+}
+
+/// 任务池本体（AoS；I7 无堆容器，inline 数组住 `World`，全零 = 合法空池）。
+#[repr(C)]
+#[derive(crate::checksum::Checksum)]
+pub struct TaskPool {
+    pub(crate) slots: [Task; TASK_CAP],
+    pub(crate) alive: [u64; TASK_CAP / 64],
+}
+
+impl TaskPool {
+    /// 全零构造（供独立于 `World` 的单测使用；`World::new` 走 `alloc_zeroed`，不经此路）。
+    pub fn new() -> Self {
+        TaskPool {
+            slots: [Task::default(); TASK_CAP],
+            alive: [0; TASK_CAP / 64],
+        }
+    }
+
+    /// 分配任务（最低空位，I4 确定性分配）：写满全部字段（复用槽写满纪律，撑"哈希全槽不掩码"）。
+    /// `owner = (kind, index, gen)`；`parent` = 调用方传入的父任务池索引+1（0=无父）。
+    #[allow(dead_code)] // T1 地基：无调用方（T2 起协程调度 + spawn_task 世界侧入口消费）
+    pub(crate) fn spawn(
+        &mut self,
+        script: u16,
+        owner: (u8, u16, u16),
+        parent: u16,
+        frame: u32,
+    ) -> Option<u16> {
+        for w in 0..self.alive.len() {
+            if self.alive[w] != u64::MAX {
+                let bit = (!self.alive[w]).trailing_zeros() as usize;
+                let idx = w * 64 + bit;
+                if idx >= TASK_CAP {
+                    return None; // 末字幽灵位防御（TASK_CAP 恰 64 倍数时不可达，同 xform.rs 先例）
+                }
+                self.alive[w] |= 1 << bit;
+                self.slots[idx] = Task {
+                    script,
+                    pc: 0,
+                    wait: 0,
+                    born_frame: frame,
+                    owner_kind: owner.0,
+                    owner_index: owner.1,
+                    owner_gen: owner.2,
+                    parent,
+                    sp: 0,
+                    csp: 0,
+                    stack: [0; EVAL_DEPTH],
+                    calls: [0; CALL_DEPTH],
+                    locals: [0; LOCALS],
+                };
+                return Some(idx as u16);
+            }
+        }
+        None
+    }
+
+    /// 按索引释放（清 alive 位）；越界属引擎 bug（P4-c debug 断言，release no-op）。
+    #[allow(dead_code)] // T1 地基：无调用方（T2 起 owner 门禁/Fault 杀任务/KILL_* 消费）
+    pub(crate) fn kill(&mut self, i: usize) {
+        debug_assert!(i < TASK_CAP, "kill 越界（引擎 bug）");
+        if i < TASK_CAP {
+            self.alive[i / 64] &= !(1 << (i % 64));
+        }
+    }
+
+    #[allow(dead_code)] // T1 地基：无调用方（T2 起 owner 门禁消费）
+    pub(crate) fn is_alive(&self, i: usize) -> bool {
+        i < TASK_CAP && (self.alive[i / 64] >> (i % 64)) & 1 != 0
+    }
+
+    /// 升序 alive 索引迭代（I4）。
+    pub fn iter_alive(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.alive.len()).flat_map(move |w| {
+            let mut bits = self.alive[w];
+            core::iter::from_fn(move || {
+                if bits == 0 {
+                    return None;
+                }
+                let b = bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                Some(w * 64 + b)
+            })
+        })
+    }
+
+    /// 快照拷贝（`copy_into` 家族，M0-15 同款：安全逐字段/整块 `copy_from_slice`）。
+    pub(crate) fn copy_into(&self, dst: &mut TaskPool) {
+        dst.slots.copy_from_slice(&self.slots);
+        dst.alive.copy_from_slice(&self.alive);
+    }
+}
+
+impl Default for TaskPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::checksum::Checksum;
+
+    #[test]
+    fn spawn_is_lowest_free_and_writes_all_fields() {
+        let mut p = TaskPool::new();
+        let a = p.spawn(3, (OWNER_ENEMY, 7, 1), 0, 10).unwrap();
+        let b = p.spawn(4, (OWNER_BULLET, 9, 2), a + 1, 11).unwrap();
+        assert_eq!((a, b), (0, 1), "最低空位升序");
+        assert!(p.is_alive(a as usize));
+        assert!(p.is_alive(b as usize));
+        let t = &p.slots[a as usize];
+        assert_eq!(t.script, 3);
+        assert_eq!(t.pc, 0);
+        assert_eq!(t.wait, 0);
+        assert_eq!(t.born_frame, 10);
+        assert_eq!(t.owner_kind, OWNER_ENEMY);
+        assert_eq!(t.owner_index, 7);
+        assert_eq!(t.owner_gen, 1);
+        assert_eq!(t.parent, 0);
+        assert_eq!(t.sp, 0);
+        assert_eq!(t.csp, 0);
+        let t2 = &p.slots[b as usize];
+        assert_eq!(t2.parent, a + 1);
+        assert_eq!(t2.born_frame, 11);
+    }
+
+    #[test]
+    fn kill_frees_slot_for_reuse() {
+        let mut p = TaskPool::new();
+        let a = p.spawn(0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        p.kill(a as usize);
+        assert!(!p.is_alive(a as usize));
+        let b = p.spawn(0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        assert_eq!(b, a, "还槽后复用最低位");
+    }
+
+    #[test]
+    fn iter_alive_ascending_matches_alive_bits() {
+        let mut p = TaskPool::new();
+        let a = p.spawn(0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let b = p.spawn(0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        p.kill(a as usize);
+        let c = p.spawn(0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        assert_eq!(c, a, "复用最低位");
+        let alive: Vec<usize> = p.iter_alive().collect();
+        assert_eq!(alive, vec![a as usize, b as usize], "升序遍历（I4）");
+    }
+
+    #[test]
+    fn pool_full_returns_none() {
+        let mut p = TaskPool::new();
+        for k in 0..TASK_CAP {
+            assert!(
+                p.spawn(0, (OWNER_STAGE, 0, 0), 0, 0).is_some(),
+                "第 {k} 个应成功"
+            );
+        }
+        assert!(
+            p.spawn(0, (OWNER_STAGE, 0, 0), 0, 0).is_none(),
+            "256 个耗尽"
+        );
+    }
+
+    #[test]
+    fn copy_into_full_roundtrip_and_checksum_matches() {
+        let mut p = TaskPool::new();
+        let a = p.spawn(9, (OWNER_ENEMY, 3, 1), 0, 5).unwrap();
+        p.slots[a as usize].locals[10] = 77;
+        let mut dst = TaskPool::new();
+        p.copy_into(&mut dst);
+        assert_eq!(dst.checksum(), p.checksum());
+        assert_eq!(dst.slots[a as usize].locals[10], 77);
+        assert!(dst.is_alive(a as usize));
+    }
+
+    /// P6 判别腿：任意槽字节（哪怕从未 spawn 过的槽）入校验和——"只哈希占用槽"的变异体在此维度
+    /// 无从分辨（xform.rs `checksum_sensitive_to_any_slot_byte_and_occupancy` 同款判别）。
+    #[test]
+    fn checksum_sensitive_to_unoccupied_slot_byte() {
+        let p0 = TaskPool::new();
+        let base = p0.checksum();
+        let mut p1 = TaskPool::new();
+        p1.slots[5].locals[0] = 42; // 槽 5 从未 spawn
+        assert_ne!(p1.checksum(), base, "未占用槽的字节也必须入哈希");
+    }
+}
