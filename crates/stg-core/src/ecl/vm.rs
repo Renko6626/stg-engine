@@ -289,6 +289,41 @@ mod tests {
         assert_eq!(t.stack[0], 42);
     }
 
+    /// wrapping 语义钉死（T1 复审 Important）：`i32::MIN / -1`（Rust 裸 `/` 在 release
+    /// 也 panic 的经典向量）与 MOD/NEG 同族边界——必须回绕不 Fault 不 panic。此测试是
+    /// "有人把 wrapping_div 改回 `/`" 的 CI 闸门（debug 跑测试即炸）。
+    #[test]
+    fn arith_wrapping_edge_min_over_neg_one() {
+        let (r, t) = run(&[
+            OP_PUSHI as u32,
+            i32::MIN as u32,
+            OP_PUSHI as u32,
+            -1i32 as u32,
+            OP_DIV as u32,
+            OP_END as u32,
+        ]);
+        assert_eq!(r, Exec::End, "MIN/-1 不得 Fault");
+        assert_eq!(t.stack[0], i32::MIN, "wrapping_div 回绕语义");
+        let (r, t) = run(&[
+            OP_PUSHI as u32,
+            i32::MIN as u32,
+            OP_PUSHI as u32,
+            -1i32 as u32,
+            OP_MOD as u32,
+            OP_END as u32,
+        ]);
+        assert_eq!(r, Exec::End);
+        assert_eq!(t.stack[0], 0, "wrapping_rem(MIN,-1) = 0");
+        let (r, t) = run(&[
+            OP_PUSHI as u32,
+            i32::MIN as u32,
+            OP_NEG as u32,
+            OP_END as u32,
+        ]);
+        assert_eq!(r, Exec::End);
+        assert_eq!(t.stack[0], i32::MIN, "wrapping_neg(MIN) = MIN");
+    }
+
     #[test]
     fn integer_arith_family() {
         let (_, t) = run(&[OP_PUSHI as u32, 7, OP_PUSHI as u32, 3, OP_ADD as u32]);
