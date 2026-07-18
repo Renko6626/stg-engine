@@ -20,3 +20,99 @@ pub mod task;
 pub(crate) mod vm;
 
 pub use image::EclImage;
+
+/// VM fuzz 冒烟（§9 承诺的最小版，M1-T5）：确定性 PRNG 生成随机字节码，断言两件事——
+/// ① 任意垃圾码永不 panic（只许确定性 Fault）；② 剥去副作用 op（SYS/SPAWN）的垃圾码
+/// **无法越权触碰 WorldBody**（对照空镜像参考世界逐字段哈希全等——白名单沙箱的实证）。
+#[cfg(test)]
+mod fuzz_smoke {
+    use crate::checksum::Checksum;
+    use crate::ecl::image::EclImage;
+    use crate::ecl::ops;
+    use crate::ecl::task::OWNER_STAGE;
+    use crate::input::InputFrame;
+    use crate::rng::Pcg32;
+    use crate::step::{World, step};
+    use crate::tables::TABLES_V0;
+
+    /// 64 字随机镜像；`strip_effects` 把 SYS（改世界）与 SPAWN（池满时改 diag）换成 POP。
+    fn random_image(rng: &mut Pcg32, strip_effects: bool) -> EclImage {
+        let mut code = Vec::with_capacity(64);
+        for _ in 0..64 {
+            let mut w = rng.next_u32();
+            if strip_effects {
+                let op = (w & 0xFF) as u8;
+                if op == ops::OP_SYS || op == ops::OP_SPAWN {
+                    w = (w & !0xFF) | ops::OP_POP as u32;
+                }
+            }
+            code.push(w);
+        }
+        EclImage {
+            code,
+            subs: vec![0],
+            content_hash: 0,
+        }
+    }
+
+    /// ① 256 份全随机镜像 × 60 帧：不 panic、不越界，Fault 走确定性通道。
+    #[test]
+    fn fuzz_random_code_never_panics() {
+        let mut rng = Pcg32::new(0xF0_22_5E_ED, 0x1);
+        for i in 0..256u64 {
+            let img = random_image(&mut rng, false);
+            let mut w = World::new(0x1000 + i);
+            w.spawn_task(&img, 0, (OWNER_STAGE, 0, 0));
+            for f in 0..60u32 {
+                step(&mut w, &TABLES_V0, &img, &InputFrame::empty(f));
+            }
+        }
+    }
+
+    /// ② 128 份去副作用镜像 vs 空镜像参考世界：除 tasks/diag（task_faults 计数）外，
+    /// WorldBody 逐字段哈希全等——垃圾码只能烧自己的预算，摸不到世界（syscall 白名单沙箱）。
+    #[test]
+    fn fuzz_stripped_code_cannot_touch_world_body() {
+        let empty = EclImage::empty();
+        let mut rng = Pcg32::new(0xF0_22_5E_EE, 0x2);
+        for i in 0..128u64 {
+            let img = random_image(&mut rng, true);
+            let seed = 0x2000 + i;
+            let mut wa = World::new(seed);
+            wa.spawn_task(&img, 0, (OWNER_STAGE, 0, 0));
+            let mut wb = World::new(seed);
+            for f in 0..60u32 {
+                step(&mut wa, &TABLES_V0, &img, &InputFrame::empty(f));
+                step(&mut wb, &TABLES_V0, &empty, &InputFrame::empty(f));
+            }
+            let a = &wa.body;
+            let b = &wb.body;
+            assert_eq!(a.frame, b.frame);
+            assert_eq!(
+                a.rng.checksum(),
+                b.rng.checksum(),
+                "镜像 {i} 越权消耗了世界 RNG"
+            );
+            assert_eq!(
+                a.bullets.checksum(),
+                b.bullets.checksum(),
+                "镜像 {i} 越权产弹"
+            );
+            assert_eq!(a.shots.checksum(), b.shots.checksum(), "镜像 {i}");
+            assert_eq!(a.enemies.checksum(), b.enemies.checksum(), "镜像 {i}");
+            assert_eq!(a.fields.checksum(), b.fields.checksum(), "镜像 {i}");
+            assert_eq!(a.items.checksum(), b.items.checksum(), "镜像 {i}");
+            assert_eq!(
+                a.globals.checksum(),
+                b.globals.checksum(),
+                "镜像 {i} 越权写 globals"
+            );
+            assert_eq!(
+                a.boss_ui.checksum(),
+                b.boss_ui.checksum(),
+                "镜像 {i} 越权写 boss_ui"
+            );
+            assert_eq!(a.players.checksum(), b.players.checksum(), "镜像 {i}");
+        }
+    }
+}
