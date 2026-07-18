@@ -61,8 +61,9 @@ pub const STATUS_BAD_ARGS: u16 = 3;
 ///   四个写 API 双边钳入 `[0, MAX_ENTITY_RADIUS]`。这四个池的 SoA 数组是 `pub(crate)`，
 ///   "只能走写 API"是类型系统**可强制**的纪律，不是约定。
 /// - **自机侧**（行 1/2/3 的被动操作数，`PlayerState::hit_radius`/`graze_radius`）：**不经任何
-///   写 API**——由 `PlayerState::spawn`（`crate::player`）直接从引擎常量赋值，上限由
-///   `player.rs` 里的编译期断言钉死（`HIT_RADIUS`/`GRAZE_RADIUS` ≤ `MAX_ENTITY_RADIUS`）。但
+///   写 API**——由 `PlayerState::spawn` 从 `WorldTables::CharacterCfg` 赋值（M0-17 迁表），
+///   上限由 `WorldTables::validate()` 的角色半径腿 + `spawn_radii_match_tables_v0_bitwise`
+///   位等测试钉死（原 player.rs 编译期断言已随常量迁表退役）。但
 ///   `WorldBody.players` 与 `PlayerState` 的字段目前都是 `pub`，任何持 `&mut World` 的上层
 ///   （今天是 stg-harness，将来是 stg-godot/stg-py）都能绕过 `spawn` 直接写这两个字段——这是
 ///   **前提**，不是强制。安全性目前只因"除 spawn 外无人写它"成立；收紧可见性（或改走访问器）
