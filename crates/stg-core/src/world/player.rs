@@ -372,25 +372,50 @@ mod tests {
         );
     }
 
-    /// focus 索引到位（M0-17 T4）：`BTN_SLOW` 持下解释器读 `sets[tier][1]`——v0 两焦点槽
-    /// 共享同一列表（`tables.rs::tables_v0_shape` 已用 `ptr::eq` 钉死内容层同源），本测试钉
-    /// 解释器*真的*用 focus=1 索引且行为等价（同弹数）；内容差异化留后补（spec 拍板 5）。
+    /// focus 索引真判别（M0-17 T4，终审前复审 Important 补强）：v0 正式表两焦点槽共享指针，
+    /// 拿它测 focus 索引是装饰断言（focus 恒 0 的 bug 照样绿）。本测试造**定制表**——tier 0
+    /// 无焦 1 路 / 聚焦 2 路——持 `BTN_SLOW` 出 2 弹、不持出 1 弹，把"解释器真的用 focus=1
+    /// 索引"变成可红命题。
     #[test]
     fn focus_indexes_focused_set() {
         use crate::input::{BTN_SHOT, BTN_SLOW};
+        use crate::tables::{Shooter, TABLES_V0, WorldTables};
 
-        let mut w = crate::step::World::new(1);
-        w.body.players[0].power = 250; // tier2：两路，便于与 tier0 单路区分
-        w.body.players[0].input = BTN_SHOT | BTN_SLOW;
-        #[cfg(debug_assertions)]
-        {
-            w.body.phase_guard = crate::world::PH_PLAYERS;
-        }
-        w.body.update_players(&crate::tables::TABLES_V0);
-        assert_eq!(
-            w.body.shots.iter_alive().count(),
-            2,
-            "focus=1 读到同一 tier2 两路列表（v0 共享内容）"
-        );
+        const S: Shooter = Shooter {
+            interval: 4,
+            delay: 0,
+            dx: crate::math::Fx::ZERO,
+            dy: crate::math::Fx::ZERO,
+            angle: crate::math::Angle(49152),
+            speed: crate::math::Fx::from_int(12),
+            damage: 1,
+            radius: crate::math::Fx::from_int(4),
+            sprite: 0,
+            option: 0,
+            flags: 0,
+        };
+        static UNFOCUSED_1WAY: [Shooter; 1] = [S];
+        static FOCUSED_2WAY: [Shooter; 2] = [S, S];
+        let mut t = WorldTables {
+            content_hash: 0,
+            characters: TABLES_V0.characters,
+            item_cfg: TABLES_V0.item_cfg,
+            drop_tables: TABLES_V0.drop_tables,
+            item_gravity: TABLES_V0.item_gravity,
+        };
+        t.characters[0].shot.sets[0] = [&UNFOCUSED_1WAY, &FOCUSED_2WAY];
+
+        let run = |slow: bool| -> usize {
+            let mut w = crate::step::World::new(1);
+            w.body.players[0].input = if slow { BTN_SHOT | BTN_SLOW } else { BTN_SHOT };
+            #[cfg(debug_assertions)]
+            {
+                w.body.phase_guard = crate::world::PH_PLAYERS;
+            }
+            w.body.update_players(&t);
+            w.body.shots.iter_alive().count()
+        };
+        assert_eq!(run(false), 1, "focus=0 读无焦列表（1 路）");
+        assert_eq!(run(true), 2, "focus=1 读聚焦列表（2 路）——索引判别腿");
     }
 }

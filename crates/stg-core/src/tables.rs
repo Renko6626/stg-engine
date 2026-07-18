@@ -26,6 +26,7 @@ pub struct WorldTables {
 
 /// 每类型道具配置（M0-17 T2 从 `items.rs` 迁入——结构体定义 + 内容全归此处；`items.rs`
 /// 只留类型编号/池/账本常数）。
+#[derive(Clone, Copy, Debug)]
 pub struct ItemTypeCfg {
     pub score: u32,
     pub eject_speed: Fx,
