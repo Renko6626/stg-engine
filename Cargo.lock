@@ -48,6 +48,7 @@ name = "stg-harness"
 version = "0.0.0"
 dependencies = [
  "stg-core",
+ "stg-ecl-compiler",
 ]
 
 [[package]]

@@ -13,6 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 stg-core.workspace = true
+# M1 T4：现场用 builder DSL 拼彩虹风铃符卡（golden --scene ecl-rainbow）——harness 在
+# 断层线【以上】，编译器同侧，依赖方向 harness→compiler→core 单向（compiler 不反向依赖 core 之外）。
+stg-ecl-compiler.workspace = true
 # 注意：harness 在断层线【以上】，允许用 f64 —— 烘焙表生成器（bake-tables）正是在
 # 这里用 f64 算 sin/cos/easing，再把【原始字节】commit 进 stg-core。stg-core 自身
 # 只 include_bytes! 消费这些字节，永不现算（§2.1 烘焙表纪律）。
