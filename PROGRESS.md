@@ -6,16 +6,18 @@
 
 ## 现在（2026-07-17）
 
-- **位置**：Phase 1 · M0 世界层，推进至 **M0-15**（`globals[1024]`+`boss_ui` 公告板三 API
-  ——M1 ECL 硬前置补齐；消弹一律转星星，经济闭环）；main 全绿（单测/clippy/金向量/烘焙表）。
+- **位置**：Phase 1 · M0 世界层，推进至 **M0-17**（WorldTables 骨架全家入驻 + shottype 表
+  ——ZUN `.sht` 式火力→弹型接线通电，逐档弹型/子机/focus 全表驱动）；main 全绿。
 - **在飞**：无。
-- **下一步候选**：M1 ECL · bomb · power→火力档位 · 激光池。
+- **下一步候选**：M1 ECL · bomb · homing 单刀 · 激光池。
 - **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；B1 剩余四池写 API 仍零覆盖）。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-18 | M0-17 | WorldTables 骨架全家入驻 + shottype 表通电——逐档弹型/子机/focus 表驱动 |
+| 2026-07-18 | M0-16 | 火力定标 0.00-4.00（一格 0.01）+ power_tier 档位取值器 |
 | 2026-07-18 | M0-15 | globals+boss_ui 三 API（M1 硬前置）+ 消弹一律转星星（30 分经济回流） |
 | 2026-07-17 | M0-14 | create_bullets_batch N×K 网格发射器——环/列/多重环一个原语，ECL 性能面就绪 |
 | 2026-07-17 | M0-13 | 敌人 move_to 插值器 + nearest_enemy 查询——ECL syscall 面补全，敌界放宽纪律回收 |

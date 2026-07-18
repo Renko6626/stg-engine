@@ -152,6 +152,11 @@ WorldTables 清单（v1）：
 - **图样描述符表**：pattern_id → 烘焙的发射参数块（appearance、count、speed、spread……），供变换 op `SPAWN_PATTERN` 以单个 id 引用（槽宽永不为胖参数膨胀，D4）；
 - **道具配置表**：item_type → 分值（**v1 固定分值**，高度计价见 Part IV）/ 物理参数（弹出初速、终端速度、磁吸速度）/ 拾取半径；
 - **游戏配置段**：场地半宽/高（逻辑 384×448）、越界回收边距、回收线（PoC）y 值、决死窗口 `DEATHBOMB_WINDOW = 8` 帧、复活参数（飞入时长、复活无敌帧）；
+- **角色配置表（shottype，M0-17 落地）**：移动参数（高/低速、判定/擦弹半径）+ shottype 表
+  （ZUN `.sht` 类似物：`[tier 0..=4][focus 0/1]` 十槽 shooterset + 每档子机偏移表，
+  shooter = 发射器十字段）——`crates/stg-core/src/tables.rs` `WorldTables` v0 骨架已建，
+  `&'static` 参数穿线（不进 World/快照）；道具配置表/掉落表已同刀迁入；`content_hash`
+  占位待文件加载刀（follow-ups C11）。
 - **角色配置表**：character_id → 高速/低速移动速度、判定半径/擦弹半径、射击 CD、homing 转率等角色常量。
 
 ## A4 step 流水线 v2
@@ -211,6 +216,10 @@ WorldTables 清单（v1）：
 - `PlayerState.character_id` 在相位 4 **静态分发**（`match`，编译进引擎的角色模块——不是函数指针，零 P5/I7 冲突）到各角色的 `update_shot / update_bomb / steer_shots` Rust 函数；
 - **世界管"身体与账本"**（角色无关的公共骨架）：移动积分、低速切换、场界钳制、中弹判定、决死窗口状态机、死亡/复活/无敌计时、bomb 触发仲裁（查库存、消库存、**触发帧立即无敌**）、残机/bomb/power/graze/score 账本；
 - **角色模块管"火力与个性"**：发弹模式（读 `players[i].input` 动作位）、homing 弹转向（逐帧扫最近敌人，转率为角色常量）、bomb 效果时间线（`bomb_phase/bomb_timer` 小状态机驱动，铺 Field 实体、发演出请求）；
+  > **M0-17 修订**：发弹已从"角色模块硬编码"改为 **shottype 表驱动**——相位 3 通用解释器按
+  > `[power_tier][focus]` 查 `WorldTables` 的 shooterset 逐 shooter 发射（`shot_timer` 持按
+  > 累进/松手清零）；"角色模块静态分发"构想保留给 bomb 效果时间线与 homing 等真个性逻辑，
+  > 纯发弹参数不再进代码。
 - 多帧演出用 `PlayerState` 内的纯数据状态机字段驱动，随快照、参与校验和；
 - 跨层备注（输入层）：`ActionInput.buttons` 现为 u8，基础动作已占 7 位；**建议扩为 u16**，世界侧按位号消费、不关心按位语义——为将来"自机技能 A"这类扩展动作留空间。
 
@@ -439,7 +448,7 @@ SoA，~64 B/敌，256 敌 ≈ 16 KB：
 | 输入 | `input: u16`（相位 2 译码写入的动作位） |
 | 生死状态机 | `life_state: u8, state_timer: u16, invuln: u16` |
 | bomb 状态机 | `bomb_phase: u8, bomb_timer: u16` |
-| 火力 | `shot_cd: u8, power: u16`（定点百分制 0–400 = 0.00–4.00） |
+| 火力 | `shot_timer: u16`（M0-17：持按累进/松手清零，替换原 `shot_cd` 冷却）, `power: u16`（定点百分制 0–400 = 0.00–4.00） |
 | 账本 | `lives: u8, bombs: u8, life_pieces: u8, bomb_pieces: u8, score: u64, graze: u32`（**score u64**：东方真实分数上千亿，u32 溢出） |
 
 **生死状态机**（全整数帧）：
@@ -633,6 +642,10 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | `emit_req` | reqs 满 | 丢弃 | `TRUNCATED` | `diag.reqs_dropped` |
 | （内部）hits 满 | — | 丢弃（**debug panic**） | — | `diag.hits_dropped` |
 | （内部）frame_events 满 | — | 丢弃 | — | `diag.events_dropped` |
+
+注：`&WorldTables` 参数已实际穿线（M0-17）：`step`/`step_with_director` +1 参，读表的相位
+函数与写 API（掉落/入账/磁吸/移动/发弹）按需下传——本表"签名"列的 `（+ &WorldTables）`
+从设计变为实况。
 
 注：`set_var / get_var / boss_set` 世界侧已落地（M0-15）：`globals: [i32; 1024]` +
 `boss_ui: [BossUiSlot; 2]` 照 A2 形状入 WorldBody（自动入校验和 + `copy_into` 快照）；

@@ -92,6 +92,12 @@ LOOP 跳回后 `[0, xform_next)` 收缩：活跃 STEP 冻结至重武装、武�
 的极端场景）会在 debug 触发溢出 panic、release 静默回绕——确定性不破（跨平台逐位一致仍成立）
 但入账值荒谬。修法：累加改 `saturating_add(1)`，蜡数比较从 `==` 改 `>=` 以抗直写越界。
 
+### B14. `WorldTables::validate()` 角色半径腿只有正向覆盖（M0-17 T1 复审分诊）
+
+`validate_rejects_bad` 的三条负向腿只压 shooter 的 interval/radius/option；角色
+`hit_radius`/`graze_radius` 越界的拒绝分支无负向测试（正向由 `tables_v0_validates` 覆盖）。
+补一条坏角色半径的拒绝腿即可，与文件加载刀的加载期校验一并做也行。
+
 ### B13. 道具近距磁吸 v0 的自机选择与优先裁决序偏离 spec —— 与 B3/B8 co-op 族同批（M0-12 终审分诊）
 
 道具近距磁吸 v0 实现取"升序首个圈内自机"，而非 spec 写的"最近的 ALIVE 自机"——`players[1]`
@@ -160,6 +166,19 @@ no-op/计数兜底），与 easing id 的 create 期拒收不对称——两条�
 若未来有人在 `polar_to_vec` 或某入口加"负速钳零"，全套测试仍绿、行为已变。补一条
 单测（负速直填 + 批量负步跨零各一断言）即可钉死，M1 ECL 暴露 `create_bullets_batch`
 给脚本作者前值得做。
+
+### C10. homing 自机弹单刀设计注记（M0-17 grill 后置）
+
+shottype 表 `Shooter.flags` bit0 已预留 homing。开刀时要拍的唯一悬案是**转向率存放**：
+甲案全局常量（所有追踪弹同转向率，零池改动）；乙案 `ShotPool` 加 `turn_rate` 字段
+（池布局变更，校验和自动跟上，表达力全）。integrate 加分支走 `nearest_enemy`（现成）。
+
+### C11. WorldTables 文件加载刀的前置三件套（M0-17 遗留占位）
+
+① `content_hash` 字段现恒 0——文件加载落地时做真哈希（A3：与 EclImage 合并进回放头/握手）；
+② `World::new` 内引 `TABLES_V0` 喂 spawn（v0 妥协避免百处调用点改签名）——多表时代补
+`new_with_tables`；③ 解释器热路径 `timer % interval` 无 interval=0 的 debug 断言（现靠
+`validate()` 单测钉 const 表）——外部表可加载后必须加载期强制校验 + 热路径 debug 兜底。
 
 ---
 
