@@ -79,6 +79,19 @@ sub main() {
   `create_bullets_batch`/`create_bullet` 对齐定稿；参数类型错 = 编译错误）。
 - **注释** `//` `/* */`；**错误报告**：文件:行:列 + 源行摘录 + 修法提示（正常语言的底线）。
 
+## 成熟项目参考（2026-07-18 调研拍板，实施计划照抄惯用法）
+
+- **Crafting Interpreters/clox**（craftinginterpreters.com，全文免费）——codegen 蓝本：
+  Pratt 表达式解析、`emitJump/patchJump` 跳转回填、循环栈簿记（break/continue fixup 列表）；
+- **Pawn**（compuphase）——"C 系 + 无类型 32 位 cell + 确定性抽象机"同位体先例，其 **tag
+  系统**（编译期标签盖 cell）= 我们三型设计的 20 年工业验证；
+- **Monkey（Writing a Compiler in Go）**——AST 多趟 + 显式回填的骨架参照（类型趟插中间）;
+- AngelScript（静态类型栈 VM 商业出货）与 Wren（栈 VM + fibers）为存在性证明。
+- **控制流降低模板**（已验证与弹栈式 JZ 兼容，短路逻辑不需要 JNZ——C13⑦ 降级为纯密度优化）：
+  `if/else` = JZ+JMP 双回填；`while` = 顶测 JZ + 回跳；`for a..b` = 计数器 + LT/JZ，
+  continue 指向自增段；`&&`/`||` = JZ 短路 + 常量臂。codegen 扩展 T3 builder 既有回填器，
+  非从零。
+
 ## 编译管线
 
 `lexer → parser（AST，错误恢复到语句边界）→ 类型检查（三型 + 单位字面量折叠 + 值消费）→
