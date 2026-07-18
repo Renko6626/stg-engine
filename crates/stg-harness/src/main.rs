@@ -79,6 +79,11 @@ fn parse_out(rest: &[String]) -> Option<String> {
 /// 消弹转星星（M0-15，**导演零改动**）：块 ③ 每 150 帧的全屏消弹自动逐弹原位转星
 /// （一律转化）——星星雨/出生即磁吸/30 分入账/可能的道具池满降级全链入对拍
 /// （实测改前后首个分歧帧 = 150，与首次消弹帧吻合）。
+///
+/// 火力拔档（M0-17 T5，续 ⑮ 编号 ⑯）：帧 200 导演直写 `players[0].power = 250`
+/// （拔到 tier 2，shottype 两路弹型入流）、帧 400 拔到 400（tier 4，三路本体 + 1 路
+/// 子机入流）——诊断场景导演直写档位合法，压相位 3 解释器逐档分支 + 子机弹随即参与
+/// 碰撞/擦弹结算链，换档瞬时生效。
 /// 600 帧 @ 60Hz。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::{BulletHandle, BulletInit};
@@ -477,6 +482,15 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                     Fx::from_int(1),
                     Fx::from_raw(32_768), // 步 0.5
                 );
+            }
+            // ⑯ M0-17 T5：导演直写火力拔档（诊断场景合法）——帧 200 拔到 250（tier 2，
+            // shottype 两路入流）、帧 400 拔到 400（tier 4，三路本体 + 1 路子机入流，
+            // 子机弹随即参与相位 6/7 碰撞/擦弹结算链）。换档瞬时生效，无过渡状态。
+            if frame == 200 {
+                b.players[0].power = 250;
+            }
+            if frame == 400 {
+                b.players[0].power = 400;
             }
         });
         lines.push_str(&format!("{frame} {:016x}\n", world.checksum()));
