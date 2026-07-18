@@ -418,4 +418,24 @@ mod tests {
         assert_eq!(run(false), 1, "focus=0 读无焦列表（1 路）");
         assert_eq!(run(true), 2, "focus=1 读聚焦列表（2 路）——索引判别腿");
     }
+
+    /// P4-b：power 直写越 POWER_MAX（导演/ECL 的合法通道）不越 sets 表界——钳到满档
+    /// 照常发弹不 panic（M0-17 终审实证 power=500 未钳时 release 下 index OOB）。
+    #[test]
+    fn overpower_clamps_to_top_tier_no_panic() {
+        use crate::input::BTN_SHOT;
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].power = 999;
+        w.body.players[0].input = BTN_SHOT;
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = crate::world::PH_PLAYERS;
+        }
+        w.body.update_players(&crate::tables::TABLES_V0);
+        assert_eq!(
+            w.body.shots.iter_alive().count(),
+            4,
+            "钳到 tier 4：三路 + 子机照常齐射"
+        );
+    }
 }

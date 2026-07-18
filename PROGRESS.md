@@ -4,7 +4,7 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-07-17）
+## 现在（2026-07-18）
 
 - **位置**：Phase 1 · M0 世界层，推进至 **M0-17**（WorldTables 骨架全家入驻 + shottype 表
   ——ZUN `.sht` 式火力→弹型接线通电，逐档弹型/子机/focus 全表驱动）；main 全绿。

@@ -494,8 +494,9 @@ release 回绕成负数 → 平方后仍为正巨数 → 全场无条件判撞�
 （弹/敌/自机弹/field 的 radius/hurtbox）；这四个池的 SoA 数组是 `pub(crate)`，"只能走写 API"是
 类型系统可强制的纪律。但**自机侧**没有对应的强制——`WorldBody.players` 与 `PlayerState` 的字段
 都是 `pub`，任何持 `&mut World` 的上层（stg-harness / 未来的 stg-godot、stg-py）都能绕过 `spawn`
-直接写这两个字段。今天安全只因"除 spawn 外无人写它"，是**前提**而非写 API 强制出的结论。现状：
-`player.rs` 加了编译期断言钉死 `HIT_RADIUS`/`GRAZE_RADIUS` ≤ `MAX_ENTITY_RADIUS`，防常量本身漂移；
+直接写这两个字段。今天安全只因"除 spawn 外无人写它"，是**前提**而非写 API 强制出的结论。现状
+（M0-17 迁表后）：半径值住 `WorldTables::CharacterCfg`，防漂移由 `WorldTables::validate()`
+角色半径腿 + spawn 位等测试钉死（原 player.rs 编译期断言随常量迁表退役）；
 但字段可见性尚未收紧，留作后续。结论"两侧都 ≤1024 ⇒ 任意和 ≤2048 ≪ 32767"依然成立，但由
 **两条强度不同的保证**共同支撑——池侧可强制、自机侧是前提——而不是四个写 API 覆盖了全部六行。
 行 6/7 与行 1-4 仍共享同一写法（`(a + b).raw() as i64`），不必为任何一行特设 i64 加法。

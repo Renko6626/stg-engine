@@ -77,12 +77,16 @@ impl PlayerState {
         }
     }
 
-    /// 火力整数档位 0..=4（M0-16 定标：`power`/100 向下取整）。换弹幕形态/张数的
-    /// 阈值语义——0.99 仍是 0 档、1.00 起跳 1 档、满 4.00 = 4 档。世界侧唯一
+    /// 火力整数档位 0..=4（M0-16 定标：`power`/100 向下取整，**上钳 4**）。换弹幕形态/
+    /// 张数的阈值语义——0.99 仍是 0 档、1.00 起跳 1 档、满 4.00 = 4 档。世界侧唯一
     /// 授权的档位换算入口（表现层/将来的火力接线都从这走，不自行除 100）。
+    ///
+    /// 上钳是 P4-b：`power` 是 pub 字段，导演/ECL 直写超 `POWER_MAX` 的非常规值时，
+    /// 档位钳到满档而非让 shottype 表 `sets[tier]` 越界 panic（M0-17 终审实证：
+    /// power=500 未钳时 release 下 index OOB——确定性安全结果优先于炸）。
     #[inline]
     pub fn power_tier(&self) -> u8 {
-        (self.power / 100) as u8
+        ((self.power / 100) as u8).min(4)
     }
 }
 
@@ -104,6 +108,8 @@ mod tests {
         assert_eq!(p.power_tier(), 3);
         p.power = crate::items::POWER_MAX; // 4.00
         assert_eq!(p.power_tier(), 4, "满火力 4 档");
+        p.power = 999; // 越 POWER_MAX 的非常规直写（P4-b）
+        assert_eq!(p.power_tier(), 4, "越界火力钳到满档，不越 sets 表界");
     }
 
     /// 迁表回归（M0-17 T3）：`spawn` 判定/擦弹半径与 `TABLES_V0` 表值逐位相等——

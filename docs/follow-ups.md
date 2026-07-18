@@ -188,8 +188,9 @@ shottype 表 `Shooter.flags` bit0 已预留 homing。开刀时要拍的唯一悬
 
 M0-8 引入 `MAX_ENTITY_RADIUS = 1024px`，在四个 `create_*` 写 API 上双边钳制，使
 「六行碰撞的 `(r_active + r_passive)` 裸 i32 Fx 加法不溢出」可证。**但自机侧不走写 API**：
-`hit_radius`/`graze_radius` 由 `PlayerState::spawn` 从引擎常量赋值，上限靠 `player.rs`
-的编译期断言钉死。
+`hit_radius`/`graze_radius` 由 `PlayerState::spawn` 从 `WorldTables::CharacterCfg` 赋值
+（M0-17 迁表），上限靠 `WorldTables::validate()` 角色半径腿 + spawn 位等测试钉死
+（原 player.rs 编译期断言已随常量迁表退役）。
 
 问题在于 **`WorldBody.players` 与 `PlayerState` 的字段都是 `pub`** —— 任何持 `&mut World`
 的上层（今天的 harness、将来的 godot/py）都能直接写 `players[i].hit_radius = 30000` 绕过一切。
