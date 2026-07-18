@@ -18,11 +18,6 @@ pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
 // 的双边钳制，上限校验已由 `WorldTables::validate()`（`radius_in_range`）接管，取代原编译期
 // 断言（T1 起）。
 
-pub const SHOT_SPEED: Fx = Fx::from_int(12);
-pub const SHOT_RADIUS: Fx = Fx::from_int(4);
-pub const SHOT_CD_FRAMES: u8 = 4;
-pub const SHOT_DAMAGE: u16 = 1;
-
 /// 自机状态（D6 全字段；本块仅移动 + 发弹活跃，余字段随快照/入校验和）。
 #[repr(C)]
 #[derive(Clone, Copy, Default, crate::checksum::Checksum)]
@@ -39,7 +34,11 @@ pub struct PlayerState {
     pub invuln: u16,
     pub bomb_phase: u8,
     pub bomb_timer: u16,
-    pub shot_cd: u8,
+    /// 发弹相位计时器（M0-17 T4：取代旧 `shot_cd` 倒计时）：持 SHOT 逐帧 `wrapping_add(1)`，
+    /// 松手清零；相位 3 解释器用**自增前**的值判 `shot_timer % interval == delay % interval`
+    /// （先判后加——见 `world/player.rs::char0_update_shot` 钉死注记 + 判别测试
+    /// `shot_timer_phase_and_release_reset`）。
+    pub shot_timer: u16,
     /// 火力，单位 = 0.01（厘火力）：0..=`POWER_MAX`(400) ↔ 显示 0.00-4.00（M0-16 定标）。
     pub power: u16,
     pub lives: u8,
@@ -67,7 +66,7 @@ impl PlayerState {
             invuln: 0,
             bomb_phase: 0,
             bomb_timer: 0,
-            shot_cd: 0,
+            shot_timer: 0,
             power: 0,
             lives: 3,
             bombs: 3,

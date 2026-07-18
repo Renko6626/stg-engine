@@ -13,7 +13,6 @@ use crate::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SLOW, BTN_UP};
 use crate::math::Fx;
 use crate::player::{
     LIFE_ABSENT, LIFE_ALIVE, LIFE_DEATHWINDOW, LIFE_GAMEOVER, LIFE_RESPAWNING, RESPAWN_INVULN,
-    SHOT_CD_FRAMES, SHOT_DAMAGE, SHOT_RADIUS, SHOT_SPEED,
 };
 use crate::shots::ShotInit;
 use crate::tables::WorldTables;
@@ -63,7 +62,7 @@ impl WorldBody {
             // 角色模块静态分发点（A8"shottype 类似物"）：现仅 character 0，将来各角色一臂。
             #[allow(clippy::single_match)]
             match self.players[i].character_id {
-                0 => self.char0_update_shot(i),
+                0 => self.char0_update_shot(i, tables),
                 _ => {}
             }
         }
@@ -142,26 +141,55 @@ impl WorldBody {
         p.y = Fx::from_raw(p.y.raw().clamp(0, Fx::from_int(super::FIELD_HEIGHT).raw()));
     }
 
-    /// character-0 火力（"shottype 类似物"）：SHOT 按下且 CD 到 → 发一发直线上飞弹。
-    fn char0_update_shot(&mut self, i: usize) {
-        if self.players[i].shot_cd > 0 {
-            self.players[i].shot_cd -= 1;
+    /// character-0 火力：相位 3 shottype 表解释器（M0-17 T4 通电；spec「相位 3 解释器」节）。
+    ///
+    /// **计时器语义（钉死）**：SHOT 松开 → `shot_timer` 清零；持住 → 用**自增前**的当前值
+    /// 判 `shot_timer % interval == delay % interval`（先判后加），随后 `wrapping_add(1)`。
+    /// 选"先判后加"而非"先加后判"是为了让**首次持住的那一帧**（`shot_timer == 0`）能在
+    /// `delay == 0` 时立即命中（v0 全表 `delay = 0`）——与旧 `shot_cd` 倒计时的直觉一致
+    /// （`player_shot_fires_on_button` 沿用旧断言：按下当帧就出弹），并被
+    /// `shot_timer_phase_and_release_reset` 判别测试钉死（松 1 帧再持，首发延迟须与初次
+    /// 一致——若改成"先加后判"，首发会晚 `interval` 帧才出现，测试会红）。
+    fn char0_update_shot(&mut self, i: usize, tables: &WorldTables) {
+        if self.players[i].input & crate::input::BTN_SHOT == 0 {
+            self.players[i].shot_timer = 0;
             return;
         }
-        if self.players[i].input & crate::input::BTN_SHOT != 0 {
-            let (px, py) = (self.players[i].x, self.players[i].y);
-            self.create_player_shot(ShotInit {
-                x: px,
-                y: py,
-                vx: Fx::ZERO,
-                vy: -SHOT_SPEED, // 上飞
-                damage: SHOT_DAMAGE,
-                radius: SHOT_RADIUS,
-                sprite: 0,
-                owner: i as u8,
-                flags: 0,
-            });
-            self.players[i].shot_cd = SHOT_CD_FRAMES;
+        let timer = self.players[i].shot_timer; // 自增前的值——发射判定用它
+        self.players[i].shot_timer = timer.wrapping_add(1);
+
+        let cfg = &tables.characters[self.players[i].character_id as usize];
+        let tier = self.players[i].power_tier() as usize;
+        let focus = if self.players[i].input & BTN_SLOW != 0 {
+            1
+        } else {
+            0
+        };
+        let shooters = cfg.shot.sets[tier][focus];
+        let option_pos = cfg.shot.option_pos[tier];
+        let (px, py) = (self.players[i].x, self.players[i].y);
+
+        for shooter in shooters {
+            if timer % shooter.interval == shooter.delay % shooter.interval {
+                let (ox, oy) = if shooter.option == 0 {
+                    (shooter.dx, shooter.dy)
+                } else {
+                    let (opx, opy) = option_pos[(shooter.option - 1) as usize];
+                    (opx + shooter.dx, opy + shooter.dy)
+                };
+                let (vx, vy) = crate::math::polar_to_vec(shooter.speed, shooter.angle);
+                self.create_player_shot(ShotInit {
+                    x: px + ox,
+                    y: py + oy,
+                    vx,
+                    vy,
+                    damage: shooter.damage,
+                    radius: shooter.radius,
+                    sprite: shooter.sprite,
+                    owner: i as u8,
+                    flags: 0,
+                });
+            }
         }
     }
 }
@@ -222,5 +250,147 @@ mod tests {
         }
         assert_eq!(w.body.players[0].x, x0, "GAMEOVER 后不该移动");
         assert_eq!(w.body.shots.iter_alive().count(), 0, "GAMEOVER 后不该发弹");
+    }
+
+    /// 相位 3 解释器逐档弹数（M0-17 T4 判别腿①③）：手动押相位（跳过 integrate，读原生出生点，
+    /// 免"弹已飞一帧"的位移噪声——出生点断言要逐位精确）。tier0 一路直射；tier2（power=250）
+    /// 两路 `dx=∓8px`；tier4（power=400）三路本体 + 1 路子机，子机出生点 =
+    /// 自机位 + `option_pos[4][0]`(-20px, 8px) 逐位。
+    ///
+    /// 变异腿：若解释器 tier 索引钉死恒 0，tier2/tier4 两处弹数会退化成 1——本测试判此。
+    #[test]
+    fn shottype_tier_bullet_counts() {
+        use crate::input::BTN_SHOT;
+        use crate::math::Fx;
+
+        // tier0（power=0，默认出生值）：一路直射，首帧持住立即出 1 弹。
+        {
+            let mut w = crate::step::World::new(1);
+            w.body.players[0].input = BTN_SHOT;
+            #[cfg(debug_assertions)]
+            {
+                w.body.phase_guard = crate::world::PH_PLAYERS;
+            }
+            w.body.update_players(&crate::tables::TABLES_V0);
+            assert_eq!(w.body.shots.iter_alive().count(), 1, "tier0 一路直射");
+        }
+
+        // tier2（power=250）：两路，dx = ∓8px 逐位。
+        {
+            let mut w = crate::step::World::new(1);
+            w.body.players[0].power = 250;
+            w.body.players[0].input = BTN_SHOT;
+            #[cfg(debug_assertions)]
+            {
+                w.body.phase_guard = crate::world::PH_PLAYERS;
+            }
+            w.body.update_players(&crate::tables::TABLES_V0);
+            assert_eq!(w.body.shots.iter_alive().count(), 2, "tier2 两路");
+            let px = w.body.players[0].x;
+            let mut xs: Vec<i32> = w
+                .body
+                .shots
+                .iter_alive()
+                .map(|i| w.body.shots.x[i].raw())
+                .collect();
+            xs.sort();
+            let mut want = vec![(px - Fx::from_int(8)).raw(), (px + Fx::from_int(8)).raw()];
+            want.sort();
+            assert_eq!(xs, want, "tier2 两路 x 偏移 ∓8px 逐位");
+        }
+
+        // tier4（power=400）：3 路本体 + 1 路子机 = 4 弹；子机出生点 = 自机位 + (-20px, 8px)。
+        {
+            let mut w = crate::step::World::new(1);
+            w.body.players[0].power = 400;
+            w.body.players[0].input = BTN_SHOT;
+            #[cfg(debug_assertions)]
+            {
+                w.body.phase_guard = crate::world::PH_PLAYERS;
+            }
+            w.body.update_players(&crate::tables::TABLES_V0);
+            assert_eq!(
+                w.body.shots.iter_alive().count(),
+                4,
+                "tier4 三路本体 + 1 路子机"
+            );
+            let px = w.body.players[0].x;
+            let py = w.body.players[0].y;
+            let want_x = (px + Fx::from_int(-20)).raw();
+            let want_y = (py + Fx::from_int(8)).raw();
+            let hit =
+                w.body.shots.iter_alive().any(|i| {
+                    w.body.shots.x[i].raw() == want_x && w.body.shots.y[i].raw() == want_y
+                });
+            assert!(hit, "子机弹出生点必须命中自机位 + option_pos 偏移逐位");
+        }
+    }
+
+    /// `shot_timer` 计时相位 + 松手清零（M0-17 T4 判别腿②）：tier0 `interval=4/delay=0`。
+    /// 持续持住命中相位 `k % 4 == 0`（首帧 k=0 立即出、第 4 帧再出）；松 1 帧清零后再持，
+    /// 首发延迟须与初次一致（若松手不清零，这里会因残留相位错开而不在本帧命中，判此变异）。
+    #[test]
+    fn shot_timer_phase_and_release_reset() {
+        use crate::input::{BTN_SHOT, InputFrame};
+
+        let hold = |f: u32| {
+            let mut inp = InputFrame::empty(f);
+            inp.actions[0].buttons = BTN_SHOT;
+            inp
+        };
+
+        let mut w = crate::step::World::new(1);
+        crate::world::test_support::step_t(&mut w, &hold(0));
+        assert_eq!(
+            w.body.shots.iter_alive().count(),
+            1,
+            "首帧持住立即出弹（先判后加，delay=0）"
+        );
+        for f in 1..4u32 {
+            crate::world::test_support::step_t(&mut w, &hold(f));
+        }
+        assert_eq!(
+            w.body.shots.iter_alive().count(),
+            1,
+            "interval 未到（k=1..3）不追加"
+        );
+        crate::world::test_support::step_t(&mut w, &hold(4));
+        assert_eq!(
+            w.body.shots.iter_alive().count(),
+            2,
+            "第 4 帧（k=4，命中 interval）再出一发"
+        );
+
+        // 松 1 帧 → shot_timer 清零；再持 → 首发延迟同初次（本帧立即出，不必再等 interval）。
+        let count_before = w.body.shots.iter_alive().count();
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(5));
+        crate::world::test_support::step_t(&mut w, &hold(6));
+        assert_eq!(
+            w.body.shots.iter_alive().count(),
+            count_before + 1,
+            "松手清零后再持——首发延迟同初次"
+        );
+    }
+
+    /// focus 索引到位（M0-17 T4）：`BTN_SLOW` 持下解释器读 `sets[tier][1]`——v0 两焦点槽
+    /// 共享同一列表（`tables.rs::tables_v0_shape` 已用 `ptr::eq` 钉死内容层同源），本测试钉
+    /// 解释器*真的*用 focus=1 索引且行为等价（同弹数）；内容差异化留后补（spec 拍板 5）。
+    #[test]
+    fn focus_indexes_focused_set() {
+        use crate::input::{BTN_SHOT, BTN_SLOW};
+
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].power = 250; // tier2：两路，便于与 tier0 单路区分
+        w.body.players[0].input = BTN_SHOT | BTN_SLOW;
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = crate::world::PH_PLAYERS;
+        }
+        w.body.update_players(&crate::tables::TABLES_V0);
+        assert_eq!(
+            w.body.shots.iter_alive().count(),
+            2,
+            "focus=1 读到同一 tier2 两路列表（v0 共享内容）"
+        );
     }
 }
