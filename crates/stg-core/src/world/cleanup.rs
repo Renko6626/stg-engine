@@ -125,7 +125,7 @@ mod tests {
 
         // 回收线 = FIELD_HEIGHT(448) + ENEMY_OOB_MARGIN(256) = 704。第 5 帧 y=700 仍在场内。
         for f in 0..5 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert!(
             w.body.enemies.get(h).is_some(),
@@ -133,7 +133,7 @@ mod tests {
         );
 
         // 第 6 帧 y=820 > 704 → 越界回收
-        crate::step::step(&mut w, &InputFrame::empty(5));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(5));
         assert_eq!(w.body.enemies.get(h), None, "越界敌人应被 cleanup 回收");
     }
 
@@ -143,7 +143,7 @@ mod tests {
     fn enemy_survives_beyond_old_margin_within_new() {
         let mut w = crate::step::World::new(1);
         let h = spawn_enemy(&mut w, 0, 600, 5);
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert!(
             w.body.enemies.get(h).is_some(),
             "600 < 704：大边界内必须存活"
@@ -155,7 +155,7 @@ mod tests {
     fn enemy_recycled_beyond_enemy_margin() {
         let mut w = crate::step::World::new(1);
         let h = spawn_enemy(&mut w, 0, 720, 5);
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert!(w.body.enemies.get(h).is_none(), "720 > 704：越大边界必收");
     }
 
@@ -198,7 +198,7 @@ mod tests {
         let seg = w.body.bullets.transform_head[i];
         assert_ne!(seg, crate::xform::XFORM_NONE);
 
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
 
         assert_eq!(w.body.bullets.get(h), None, "越界弹应被回收");
         assert_eq!(w.body.xforms.alloc().unwrap(), seg, "段应已还，复得原段号");
@@ -210,11 +210,21 @@ mod tests {
         use crate::items::{ITEM_POWER, MAGNET_PICKED};
         use crate::world::PH_CLEANUP;
         let mut w = crate::step::World::new(1);
-        let picked = w.body.drop_item(Fx::ZERO, Fx::from_int(384), ITEM_POWER);
+        let picked = w.body.drop_item(
+            Fx::ZERO,
+            Fx::from_int(384),
+            ITEM_POWER,
+            &crate::tables::TABLES_V0,
+        );
         let pi = w.body.items.get(picked).unwrap();
         w.body.items.magnet_to[pi] = MAGNET_PICKED; // 模拟 settle 趟三已标记
 
-        let oob = w.body.drop_item(Fx::from_int(2000), Fx::ZERO, ITEM_POWER); // 远出场外
+        let oob = w.body.drop_item(
+            Fx::from_int(2000),
+            Fx::ZERO,
+            ITEM_POWER,
+            &crate::tables::TABLES_V0,
+        ); // 远出场外
 
         #[cfg(debug_assertions)]
         {

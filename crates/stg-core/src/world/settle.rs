@@ -11,6 +11,7 @@ use super::WorldBody;
 use crate::enemy::ENEMY_DYING;
 use crate::events::Event;
 use crate::field::FieldPool;
+use crate::tables::WorldTables;
 
 impl WorldBody {
     /// 中弹触发（行 1/3 共用）：只 Alive 者转入决死窗口 —— 一次中弹只触发一次。
@@ -24,20 +25,20 @@ impl WorldBody {
 
     /// 敌人扣血 + 致死则标记 dying 并产出 `EnemyDied`（行 4/行 7 共用；只发一次）。
     /// **只标记不回收**——槽要活到相位 8 供死亡脚本/表现层读；相位 9 cleanup 收尸。
-    fn damage_enemy(&mut self, e: usize, dmg: u16) {
+    fn damage_enemy(&mut self, e: usize, dmg: u16, tables: &WorldTables) {
         self.enemies.hp[e] -= dmg as i32;
         self.enemies.hit_flash[e] = 4;
         if self.enemies.hp[e] <= 0 {
             self.enemies.flags[e] |= ENEMY_DYING;
             // 掉落直接分配（A6/A7）：按 drop_table 查表展开；越界表 → P4-b 计数 + 视同空表。
             let table = self.enemies.drop_table[e] as usize;
-            if table >= crate::items::DROP_TABLES.len() {
+            if table >= tables.drop_tables.len() {
                 self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             } else {
                 let (ex, ey) = (self.enemies.x[e], self.enemies.y[e]);
-                for &(ty, n) in crate::items::DROP_TABLES[table] {
+                for &(ty, n) in tables.drop_tables[table] {
                     for _ in 0..n {
-                        self.spawn_drop(ex, ey, ty);
+                        self.spawn_drop(ex, ey, ty, tables);
                     }
                 }
             }
@@ -56,7 +57,7 @@ impl WorldBody {
         }
     }
 
-    pub(crate) fn settle(&mut self) {
+    pub(crate) fn settle(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_SETTLE);
         // ── 趟一 · 清除/防护：行 6 消弹 ──────────────────────────────────
         // **只标记不回收**（趟二/趟三随后按索引读这颗弹；回收在相位 9 cleanup）。
@@ -109,7 +110,7 @@ impl WorldBody {
                     if self.enemies.invuln[e] != 0 || !self.shots.is_alive(s) {
                         continue; // 无敌帧跳伤害；悬垂弹跳过
                     }
-                    self.damage_enemy(e, self.shots.damage[s]);
+                    self.damage_enemy(e, self.shots.damage[s], tables);
                 }
                 crate::events::ROW_FIELD_ENEMY => {
                     let f = h.active as usize;
@@ -120,7 +121,7 @@ impl WorldBody {
                     if self.enemies.invuln[e] != 0 || !self.fields.is_alive(f) {
                         continue; // 无敌帧跳伤害（收集时不查、结算时判）
                     }
-                    self.damage_enemy(e, self.fields.dmg_per_frame[f]);
+                    self.damage_enemy(e, self.fields.dmg_per_frame[f], tables);
                 }
                 crate::events::ROW_BULLET_PLAYER_HIT => {
                     let b = h.active as usize;
@@ -163,7 +164,7 @@ impl WorldBody {
                     }
                     self.items.magnet_to[it] = crate::items::MAGNET_PICKED;
                     let ty = self.items.item_type[it];
-                    self.credit_item(h.passive as usize, ty);
+                    self.credit_item(h.passive as usize, ty, tables);
                     let ev = Event {
                         kind: crate::events::EVT_ITEM_PICKED,
                         a_index: it as u16,
@@ -181,7 +182,7 @@ impl WorldBody {
 
     /// 拾取入账（D9 趟三）——**唯一** per-type 逻辑居所（扩展四步第 ③ 步：新增类型在此加臂）。
     /// 未知类型：P4-b 计数忽略（两机同弃，无副作用）。
-    fn credit_item(&mut self, p: usize, item_type: u8) {
+    fn credit_item(&mut self, p: usize, item_type: u8, tables: &WorldTables) {
         use crate::items::*;
         match item_type {
             ITEM_POWER => {
@@ -189,11 +190,11 @@ impl WorldBody {
                 if pl.power < POWER_MAX {
                     pl.power += 1;
                 } else {
-                    pl.score += ITEM_CFG[ITEM_POINT as usize].score as u64; // 满 power 转化
+                    pl.score += tables.item_cfg[ITEM_POINT as usize].score as u64; // 满 power 转化
                 }
             }
             ITEM_POINT => {
-                self.players[p].score += ITEM_CFG[ITEM_POINT as usize].score as u64;
+                self.players[p].score += tables.item_cfg[ITEM_POINT as usize].score as u64;
             }
             ITEM_LIFE_PIECE => {
                 let pl = &mut self.players[p];
@@ -212,7 +213,7 @@ impl WorldBody {
                 }
             }
             ITEM_STAR => {
-                self.players[p].score += ITEM_CFG[ITEM_STAR as usize].score as u64;
+                self.players[p].score += tables.item_cfg[ITEM_STAR as usize].score as u64;
             }
             _ => {
                 self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
@@ -249,8 +250,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert!(w.body.enemies.hp[ei] <= 0);
         assert_ne!(w.body.enemies.flags[ei] & ENEMY_DYING, 0);
         assert_eq!(w.body.events_len, 1);
@@ -279,8 +280,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.events_len, 1); // 只死一次
     }
 
@@ -295,8 +296,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.players[0].life_state, LIFE_DEATHWINDOW);
         assert_eq!(w.body.players[0].state_timer, DEATHBOMB_WINDOW);
     }
@@ -304,7 +305,7 @@ mod tests {
     #[test]
     fn settle_graze_counts_once_per_bullet() {
         use crate::input::InputFrame;
-        use crate::step::step;
+        use crate::world::test_support::step_t;
         let mut w = crate::step::World::new(1);
         w.body.players[0].x = Fx::ZERO;
         w.body.players[0].y = Fx::from_int(384);
@@ -332,7 +333,7 @@ mod tests {
         });
         // 弹静止、贴着自机 → 连跑 3 帧，graze 只 +1（grazed_by 逐弹一次）
         for _ in 0..3 {
-            step(&mut w, &InputFrame::empty(0));
+            step_t(&mut w, &InputFrame::empty(0));
         }
         assert_eq!(w.body.players[0].graze, 1);
     }
@@ -350,8 +351,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_ne!(w.body.bullets.flags[0] & BULLET_CLEARED, 0);
         assert_ne!(w.body.bullets.flags[1] & BULLET_CLEARED, 0);
         // 聚合：一条事件、count=2
@@ -375,8 +376,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         let expect = [(-10, 100), (0, 100), (10, 90)];
         assert_eq!(w.body.items.iter_alive().count(), 3, "恰 3 星");
         for (i, &(x, y)) in expect.iter().enumerate() {
@@ -405,8 +406,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.items.iter_alive().count(), 1);
         assert_eq!(w.body.items.magnet_to[0], MAGNET_NONE, "无存活自机不磁吸");
     }
@@ -416,14 +417,14 @@ mod tests {
     fn star_pickup_credits_30_score() {
         use crate::field::FIELD_CLEAR_BULLETS;
         use crate::input::InputFrame;
-        use crate::step::step;
+        use crate::world::test_support::step_t;
         let mut w = crate::step::World::new(1);
         // 弹贴自机位；同帧 field 消掉（趟一先于趟二 → 不中弹）→ 星生于自机位 → 次帧拾取
         spawn_field(&mut w, 0, 384, 20, FIELD_CLEAR_BULLETS, 1);
         bullet_at(&mut w, 0, 384);
         let s0 = w.body.players[0].score;
         for _ in 0..3 {
-            step(&mut w, &InputFrame::empty(0));
+            step_t(&mut w, &InputFrame::empty(0));
         }
         assert_eq!(w.body.players[0].score, s0 + 30, "星星入账恰 +30");
     }
@@ -434,8 +435,12 @@ mod tests {
         use crate::field::FIELD_CLEAR_BULLETS;
         let mut w = crate::step::World::new(1);
         for _ in 0..(crate::items::ItemPool::CAP - 1) {
-            w.body
-                .drop_item(Fx::ZERO, Fx::from_int(200), crate::items::ITEM_POWER);
+            w.body.drop_item(
+                Fx::ZERO,
+                Fx::from_int(200),
+                crate::items::ITEM_POWER,
+                &crate::tables::TABLES_V0,
+            );
         }
         let pf0 = w.body.diag.pool_full[crate::world::POOL_ITEM];
         spawn_field(&mut w, 0, 100, 40, FIELD_CLEAR_BULLETS, 1);
@@ -446,8 +451,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(
             w.body.diag.pool_full[crate::world::POOL_ITEM],
             pf0 + 2,
@@ -467,8 +472,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         // 幂等：弹只被计一次 → 只有 field 0 计到 1，field 1 计 0（无事件）
         let total: i32 = (0..w.body.events_len as usize)
             .map(|k| w.body.events[k].data[0])
@@ -490,8 +495,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.players[0].life_state, LIFE_ALIVE); // 被救
         assert_ne!(w.body.players[0].life_state, LIFE_DEATHWINDOW);
         assert_eq!(w.body.players[0].graze, 1); // 但 graze 照算（擦在先、清在后）
@@ -554,8 +559,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.items.iter_alive().count(), 6, "两敌各掉 3 颗");
         let ax = w.body.enemies.x[eai];
         let bx = w.body.enemies.x[ebi];
@@ -597,8 +602,8 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.enemies.hp[ei], 3); // 5 - 2
     }
 
@@ -609,20 +614,26 @@ mod tests {
         use crate::items::{ITEM_POWER, MAGNET_NONE, MAGNET_PICKED};
         let mut w = crate::step::World::new(1);
         // 自机在 (0,384)：一颗放在距 30（拾取和 32 内）、一颗放在距 34（拾取和外）。
-        let near = w
-            .body
-            .drop_item(Fx::ZERO, Fx::from_int(384 - 30), ITEM_POWER);
-        let far = w
-            .body
-            .drop_item(Fx::ZERO, Fx::from_int(384 + 34), ITEM_POWER);
+        let near = w.body.drop_item(
+            Fx::ZERO,
+            Fx::from_int(384 - 30),
+            ITEM_POWER,
+            &crate::tables::TABLES_V0,
+        );
+        let far = w.body.drop_item(
+            Fx::ZERO,
+            Fx::from_int(384 + 34),
+            ITEM_POWER,
+            &crate::tables::TABLES_V0,
+        );
         let ni = w.body.items.get(near).unwrap();
         let fi = w.body.items.get(far).unwrap();
         #[cfg(debug_assertions)]
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.events_len, 1);
         assert_eq!(w.body.events[0].kind, EVT_ITEM_PICKED);
         assert_eq!(w.body.events[0].data[0], ITEM_POWER as i32);
@@ -633,16 +644,17 @@ mod tests {
     /// 四类入账 + 满 power 转化：power=127 吃 POWER → 128；再吃 POWER → power 不动、score += 100。
     #[test]
     fn credit_power_caps_then_converts_to_point_score() {
-        use crate::items::{ITEM_CFG, ITEM_POINT, ITEM_POWER, POWER_MAX};
+        use crate::items::{ITEM_POINT, ITEM_POWER, POWER_MAX};
         let mut w = crate::step::World::new(1);
         w.body.players[0].power = POWER_MAX - 1;
-        w.body.credit_item(0, ITEM_POWER);
+        w.body.credit_item(0, ITEM_POWER, &crate::tables::TABLES_V0);
         assert_eq!(w.body.players[0].power, POWER_MAX);
         assert_eq!(w.body.players[0].score, 0);
-        w.body.credit_item(0, ITEM_POWER);
+        w.body.credit_item(0, ITEM_POWER, &crate::tables::TABLES_V0);
         assert_eq!(w.body.players[0].power, POWER_MAX, "满 power 不再涨");
         assert_eq!(
-            w.body.players[0].score, ITEM_CFG[ITEM_POINT as usize].score as u64,
+            w.body.players[0].score,
+            crate::tables::TABLES_V0.item_cfg[ITEM_POINT as usize].score as u64,
             "满 power 转化为 POINT 分值"
         );
     }
@@ -654,13 +666,15 @@ mod tests {
         let mut w = crate::step::World::new(1);
         w.body.players[0].life_pieces = PIECES_PER_LIFE - 1;
         let lives_before = w.body.players[0].lives;
-        w.body.credit_item(0, ITEM_LIFE_PIECE);
+        w.body
+            .credit_item(0, ITEM_LIFE_PIECE, &crate::tables::TABLES_V0);
         assert_eq!(w.body.players[0].lives, lives_before + 1);
         assert_eq!(w.body.players[0].life_pieces, 0);
 
         w.body.players[0].bomb_pieces = PIECES_PER_BOMB - 1;
         let bombs_before = w.body.players[0].bombs;
-        w.body.credit_item(0, ITEM_BOMB_PIECE);
+        w.body
+            .credit_item(0, ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);
         assert_eq!(w.body.players[0].bombs, bombs_before + 1);
         assert_eq!(w.body.players[0].bomb_pieces, 0);
     }
@@ -670,9 +684,14 @@ mod tests {
     #[test]
     fn item_picked_only_once() {
         use crate::events::{EVT_ITEM_PICKED, ROW_ITEM_PLAYER};
-        use crate::items::{ITEM_CFG, ITEM_POINT, MAGNET_PICKED};
+        use crate::items::{ITEM_POINT, MAGNET_PICKED};
         let mut w = crate::step::World::new(1);
-        let h = w.body.drop_item(Fx::ZERO, Fx::from_int(384), ITEM_POINT);
+        let h = w.body.drop_item(
+            Fx::ZERO,
+            Fx::from_int(384),
+            ITEM_POINT,
+            &crate::tables::TABLES_V0,
+        );
         let i = w.body.items.get(h).unwrap();
         w.body.push_hit(ROW_ITEM_PLAYER, i as u16, 0);
         w.body.push_hit(ROW_ITEM_PLAYER, i as u16, 0); // 同帧双 hit：收集层不会真产出，手工构造
@@ -681,14 +700,15 @@ mod tests {
         {
             w.body.phase_guard = crate::world::PH_SETTLE;
         }
-        w.body.settle();
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.items.magnet_to[i], MAGNET_PICKED);
         let picks = (0..w.body.events_len as usize)
             .filter(|&k| w.body.events[k].kind == EVT_ITEM_PICKED)
             .count();
         assert_eq!(picks, 1, "同帧多 hit 只入账一次");
         assert_eq!(
-            w.body.players[0].score, ITEM_CFG[ITEM_POINT as usize].score as u64,
+            w.body.players[0].score,
+            crate::tables::TABLES_V0.item_cfg[ITEM_POINT as usize].score as u64,
             "账本也只入一次"
         );
     }
@@ -699,17 +719,20 @@ mod tests {
         use crate::events::EVT_ITEM_PICKED;
         use crate::items::ITEM_BOMB_PIECE;
         let mut w = crate::step::World::new(1);
-        let h = w
-            .body
-            .drop_item(Fx::ZERO, Fx::from_int(384), ITEM_BOMB_PIECE);
+        let h = w.body.drop_item(
+            Fx::ZERO,
+            Fx::from_int(384),
+            ITEM_BOMB_PIECE,
+            &crate::tables::TABLES_V0,
+        );
         let i = w.body.items.get(h).unwrap();
         let item_gen = w.body.items.generation[i];
         #[cfg(debug_assertions)]
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
-        w.body.settle();
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.events_len, 1);
         let ev = w.body.events[0];
         assert_eq!(ev.kind, EVT_ITEM_PICKED);

@@ -1,15 +1,15 @@
 //! `WorldTables` —— 静态只读数据层骨架（A3；spec
 //! `docs/superpowers/specs/2026-07-18-m0-17-shottype-worldtables.md`）。角色参数（原
-//! player.rs 常量）+ 道具表（原 items.rs `ITEM_CFG`/`DROP_TABLES`/`ITEM_GRAVITY`）+
-//! shottype 表（本刀新增）全家入驻同一 `&'static` 结构，供 `step`/`step_with_director`
-//! 未来按帧传参消费。**本任务纯新增、零消费者**——`TABLES_V0` 尚无调用点，既有测试套件
-//! 原样全绿即回归门；`player.rs`/`items.rs` 原件本刀不动（迁移在 M0-17 后续任务）。
+//! player.rs 常量）+ 道具表（**M0-17 T2 起 `ItemTypeCfg` 结构体与三件内容表已从 items.rs
+//! 搬入本模块**——items.rs 只留类型编号/池/账本常数）+ shottype 表全家入驻同一
+//! `&'static` 结构，`step`/`step_with_director` 按帧传参消费（T2 起 `&WorldTables` 已穿线；
+//! 角色参数改道见 T3）。
 //!
 //! 传递形态（spec 拍板）：`&'static WorldTables` **不进 `World`**（I7 无引用；快照/校验和
 //! 不覆盖——两机同表由二进制同一性 + 未来内容哈希保证，不由逐帧校验和保证）。
 //! `content_hash` 字段本刀占位恒 0；文件加载刀（A3 双身份链）再实现真哈希。
 
-use crate::items::{DROP_TABLES, ITEM_CFG, ITEM_GRAVITY, ITEM_TYPE_COUNT, ItemTypeCfg};
+use crate::items::{ITEM_POINT, ITEM_POWER, ITEM_TYPE_COUNT};
 use crate::math::{Angle, Fx};
 use crate::player::{GRAZE_RADIUS, HIGH_SPEED, HIT_RADIUS, INV_SQRT2, LOW_SPEED};
 use crate::world::MAX_ENTITY_RADIUS;
@@ -23,6 +23,17 @@ pub struct WorldTables {
     pub item_cfg: [ItemTypeCfg; ITEM_TYPE_COUNT],
     pub drop_tables: &'static [&'static [(u8, u8)]],
     pub item_gravity: Fx,
+}
+
+/// 每类型道具配置（M0-17 T2 从 `items.rs` 迁入——结构体定义 + 内容全归此处；`items.rs`
+/// 只留类型编号/池/账本常数）。
+pub struct ItemTypeCfg {
+    pub score: u32,
+    pub eject_speed: Fx,
+    pub terminal_vy: Fx,
+    pub magnet_speed: Fx,
+    pub pickup_radius: Fx,
+    pub attract_radius: Fx,
 }
 
 /// 单角色配置：移动参数（原 player.rs 常量）+ shottype 表。
@@ -119,6 +130,50 @@ static TIER4_OPTION_POS: [(Fx, Fx); 1] = [(Fx::from_int(-20), Fx::from_int(8))];
 /// 0-3 档无子机——空表。
 const EMPTY_OPTION_POS: &[(Fx, Fx)] = &[];
 
+// ── 道具三件（M0-17 T2 从 items.rs 迁入；逐字节抄现值，零行为搬家）────────────
+
+/// 全局重力（≈0.15 px/帧²；未锁定道具 vy += 至终速钉住）。
+const ITEM_GRAVITY_V0: Fx = Fx::from_raw(9_830);
+
+const STD_ITEM: ItemTypeCfg = ItemTypeCfg {
+    score: 0, // 各行覆写
+    eject_speed: Fx::from_int(3),
+    terminal_vy: Fx::from_raw(144_179), // ≈2.2
+    magnet_speed: Fx::from_int(8),
+    pickup_radius: Fx::from_int(16),
+    attract_radius: Fx::from_int(40),
+};
+
+/// 索引 = 类型编号；数组类型使"表长 == 类型数"成为编译期事实。
+const ITEM_CFG_V0: [ItemTypeCfg; ITEM_TYPE_COUNT] = [
+    ItemTypeCfg {
+        score: 10,
+        ..STD_ITEM
+    }, // POWER
+    ItemTypeCfg {
+        score: 100,
+        ..STD_ITEM
+    }, // POINT
+    ItemTypeCfg {
+        score: 50,
+        ..STD_ITEM
+    }, // LIFE_PIECE
+    ItemTypeCfg {
+        score: 50,
+        ..STD_ITEM
+    }, // BOMB_PIECE
+    ItemTypeCfg {
+        score: 30,
+        ..STD_ITEM
+    }, // STAR（消弹转化；grill 2026-07-18 拍板 30 分）
+];
+
+/// 掉落表 v0：表 id → [(类型, 数量)]。表 0 = 空（enemy.drop_table 零默认 = 不掉）。
+const DROP_TABLES_V0: &[&[(u8, u8)]] = &[
+    &[],
+    &[(ITEM_POWER, 2), (ITEM_POINT, 1)], // 表 1：标准杂鱼
+];
+
 /// character-0 的 shottype 表：tier0/1 共享 1 路、tier2/3 共享 2 路、tier4 独立
 /// 3 路+子机；每档两焦点槽指同一列表（v0 简化：高低速不分化）。
 const CHARACTER0_SHOT: ShotTypeCfg = ShotTypeCfg {
@@ -149,9 +204,9 @@ pub static TABLES_V0: WorldTables = WorldTables {
         graze_radius: GRAZE_RADIUS,
         shot: CHARACTER0_SHOT,
     }],
-    item_cfg: ITEM_CFG,
-    drop_tables: DROP_TABLES,
-    item_gravity: ITEM_GRAVITY,
+    item_cfg: ITEM_CFG_V0,
+    drop_tables: DROP_TABLES_V0,
+    item_gravity: ITEM_GRAVITY_V0,
 };
 
 impl WorldTables {
@@ -246,6 +301,44 @@ mod tests {
         }
     }
 
+    /// 配置表逐行健全（迁自 `items.rs`：M0-17 T2 道具表搬家）：分值/物理参数为正、
+    /// 拾取半径 ≤ MAX_ENTITY_RADIUS（行 5 加法证明前提）。
+    #[test]
+    fn item_cfg_rows_sane() {
+        use crate::items::ITEM_POINT;
+        for (t, cfg) in TABLES_V0.item_cfg.iter().enumerate() {
+            assert!(cfg.score > 0, "type {t}");
+            assert!(cfg.eject_speed.raw() > 0 && cfg.terminal_vy.raw() > 0);
+            assert!(cfg.magnet_speed.raw() > 0 && cfg.attract_radius.raw() > 0);
+            assert!(
+                cfg.pickup_radius.raw() > 0
+                    && cfg.pickup_radius.raw() <= crate::world::MAX_ENTITY_RADIUS.raw(),
+                "type {t} 拾取半径越出行 5 加法安全域"
+            );
+        }
+        assert_eq!(TABLES_V0.item_cfg[ITEM_POINT as usize].score, 100);
+    }
+
+    /// 掉落表（迁自 `items.rs`）：表 0 恒空（enemy.drop_table 零初始化默认 = 不掉）；
+    /// 表 1 = 标准杂鱼。
+    #[test]
+    fn drop_tables_shape() {
+        use crate::items::{ITEM_POINT, ITEM_POWER, ITEM_TYPE_COUNT};
+        assert!(TABLES_V0.drop_tables[0].is_empty());
+        assert_eq!(
+            TABLES_V0.drop_tables[1],
+            &[(ITEM_POWER, 2), (ITEM_POINT, 1)]
+        );
+        assert!(
+            TABLES_V0
+                .drop_tables
+                .iter()
+                .flat_map(|t| t.iter())
+                .all(|&(ty, _)| (ty as usize) < ITEM_TYPE_COUNT),
+            "掉落表条目类型必须合法——扩展四步第④步的脚下网"
+        );
+    }
+
     /// 判别腿：interval=0 / radius 超上限 / option 号越界的坏表各自 `validate() == false`。
     #[test]
     fn validate_rejects_bad() {
@@ -255,9 +348,9 @@ mod tests {
             WorldTables {
                 content_hash: 0,
                 characters: [character],
-                item_cfg: ITEM_CFG,
-                drop_tables: DROP_TABLES,
-                item_gravity: ITEM_GRAVITY,
+                item_cfg: ITEM_CFG_V0,
+                drop_tables: DROP_TABLES_V0,
+                item_gravity: ITEM_GRAVITY_V0,
             }
         }
 

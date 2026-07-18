@@ -316,12 +316,12 @@ mod tests {
                 slot(0, OP_TURN, 16384, 0), // +90°
             ],
         );
-        crate::step::step(&mut w, &InputFrame::empty(0)); // 帧0：SET_SPEED 发射
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0)); // 帧0：SET_SPEED 发射
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(1));
         assert_eq!(w.body.bullets.angle[i], Angle::ZERO, "帧0 TURN 不得发射");
-        crate::step::step(&mut w, &InputFrame::empty(1)); // 帧1：wait 中
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1)); // 帧1：wait 中
         assert_eq!(w.body.bullets.angle[i], Angle::ZERO, "帧1 TURN 不得发射");
-        crate::step::step(&mut w, &InputFrame::empty(2)); // 帧2：TURN 发射
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(2)); // 帧2：TURN 发射
         assert_eq!(
             w.body.bullets.angle[i],
             Angle::QUARTER,
@@ -341,7 +341,7 @@ mod tests {
                 slot(0, OP_SET_SPRITE, 9, 0),
             ],
         );
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(2));
         assert_eq!(w.body.bullets.angle[i], Angle(8192));
         assert_eq!(w.body.bullets.sprite[i], 9);
@@ -360,7 +360,7 @@ mod tests {
             ],
         );
         for f in 0..5u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(1), "END 后不得再发射");
         assert!(w.body.bullets.is_alive(i), "终止 ≠ 弹死");
@@ -374,10 +374,10 @@ mod tests {
         let i = xf_bullet(&mut w, &[slot(0, OP_SET_SPRITE, 1, 0)]);
         w.body.bullets.transform_head[i] = 3000;
         let cv0 = w.body.diag.contract_viol;
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.diag.contract_viol, cv0 + 1, "伪造越界段号恰计一次");
         assert_eq!(w.body.bullets.xform_next[i], 16, "序列终止（哨兵）");
-        crate::step::step(&mut w, &InputFrame::empty(1));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
         assert_eq!(
             w.body.diag.contract_viol,
             cv0 + 1,
@@ -400,7 +400,7 @@ mod tests {
         w.body.xforms.seg_slots_mut(seg)[1].op = 99; // 涂改成未知（族外垃圾值）
         let cv0 = w.body.diag.contract_viol;
         for f in 0..4u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.diag.contract_viol, cv0 + 1, "未知 op 恰计一次");
         assert_eq!(w.body.bullets.angle[i], Angle::ZERO, "未知 op 后序列终止");
@@ -412,10 +412,10 @@ mod tests {
         let mut w = crate::step::World::new(1);
         let i = xf_bullet(&mut w, &[slot(0, OP_SET_SPEED, Fx::from_int(3).raw(), 0)]);
         w.body.bullets.delay[i] = 2;
-        crate::step::step(&mut w, &InputFrame::empty(0));
-        crate::step::step(&mut w, &InputFrame::empty(1));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
         assert_eq!(w.body.bullets.speed[i], Fx::ZERO, "delay 期不发射");
-        crate::step::step(&mut w, &InputFrame::empty(2));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(2));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(3), "delay 尽后发射");
     }
 
@@ -433,7 +433,7 @@ mod tests {
                 slot(0, OP_SET_ACCEL, 3277, 0),
             ],
         );
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         let fl = w.body.bullets.flags[i];
         assert_ne!(fl & BULLET_POLAR_FX, 0, "终态 SET_ACCEL 开 POLAR");
         assert_eq!(fl & BULLET_CART_FX, 0);
@@ -455,7 +455,7 @@ mod tests {
             ],
         );
         for f in 0..10u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.bullets.angle[i], Angle::HALF, "TURN 恰两次 = 半圈");
         assert_eq!(w.body.bullets.sprite[i], 5, "耗尽后落空到槽2");
@@ -469,7 +469,7 @@ mod tests {
         let mut w = crate::step::World::new(1);
         let i = xf_bullet(&mut w, &[slot(1, OP_TURN, 1024, 0), slot(0, OP_LOOP, 0, 0)]);
         for f in 0..60u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert!(w.body.bullets.xform_next[i] < 16, "无限循环不终止");
         assert_ne!(w.body.bullets.angle[i], Angle::ZERO, "持续转向");
@@ -486,13 +486,13 @@ mod tests {
                 slot(0, OP_LOOP, 0, 0),    // 无限
             ],
         );
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(
             w.body.bullets.angle[i],
             Angle(1024),
             "第一帧恰转一步——护栏生效"
         );
-        crate::step::step(&mut w, &InputFrame::empty(1));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
         assert_eq!(w.body.bullets.angle[i], Angle(2048), "次帧恢复再转一步");
     }
 
@@ -507,7 +507,7 @@ mod tests {
         let seg = w.body.bullets.transform_head[i];
         w.body.xforms.seg_slots_mut(seg)[0].args[0] = 16; // 涂改成越界 target
         let cv0 = w.body.diag.contract_viol;
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.diag.contract_viol, cv0 + 1);
         assert_eq!(w.body.bullets.xform_next[i], 16, "序列终止");
     }
@@ -526,7 +526,7 @@ mod tests {
                 slot(0, OP_SET_LIFE, 7, 0),
             ],
         );
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(3));
         let aim = crate::math::cordic::atan2(Fx::from_int(284), Fx::ZERO);
         assert_eq!(
@@ -553,18 +553,23 @@ mod tests {
             ],
         );
         // 帧 0-1：无脉冲，停驻
-        crate::step::step(&mut w, &InputFrame::empty(0));
-        crate::step::step(&mut w, &InputFrame::empty(1));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
         assert_eq!(w.body.bullets.angle[i], Angle::ZERO, "无脉冲不得放行");
         // 帧 2：导演槽脉冲（step_with_director 在相位 2 调闭包）→ 相位 4 同帧放行
-        crate::step::step_with_director(&mut w, &InputFrame::empty(2), |b| b.pulse_signal(3));
+        crate::step::step_with_director(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &InputFrame::empty(2),
+            |b| b.pulse_signal(3),
+        );
         assert_eq!(w.body.bullets.angle[i], Angle::QUARTER, "当帧脉冲当帧放行");
         // 帧 3：无新脉冲——已放行的弹不受影响，且新停驻弹听不到旧脉冲
         let j = xf_bullet(
             &mut w,
             &[slot(0, OP_WAIT_SIGNAL, 3, 0), slot(0, OP_SET_SPRITE, 9, 0)],
         );
-        crate::step::step(&mut w, &InputFrame::empty(3));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(3));
         assert_eq!(
             w.body.bullets.sprite[j], 0,
             "旧脉冲是边沿不是电平：次帧不得放行"
@@ -577,7 +582,7 @@ mod tests {
         let mut w = crate::step::World::new(1);
         let i = xf_bullet(&mut w, &[slot(0, OP_WAIT_SIGNAL, 8, 0)]);
         let cv0 = w.body.diag.contract_viol;
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.diag.contract_viol, cv0 + 1);
         assert_eq!(w.body.bullets.xform_next[i], 16, "坏通道终止序列");
     }
@@ -608,11 +613,11 @@ mod tests {
             ],
         );
         // 帧 0：SET_SPEED 发射 + STEP 发射（scratch 初始化，elapsed=0，本帧不 tick）
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(1), "发射帧不 tick");
         // 帧 1..4：每帧 +0.5（linear：1 + t×2，t = k/4）
         for k in 1..=4u32 {
-            crate::step::step(&mut w, &InputFrame::empty(k));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(k));
             let expect = Fx::from_raw(65536 + (k as i32 * 2 * 65536) / 4);
             assert_eq!(w.body.bullets.speed[i], expect, "第 {k} tick");
         }
@@ -623,7 +628,7 @@ mod tests {
             0,
             "active 应清"
         );
-        crate::step::step(&mut w, &InputFrame::empty(5));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(5));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(3), "完成后值冻结");
     }
 
@@ -640,7 +645,7 @@ mod tests {
                 slot(0, OP_SET_SPRITE, 7, 0), // 槽 2：STEP 之后的下一个真 op
             ],
         );
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.bullets.sprite[i], 7, "游标须按 1+ARITY 跳过扩展槽");
     }
 
@@ -655,14 +660,14 @@ mod tests {
                 slot(0, OP_STEP_ANGLE, 1820, 2), // 2 帧, Linear
             ],
         );
-        crate::step::step(&mut w, &InputFrame::empty(0));
-        crate::step::step(&mut w, &InputFrame::empty(1)); // t=0.5：中点应在回绕缝上
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1)); // t=0.5：中点应在回绕缝上
         let mid = w.body.bullets.angle[i].raw();
         assert!(
             !(1820..=63715).contains(&mid),
             "中点须在短弧上（跨 0），实际 {mid}"
         );
-        crate::step::step(&mut w, &InputFrame::empty(2));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(2));
         assert_eq!(w.body.bullets.angle[i], Angle(1820), "终值精确");
     }
 
@@ -676,7 +681,7 @@ mod tests {
             cv0 = w.body.diag.contract_viol;
             i
         };
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(5));
         assert_eq!(w.body.diag.contract_viol, cv0, "合法退化不计数");
         let seg = w.body.bullets.transform_head[i];
@@ -701,7 +706,7 @@ mod tests {
             ],
         );
         for f in 0..12u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         // 第一轮：0→2（2帧）→ +3 = 5；第二轮重武装：5→2（2帧）→ +3 = 5；终态 5
         assert_eq!(
@@ -724,10 +729,10 @@ mod tests {
         // 运行期涂改末槽为 STEP——前门已挡不了这条路，只能靠段直写模拟。
         w.body.xforms.seg_slots_mut(seg)[15] = slot(0, OP_STEP_SPEED, Fx::from_int(2).raw(), 4);
         let cv0 = w.body.diag.contract_viol;
-        crate::step::step(&mut w, &InputFrame::empty(0)); // 槽 0..15 全 wait=0 同帧连发
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0)); // 槽 0..15 全 wait=0 同帧连发
         assert_eq!(w.body.diag.contract_viol, cv0 + 1, "末槽 STEP 恰计一次");
         assert_eq!(w.body.bullets.xform_next[i], 16, "序列终止");
-        crate::step::step(&mut w, &InputFrame::empty(1)); // 不再计数、不 panic
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1)); // 不再计数、不 panic
         assert_eq!(w.body.diag.contract_viol, cv0 + 1);
     }
 
@@ -743,14 +748,14 @@ mod tests {
                 slot(0, OP_STEP_SPEED, Fx::from_int(3).raw(), 2 | (1 << 16)), // frames=2, QuadIn
             ],
         );
-        crate::step::step(&mut w, &InputFrame::empty(0)); // 发射帧不 tick
-        crate::step::step(&mut w, &InputFrame::empty(1)); // t=0.5 → 0.25
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0)); // 发射帧不 tick
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1)); // t=0.5 → 0.25
         assert_eq!(
             w.body.bullets.speed[i].raw(),
             98304,
             "1 + 2×QuadIn(0.5) = 1.5"
         );
-        crate::step::step(&mut w, &InputFrame::empty(2));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(2));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(3), "终值精确");
     }
 }

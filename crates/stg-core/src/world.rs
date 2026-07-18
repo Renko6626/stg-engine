@@ -472,8 +472,14 @@ impl WorldBody {
 
     /// 掉落一颗道具（内部核；散布消耗世界 RNG——消耗序 = 调用序 = 结算序，A6）。
     /// P4-a：池满 → NULL + 计数。类型合法性由调用方保证（settle 走表、公开壳已验）。
-    pub(crate) fn spawn_drop(&mut self, x: Fx, y: Fx, item_type: u8) -> crate::items::ItemHandle {
-        let cfg = &crate::items::ITEM_CFG[item_type as usize];
+    pub(crate) fn spawn_drop(
+        &mut self,
+        x: Fx,
+        y: Fx,
+        item_type: u8,
+        tables: &crate::tables::WorldTables,
+    ) -> crate::items::ItemHandle {
+        let cfg = &tables.item_cfg[item_type as usize];
         let vx = Fx::from_raw(self.rng.rand_range(131_073) as i32 - 65_536); // ±1.0
         let vy = Fx::ZERO - cfg.eject_speed + Fx::from_raw(self.rng.rand_range(32_769) as i32);
         match self.items.alloc(crate::items::ItemInit {
@@ -519,13 +525,19 @@ impl WorldBody {
 
     /// 掉落一颗道具（公开写 API；将来 ECL syscall `drop_item` 直通）。
     /// P4-b：坏类型 → NULL + BAD_ARGS（散布 RNG **不**消耗——失败零副作用）。
-    pub fn drop_item(&mut self, x: Fx, y: Fx, item_type: u8) -> crate::items::ItemHandle {
+    pub fn drop_item(
+        &mut self,
+        x: Fx,
+        y: Fx,
+        item_type: u8,
+        tables: &crate::tables::WorldTables,
+    ) -> crate::items::ItemHandle {
         if item_type as usize >= crate::items::ITEM_TYPE_COUNT {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             self.last_status = STATUS_BAD_ARGS;
             return crate::items::ItemHandle::NULL;
         }
-        self.spawn_drop(x, y, item_type)
+        self.spawn_drop(x, y, item_type, tables)
     }
 
     /// 全场磁吸（bomb / 导演 / 将来 ECL syscall 的通用入口）：全部未锁定道具锁定该自机。
@@ -669,6 +681,12 @@ impl WorldBody {
 #[cfg(test)]
 pub(crate) mod test_support {
     use crate::math::Fx;
+
+    /// `step` 糖（M0-17 T2）：测试专用，固定喂 `&TABLES_V0`——生产/harness 调用方仍需显式
+    /// 传入自己的 `&WorldTables`（D12 既定签名形态，见 `crate::step::step`）。
+    pub(crate) fn step_t(w: &mut crate::step::World, input: &crate::input::InputFrame) {
+        crate::step::step(w, &crate::tables::TABLES_V0, input)
+    }
 
     /// 造一颗停在 (x,y) 的哑弹（半径 2）。
     pub(crate) fn bullet_at(
@@ -826,7 +844,7 @@ mod tests {
         };
         let h = w.body.create_enemy(init);
         assert_ne!(h, crate::enemy::EnemyHandle::NULL);
-        crate::step::step(&mut w, &crate::input::InputFrame::empty(0));
+        step_t(&mut w, &crate::input::InputFrame::empty(0));
         let i = w.body.enemies.get(h).unwrap();
         assert_eq!(w.body.enemies.x[i], Fx::from_int(1)); // 0+1
         assert_eq!(w.body.enemies.y[i], Fx::from_int(52)); // 50+2
@@ -847,7 +865,7 @@ mod tests {
         let mut w = crate::step::World::new(1);
         let h = spawn_field(&mut w, 0, 100, 20, crate::field::FIELD_CLEAR_BULLETS, 1);
         assert!(w.body.fields.get(h).is_some());
-        crate::step::step(&mut w, &crate::input::InputFrame::empty(0));
+        step_t(&mut w, &crate::input::InputFrame::empty(0));
         assert_eq!(w.body.fields.get(h), None); // 活一帧后 cleanup 回收
     }
 
@@ -856,10 +874,10 @@ mod tests {
         let mut w = crate::step::World::new(1);
         let h = spawn_field(&mut w, 0, 100, 20, crate::field::FIELD_CLEAR_BULLETS, 3);
         for _ in 0..2 {
-            crate::step::step(&mut w, &crate::input::InputFrame::empty(0));
+            step_t(&mut w, &crate::input::InputFrame::empty(0));
             assert!(w.body.fields.get(h).is_some()); // 前 2 帧仍在
         }
-        crate::step::step(&mut w, &crate::input::InputFrame::empty(0));
+        step_t(&mut w, &crate::input::InputFrame::empty(0));
         assert_eq!(w.body.fields.get(h), None); // 第 3 帧尽
     }
 

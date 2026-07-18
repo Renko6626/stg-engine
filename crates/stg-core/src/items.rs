@@ -1,8 +1,13 @@
-//! 道具池（D7）——`define_pool!` 第五实例 + 类型常量 + 配置表 v0 + 掉落表。
+//! 道具池（D7）——`define_pool!` 第五实例 + 类型常量 + 池入账常数。
 //! 行为世界侧固定（账本公平性同级，D7）；**扩展性四步清单**（spec 2026-07-16）：
-//! 新增类型 = ①加类型常量（编号只增不改）②`ITEM_CFG` 加行（数组类型强制表长==类型数）
-//! ③`credit_item`（world/settle.rs）加 match 臂 ④按需加掉落表行。
-//! 配置表 v0 = 引擎常量（player.rs 先例）；WorldTables 建成后整表搬家、结构体不动。
+//! 新增类型 = ①加类型常量（编号只增不改）②`tables::TABLES_V0.item_cfg` 加行
+//! （数组类型强制表长==类型数）③`credit_item`（world/settle.rs）加 match 臂
+//! ④按需加掉落表行。
+//!
+//! **M0-17 T2 起**：`ItemTypeCfg` 结构体定义 + `ITEM_CFG`/`DROP_TABLES`/`ITEM_GRAVITY`
+//! 三件内容已搬去 `crate::tables`（`WorldTables` 全家入驻，见 `tables.rs` 模块文档）。
+//! 本文件只留类型编号（冻结）/池定义/哨兵/账本规则常数（`POWER_MAX` 等——世界规则不是
+//! 内容数据，不迁）。
 
 use crate::define_pool;
 use crate::math::Fx;
@@ -27,43 +32,6 @@ pub const MAGNET_PICKED: u8 = 0xFE;
 pub const POWER_MAX: u16 = 400;
 pub const PIECES_PER_LIFE: u8 = 5;
 pub const PIECES_PER_BOMB: u8 = 5;
-
-/// 全局重力（≈0.15 px/帧²；未锁定道具 vy += 至终速钉住）。
-pub(crate) const ITEM_GRAVITY: Fx = Fx::from_raw(9_830);
-
-/// 每类型配置（v0 引擎常量；金向量实测后调参）。
-pub struct ItemTypeCfg {
-    pub score: u32,
-    pub eject_speed: Fx,
-    pub terminal_vy: Fx,
-    pub magnet_speed: Fx,
-    pub pickup_radius: Fx,
-    pub attract_radius: Fx,
-}
-
-const STD: ItemTypeCfg = ItemTypeCfg {
-    score: 0, // 各行覆写
-    eject_speed: Fx::from_int(3),
-    terminal_vy: Fx::from_raw(144_179), // ≈2.2
-    magnet_speed: Fx::from_int(8),
-    pickup_radius: Fx::from_int(16),
-    attract_radius: Fx::from_int(40),
-};
-
-/// 索引 = 类型编号；数组类型使"表长 == 类型数"成为编译期事实。
-pub(crate) const ITEM_CFG: [ItemTypeCfg; ITEM_TYPE_COUNT] = [
-    ItemTypeCfg { score: 10, ..STD },  // POWER
-    ItemTypeCfg { score: 100, ..STD }, // POINT
-    ItemTypeCfg { score: 50, ..STD },  // LIFE_PIECE
-    ItemTypeCfg { score: 50, ..STD },  // BOMB_PIECE
-    ItemTypeCfg { score: 30, ..STD },  // STAR（消弹转化；grill 2026-07-18 拍板 30 分）
-];
-
-/// 掉落表 v0：表 id → [(类型, 数量)]。表 0 = 空（enemy.drop_table 零默认 = 不掉）。
-pub(crate) const DROP_TABLES: &[&[(u8, u8)]] = &[
-    &[],
-    &[(ITEM_POWER, 2), (ITEM_POINT, 1)], // 表 1：标准杂鱼
-];
 
 define_pool! {
     Item, cap = 512,
@@ -94,36 +62,6 @@ mod tests {
         );
         assert_eq!(ITEM_TYPE_COUNT, 5);
         assert_eq!((MAGNET_NONE, MAGNET_PICKED), (0xFF, 0xFE));
-    }
-
-    /// 配置表逐行健全：分值/物理参数为正、拾取半径 ≤ MAX_ENTITY_RADIUS（行 5 加法证明前提）。
-    #[test]
-    fn item_cfg_rows_sane() {
-        for (t, cfg) in ITEM_CFG.iter().enumerate() {
-            assert!(cfg.score > 0, "type {t}");
-            assert!(cfg.eject_speed.raw() > 0 && cfg.terminal_vy.raw() > 0);
-            assert!(cfg.magnet_speed.raw() > 0 && cfg.attract_radius.raw() > 0);
-            assert!(
-                cfg.pickup_radius.raw() > 0
-                    && cfg.pickup_radius.raw() <= crate::world::MAX_ENTITY_RADIUS.raw(),
-                "type {t} 拾取半径越出行 5 加法安全域"
-            );
-        }
-        assert_eq!(ITEM_CFG[ITEM_POINT as usize].score, 100);
-    }
-
-    /// 掉落表：表 0 恒空（enemy.drop_table 零初始化默认 = 不掉）；表 1 = 标准杂鱼。
-    #[test]
-    fn drop_tables_shape() {
-        assert!(DROP_TABLES[0].is_empty());
-        assert_eq!(DROP_TABLES[1], &[(ITEM_POWER, 2), (ITEM_POINT, 1)]);
-        assert!(
-            DROP_TABLES
-                .iter()
-                .flat_map(|t| t.iter())
-                .all(|&(ty, _)| (ty as usize) < ITEM_TYPE_COUNT),
-            "掉落表条目类型必须合法——扩展四步第④步的脚下网"
-        );
     }
 
     /// 池确定性 + 校验和敏感（与其余池同款纪律）。

@@ -73,13 +73,21 @@ impl World {
 }
 
 /// 空导演 = 纯世界模拟（P2：空租户零次循环）。
-pub fn step(world: &mut World, input: &crate::input::InputFrame) {
-    step_with_director(world, input, |_| {});
+pub fn step(
+    world: &mut World,
+    tables: &crate::tables::WorldTables,
+    input: &crate::input::InputFrame,
+) {
+    step_with_director(world, tables, input, |_| {});
 }
 
 /// §3.5 宪法顺序（导演槽在 step-3 跑一次）。相位由 world 出，顺序由此焊死，PhaseGuard 押运。
+///
+/// `tables: &WorldTables`（M0-17 T2 起穿线；D12 既定签名形态）：**不进 `World`**（I7 无引用；
+/// 静态表不进快照/校验和——两机同表由二进制同一性/表哈希保证，见 `crate::tables` 模块文档）。
 pub fn step_with_director<F: FnMut(&mut WorldBody)>(
     world: &mut World,
+    tables: &crate::tables::WorldTables,
     input: &crate::input::InputFrame,
     mut director: F,
 ) {
@@ -90,9 +98,9 @@ pub fn step_with_director<F: FnMut(&mut WorldBody)>(
     director(b);
     b.update_players(); // 3
     b.run_transforms(); // 4
-    b.integrate(); // 5
-    b.collide(); // 6
-    b.settle(); // 7
+    b.integrate(tables); // 5
+    b.collide(tables); // 6
+    b.settle(tables); // 7
     b.phase_enter(PH_ECL_HOOK); // 8：ECL 事件挂钩槽（M0-4 空）
     b.cleanup(); // 9
     b.advance(); // 10
@@ -584,7 +592,7 @@ mod tests {
         let x0 = w.body.players[0].x.raw();
         let mut f = InputFrame::empty(0);
         f.actions[0].buttons = BTN_RIGHT;
-        step(&mut w, &f);
+        crate::world::test_support::step_t(&mut w, &f);
         assert!(w.body.players[0].x.raw() > x0); // 右移
     }
 
@@ -594,7 +602,7 @@ mod tests {
         let mut w = World::new(1);
         let mut f = InputFrame::empty(0);
         f.actions[0].buttons = BTN_SHOT;
-        step(&mut w, &f);
+        crate::world::test_support::step_t(&mut w, &f);
         assert_eq!(w.body.shots.iter_alive().count(), 1); // shot_cd 从 0 → 发 1 发
     }
 
@@ -605,7 +613,7 @@ mod tests {
         let mut f = InputFrame::empty(0);
         f.actions[0].buttons = BTN_LEFT;
         for _ in 0..200 {
-            step(&mut w, &f); // 一直左移
+            crate::world::test_support::step_t(&mut w, &f); // 一直左移
         }
         assert_eq!(w.body.players[0].x, Fx::from_int(-192)); // 钳到左边界
     }
@@ -619,7 +627,7 @@ mod tests {
             for frame in 0..60u32 {
                 let mut f = InputFrame::empty(frame);
                 f.actions[0].buttons = BTN_RIGHT | BTN_SHOT;
-                step(&mut w, &f);
+                crate::world::test_support::step_t(&mut w, &f);
                 cks.push(w.checksum());
             }
             cks
@@ -631,7 +639,7 @@ mod tests {
     fn integrate_moves_and_advances_frame() {
         let mut w = World::new(1);
         let h = w.body.create_bullet(straight(0, 0, 1, 2, 0xFFFF));
-        step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         let i = w.body.bullets.get(h).unwrap();
         assert_eq!(w.body.bullets.x[i], Fx::from_int(1));
         assert_eq!(w.body.bullets.y[i], Fx::from_int(2));
@@ -643,7 +651,7 @@ mod tests {
         let mut w = World::new(1);
         let h_far = w.body.create_bullet(straight(1000, 0, 0, 0, 0xFFFF)); // 越界
         let h_life = w.body.create_bullet(straight(0, 0, 0, 0, 1)); // 寿命 1
-        step(&mut w, &InputFrame::empty(0)); // life:1→0(integrate)，cleanup 释放两者
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0)); // life:1→0(integrate)，cleanup 释放两者
         assert_eq!(w.body.bullets.get(h_far), None);
         assert_eq!(w.body.bullets.get(h_life), None);
     }
@@ -654,10 +662,15 @@ mod tests {
             let mut w = World::new(7);
             let mut cks = Vec::new();
             for _ in 0..50u32 {
-                step_with_director(&mut w, &InputFrame::empty(0), |b| {
-                    let vx = b.rng.rand_range(5) as i32 - 2;
-                    b.create_bullet(straight(0, 0, vx, 3, 100));
-                });
+                step_with_director(
+                    &mut w,
+                    &crate::tables::TABLES_V0,
+                    &InputFrame::empty(0),
+                    |b| {
+                        let vx = b.rng.rand_range(5) as i32 - 2;
+                        b.create_bullet(straight(0, 0, vx, 3, 100));
+                    },
+                );
                 cks.push(w.checksum());
             }
             cks
@@ -669,15 +682,20 @@ mod tests {
     fn snapshot_restore_roundtrip() {
         let mut w = World::new(3);
         for _ in 0..10 {
-            step_with_director(&mut w, &InputFrame::empty(0), |b| {
-                b.create_bullet(straight(0, 0, 1, 1, 200));
-            });
+            step_with_director(
+                &mut w,
+                &crate::tables::TABLES_V0,
+                &InputFrame::empty(0),
+                |b| {
+                    b.create_bullet(straight(0, 0, 1, 1, 200));
+                },
+            );
         }
         let snap_ck = w.checksum();
         let mut snap = World::new(3);
         w.copy_into(&mut snap);
         assert_eq!(snap.checksum(), snap_ck);
-        step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_ne!(w.checksum(), snap_ck);
         snap.copy_into(&mut w); // 恢复
         assert_eq!(w.checksum(), snap_ck);
@@ -749,12 +767,18 @@ mod tests {
     fn drop_item_scatter_deterministic() {
         let run = || {
             let mut w = World::new(11);
-            let a = w
-                .body
-                .drop_item(Fx::ZERO, Fx::from_int(100), crate::items::ITEM_POWER);
-            let b = w
-                .body
-                .drop_item(Fx::ZERO, Fx::from_int(100), crate::items::ITEM_POWER);
+            let a = w.body.drop_item(
+                Fx::ZERO,
+                Fx::from_int(100),
+                crate::items::ITEM_POWER,
+                &crate::tables::TABLES_V0,
+            );
+            let b = w.body.drop_item(
+                Fx::ZERO,
+                Fx::from_int(100),
+                crate::items::ITEM_POWER,
+                &crate::tables::TABLES_V0,
+            );
             let (ia, ib) = (w.body.items.get(a).unwrap(), w.body.items.get(b).unwrap());
             (
                 w.body.items.vx[ia],
@@ -775,17 +799,26 @@ mod tests {
     fn drop_item_bad_type_and_pool_full() {
         let mut w = World::new(1);
         assert_eq!(
-            w.body.drop_item(Fx::ZERO, Fx::ZERO, 9),
+            w.body
+                .drop_item(Fx::ZERO, Fx::ZERO, 9, &crate::tables::TABLES_V0),
             crate::items::ItemHandle::NULL
         );
         assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
         for _ in 0..crate::items::ItemPool::CAP {
-            w.body
-                .spawn_drop(Fx::ZERO, Fx::from_int(50), crate::items::ITEM_POINT);
+            w.body.spawn_drop(
+                Fx::ZERO,
+                Fx::from_int(50),
+                crate::items::ITEM_POINT,
+                &crate::tables::TABLES_V0,
+            );
         }
         assert_eq!(
-            w.body
-                .drop_item(Fx::ZERO, Fx::ZERO, crate::items::ITEM_POINT),
+            w.body.drop_item(
+                Fx::ZERO,
+                Fx::ZERO,
+                crate::items::ITEM_POINT,
+                &crate::tables::TABLES_V0
+            ),
             crate::items::ItemHandle::NULL
         );
         assert_eq!(w.body.diag.pool_full[crate::world::POOL_ITEM], 1);

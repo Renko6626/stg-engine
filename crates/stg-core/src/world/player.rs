@@ -176,14 +176,14 @@ mod tests {
         let lives0 = w.body.players[0].lives;
         // 跑够窗口帧数 → Dead → Respawning
         for _ in 0..crate::player::DEATHBOMB_WINDOW {
-            crate::step::step(&mut w, &InputFrame::empty(0));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         }
         assert_eq!(w.body.players[0].life_state, LIFE_RESPAWNING);
         assert_eq!(w.body.players[0].lives, lives0 - 1);
         assert!(w.body.players[0].invuln > 0);
         // 再跑够无敌帧 → Alive
         for _ in 0..crate::player::RESPAWN_INVULN {
-            crate::step::step(&mut w, &InputFrame::empty(0));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         }
         assert_eq!(w.body.players[0].life_state, LIFE_ALIVE);
     }
@@ -206,7 +206,7 @@ mod tests {
 
         // 窗口耗尽 → commit_death → lives 0 → GAMEOVER（不是 RESPAWNING）
         for f in 0..DEATHBOMB_WINDOW as u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.players[0].life_state, LIFE_GAMEOVER);
         assert_eq!(w.body.players[0].lives, 0);
@@ -215,7 +215,7 @@ mod tests {
         let mut f = InputFrame::empty(100);
         f.actions[0].buttons = BTN_RIGHT | BTN_SHOT;
         for _ in 0..10 {
-            crate::step::step(&mut w, &f);
+            crate::world::test_support::step_t(&mut w, &f);
         }
         assert_eq!(w.body.players[0].x, x0, "GAMEOVER 后不该移动");
         assert_eq!(w.body.shots.iter_alive().count(), 0, "GAMEOVER 后不该发弹");

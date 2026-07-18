@@ -172,7 +172,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
             btn |= BTN_SLOW;
         }
         input.actions[0].buttons = btn;
-        step_with_director(&mut world, &input, |b| {
+        step_with_director(&mut world, &stg_core::tables::TABLES_V0, &input, |b| {
             // ① 每 60 帧把敌人补到 3 个（顶部固定三点；被自机弹打死→cleanup 回收→补位 churn）。
             // 场外飘入：出生在 (ex, -100)——旧共用界（y∈[-64,512]）外必死、新敌人大边界
             // （y∈[-256,704]，ENEMY_OOB_MARGIN=256）内存活——再 `move_enemy_to` 40 帧

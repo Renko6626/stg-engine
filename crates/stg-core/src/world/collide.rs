@@ -11,14 +11,15 @@ use crate::events::{
 };
 use crate::field::{FIELD_CLEAR_BULLETS, FIELD_DAMAGE};
 use crate::math::geom::len_sq;
+use crate::tables::WorldTables;
 
 impl WorldBody {
-    pub(crate) fn collide(&mut self) {
+    pub(crate) fn collide(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_COLLIDE);
         self.collide_bullets_player(); // 行 1/2：敌弹 × 自机
         self.collide_body_player(); // 行 3：敌体 × 自机
         self.collide_shot_enemy(); // 行 4：自机弹 × 敌人
-        self.collide_item_player(); // 行 5：道具 × 自机拾取圈
+        self.collide_item_player(tables); // 行 5：道具 × 自机拾取圈
         self.collide_field_bullet(); // 行 6：作用区 × 敌弹（消弹）
         self.collide_field_enemy(); // 行 7：作用区 × 敌人（伤敌）
     }
@@ -117,7 +118,7 @@ impl WorldBody {
         }
     }
     /// 行 5：道具 × 自机拾取圈（graze_radius 兼拾取圈，D7；主动半径查配置表）。
-    fn collide_item_player(&mut self) {
+    fn collide_item_player(&mut self, tables: &WorldTables) {
         for p in 0..crate::MAX_PLAYERS {
             if self.players[p].life_state != crate::player::LIFE_ALIVE {
                 continue;
@@ -128,7 +129,7 @@ impl WorldBody {
                 while bits != 0 {
                     let i = w * 64 + bits.trailing_zeros() as usize;
                     bits &= bits - 1;
-                    let pr = crate::items::ITEM_CFG[self.items.item_type[i] as usize].pickup_radius;
+                    let pr = tables.item_cfg[self.items.item_type[i] as usize].pickup_radius;
                     let r = pr + self.players[p].graze_radius;
                     let d2 = len_sq(
                         self.items.x[i] - self.players[p].x,
@@ -230,7 +231,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         let hit = (0..w.body.hits_len as usize)
             .filter(|&k| w.body.hits[k].row == ROW_BULLET_PLAYER_HIT)
             .count();
@@ -252,7 +253,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         let hit = (0..w.body.hits_len as usize)
             .filter(|&k| w.body.hits[k].row == ROW_BULLET_PLAYER_HIT)
             .count();
@@ -274,7 +275,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         assert_eq!(w.body.hits_len, 0);
     }
 
@@ -290,7 +291,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         assert_eq!(w.body.hits_len, 0);
     }
 
@@ -305,7 +306,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         let n = (0..w.body.hits_len as usize)
             .filter(|&k| w.body.hits[k].row == ROW_BODY_PLAYER_HIT)
             .count();
@@ -332,7 +333,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         let n = (0..w.body.hits_len as usize)
             .filter(|&k| w.body.hits[k].row == ROW_BODY_PLAYER_HIT)
             .count();
@@ -365,7 +366,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         let hits: Vec<_> = (0..w.body.hits_len as usize)
             .map(|k| w.body.hits[k])
             .filter(|h| h.row == ROW_SHOT_ENEMY)
@@ -388,7 +389,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         let hits: Vec<_> = (0..w.body.hits_len as usize)
             .map(|k| w.body.hits[k])
             .filter(|h| h.row == ROW_FIELD_BULLET)
@@ -410,7 +411,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         assert_eq!(
             (0..w.body.hits_len as usize)
                 .filter(|&k| w.body.hits[k].row == ROW_FIELD_BULLET)
@@ -432,7 +433,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         assert_eq!(
             (0..w.body.hits_len as usize)
                 .filter(|&k| w.body.hits[k].row == ROW_FIELD_ENEMY)
@@ -453,7 +454,7 @@ mod tests {
         {
             w.body.phase_guard = PH_COLLIDE;
         }
-        w.body.collide();
+        w.body.collide(&crate::tables::TABLES_V0);
         assert_eq!(
             (0..w.body.hits_len as usize)
                 .filter(|&k| w.body.hits[k].row == ROW_FIELD_ENEMY)

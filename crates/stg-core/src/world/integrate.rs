@@ -11,9 +11,10 @@
 
 use super::WorldBody;
 use crate::math::Fx;
+use crate::tables::WorldTables;
 
 impl WorldBody {
-    pub(crate) fn integrate(&mut self) {
+    pub(crate) fn integrate(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_INTEGRATE);
         let nw = self.bullets.alive.len();
         for w in 0..nw {
@@ -122,7 +123,7 @@ impl WorldBody {
             while bits != 0 {
                 let i = w * 64 + bits.trailing_zeros() as usize;
                 bits &= bits - 1;
-                self.integrate_item(i, poc_player);
+                self.integrate_item(i, poc_player, tables);
             }
         }
         // 作用区：寿命倒数（照抄弹的模式；life=1 → 本帧减到 0，相位6 仍参与判定，相位9 回收）
@@ -140,13 +141,13 @@ impl WorldBody {
     }
 
     /// 单颗道具的一帧：触发（PoC / 近距）→ 磁吸或下落移动。已拾取（0xFE）静置待回收。
-    fn integrate_item(&mut self, i: usize, poc_player: Option<usize>) {
-        use crate::items::{ITEM_CFG, ITEM_GRAVITY, MAGNET_NONE, MAGNET_PICKED};
+    fn integrate_item(&mut self, i: usize, poc_player: Option<usize>, tables: &WorldTables) {
+        use crate::items::{MAGNET_NONE, MAGNET_PICKED};
         let m = self.items.magnet_to[i];
         if m == MAGNET_PICKED {
             return;
         }
-        let cfg = &ITEM_CFG[self.items.item_type[i] as usize];
+        let cfg = &tables.item_cfg[self.items.item_type[i] as usize];
         if m == MAGNET_NONE {
             if let Some(p) = poc_player {
                 self.items.magnet_to[i] = p as u8;
@@ -189,7 +190,7 @@ impl WorldBody {
             }
         }
         // 未锁定/刚解锁：重力到终速钉住
-        let nvy = self.items.vy[i] + ITEM_GRAVITY;
+        let nvy = self.items.vy[i] + tables.item_gravity;
         self.items.vy[i] = if nvy.raw() > cfg.terminal_vy.raw() {
             cfg.terminal_vy
         } else {
@@ -311,16 +312,16 @@ mod tests {
         w.body.bullets.delay[0] = 2;
 
         // delay 期：不动，只倒数
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.bullets.x[0], Fx::ZERO, "delay 期弹不该移动");
         assert_eq!(w.body.bullets.delay[0], 1);
 
-        crate::step::step(&mut w, &InputFrame::empty(1));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
         assert_eq!(w.body.bullets.x[0], Fx::ZERO, "delay 期弹不该移动");
         assert_eq!(w.body.bullets.delay[0], 0);
 
         // delay 尽 → 开始积分
-        crate::step::step(&mut w, &InputFrame::empty(2));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(2));
         assert_eq!(w.body.bullets.x[0], Fx::from_int(3), "delay 尽后应开始移动");
     }
 
@@ -335,7 +336,7 @@ mod tests {
         w.body.refresh_vel_from_polar(i);
         w.body.set_ang_vel_at(i, 1024);
         for f in 0..16u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.bullets.angle[i], Angle::QUARTER);
         let (rvx, rvy) = polar_to_vec(Fx::from_int(2), Angle::QUARTER);
@@ -354,7 +355,7 @@ mod tests {
         w.body.refresh_vel_from_polar(i);
         w.body.set_accel_at(i, Fx::from_raw(3277)); // ~0.05 px/帧²
         for f in 0..10u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.bullets.speed[i].raw(), 65536 + 10 * 3277);
         let (rvx, _) = polar_to_vec(Fx::from_raw(65536 + 10 * 3277), Angle::ZERO);
@@ -373,11 +374,11 @@ mod tests {
         w.body.set_ang_vel_at(i, 1024);
         w.body.bullets.delay[i] = 2;
         for f in 0..2u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.bullets.angle[i], Angle::ZERO, "delay 期角度不得推进");
         assert_eq!(w.body.bullets.x[i], Fx::ZERO, "delay 期不得移动");
-        crate::step::step(&mut w, &InputFrame::empty(2));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(2));
         assert_eq!(
             w.body.bullets.angle[i],
             Angle(1024),
@@ -400,7 +401,7 @@ mod tests {
             "应已开 CART_FX"
         );
         for f in 0..20u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         // vy = -3 + 20×0.25 = +2：过了顶点
         assert_eq!(w.body.bullets.vy[i].raw(), -3 * 65536 + 20 * 16384);
@@ -427,7 +428,7 @@ mod tests {
         w.body.bullets.x[i] = Fx::from_int(190);
         w.body.bullets.y[i] = Fx::from_int(100);
         w.body.bullets.vx[i] = Fx::from_int(5);
-        crate::step::step(&mut w, &InputFrame::empty(0)); // BOUNCE_ARM 发射 + 位移 195 → 折返
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0)); // BOUNCE_ARM 发射 + 位移 195 → 折返
         assert_eq!(w.body.bullets.x[i], Fx::from_int(189), "2·192−195 = 189");
         assert_eq!(w.body.bullets.vx[i], Fx::from_int(-5));
         assert_eq!(
@@ -452,7 +453,7 @@ mod tests {
         );
         w.body.bullets.x[i] = Fx::from_int(189);
         w.body.bullets.y[i] = Fx::from_int(100);
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(
             w.body.bullets.angle[i],
             Angle::HALF.sub(Angle(8192)),
@@ -471,7 +472,7 @@ mod tests {
         w.body.bullets.y[i] = Fx::from_int(100);
         w.body.bullets.vx[i] = Fx::from_int(-8); // 左飞
         for f in 0..12u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f)); // −190−8k，越 OOB(−256) 即回收
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f)); // −190−8k，越 OOB(−256) 即回收
         }
         assert!(!w.body.bullets.is_alive(i), "未武装左墙：照常越界回收");
     }
@@ -486,7 +487,7 @@ mod tests {
         w.body.bullets.vx[i] = Fx::from_int(60); // 大步伐来回撞
         let mut bounced_once = false;
         for f in 0..20u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
             if w.body.bullets.is_alive(i) && w.body.bullets.vx[i].raw() < 0 {
                 bounced_once = true;
             }
@@ -513,18 +514,18 @@ mod tests {
             .unwrap();
         let mut prev_vy = w.body.items.vy[0];
         for f in 0..40u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
             let vy = w.body.items.vy[0];
             assert!(vy.raw() >= prev_vy.raw(), "重力单调");
             assert!(
-                vy.raw() <= crate::items::ITEM_CFG[0].terminal_vy.raw(),
+                vy.raw() <= crate::tables::TABLES_V0.item_cfg[0].terminal_vy.raw(),
                 "永不超终速"
             );
             prev_vy = vy;
         }
         assert_eq!(
             prev_vy,
-            crate::items::ITEM_CFG[0].terminal_vy,
+            crate::tables::TABLES_V0.item_cfg[0].terminal_vy,
             "40 帧后必达终速"
         );
     }
@@ -558,7 +559,7 @@ mod tests {
         {
             w.body.phase_guard = crate::world::PH_INTEGRATE;
         }
-        w.body.integrate();
+        w.body.integrate(&crate::tables::TABLES_V0);
         assert_eq!(w.body.items.magnet_to[0], 0, "圈内锁定自机 0");
         assert_eq!(
             w.body.items.magnet_to[1],
@@ -571,7 +572,7 @@ mod tests {
         {
             w.body.phase_guard = crate::world::PH_INTEGRATE;
         }
-        w.body.integrate();
+        w.body.integrate(&crate::tables::TABLES_V0);
         assert!(w.body.items.y[0].raw() > y0.raw(), "朝自机（下方）追");
     }
 
@@ -595,7 +596,7 @@ mod tests {
                 .unwrap();
         }
         w.body.items.magnet_to[2] = crate::items::MAGNET_PICKED; // 已拾取哨兵
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.items.magnet_to[0], 0);
         assert_eq!(w.body.items.magnet_to[1], 0);
         assert_eq!(
@@ -623,7 +624,7 @@ mod tests {
             .unwrap();
         w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW; // 非 ALIVE
         w.body.players[0].state_timer = 8;
-        crate::step::step(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
         assert_eq!(w.body.items.magnet_to[0], crate::items::MAGNET_NONE, "解锁");
         assert_eq!(w.body.items.vx[0], Fx::ZERO, "垂直续落");
     }
@@ -660,7 +661,7 @@ mod tests {
             .move_enemy_to(h, Fx::from_int(80), Fx::from_int(180), 4, 0);
         let i = w.body.enemies.get(h).unwrap();
         for k in 1..=4i32 {
-            crate::step::step(&mut w, &InputFrame::empty(k as u32));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(k as u32));
             assert_eq!(
                 w.body.enemies.x[i].raw(),
                 (80 * 65536 * k) / 4,
@@ -684,13 +685,13 @@ mod tests {
         w.body
             .move_enemy_to(h, Fx::from_int(50), Fx::from_int(150), 3, 2); // QuadOut
         for f in 0..3u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.enemies.x[i], Fx::from_int(50), "精确到点");
         assert_eq!(w.body.enemies.y[i], Fx::from_int(150));
         assert_eq!(w.body.enemies.vx[i], Fx::ZERO, "到点清速");
         assert_eq!(w.body.enemies.mv_active[i], 0);
-        crate::step::step(&mut w, &InputFrame::empty(3));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(3));
         assert_eq!(w.body.enemies.x[i], Fx::from_int(50), "到点后不得漂移");
     }
 
@@ -715,12 +716,12 @@ mod tests {
         let h = spawn_enemy(&mut w, 0, 100, 5);
         w.body
             .move_enemy_to(h, Fx::from_int(100), Fx::from_int(100), 10, 0);
-        crate::step::step(&mut w, &InputFrame::empty(0)); // 在飞
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0)); // 在飞
         w.body
             .move_enemy_to(h, Fx::from_int(-80), Fx::from_int(30), 0, 0); // 瞬移
         let i = w.body.enemies.get(h).unwrap();
         assert_eq!(w.body.enemies.mv_active[i], 0, "瞬移清除在飞插值");
-        crate::step::step(&mut w, &InputFrame::empty(1));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
         assert_eq!(w.body.enemies.x[i], Fx::from_int(-80), "旧轨迹不得复活");
         assert_eq!(w.body.enemies.y[i], Fx::from_int(30));
     }
@@ -732,13 +733,13 @@ mod tests {
         let h = spawn_enemy(&mut w, 0, 100, 5);
         w.body
             .move_enemy_to(h, Fx::from_int(100), Fx::from_int(100), 10, 0);
-        crate::step::step(&mut w, &InputFrame::empty(0)); // 走 1/10 → x=10
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0)); // 走 1/10 → x=10
         let i = w.body.enemies.get(h).unwrap();
         let mid_x = w.body.enemies.x[i];
         w.body.move_enemy_to(h, Fx::ZERO, Fx::from_int(100), 2, 0); // 掉头回 x=0
         assert_eq!(w.body.enemies.mv_from_x[i], mid_x, "重启 from = 当前位置");
         for f in 1..=2u32 {
-            crate::step::step(&mut w, &InputFrame::empty(f));
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.enemies.x[i], Fx::ZERO, "2 帧回到 0");
     }
