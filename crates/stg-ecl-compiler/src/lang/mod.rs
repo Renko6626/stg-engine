@@ -7,8 +7,11 @@
 //! T3 上升到 `EclImage` 层面钉全管线确定性）。
 
 pub mod ast;
+pub mod builtins;
 pub mod lex;
 pub mod parse;
+pub mod slots;
+pub mod typeck;
 
 pub use ast::{CompileError, Program};
 
@@ -31,14 +34,46 @@ pub fn parse(src: &str, _file: &str) -> Result<Program, Vec<CompileError>> {
 
 /// 核心接口块钉死的全管线入口：`compile(src, file) -> Result<EclImage, Vec<CompileError>>`。
 ///
-/// **T1 阶段桩实现（有意的契约偏离，计划 Task 1 文件描述原文即"`compile` 入口暂 stub 到
-/// parse"）**：类型趟（T2）、槽分配趟（T2）、codegen（T3）都还不存在，此刻不可能产出
-/// `EclImage`。桩签名先退化成 `Result<Program, Vec<CompileError>>`（= 直接转发
-/// [`parse`]），T3 落地时会把返回类型改成 `Result<EclImage, Vec<CompileError>>` 并接入完整
-/// 管线——**调用方在 T3 之前不应该依赖本函数产出可执行镜像**，详见
-/// `.superpowers/sdd/task-1-report.md` 的「契约偏离」记录。
+/// **T2 阶段仍是契约偏离（T1 报告已记录、T2 顺延）**：codegen（T3）还不存在，此刻不可能产出
+/// `EclImage`。签名仍退化成 `Result<Program, Vec<CompileError>>`，但管线本身从本刀起真正
+/// 贯通 `parse → typeck::check → slots::allocate`（T1 阶段只到 `parse`）——三趟任何一趟报错
+/// 都会被收集进最终 `Err`，`typeck`/`slots` 产出的 `TypedInfo`/`SlotMap` 目前**丢弃不返回**
+/// （它们没有独立的公开出口，T3 落地时会把返回类型改成 `Result<EclImage, Vec<CompileError>>`
+/// 并把这两份中间产物真正接进 codegen）——**调用方在 T3 之前不应该依赖本函数产出可执行
+/// 镜像**，但已经可以拿它当"这份 `.ecl` 源码类型对不对、槽分配得下"的完整静态检查用。
+///
+/// **`CompileError.src_line` 在这里被回填**：`typeck::check`/`slots::allocate` 都没有原始
+/// 源码文本（签名只收 `&Program`/`&TypedInfo`），产出的错误 `src_line` 恒为空串（见两个
+/// 模块的文档）——本函数是唯一持有 `src` 的地方，用 `src.lines()` 把这些错误的 `src_line`
+/// 补全，让最终交给用户的 `CompileError::render()` 仍是完整契约格式。
 pub fn compile(src: &str, file: &str) -> Result<Program, Vec<CompileError>> {
-    parse(src, file)
+    let program = parse(src, file)?;
+    let typed = match typeck::check(&program) {
+        Ok(t) => t,
+        Err(mut errors) => {
+            attach_src_lines(&mut errors, src);
+            return Err(errors);
+        }
+    };
+    if let Err(mut errors) = slots::allocate(&program, &typed) {
+        attach_src_lines(&mut errors, src);
+        return Err(errors);
+    }
+    Ok(program)
+}
+
+/// 回填 `typeck`/`slots` 产出的 [`CompileError`] 的 `src_line`（它们构造时没有源码文本，
+/// 见 `compile` 文档）——按 1-based `line` 索引 `src.lines()`，越界同 `CompileError::at`
+/// 的兜底纪律退化成空串，不 panic。
+fn attach_src_lines(errors: &mut [CompileError], src: &str) {
+    let lines: Vec<&str> = src.lines().collect();
+    for e in errors.iter_mut() {
+        e.src_line = lines
+            .get(e.line.saturating_sub(1) as usize)
+            .copied()
+            .unwrap_or("")
+            .to_string();
+    }
 }
 
 #[cfg(test)]
@@ -77,5 +112,44 @@ mod tests {
         let p1 = parse(src, "a.ecl").expect("应解析成功");
         let p2 = parse(src, "a.ecl").expect("应解析成功");
         assert_eq!(p1, p2);
+    }
+
+    /// `compile` T2 起贯通 `parse → typeck::check → slots::allocate`：类型层面合法的源码
+    /// 应该编译通过（不再只看语法层面）。
+    #[test]
+    fn compile_runs_typeck_and_slots_on_top_of_parse() {
+        let src = "sub main() { var x: fx = 1.0fx + 2.0fx; }";
+        assert!(compile(src, "smoke.ecl").is_ok());
+    }
+
+    /// `compile` 把 `typeck::check` 的类型错误也纳入最终 `Err`（不仅仅是语法错误）——
+    /// 判别式源码语法完全合法（parse 会成功），但 `fx + int` 违反类型矩阵。
+    #[test]
+    fn compile_surfaces_typeck_errors() {
+        let errors = compile("sub main() { var x: fx = 1.0fx + 1; }", "smoke.ecl").unwrap_err();
+        assert!(errors.iter().any(|e| e.msg.contains("cast")), "{errors:?}");
+    }
+
+    /// `compile` 把 `slots::allocate` 的容量错误也纳入最终 `Err`（递归环——语法/类型层面
+    /// 都合法，只有槽分配趟才能发现）。
+    #[test]
+    fn compile_surfaces_slots_errors() {
+        let errors = compile("sub a() { a(); }", "smoke.ecl").unwrap_err();
+        assert!(errors.iter().any(|e| e.msg.contains("递归")), "{errors:?}");
+    }
+
+    /// `typeck`/`slots` 产出的 `CompileError` 本身没有 `src_line`（见两模块文档）——
+    /// `compile` 总入口必须用它持有的 `src` 回填，最终 `render()` 才是完整契约格式。
+    #[test]
+    fn compile_backfills_src_line_for_typeck_and_slots_errors() {
+        let src = "sub main() { var x: fx = 1.0fx + 1; }";
+        let errors = compile(src, "smoke.ecl").unwrap_err();
+        let e = errors.first().expect("应有至少一条错误");
+        assert_eq!(e.src_line, src, "单行源码，回填后应等于整行原文");
+        let rendered = e.render("smoke.ecl");
+        assert!(
+            rendered.contains(src),
+            "render() 应带上真实源行：{rendered}"
+        );
     }
 }
