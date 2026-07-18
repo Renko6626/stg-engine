@@ -1,5 +1,6 @@
 //! ecl/vm.rs —— 单任务解释核 + 相位 2 调度租户（T2：`SPAWN`/`KILL_SELF`/`KILL_CHILDREN`
-//! 语义落地；`SYS` 仍是 `Exec::Fault(FAULT_UNIMPLEMENTED)` 占位，T3 接线）。
+//! 语义落地；T3 起 `SYS` 派发进 `ecl::syscall::dispatch`——`VmCtx` 相应扩出
+//! `body: &mut WorldBody` + `tables: &WorldTables`，取代原先单独的 `diag` 字段）。
 //!
 //! 指令编码：1 头字（opcode 在低 8 位，余位留白供未来 mask）+ N 操作数字（N 由
 //! `ops::ARITY` 钉死）。循环：预算门（任务 1024 + 全局）→ 取头字（pc 越界 Fault(1)）→
@@ -12,6 +13,7 @@
 
 use crate::ecl::image::EclImage;
 use crate::ecl::ops::{self, ARITY};
+use crate::ecl::syscall;
 use crate::ecl::task::{
     CALL_DEPTH, EVAL_DEPTH, LOCALS, OWNER_BULLET, OWNER_ENEMY, OWNER_STAGE, TASK_CAP, Task,
     TaskPool,
@@ -20,7 +22,8 @@ use crate::events::{EVT_TASK_FAULT, Event};
 use crate::math::Angle;
 use crate::math::Fx;
 use crate::math::trig;
-use crate::world::{DiagCounters, POOL_TASK, WorldBody};
+use crate::tables::WorldTables;
+use crate::world::{POOL_TASK, WorldBody};
 
 /// 单任务每帧指令预算（spec 拍板 2：双层，超限确定性杀）。
 pub const TASK_BUDGET: u32 = 1024;
@@ -41,8 +44,9 @@ pub const FAULT_BUDGET: u8 = 3;
 pub const FAULT_DIV_ZERO: u8 = 4;
 /// 调用深度超限（`CALL` 满 8 层再调用）或 `RET` 时调用栈已空。
 pub const FAULT_CALL_DEPTH: u8 = 5;
-/// **T3 占位（本刀起收窄为仅 `SYS` 一族）**：`SYS` 解码已实现但派发未接线（syscall 表是
-/// T3 的事）。`SPAWN`/`KILL_SELF`/`KILL_CHILDREN` 已在本刀（T2）落地真实语义，不再落这里。
+/// **T3 起保留但不再产出**：T1/T2 占位期 `SYS` 未接线时曾走这里；T3 起 `SYS` 派发进
+/// `ecl::syscall::dispatch`（坏 syscall 号复用 `FAULT_BAD_OP`，见该模块文档），本码不再由
+/// 任何路径产出。保留常量值（不重排）——fault 码"编号即契约"，占位过的号不回收复用。
 pub const FAULT_UNIMPLEMENTED: u8 = 6;
 
 /// 单次 `exec` 调用的执行结果。
@@ -54,25 +58,30 @@ pub(crate) enum Exec {
 }
 
 /// 单帧执行上下文：本任务将要解码的字节码 + 全局剩余预算（跨任务共享，按池序消耗，I4）+
-/// `SPAWN`/`KILL_CHILDREN` 所需的任务池句柄 + 脚本镜像 + 本任务自身索引/当前帧号 + 诊断
-/// 计数器（`SPAWN` 池满记 `pool_full[POOL_TASK]`）。调度层（`run_tasks`）构造；单元测试
-/// 也可直接手搭（`tasks`/`ecl`/`diag` 用最小占位值）。
+/// `SPAWN`/`KILL_CHILDREN` 所需的任务池句柄 + 脚本镜像 + 本任务自身索引/当前帧号 +
+/// 世界本体（`SYS` 派发读写世界状态/诊断计数器，M1 T3 起扩）+ 静态表（appearance 查表等）。
+/// 调度层（`run_tasks`）构造；单元测试也可直接手搭（`tasks`/`ecl`/`body`/`tables` 用最小
+/// 占位值——测试惯例：`World::new(seed)` 提供 `body`/`tasks`，`&TABLES_V0` 提供 `tables`）。
 pub(crate) struct VmCtx<'a> {
     pub code: &'a [u32],
     pub budget: &'a mut u32,
-    /// 任务池——`SPAWN` 分配新槽、`KILL_CHILDREN` 扫描直系子。**不含当前正在执行的任务**
+    /// 任务池——`SPAWN` 分配新槽、`KILL_CHILDREN` 扫描直系子、`SYS_CREATE_BULLET` 的
+    /// `task_script` 挂弹派任务同走此路（T3 起）。**不含当前正在执行的任务**
     /// 的最新状态（那份状态在调用方的局部 `task` 拷贝里，见 `run_tasks` 的 copy-out/
     /// copy-back）；池内自身槽仍是本轮开始前的旧值，但 `spawn`/`kill_children` 只触碰
     /// *其它* 槽（自身槽的 alive 位在本轮全程保持置位，`first_free` 天然跳过），无别名冲突。
     pub tasks: &'a mut TaskPool,
-    /// 脚本镜像——`SPAWN` 靠它把 `script id` 解析成子任务的入口 `pc`。
+    /// 脚本镜像——`SPAWN`/`SYS_CREATE_BULLET` 靠它把 `script id` 解析成子任务的入口 `pc`。
     pub ecl: &'a EclImage,
+    /// 世界本体（M1 T3 起扩）：`SYS` 派发读写弹/敌/道具/globals/boss_ui/rng/诊断计数器
+    /// 的唯一入口，取代原先单独的 `diag: &mut DiagCounters` 字段（`ctx.body.diag` 等价物）。
+    pub body: &'a mut WorldBody,
+    /// 静态只读表（appearance 查表等；T3 起随 `&WorldTables` 穿线同款惯例）。
+    pub tables: &'a WorldTables,
     /// 本任务在池中的索引（`SPAWN` 的 `parent` 戳 = 此值+1；`KILL_CHILDREN` 的扫描目标同）。
     pub self_index: u16,
-    /// 当前世界帧号（`SPAWN` 子任务的 `born_frame` 戳）。
+    /// 当前世界帧号（`SPAWN`/`SYS_CREATE_BULLET` 子任务的 `born_frame` 戳）。
     pub frame: u32,
-    /// 诊断计数器（`SPAWN` 池满时 `pool_full[POOL_TASK] += 1`）。
-    pub diag: &'a mut DiagCounters,
 }
 
 /// 从 `task.pc` 起解释执行，直到 `WAIT` 让出 / `END` 完成 / Fault。
@@ -291,8 +300,8 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
                     Some(idx) => push!(idx as i32),
                     None => {
                         push!(-1);
-                        ctx.diag.pool_full[POOL_TASK] =
-                            ctx.diag.pool_full[POOL_TASK].wrapping_add(1);
+                        ctx.body.diag.pool_full[POOL_TASK] =
+                            ctx.body.diag.pool_full[POOL_TASK].wrapping_add(1);
                     }
                 }
             }
@@ -308,7 +317,10 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
                 }
             }
             ops::OP_SYS => {
-                return Exec::Fault(FAULT_UNIMPLEMENTED); // T3 接线（syscall 表）
+                let no = ctx.code[opnd_start] as u16;
+                if let Err(code) = syscall::dispatch(no, task, ctx) {
+                    return Exec::Fault(code);
+                }
             }
             _ => return Exec::Fault(FAULT_BAD_OP), // 防御：op_implemented 与本 match 若失步，不 panic
         }
@@ -348,7 +360,12 @@ fn fault_event(task_index: u16, fault_code: u8, script: u16) -> Event {
 /// 自己的 1024 上限、还是把共享池撞到 0，都按既有语义 `Exec::Fault(FAULT_BUDGET)`——响亮地杀 +
 /// 事件 + 计数（"死循环是作者 bug"，两机确定性撞在同一批任务上，I4）。两态用"进 `exec` 前
 /// `budget` 是否已经是 0"一刀切分，`exec` 不必上报"这次到底跑了几条"。
-pub(crate) fn run_tasks(tasks: &mut TaskPool, body: &mut WorldBody, ecl: &EclImage) {
+pub(crate) fn run_tasks(
+    tasks: &mut TaskPool,
+    body: &mut WorldBody,
+    ecl: &EclImage,
+    tables: &WorldTables,
+) {
     let frame = body.frame;
     let mut budget = GLOBAL_BUDGET;
 
@@ -405,9 +422,10 @@ pub(crate) fn run_tasks(tasks: &mut TaskPool, body: &mut WorldBody, ecl: &EclIma
             budget: &mut budget,
             tasks: &mut *tasks,
             ecl,
+            body: &mut *body,
+            tables,
             self_index: i as u16,
             frame,
-            diag: &mut body.diag,
         };
         // 三分支都先把本轮执行到的最终状态写回槽位，再决定是否 `kill`——`kill` 只翻
         // alive 位，不清字节（同 xform.rs/其它池先例）；死后的槽仍应是"最后一次真实执行
@@ -433,21 +451,27 @@ mod tests {
     use super::*;
     use crate::ecl::ops::*;
 
+    /// 测试专用最小世界（`World::new` 提供 `body`/`tasks`；`&TABLES_V0` 提供静态表）——
+    /// T3 起 `VmCtx` 扩出 `body`/`tables`，测试构造从"裸 `TaskPool`+`DiagCounters`"改走此路。
+    fn test_world() -> Box<crate::step::World> {
+        crate::step::World::new(1)
+    }
+
     /// 通用 op 走格用：空任务池 + 空镜像（不涉及 `SPAWN`/`KILL_CHILDREN` 的测试用它即可）。
     fn run(code: &[u32]) -> (Exec, Task) {
         let mut task = Task::default();
         let mut budget = u32::MAX;
-        let mut tasks = TaskPool::new();
+        let mut w = test_world();
         let ecl = EclImage::empty();
-        let mut diag = DiagCounters::default();
         let mut ctx = VmCtx {
             code,
             budget: &mut budget,
-            tasks: &mut tasks,
+            tasks: &mut w.tasks,
             ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
             self_index: 0,
             frame: 0,
-            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         (r, task)
@@ -645,17 +669,17 @@ mod tests {
         ];
         let mut task = Task::default();
         let mut budget = u32::MAX;
-        let mut tasks = TaskPool::new();
+        let mut w = test_world();
         let ecl = EclImage::empty();
-        let mut diag = DiagCounters::default();
         let mut ctx = VmCtx {
             code: &code,
             budget: &mut budget,
-            tasks: &mut tasks,
+            tasks: &mut w.tasks,
             ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
             self_index: 0,
             frame: 0,
-            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::Yield);
@@ -765,17 +789,17 @@ mod tests {
         let code = [OP_JMP as u32, 0];
         let mut task = Task::default();
         let mut budget = 5u32;
-        let mut tasks = TaskPool::new();
+        let mut w = test_world();
         let ecl = EclImage::empty();
-        let mut diag = DiagCounters::default();
         let mut ctx = VmCtx {
             code: &code,
             budget: &mut budget,
-            tasks: &mut tasks,
+            tasks: &mut w.tasks,
             ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
             self_index: 0,
             frame: 0,
-            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::Fault(FAULT_BUDGET));
@@ -814,17 +838,17 @@ mod tests {
         let mut task = Task::default();
         task.locals[3] = 77;
         let mut budget = u32::MAX;
-        let mut tasks = TaskPool::new();
+        let mut w = test_world();
         let ecl = EclImage::empty();
-        let mut diag = DiagCounters::default();
         let mut ctx = VmCtx {
             code: &[OP_PUSHL as u32, 3],
             budget: &mut budget,
-            tasks: &mut tasks,
+            tasks: &mut w.tasks,
             ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
             self_index: 0,
             frame: 0,
-            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::Fault(FAULT_PC_OOB)); // 无 END：code 耗尽后下一次 fetch 越界
@@ -832,30 +856,62 @@ mod tests {
 
         let mut task2 = Task::default();
         let mut budget2 = u32::MAX;
-        let mut tasks2 = TaskPool::new();
+        let mut w2 = test_world();
         let ecl2 = EclImage::empty();
-        let mut diag2 = DiagCounters::default();
         let mut ctx2 = VmCtx {
             code: &[OP_PUSHI as u32, 55, OP_POPL as u32, 9],
             budget: &mut budget2,
-            tasks: &mut tasks2,
+            tasks: &mut w2.tasks,
             ecl: &ecl2,
+            body: &mut w2.body,
+            tables: &crate::tables::TABLES_V0,
             self_index: 0,
             frame: 0,
-            diag: &mut diag2,
         };
         let r2 = exec(&mut task2, &mut ctx2);
         assert_eq!(r2, Exec::Fault(FAULT_PC_OOB));
         assert_eq!(task2.locals[9], 55);
     }
 
-    /// `SYS`：T3 未接线前统一 `Fault(FAULT_UNIMPLEMENTED)`——`SPAWN`/`KILL_SELF`/
-    /// `KILL_CHILDREN` 本刀（T2）已落地真实语义，见下方各自专属测试。
+    /// fault 码编号冻结钉死（T1/T2 占位期用过的 6 号不回收复用，见 `FAULT_UNIMPLEMENTED` 文档）。
     #[test]
-    fn sys_op_still_returns_unimplemented_fault_pending_t3() {
-        assert_eq!(FAULT_UNIMPLEMENTED, 6, "占位 fault 码钉死");
-        let (r, _) = run(&[OP_SYS as u32, 0]);
-        assert_eq!(r, Exec::Fault(FAULT_UNIMPLEMENTED));
+    fn fault_unimplemented_numbering_frozen() {
+        assert_eq!(FAULT_UNIMPLEMENTED, 6);
+    }
+
+    /// `SYS`：T3 起真派发——坏 syscall 号（不在 v1 号表内）→ `Fault(FAULT_BAD_OP)`
+    /// （`ecl::syscall::dispatch` 的默认臂，同 `OP_SPAWN` 坏脚本号处置口径）。
+    #[test]
+    fn sys_op_bad_syscall_number_faults() {
+        let (r, _) = run(&[OP_SYS as u32, 9999]);
+        assert_eq!(r, Exec::Fault(FAULT_BAD_OP));
+    }
+
+    /// `SYS_FRAME`（0 参读）经 `OP_SYS` 端到端派发：压回当前帧号。
+    #[test]
+    fn sys_op_dispatches_frame_read() {
+        let mut task = Task::default();
+        let mut budget = u32::MAX;
+        let mut w = test_world();
+        w.body.frame = 7;
+        let ecl = EclImage::empty();
+        let mut ctx = VmCtx {
+            code: &[
+                OP_SYS as u32,
+                crate::ecl::syscall::SYS_FRAME as u32,
+                OP_END as u32,
+            ],
+            budget: &mut budget,
+            tasks: &mut w.tasks,
+            ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
+            self_index: 0,
+            frame: 7,
+        };
+        let r = exec(&mut task, &mut ctx);
+        assert_eq!(r, Exec::End);
+        assert_eq!(task.stack[0], 7, "SYS_FRAME 押回 ctx.frame");
     }
 
     #[test]
@@ -872,13 +928,12 @@ mod tests {
     /// pc 戳为 `ecl.entry(script)`——句柄（池索引）压回求值栈。
     #[test]
     fn spawn_op_inherits_owner_and_stamps_child_fields() {
-        let mut tasks = TaskPool::new();
+        let mut w = test_world();
         let ecl = EclImage {
             code: vec![OP_END as u32],
             subs: vec![0],
             content_hash: 0,
         };
-        let mut diag = DiagCounters::default();
         let mut budget = u32::MAX;
         let mut task = Task {
             owner_kind: OWNER_ENEMY,
@@ -889,18 +944,19 @@ mod tests {
         let mut ctx = VmCtx {
             code: &[OP_SPAWN as u32, 0, OP_END as u32],
             budget: &mut budget,
-            tasks: &mut tasks,
+            tasks: &mut w.tasks,
             ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
             self_index: 7,
             frame: 42,
-            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::End);
         assert_eq!(task.sp, 1, "SPAWN 把子句柄压回求值栈");
         let child_idx = task.stack[0];
         assert!(child_idx >= 0);
-        let c = &tasks.slots[child_idx as usize];
+        let c = &w.tasks.slots[child_idx as usize];
         assert_eq!(c.owner_kind, OWNER_ENEMY, "owner 继承自当前任务");
         assert_eq!(c.owner_index, 5);
         assert_eq!(c.owner_gen, 2);
@@ -912,19 +968,19 @@ mod tests {
     /// 坏脚本号（`script >= subs.len()`）→ `Fault(FAULT_BAD_OP)`（同 PUSHL/POPL 越界口径）。
     #[test]
     fn spawn_bad_script_id_faults() {
-        let mut tasks = TaskPool::new();
+        let mut w = test_world();
         let ecl = EclImage::empty(); // subs 空——任何脚本号都越界
-        let mut diag = DiagCounters::default();
         let mut budget = u32::MAX;
         let mut task = Task::default();
         let mut ctx = VmCtx {
             code: &[OP_SPAWN as u32, 0],
             budget: &mut budget,
-            tasks: &mut tasks,
+            tasks: &mut w.tasks,
             ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
             self_index: 0,
             frame: 0,
-            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::Fault(FAULT_BAD_OP));
@@ -933,9 +989,9 @@ mod tests {
     /// 任务池满 → 压 -1 + `pool_full[POOL_TASK]` 计数（P4-a：确定性降级不 panic）。
     #[test]
     fn spawn_pushes_neg1_and_counts_pool_full_when_task_pool_exhausted() {
-        let mut tasks = TaskPool::new();
+        let mut w = test_world();
         for _ in 0..TASK_CAP {
-            tasks
+            w.tasks
                 .spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0)
                 .expect("池未满前应成功");
         }
@@ -944,55 +1000,60 @@ mod tests {
             subs: vec![0],
             content_hash: 0,
         };
-        let mut diag = DiagCounters::default();
         let mut budget = u32::MAX;
         let mut task = Task::default();
         let mut ctx = VmCtx {
             code: &[OP_SPAWN as u32, 0, OP_END as u32],
             budget: &mut budget,
-            tasks: &mut tasks,
+            tasks: &mut w.tasks,
             ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
             self_index: 0,
             frame: 0,
-            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::End);
         assert_eq!(task.stack[0], -1, "池满压 -1");
-        assert_eq!(diag.pool_full[POOL_TASK], 1);
+        assert_eq!(w.body.diag.pool_full[POOL_TASK], 1);
     }
 
     /// `KILL_CHILDREN`：只杀直系子（parent == 自己索引+1），孙辈与无关任务不受影响
     /// （detached 语义，不递归）。
     #[test]
     fn kill_children_kills_only_direct_children() {
-        let mut tasks = TaskPool::new();
-        let self_idx = tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
-        let child = tasks
+        let mut w = test_world();
+        let self_idx = w.tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let child = w
+            .tasks
             .spawn(0, 0, (OWNER_STAGE, 0, 0), self_idx + 1, 0)
             .unwrap();
-        let grandchild = tasks
+        let grandchild = w
+            .tasks
             .spawn(0, 0, (OWNER_STAGE, 0, 0), child + 1, 0)
             .unwrap();
-        let unrelated = tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let unrelated = w.tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
 
         let ecl = EclImage::empty();
-        let mut diag = DiagCounters::default();
         let mut budget = u32::MAX;
-        let mut task = tasks.slots[self_idx as usize];
+        let mut task = w.tasks.slots[self_idx as usize];
         let mut ctx = VmCtx {
             code: &[OP_KILL_CHILDREN as u32, OP_END as u32],
             budget: &mut budget,
-            tasks: &mut tasks,
+            tasks: &mut w.tasks,
             ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
             self_index: self_idx,
             frame: 0,
-            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::End);
-        assert!(!tasks.is_alive(child as usize), "直系子应被杀");
-        assert!(tasks.is_alive(grandchild as usize), "孙不应被杀（不递归）");
-        assert!(tasks.is_alive(unrelated as usize), "无关任务不受影响");
+        assert!(!w.tasks.is_alive(child as usize), "直系子应被杀");
+        assert!(
+            w.tasks.is_alive(grandchild as usize),
+            "孙不应被杀（不递归）"
+        );
+        assert!(w.tasks.is_alive(unrelated as usize), "无关任务不受影响");
     }
 }

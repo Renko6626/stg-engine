@@ -402,6 +402,7 @@ mod tests {
             item_cfg: TABLES_V0.item_cfg,
             drop_tables: TABLES_V0.drop_tables,
             item_gravity: TABLES_V0.item_gravity,
+            appearances: TABLES_V0.appearances,
         };
         t.characters[0].shot.sets[0] = [&UNFOCUSED_1WAY, &FOCUSED_2WAY];
 

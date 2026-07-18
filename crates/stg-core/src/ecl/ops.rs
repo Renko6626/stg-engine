@@ -39,12 +39,12 @@ pub const OP_LE: u8 = 43;
 pub const OP_GT: u8 = 44;
 pub const OP_GE: u8 = 45;
 
-// ── 5x：任务（T1 仅解码占位——语义 T2/T3 接管，见 vm.rs::FAULT_UNIMPLEMENTED）───
+// ── 5x：任务（语义 T2 落地：SPAWN/KILL_SELF/KILL_CHILDREN，见 vm.rs）─────────
 pub const OP_SPAWN: u8 = 50;
 pub const OP_KILL_SELF: u8 = 51;
 pub const OP_KILL_CHILDREN: u8 = 52;
 
-// ── 6x：syscall（T1 仅解码占位）─────────────────────────────────────────────
+// ── 6x：syscall（语义 T3 落地：派发进 ecl::syscall::dispatch，见 vm.rs/syscall.rs）──
 pub const OP_SYS: u8 = 60;
 
 /// 元数表：opcode → 内联操作数字数（JMP/JZ/CALL=1 目标字；PUSHI/PUSHL/POPL=1；SPAWN=1
@@ -62,10 +62,9 @@ pub const ARITY: [u8; 256] = {
     a
 };
 
-/// 本刀（T1）解码层已知的 op 集合——**按表查而非比大小**（族号制下编号非连续，`xform.rs`
-/// 同款纪律）。`SPAWN`/`KILL_SELF`/`KILL_CHILDREN`/`SYS` 解码上"已实现"（不触发
-/// `Fault(FAULT_BAD_OP)`），但派发语义尚未接线——踩到即 `Exec::Fault(FAULT_UNIMPLEMENTED)`
-/// （T2/T3 接管，见 `vm.rs`）。
+/// 解码层已知的 op 集合——**按表查而非比大小**（族号制下编号非连续，`xform.rs`
+/// 同款纪律）。`SPAWN`/`KILL_SELF`/`KILL_CHILDREN`（T2）与 `SYS`（T3）均已落地真实派发
+/// 语义，见 `vm.rs`/`syscall.rs`。
 pub const fn op_implemented(op: u8) -> bool {
     matches!(
         op,

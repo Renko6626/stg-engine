@@ -142,7 +142,7 @@ pub fn step_with_director<F: FnMut(&mut WorldBody)>(
     b.begin(); // 0
     b.decode_input(input); // 1
     b.phase_enter(PH_DIRECTOR); // 2：导演槽（护栏在组装层押）
-    crate::ecl::vm::run_tasks(&mut world.tasks, b, ecl); // 默认租户：ECL 任务运行器先跑
+    crate::ecl::vm::run_tasks(&mut world.tasks, b, ecl, tables); // 默认租户：ECL 任务运行器先跑
     director(b);
     b.update_players(tables); // 3
     b.run_transforms(); // 4

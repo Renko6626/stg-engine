@@ -22,6 +22,17 @@ pub struct WorldTables {
     pub item_cfg: [ItemTypeCfg; ITEM_TYPE_COUNT],
     pub drop_tables: &'static [&'static [(u8, u8)]],
     pub item_gravity: Fx,
+    /// 弹外观表（M1 T3；ECL syscall `create_bullet` 按 id 查表填默认 radius/sprite，
+    /// 显式参数可覆盖——见 spec §3.2.1「appearance 表」既定）。索引 = appearance id。
+    pub appearances: &'static [AppearanceCfg],
+}
+
+/// 单条弹外观配置：默认判定半径 + 精灵号（M1 T3 新增；`ecl::syscall::SYS_CREATE_BULLET`
+/// 消费）。
+#[derive(Clone, Copy, Debug)]
+pub struct AppearanceCfg {
+    pub radius: Fx,
+    pub sprite: u16,
 }
 
 /// 每类型道具配置（M0-17 T2 从 `items.rs` 迁入——结构体定义 + 内容全归此处；`items.rs`
@@ -144,6 +155,31 @@ const STD_ITEM: ItemTypeCfg = ItemTypeCfg {
     attract_radius: Fx::from_int(40),
 };
 
+// ── 弹外观表 v0（M1 T3；≥4 行：小/中/大/星形，半径 3/4/6/8px）─────────────────
+pub const APPEARANCE_SMALL: u16 = 0;
+pub const APPEARANCE_MEDIUM: u16 = 1;
+pub const APPEARANCE_LARGE: u16 = 2;
+pub const APPEARANCE_STAR: u16 = 3;
+
+const APPEARANCES_V0: &[AppearanceCfg] = &[
+    AppearanceCfg {
+        radius: Fx::from_int(3),
+        sprite: 0,
+    }, // small
+    AppearanceCfg {
+        radius: Fx::from_int(4),
+        sprite: 1,
+    }, // medium
+    AppearanceCfg {
+        radius: Fx::from_int(6),
+        sprite: 2,
+    }, // large
+    AppearanceCfg {
+        radius: Fx::from_int(8),
+        sprite: 3,
+    }, // star-ish
+];
+
 /// 索引 = 类型编号；数组类型使"表长 == 类型数"成为编译期事实。
 const ITEM_CFG_V0: [ItemTypeCfg; ITEM_TYPE_COUNT] = [
     ItemTypeCfg {
@@ -215,12 +251,17 @@ pub static TABLES_V0: WorldTables = WorldTables {
     item_cfg: ITEM_CFG_V0,
     drop_tables: DROP_TABLES_V0,
     item_gravity: ITEM_GRAVITY_V0,
+    appearances: APPEARANCES_V0,
 };
 
 impl WorldTables {
     /// 表校验（debug/测试用）：`interval > 0`、`radius` 双边入 `[0, MAX_ENTITY_RADIUS]`、
-    /// `option` 号 `<=` 该档子机数、`drop_tables` 条目类型合法、角色判定/擦弹半径同域。
+    /// `option` 号 `<=` 该档子机数、`drop_tables` 条目类型合法、角色判定/擦弹半径同域、
+    /// appearance 表逐行半径同域（M1 T3）。
     pub fn validate(&self) -> bool {
+        if !self.appearances.iter().all(|a| radius_in_range(a.radius)) {
+            return false;
+        }
         for c in &self.characters {
             if !radius_in_range(c.hit_radius) || !radius_in_range(c.graze_radius) {
                 return false;
@@ -359,6 +400,7 @@ mod tests {
                 item_cfg: ITEM_CFG_V0,
                 drop_tables: DROP_TABLES_V0,
                 item_gravity: ITEM_GRAVITY_V0,
+                appearances: APPEARANCES_V0,
             }
         }
 
@@ -403,5 +445,50 @@ mod tests {
                 "option 号超出该档子机数必须被 validate 拒绝"
             );
         }
+    }
+
+    /// appearance 表 v0 形状（M1 T3）：恰 4 行，半径 3/4/6/8px 递增，sprite 逐行不同。
+    #[test]
+    fn appearances_v0_shape() {
+        assert_eq!(TABLES_V0.appearances.len(), 4);
+        let radii: Vec<i32> = TABLES_V0
+            .appearances
+            .iter()
+            .map(|a| a.radius.raw())
+            .collect();
+        assert_eq!(
+            radii,
+            vec![
+                Fx::from_int(3).raw(),
+                Fx::from_int(4).raw(),
+                Fx::from_int(6).raw(),
+                Fx::from_int(8).raw(),
+            ],
+            "半径递增 3/4/6/8px"
+        );
+        let sprites: Vec<u16> = TABLES_V0.appearances.iter().map(|a| a.sprite).collect();
+        assert_eq!(sprites, vec![0, 1, 2, 3], "sprite 逐行不同");
+        assert_eq!(APPEARANCE_SMALL, 0);
+        assert_eq!(APPEARANCE_MEDIUM, 1);
+        assert_eq!(APPEARANCE_LARGE, 2);
+        assert_eq!(APPEARANCE_STAR, 3);
+    }
+
+    /// appearance 表 validate 判别腿：半径超上限的坏行必须被拒绝。
+    #[test]
+    fn validate_rejects_bad_appearance_radius() {
+        static BAD_APPEARANCES: &[AppearanceCfg] = &[AppearanceCfg {
+            radius: Fx::from_int(2000), // 超 MAX_ENTITY_RADIUS(1024)
+            sprite: 0,
+        }];
+        let bad = WorldTables {
+            content_hash: 0,
+            characters: TABLES_V0.characters,
+            item_cfg: ITEM_CFG_V0,
+            drop_tables: DROP_TABLES_V0,
+            item_gravity: ITEM_GRAVITY_V0,
+            appearances: BAD_APPEARANCES,
+        };
+        assert!(!bad.validate(), "appearance 半径超上限必须被 validate 拒绝");
     }
 }
