@@ -2,14 +2,17 @@
 
 use std::alloc::{Layout, alloc_zeroed, handle_alloc_error};
 
+use crate::ecl::image::EclImage;
 use crate::rng::Pcg32;
-use crate::world::{PH_DIRECTOR, PH_ECL_HOOK, RNG_SEQ, WorldBody};
+use crate::world::{
+    PH_DIRECTOR, PH_ECL_HOOK, POOL_TASK, RNG_SEQ, STATUS_BAD_ARGS, STATUS_POOL_FULL, WorldBody,
+};
 
 /// 权威可变状态。
 ///
-/// `tasks`（M1 T1 起）：ECL 任务池物理住组装层以满足 memcpy 快照（P1：world 不知道"任务"
-/// 存在，`WorldBody` 内不 import `ecl::*`）。T1 版**无任何相位驱动它**——纯地基，金向量
-/// 因而逐位不变；协程调度接入相位 2 导演槽是 T2 的事。
+/// `tasks`（M1 起）：ECL 任务池物理住组装层以满足 memcpy 快照（P1：world 不知道"任务"存在，
+/// `WorldBody` 内不 import `ecl::*`）。T2 起相位 2（`PH_DIRECTOR`）导演槽跑
+/// `ecl::vm::run_tasks` 驱动它（`step_with_director` 内，注入的导演闭包之前）。
 #[repr(C)]
 #[derive(crate::checksum::Checksum)]
 pub struct World {
@@ -80,24 +83,58 @@ impl World {
     pub fn checksum(&self) -> u64 {
         crate::checksum::Checksum::checksum(self)
     }
+
+    /// 世界侧任务派生入口（供绑定层/harness/测试；组装层辅助，非 ECL 类型泄漏进 `WorldBody`——
+    /// P1 仍持：`World`（本结构）知道 ECL，`WorldBody` 不知道）。次帧首跑（`born_frame` 戳当前
+    /// 帧）；`owner=(kind,index,gen)` 由调用方指定；`parent=0`（无父——本入口是"从任务外部"
+    /// 创建，没有"当前正在跑的任务"可归属，仅 `OP_SPAWN`（脚本内派生）才建立 parent 链）。
+    ///
+    /// 坏脚本号（`script` 不在 `ecl.subs` 范围）→ `None` + `contract_viol` 计数（P4-b：调用方
+    /// 违约）；任务池满 → `None` + `pool_full[POOL_TASK]` 计数（P4-a：资源耗尽确定性降级）。
+    pub fn spawn_task(
+        &mut self,
+        ecl: &EclImage,
+        script: u16,
+        owner: (u8, u16, u16),
+    ) -> Option<u16> {
+        let Some(pc) = ecl.entry(script) else {
+            self.body.diag.contract_viol = self.body.diag.contract_viol.wrapping_add(1);
+            self.body.last_status = STATUS_BAD_ARGS;
+            return None;
+        };
+        let frame = self.body.frame;
+        match self.tasks.spawn(script, pc, owner, 0, frame) {
+            Some(idx) => Some(idx),
+            None => {
+                self.body.diag.pool_full[POOL_TASK] =
+                    self.body.diag.pool_full[POOL_TASK].wrapping_add(1);
+                self.body.last_status = STATUS_POOL_FULL;
+                None
+            }
+        }
+    }
 }
 
 /// 空导演 = 纯世界模拟（P2：空租户零次循环）。
 pub fn step(
     world: &mut World,
     tables: &crate::tables::WorldTables,
+    ecl: &EclImage,
     input: &crate::input::InputFrame,
 ) {
-    step_with_director(world, tables, input, |_| {});
+    step_with_director(world, tables, ecl, input, |_| {});
 }
 
 /// §3.5 宪法顺序（导演槽在 step-3 跑一次）。相位由 world 出，顺序由此焊死，PhaseGuard 押运。
 ///
-/// `tables: &WorldTables`（M0-17 T2 起穿线；D12 既定签名形态）：**不进 `World`**（I7 无引用；
-/// 静态表不进快照/校验和——两机同表由二进制同一性/表哈希保证，见 `crate::tables` 模块文档）。
+/// `tables: &WorldTables`（M0-17 T2 起穿线；D12 既定签名形态）/`ecl: &EclImage`（M1 T2 起
+/// 穿线，同款设计）：**都不进 `World`**（I7 无引用；静态数据不进快照/校验和——两机同表/同镜像
+/// 由二进制同一性/内容哈希保证）。ECL 任务运行器是相位 2（`PH_DIRECTOR`）导演槽的默认租户
+/// （P2 既定），在注入的导演闭包**之前**跑（"二者共存"，见 `crate::ecl::vm::run_tasks` 文档）。
 pub fn step_with_director<F: FnMut(&mut WorldBody)>(
     world: &mut World,
     tables: &crate::tables::WorldTables,
+    ecl: &EclImage,
     input: &crate::input::InputFrame,
     mut director: F,
 ) {
@@ -105,6 +142,7 @@ pub fn step_with_director<F: FnMut(&mut WorldBody)>(
     b.begin(); // 0
     b.decode_input(input); // 1
     b.phase_enter(PH_DIRECTOR); // 2：导演槽（护栏在组装层押）
+    crate::ecl::vm::run_tasks(&mut world.tasks, b, ecl); // 默认租户：ECL 任务运行器先跑
     director(b);
     b.update_players(tables); // 3
     b.run_transforms(); // 4
@@ -120,6 +158,8 @@ pub fn step_with_director<F: FnMut(&mut WorldBody)>(
 mod tests {
     use super::*;
     use crate::bullets::{BulletHandle, BulletInit, BulletPool};
+    use crate::ecl::ops::*;
+    use crate::ecl::task::{OWNER_BULLET, OWNER_ENEMY, OWNER_STAGE, TASK_CAP};
     use crate::input::InputFrame;
     use crate::math::{Angle, Fx};
     use crate::world::{POOL_BULLET, STATUS_POOL_FULL};
@@ -675,6 +715,7 @@ mod tests {
                 step_with_director(
                     &mut w,
                     &crate::tables::TABLES_V0,
+                    &EclImage::empty(),
                     &InputFrame::empty(0),
                     |b| {
                         let vx = b.rng.rand_range(5) as i32 - 2;
@@ -695,6 +736,7 @@ mod tests {
             step_with_director(
                 &mut w,
                 &crate::tables::TABLES_V0,
+                &EclImage::empty(),
                 &InputFrame::empty(0),
                 |b| {
                     b.create_bullet(straight(0, 0, 1, 1, 200));
@@ -776,6 +818,518 @@ mod tests {
             ck1,
             "restore 必须还原 tasks 池（copy_into 漏拷即红）"
         );
+    }
+
+    /// M1 T2：空镜像穿线不 panic、零任务零行为（`EclImage::empty()` 是金向量一号的常态输入）。
+    #[test]
+    fn empty_image_step_runs_without_panic_and_zero_tasks() {
+        let mut w = World::new(1);
+        let ecl = EclImage::empty();
+        for f in 0..10u32 {
+            step(
+                &mut w,
+                &crate::tables::TABLES_V0,
+                &ecl,
+                &InputFrame::empty(f),
+            );
+        }
+        assert_eq!(w.tasks.iter_alive().count(), 0);
+        assert_eq!(w.body.diag.task_faults, 0);
+    }
+
+    /// M1 T2：`spawn_task` 次帧首跑——出生帧（`born_frame == frame`）门禁挡在 owner/wait 门禁
+    /// 之外（本任务 owner=STAGE 恒过、wait 恰为 0，唯一能挡它的只有 born_frame 门禁）：
+    /// 出生当帧 locals 原封不动，次帧起首次执行才写入。
+    #[test]
+    fn spawn_task_next_frame_first_run() {
+        let ecl = EclImage {
+            code: vec![
+                OP_PUSHI as u32,
+                1,
+                OP_POPL as u32,
+                0,
+                OP_PUSHI as u32,
+                5,
+                OP_WAIT as u32,
+            ],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let mut w = World::new(1);
+        let idx = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        );
+        assert_eq!(
+            w.tasks.slots[idx as usize].locals[0], 0,
+            "born_frame 门禁：出生当帧不跑"
+        );
+        assert!(w.tasks.is_alive(idx as usize));
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        );
+        assert_eq!(
+            w.tasks.slots[idx as usize].locals[0], 1,
+            "次帧首跑：locals 写入生效"
+        );
+        assert_eq!(w.tasks.slots[idx as usize].wait, 5);
+    }
+
+    /// M1 T2：owner=ENEMY 的敌人死亡（池释放）→ 任务次帧被静默回收——不发 `EVT_TASK_FAULT`、
+    /// 不计 `task_faults`（owner 死是常态非错误，物理区分于确定性报错杀）。
+    #[test]
+    fn owner_enemy_death_kills_task_silently_next_frame() {
+        let mut w = World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 80, 5);
+        let ecl = EclImage {
+            code: vec![OP_END as u32],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let idx = w
+            .spawn_task(&ecl, 0, (OWNER_ENEMY, h.index, h.generation))
+            .unwrap();
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        ); // 出生帧：born_frame 门禁跳过
+        assert!(w.tasks.is_alive(idx as usize));
+        w.body.enemies.free(h); // 模拟 owner 死亡（脱离正常 settle/cleanup 链路，直测门禁）
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        );
+        assert!(!w.tasks.is_alive(idx as usize), "owner 死后任务应被回收");
+        assert_eq!(w.body.diag.task_faults, 0, "owner 死不是 Fault");
+        assert_eq!(w.body.events_len, 0, "owner 死静默——不发 EVT_TASK_FAULT");
+    }
+
+    /// M1 T2：owner=BULLET 同款门禁（与 ENEMY 分支镜像，独立判别覆盖）。
+    #[test]
+    fn owner_bullet_death_kills_task_silently_next_frame() {
+        let mut w = World::new(1);
+        let h = crate::world::test_support::bullet_at(&mut w, 0, 0);
+        let ecl = EclImage {
+            code: vec![OP_END as u32],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let idx = w
+            .spawn_task(&ecl, 0, (OWNER_BULLET, h.index, h.generation))
+            .unwrap();
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        );
+        assert!(w.tasks.is_alive(idx as usize));
+        w.body.bullets.free(h);
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        );
+        assert!(!w.tasks.is_alive(idx as usize), "owner 死后任务应被回收");
+        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.events_len, 0);
+    }
+
+    /// M1 T2：`wait n` 恰 n 帧后恢复——`WAIT` 执行帧不计入空转，随后 n 帧调度层只递减
+    /// 不执行，第 n+1 帧起恢复。
+    #[test]
+    fn wait_n_idles_exactly_n_frames_then_resumes() {
+        const N: u16 = 3;
+        let ecl = EclImage {
+            code: vec![
+                OP_PUSHI as u32,
+                N as u32,
+                OP_WAIT as u32,
+                OP_PUSHI as u32,
+                7,
+                OP_POPL as u32,
+                0,
+                OP_END as u32,
+            ],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let mut w = World::new(1);
+        let idx = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        ); // 出生帧：跳过
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        ); // 首跑：执行到 WAIT(N)
+        assert_eq!(
+            w.tasks.slots[idx as usize].wait, N,
+            "WAIT 执行帧本身即置 wait=N"
+        );
+        assert!(w.tasks.is_alive(idx as usize));
+
+        for k in 0..N {
+            step(
+                &mut w,
+                &crate::tables::TABLES_V0,
+                &ecl,
+                &InputFrame::empty(2 + k as u32),
+            );
+            assert!(
+                w.tasks.is_alive(idx as usize),
+                "空转第 {k} 帧仍不该恢复执行/死亡"
+            );
+            assert_eq!(w.tasks.slots[idx as usize].locals[0], 0, "空转帧不得执行");
+        }
+
+        // 第 N+2 帧（出生后第 N+1 个 step 调用）：wait 已递减到 0，恢复执行至 END。
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(2 + N as u32),
+        );
+        assert_eq!(
+            w.tasks.slots[idx as usize].locals[0], 7,
+            "恰 N 帧后恢复执行"
+        );
+        assert!(!w.tasks.is_alive(idx as usize), "恢复后跑到 END 被回收");
+    }
+
+    /// M1 T2：调度升序（I4）——两个 STAGE 任务各自 `SPAWN` 一个子任务；池分配走最低空位，
+    /// 若调度确实按池索引升序执行，先注册的任务（低索引）先跑、先抢到更低的子任务槽位。
+    #[test]
+    fn scheduler_executes_in_ascending_pool_index_order() {
+        // 父模板（script0，入口 idx0）：SPAWN script1 → POP 丢弃句柄 → PUSHI 1000 → WAIT
+        // （**故意不让父在本帧 END**——若父当帧死亡，它的槽会被同帧后续任务的 SPAWN 复用，
+        // 破坏槽号与"谁先跑"的对应关系；WAIT 让父存活，子任务的槽号才干净地反映执行序）。
+        // 子模板（script1，入口 idx6）：纯 END（次帧首跑门禁下本帧不会被调度到，无所谓）。
+        let ecl = EclImage {
+            code: vec![
+                OP_SPAWN as u32,
+                1,               // 0,1: SPAWN script1
+                OP_POP as u32,   // 2
+                OP_PUSHI as u32, // 3
+                1000,            // 4
+                OP_WAIT as u32,  // 5
+                OP_END as u32,   // 6: script1 入口
+            ],
+            subs: vec![0, 6],
+            content_hash: 0,
+        };
+        let mut w = World::new(1);
+        let a = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap(); // 期望池索引 0
+        let b = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap(); // 期望池索引 1
+        assert_eq!((a, b), (0, 1), "前置：两父任务确定性占据 0/1 号槽");
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        ); // 出生帧：都不跑
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        ); // 两父任务各自 SPAWN 一次
+
+        // 若 A(0) 先跑，其子占最低空位 2；若 B(1) 先跑，其子会先占 2——用 parent 字段反查
+        // 谁先谁后：A 的 parent 戳 = a+1 = 1，B 的 parent 戳 = b+1 = 2。
+        let child_of_a = w
+            .tasks
+            .slots
+            .iter()
+            .enumerate()
+            .find(|(i, t)| *i >= 2 && w.tasks.is_alive(*i) && t.parent == a + 1)
+            .map(|(i, _)| i)
+            .expect("A 的子任务应已生成");
+        let child_of_b = w
+            .tasks
+            .slots
+            .iter()
+            .enumerate()
+            .find(|(i, t)| *i >= 2 && w.tasks.is_alive(*i) && t.parent == b + 1)
+            .map(|(i, _)| i)
+            .expect("B 的子任务应已生成");
+        assert!(
+            child_of_a < child_of_b,
+            "升序调度：A（低索引）先跑，其子应先抢到更低槽位（A={child_of_a}, B={child_of_b}）"
+        );
+    }
+
+    /// M1 T2：全局预算横跨多任务升序饿死判别——`GLOBAL_BUDGET`(65536) 恰是
+    /// `TASK_BUDGET`(1024) 的 64 倍：64 个自跳转死循环任务各耗尽自己的 1024 上限、
+    /// 恰好吃满全局预算；第 65 个任务（canary）本帧连一条指令都不会执行——
+    /// **没轮到不是它的错**：不 Fault、状态原封不动，次帧满血重跑正常完成。
+    #[test]
+    fn global_budget_starves_across_tasks_same_frame_then_resumes_next() {
+        let ecl = EclImage {
+            code: vec![
+                OP_JMP as u32,
+                0, // script 0：自跳转死循环（永不 END）
+                OP_PUSHI as u32,
+                9,
+                OP_POPL as u32,
+                0,
+                OP_END as u32, // script 1（入口字 2）：canary，写 locals[0]=9 后正常结束
+            ],
+            subs: vec![0, 2],
+            content_hash: 0,
+        };
+        let mut w = World::new(1);
+        let mut looper_indices = Vec::new();
+        for _ in 0..64 {
+            looper_indices.push(w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap());
+        }
+        let canary = w.spawn_task(&ecl, 1, (OWNER_STAGE, 0, 0)).unwrap();
+        assert_eq!(canary as usize, 64, "canary 应落在第 65 号槽（升序分配）");
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        ); // 出生帧：全部跳过
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        ); // 64 个死循环各耗尽 1024，恰吃满 65536
+        for &i in &looper_indices {
+            assert!(
+                !w.tasks.is_alive(i as usize),
+                "死循环任务应在自己的 1024 上限处 Fault 被杀"
+            );
+        }
+        assert_eq!(w.body.diag.task_faults, 64, "64 个死循环各计一次 Fault");
+        assert!(
+            w.tasks.is_alive(canary as usize),
+            "canary 本帧没轮到，不该被杀"
+        );
+        assert_eq!(
+            w.tasks.slots[canary as usize].locals[0], 0,
+            "canary 本帧零执行（全局预算已耗尽，静默跳过不 Fault）"
+        );
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(2),
+        ); // 次帧：预算满血重置，死循环任务已死，canary 独享
+        assert_eq!(
+            w.tasks.slots[canary as usize].locals[0], 9,
+            "次帧满血重跑，canary 正常执行完成"
+        );
+        assert!(
+            !w.tasks.is_alive(canary as usize),
+            "canary 执行到 END 被回收"
+        );
+    }
+
+    /// M1 T2：`KILL_CHILDREN` 只杀直系子，孙辈存活（detached、不递归）——真实多帧调度链路：
+    /// root spawn mid → mid spawn grandchild → root 稍后 `KILL_CHILDREN`（只碰 mid，不碰
+    /// grandchild）。
+    #[test]
+    fn kill_children_through_real_frames_kills_only_direct_child() {
+        // root: SPAWN mid(script1,入口3) ; POP(丢弃句柄) ; PUSHI 5 ; WAIT ; KILL_CHILDREN ; END
+        // mid : SPAWN grandchild(script2,入口16) ; POP ; PUSHI 200 ; WAIT ; END
+        // grandchild: PUSHI 200 ; WAIT ; END
+        let root_code = [
+            OP_SPAWN as u32,
+            1,                       // 0,1: SPAWN script1(mid)
+            OP_POP as u32,           // 2
+            OP_PUSHI as u32,         // 3
+            5,                       // 4
+            OP_WAIT as u32,          // 5
+            OP_KILL_CHILDREN as u32, // 6
+            OP_END as u32,           // 7
+        ];
+        let mid_code_at = root_code.len() as u32; // 8
+        let mid_code = [
+            OP_SPAWN as u32,
+            2,               // +0,+1: SPAWN script2(grandchild)
+            OP_POP as u32,   // +2
+            OP_PUSHI as u32, // +3
+            200,             // +4
+            OP_WAIT as u32,  // +5
+            OP_END as u32,   // +6
+        ];
+        let grandchild_code_at = mid_code_at + mid_code.len() as u32; // 15
+        let grandchild_code = [
+            OP_PUSHI as u32,
+            200,            // +0,+1
+            OP_WAIT as u32, // +2
+            OP_END as u32,  // +3
+        ];
+
+        let mut code = Vec::new();
+        code.extend_from_slice(&root_code);
+        code.extend_from_slice(&mid_code);
+        code.extend_from_slice(&grandchild_code);
+
+        let ecl = EclImage {
+            code,
+            subs: vec![0, mid_code_at, grandchild_code_at],
+            content_hash: 0,
+        };
+
+        let mut w = World::new(1);
+        let root = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+
+        // 出生帧：跳过。
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        );
+        // 帧1：root 首跑——SPAWN mid（born_frame=1）、POP、PUSHI 5、WAIT(5)。
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        );
+        let mid = (0..TASK_CAP)
+            .find(|&i| {
+                i != root as usize && w.tasks.is_alive(i) && w.tasks.slots[i].parent == root + 1
+            })
+            .expect("mid 应已生成") as u16;
+
+        // 帧2：mid 首跑（born_frame=1 != 2）——SPAWN grandchild（born_frame=2）、POP、PUSHI 200、WAIT(200)。
+        // root 本帧 wait 5>0 递减，不跑。
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(2),
+        );
+        let grandchild = (0..TASK_CAP)
+            .find(|&i| {
+                i != root as usize
+                    && i != mid as usize
+                    && w.tasks.is_alive(i)
+                    && w.tasks.slots[i].parent == mid + 1
+            })
+            .expect("grandchild 应已生成") as u16;
+        assert!(w.tasks.is_alive(mid as usize));
+        assert!(w.tasks.is_alive(grandchild as usize));
+
+        // 再跑足够多帧，让 root 的 wait(5) 耗尽并执行 KILL_CHILDREN + END。
+        // root 于帧1设 wait=5；帧2..6 各递减一次（5→4→3→2→1→0，5 次递减）；帧7 起 wait==0 恢复执行。
+        for f in 3..8u32 {
+            step(
+                &mut w,
+                &crate::tables::TABLES_V0,
+                &ecl,
+                &InputFrame::empty(f),
+            );
+        }
+
+        assert!(!w.tasks.is_alive(root as usize), "root 执行到 END 应已回收");
+        assert!(
+            !w.tasks.is_alive(mid as usize),
+            "mid 是 root 的直系子，应被 KILL_CHILDREN 杀"
+        );
+        assert!(
+            w.tasks.is_alive(grandchild as usize),
+            "grandchild 是 mid 的子、不是 root 的直系子，不应被杀（不递归）"
+        );
+    }
+
+    /// M1 T2：`EVT_TASK_FAULT` 事件形状——`a_index` = 任务池索引，`data = [fault_code, script]`。
+    #[test]
+    fn task_fault_event_has_right_kind_index_and_data() {
+        let ecl = EclImage {
+            code: vec![
+                OP_PUSHI as u32,
+                5,
+                OP_PUSHI as u32,
+                0,
+                OP_DIV as u32, // 除零 → Fault(FAULT_DIV_ZERO=4)
+            ],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let mut w = World::new(1);
+        let idx = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        );
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        );
+
+        assert!(!w.tasks.is_alive(idx as usize));
+        assert_eq!(w.body.diag.task_faults, 1);
+        assert_eq!(w.body.events_len, 1);
+        let ev = w.body.events[0];
+        assert_eq!(ev.kind, crate::events::EVT_TASK_FAULT);
+        assert_eq!(ev.a_index, idx);
+        assert_eq!(ev.data, [4, 0], "data = [fault_code, script]");
+    }
+
+    /// M1 T2：`spawn_task` 坏脚本号 → `None` + `contract_viol` 计数（P4-b）。
+    #[test]
+    fn spawn_task_bad_script_id_counts_contract_viol() {
+        let mut w = World::new(1);
+        let ecl = EclImage::empty(); // subs 空
+        let cv0 = w.body.diag.contract_viol;
+        assert_eq!(w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)), None);
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, STATUS_BAD_ARGS);
+    }
+
+    /// M1 T2：`spawn_task` 任务池满 → `None` + `pool_full[POOL_TASK]` 计数（P4-a）。
+    #[test]
+    fn spawn_task_pool_full_counts_pool_full() {
+        let mut w = World::new(1);
+        let ecl = EclImage {
+            code: vec![OP_END as u32],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        for _ in 0..TASK_CAP {
+            assert!(w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).is_some());
+        }
+        assert_eq!(w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)), None);
+        assert_eq!(w.body.diag.pool_full[POOL_TASK], 1);
+        assert_eq!(w.body.last_status, STATUS_POOL_FULL);
     }
 
     #[test]

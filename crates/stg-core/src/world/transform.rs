@@ -560,6 +560,7 @@ mod tests {
         crate::step::step_with_director(
             &mut w,
             &crate::tables::TABLES_V0,
+            &crate::ecl::image::EclImage::empty(),
             &InputFrame::empty(2),
             |b| b.pulse_signal(3),
         );

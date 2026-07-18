@@ -1,12 +1,17 @@
-//! ECL 任务协程层地基（M1 Task 1）—— 断层线以下（`stg-core` 内）。字节码栈机 VM + Task 池。
+//! ECL 任务协程层（M1）—— 断层线以下（`stg-core` 内）。字节码栈机 VM + Task 池 + 只读镜像。
 //!
-//! **T1 版现状**：`task` 池 + `vm` 解释核落地，**零 step 集成**——`World.tasks` 字段已加入
-//! 快照/校验和，但没有任何相位驱动它（协程调度 + `EclImage` 穿线是 T2 的事）；金向量因而
-//! 逐位不变。`ops` 承载编号即契约的 opcode 表 + 元数表。
+//! **T2 版现状**：`vm::run_tasks` 是相位 2（`PH_DIRECTOR`）导演槽的默认租户——升序遍历
+//! `World.tasks`，owner 门禁 → 次帧首跑门禁 → wait 门禁 → 全局预算门禁 → 解释执行；
+//! `EclImage`（本模块 `image` 子模块）随 `&EclImage` 参数穿线（与 `&WorldTables` 同款，
+//! 不进 `World`）。`OP_SPAWN`/`OP_KILL_SELF`/`OP_KILL_CHILDREN` 语义落地；`OP_SYS` 仍是
+//! `FAULT_UNIMPLEMENTED` 占位（T3 接线）。`ops` 承载编号即契约的 opcode 表 + 元数表。
 //!
 //! 依赖方向（P1）：`ECL → world`；world 不 import 本模块的任何类型知识——`World.tasks`
 //! 字段物理住组装层 `stg_core::step`，但 world 侧代码从不引用 `ecl::*`。
 
+pub mod image;
 pub mod ops;
 pub mod task;
 pub(crate) mod vm;
+
+pub use image::EclImage;

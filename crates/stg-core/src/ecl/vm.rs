@@ -1,23 +1,32 @@
-//! ecl/vm.rs —— 单任务解释核（T1：字流解码 + 双层预算完整；`SPAWN`/`KILL_*`/`SYS` 解码
-//! 通过但派发未接线——踩到即 `Exec::Fault(FAULT_UNIMPLEMENTED)`，T2/T3 接管实际语义）。
+//! ecl/vm.rs —— 单任务解释核 + 相位 2 调度租户（T2：`SPAWN`/`KILL_SELF`/`KILL_CHILDREN`
+//! 语义落地；`SYS` 仍是 `Exec::Fault(FAULT_UNIMPLEMENTED)` 占位，T3 接线）。
 //!
 //! 指令编码：1 头字（opcode 在低 8 位，余位留白供未来 mask）+ N 操作数字（N 由
 //! `ops::ARITY` 钉死）。循环：预算门（任务 1024 + 全局）→ 取头字（pc 越界 Fault(1)）→
 //! op 低 8 位 → `op_implemented`? → 按 `ARITY` 取操作数字（越界 Fault(1)）→ 语义分派 →
 //! `WAIT` 写 `wait` 并 `Yield` / `END` → `End`。
 //!
-//! **T1 地基无消费者**：本文件的全部公开面（`exec`/`VmCtx`/`Exec`/`FAULT_*`/`TASK_BUDGET`）
-//! 只被本文件自己的单测调用——协程调度接入相位 2 导演槽是 T2 的事，届时这里的 dead_code
-//! 允许会随第一个真调用点自然解除。
+//! `run_tasks` 是相位 2（`PH_DIRECTOR`）导演槽的默认租户（P2 既定）：升序遍历
+//! `World.tasks`，owner 门禁 → 次帧首跑门禁 → wait 门禁 → 全局预算门禁 → `exec`。
 #![allow(dead_code)]
 
+use crate::ecl::image::EclImage;
 use crate::ecl::ops::{self, ARITY};
-use crate::ecl::task::{CALL_DEPTH, EVAL_DEPTH, LOCALS, Task};
+use crate::ecl::task::{
+    CALL_DEPTH, EVAL_DEPTH, LOCALS, OWNER_BULLET, OWNER_ENEMY, OWNER_STAGE, TASK_CAP, Task,
+    TaskPool,
+};
+use crate::events::{EVT_TASK_FAULT, Event};
 use crate::math::Angle;
+use crate::math::Fx;
 use crate::math::trig;
+use crate::world::{DiagCounters, POOL_TASK, WorldBody};
 
 /// 单任务每帧指令预算（spec 拍板 2：双层，超限确定性杀）。
 pub const TASK_BUDGET: u32 = 1024;
+
+/// 全局每帧指令预算（跨任务共享层，按池索引升序消耗，I4：两机饿死同一批）。
+pub(crate) const GLOBAL_BUDGET: u32 = 65536;
 
 // ── Fault 码（五类既定 + 一类 T1 占位；见 brief）───────────────────────────
 /// 未知 op / `op_implemented` 判否。
@@ -32,9 +41,8 @@ pub const FAULT_BUDGET: u8 = 3;
 pub const FAULT_DIV_ZERO: u8 = 4;
 /// 调用深度超限（`CALL` 满 8 层再调用）或 `RET` 时调用栈已空。
 pub const FAULT_CALL_DEPTH: u8 = 5;
-/// **T1 占位**：`SPAWN`/`KILL_SELF`/`KILL_CHILDREN`/`SYS` 解码已实现但派发未接线
-/// （T2 接协程调度、T3 接 syscall 表）。与 0-5 五个"确定性坏行为"物理区分——命中这里
-/// 不是作者 bug，是本刀故意留白；T2/T3 落地后这个变体的测试会被替换为真实语义测试。
+/// **T3 占位（本刀起收窄为仅 `SYS` 一族）**：`SYS` 解码已实现但派发未接线（syscall 表是
+/// T3 的事）。`SPAWN`/`KILL_SELF`/`KILL_CHILDREN` 已在本刀（T2）落地真实语义，不再落这里。
 pub const FAULT_UNIMPLEMENTED: u8 = 6;
 
 /// 单次 `exec` 调用的执行结果。
@@ -45,11 +53,26 @@ pub(crate) enum Exec {
     Fault(u8),
 }
 
-/// 单帧执行上下文：本任务将要解码的字节码 + 全局剩余预算（跨任务共享，按池序消耗，I4；
-/// T1 未做调度层，测试直接构造）。
+/// 单帧执行上下文：本任务将要解码的字节码 + 全局剩余预算（跨任务共享，按池序消耗，I4）+
+/// `SPAWN`/`KILL_CHILDREN` 所需的任务池句柄 + 脚本镜像 + 本任务自身索引/当前帧号 + 诊断
+/// 计数器（`SPAWN` 池满记 `pool_full[POOL_TASK]`）。调度层（`run_tasks`）构造；单元测试
+/// 也可直接手搭（`tasks`/`ecl`/`diag` 用最小占位值）。
 pub(crate) struct VmCtx<'a> {
     pub code: &'a [u32],
     pub budget: &'a mut u32,
+    /// 任务池——`SPAWN` 分配新槽、`KILL_CHILDREN` 扫描直系子。**不含当前正在执行的任务**
+    /// 的最新状态（那份状态在调用方的局部 `task` 拷贝里，见 `run_tasks` 的 copy-out/
+    /// copy-back）；池内自身槽仍是本轮开始前的旧值，但 `spawn`/`kill_children` 只触碰
+    /// *其它* 槽（自身槽的 alive 位在本轮全程保持置位，`first_free` 天然跳过），无别名冲突。
+    pub tasks: &'a mut TaskPool,
+    /// 脚本镜像——`SPAWN` 靠它把 `script id` 解析成子任务的入口 `pc`。
+    pub ecl: &'a EclImage,
+    /// 本任务在池中的索引（`SPAWN` 的 `parent` 戳 = 此值+1；`KILL_CHILDREN` 的扫描目标同）。
+    pub self_index: u16,
+    /// 当前世界帧号（`SPAWN` 子任务的 `born_frame` 戳）。
+    pub frame: u32,
+    /// 诊断计数器（`SPAWN` 池满时 `pool_full[POOL_TASK] += 1`）。
+    pub diag: &'a mut DiagCounters,
 }
 
 /// 从 `task.pc` 起解释执行，直到 `WAIT` 让出 / `END` 完成 / Fault。
@@ -255,8 +278,37 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
                 let a = pop!();
                 push!((a >= b) as i32);
             }
-            ops::OP_SPAWN | ops::OP_KILL_SELF | ops::OP_KILL_CHILDREN | ops::OP_SYS => {
-                return Exec::Fault(FAULT_UNIMPLEMENTED);
+            ops::OP_SPAWN => {
+                // 操作数 = script id（立即数内联，不弹栈——与 PUSHI/JMP 目标同款编码）。
+                let script = ctx.code[opnd_start] as u16;
+                let Some(pc0) = ctx.ecl.entry(script) else {
+                    // 坏脚本号：同 PUSHL/POPL 越界处置口径，复用 FAULT_BAD_OP。
+                    return Exec::Fault(FAULT_BAD_OP);
+                };
+                let owner = (task.owner_kind, task.owner_index, task.owner_gen);
+                let parent = ctx.self_index + 1;
+                match ctx.tasks.spawn(script, pc0, owner, parent, ctx.frame) {
+                    Some(idx) => push!(idx as i32),
+                    None => {
+                        push!(-1);
+                        ctx.diag.pool_full[POOL_TASK] =
+                            ctx.diag.pool_full[POOL_TASK].wrapping_add(1);
+                    }
+                }
+            }
+            ops::OP_KILL_SELF => return Exec::End, // “End-like”：调度层按 End 统一收尸
+            ops::OP_KILL_CHILDREN => {
+                // 升序扫描：parent == 自己池索引+1 者杀（只杀直系一层，不递归——detached
+                // 语义下孙辈是"别的任务的直系子"，与本任务无关）。
+                let target_parent = ctx.self_index + 1;
+                for j in 0..TASK_CAP {
+                    if ctx.tasks.is_alive(j) && ctx.tasks.slots[j].parent == target_parent {
+                        ctx.tasks.kill(j);
+                    }
+                }
+            }
+            ops::OP_SYS => {
+                return Exec::Fault(FAULT_UNIMPLEMENTED); // T3 接线（syscall 表）
             }
             _ => return Exec::Fault(FAULT_BAD_OP), // 防御：op_implemented 与本 match 若失步，不 panic
         }
@@ -264,18 +316,138 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
     }
 }
 
+/// 组一条 `EVT_TASK_FAULT` 事件（`a_index` = 任务池索引，`data = [fault_code, script]`，
+/// 见 `events.rs` 文档）。
+fn fault_event(task_index: u16, fault_code: u8, script: u16) -> Event {
+    Event {
+        kind: EVT_TASK_FAULT,
+        a_index: task_index,
+        a_gen: 0,
+        x: Fx::ZERO,
+        y: Fx::ZERO,
+        data: [fault_code as i32, script as i32],
+    }
+}
+
+/// 相位 2（`PH_DIRECTOR`）导演槽的默认租户（P2 既定）——组装层 `step_with_director` 在
+/// 注入的导演闭包**之前**调用本函数（"二者共存"，spec 既定）。
+///
+/// 升序遍历 `tasks`（I4）：
+///
+/// 1. **owner 门禁**：`OWNER_STAGE` 恒过；`OWNER_ENEMY`/`OWNER_BULLET` 查对应池
+///    `is_alive + generation` 是否仍与任务出生时一致，不符 → **静默杀**（不发 `EVT_TASK_FAULT`，
+///    不计 `task_faults`——owner 死是常态非错误，不是 bug）。
+/// 2. **次帧首跑门禁**：`born_frame == frame` → 跳过（出生当帧不跑）。
+/// 3. **wait 门禁**：`wait > 0` → 递减 1、跳过（不消耗预算）。
+/// 4. **全局预算门禁**（本刀设计决策，T2 无先例——见下）。
+/// 5. `exec`：`Yield` 写回、`End`/`Fault` 杀（`Fault` 额外发事件 + 计数）。
+///
+/// **"没轮到"与"自己撞墙"的边界**：进 `exec` 前若全局预算已耗尽为 0，视同调度层门禁
+/// （同 `wait`）——静默跳过、任务状态原封不动、次帧满血重跑，**不产生 `Fault`、不杀**：
+/// 这是"这一帧没轮到它"，不是它的错。但凡任务真正进了 `exec`（预算 >0 起跑），期间不论撞上
+/// 自己的 1024 上限、还是把共享池撞到 0，都按既有语义 `Exec::Fault(FAULT_BUDGET)`——响亮地杀 +
+/// 事件 + 计数（"死循环是作者 bug"，两机确定性撞在同一批任务上，I4）。两态用"进 `exec` 前
+/// `budget` 是否已经是 0"一刀切分，`exec` 不必上报"这次到底跑了几条"。
+pub(crate) fn run_tasks(tasks: &mut TaskPool, body: &mut WorldBody, ecl: &EclImage) {
+    let frame = body.frame;
+    let mut budget = GLOBAL_BUDGET;
+
+    for i in 0..TASK_CAP {
+        if !tasks.is_alive(i) {
+            continue;
+        }
+        let mut t = tasks.slots[i];
+
+        if t.owner_kind != OWNER_STAGE {
+            let alive = match t.owner_kind {
+                OWNER_ENEMY => {
+                    body.enemies.is_alive(t.owner_index as usize)
+                        && body.enemies.generation[t.owner_index as usize] == t.owner_gen
+                }
+                OWNER_BULLET => {
+                    body.bullets.is_alive(t.owner_index as usize)
+                        && body.bullets.generation[t.owner_index as usize] == t.owner_gen
+                }
+                _ => false, // 未知 owner_kind：不应由合法路径产生，视同悬垂静默回收
+            };
+            if !alive {
+                tasks.kill(i);
+                continue;
+            }
+        }
+
+        if t.born_frame == frame {
+            continue;
+        }
+
+        if t.wait > 0 {
+            t.wait -= 1;
+            tasks.slots[i] = t;
+            continue;
+        }
+
+        if budget == 0 {
+            continue; // 本帧没轮到：不是它的错，次帧满血重跑（不 Fault，见函数文档）
+        }
+
+        let Some(pc0) = ecl.entry(t.script) else {
+            // 脚本号已不在册（画面外情形——正常 spawn 路径已在创建时校验，这里是防御）：
+            // 视同确定性坏行为，杀 + 事件 + 计数。
+            tasks.kill(i);
+            body.diag.task_faults = body.diag.task_faults.wrapping_add(1);
+            body.push_event(fault_event(i as u16, FAULT_BAD_OP, t.script));
+            continue;
+        };
+        let _ = pc0; // 入口只在 spawn 时戳一次 pc；此处仅确认脚本仍在册，不重置 pc（履历续跑）。
+
+        let mut ctx = VmCtx {
+            code: &ecl.code,
+            budget: &mut budget,
+            tasks: &mut *tasks,
+            ecl,
+            self_index: i as u16,
+            frame,
+            diag: &mut body.diag,
+        };
+        // 三分支都先把本轮执行到的最终状态写回槽位，再决定是否 `kill`——`kill` 只翻
+        // alive 位，不清字节（同 xform.rs/其它池先例）；死后的槽仍应是"最后一次真实执行
+        // 到的状态"（校验和忠实反映模拟发生了什么），而不是执行前的陈值。
+        match exec(&mut t, &mut ctx) {
+            Exec::Yield => tasks.slots[i] = t,
+            Exec::End => {
+                tasks.slots[i] = t;
+                tasks.kill(i);
+            }
+            Exec::Fault(code) => {
+                tasks.slots[i] = t;
+                tasks.kill(i);
+                body.diag.task_faults = body.diag.task_faults.wrapping_add(1);
+                body.push_event(fault_event(i as u16, code, t.script));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ecl::ops::*;
-    use crate::math::Fx;
 
+    /// 通用 op 走格用：空任务池 + 空镜像（不涉及 `SPAWN`/`KILL_CHILDREN` 的测试用它即可）。
     fn run(code: &[u32]) -> (Exec, Task) {
         let mut task = Task::default();
         let mut budget = u32::MAX;
+        let mut tasks = TaskPool::new();
+        let ecl = EclImage::empty();
+        let mut diag = DiagCounters::default();
         let mut ctx = VmCtx {
             code,
             budget: &mut budget,
+            tasks: &mut tasks,
+            ecl: &ecl,
+            self_index: 0,
+            frame: 0,
+            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         (r, task)
@@ -473,9 +645,17 @@ mod tests {
         ];
         let mut task = Task::default();
         let mut budget = u32::MAX;
+        let mut tasks = TaskPool::new();
+        let ecl = EclImage::empty();
+        let mut diag = DiagCounters::default();
         let mut ctx = VmCtx {
             code: &code,
             budget: &mut budget,
+            tasks: &mut tasks,
+            ecl: &ecl,
+            self_index: 0,
+            frame: 0,
+            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::Yield);
@@ -585,9 +765,17 @@ mod tests {
         let code = [OP_JMP as u32, 0];
         let mut task = Task::default();
         let mut budget = 5u32;
+        let mut tasks = TaskPool::new();
+        let ecl = EclImage::empty();
+        let mut diag = DiagCounters::default();
         let mut ctx = VmCtx {
             code: &code,
             budget: &mut budget,
+            tasks: &mut tasks,
+            ecl: &ecl,
+            self_index: 0,
+            frame: 0,
+            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::Fault(FAULT_BUDGET));
@@ -626,9 +814,17 @@ mod tests {
         let mut task = Task::default();
         task.locals[3] = 77;
         let mut budget = u32::MAX;
+        let mut tasks = TaskPool::new();
+        let ecl = EclImage::empty();
+        let mut diag = DiagCounters::default();
         let mut ctx = VmCtx {
             code: &[OP_PUSHL as u32, 3],
             budget: &mut budget,
+            tasks: &mut tasks,
+            ecl: &ecl,
+            self_index: 0,
+            frame: 0,
+            diag: &mut diag,
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::Fault(FAULT_PC_OOB)); // 无 END：code 耗尽后下一次 fetch 越界
@@ -636,27 +832,167 @@ mod tests {
 
         let mut task2 = Task::default();
         let mut budget2 = u32::MAX;
+        let mut tasks2 = TaskPool::new();
+        let ecl2 = EclImage::empty();
+        let mut diag2 = DiagCounters::default();
         let mut ctx2 = VmCtx {
             code: &[OP_PUSHI as u32, 55, OP_POPL as u32, 9],
             budget: &mut budget2,
+            tasks: &mut tasks2,
+            ecl: &ecl2,
+            self_index: 0,
+            frame: 0,
+            diag: &mut diag2,
         };
         let r2 = exec(&mut task2, &mut ctx2);
         assert_eq!(r2, Exec::Fault(FAULT_PC_OOB));
         assert_eq!(task2.locals[9], 55);
     }
 
-    /// SPAWN/KILL_SELF/KILL_CHILDREN/SYS：T1 解码通过但派发未接线，统一 `Fault(FAULT_UNIMPLEMENTED)`
-    /// ——与既定 0-5 五个"确定性坏行为" fault 码物理区分，T2/T3 接线时把这里替换为真实语义测试。
+    /// `SYS`：T3 未接线前统一 `Fault(FAULT_UNIMPLEMENTED)`——`SPAWN`/`KILL_SELF`/
+    /// `KILL_CHILDREN` 本刀（T2）已落地真实语义，见下方各自专属测试。
     #[test]
-    fn unwired_task_and_syscall_ops_return_dedicated_fault() {
+    fn sys_op_still_returns_unimplemented_fault_pending_t3() {
         assert_eq!(FAULT_UNIMPLEMENTED, 6, "占位 fault 码钉死");
-        let (r, _) = run(&[OP_SPAWN as u32, 0]);
-        assert_eq!(r, Exec::Fault(FAULT_UNIMPLEMENTED));
-        let (r, _) = run(&[OP_KILL_SELF as u32]);
-        assert_eq!(r, Exec::Fault(FAULT_UNIMPLEMENTED));
-        let (r, _) = run(&[OP_KILL_CHILDREN as u32]);
-        assert_eq!(r, Exec::Fault(FAULT_UNIMPLEMENTED));
         let (r, _) = run(&[OP_SYS as u32, 0]);
         assert_eq!(r, Exec::Fault(FAULT_UNIMPLEMENTED));
+    }
+
+    #[test]
+    fn kill_self_ends_like_end() {
+        let (r, _) = run(&[OP_KILL_SELF as u32]);
+        assert_eq!(
+            r,
+            Exec::End,
+            "KILL_SELF 即刻 End 语义（调度层按 End 统一收尸）"
+        );
+    }
+
+    /// `SPAWN` 成功路径：owner 从当前任务继承、parent 戳为自身索引+1、born_frame 戳为当前帧、
+    /// pc 戳为 `ecl.entry(script)`——句柄（池索引）压回求值栈。
+    #[test]
+    fn spawn_op_inherits_owner_and_stamps_child_fields() {
+        let mut tasks = TaskPool::new();
+        let ecl = EclImage {
+            code: vec![OP_END as u32],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let mut diag = DiagCounters::default();
+        let mut budget = u32::MAX;
+        let mut task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: 5,
+            owner_gen: 2,
+            ..Task::default()
+        };
+        let mut ctx = VmCtx {
+            code: &[OP_SPAWN as u32, 0, OP_END as u32],
+            budget: &mut budget,
+            tasks: &mut tasks,
+            ecl: &ecl,
+            self_index: 7,
+            frame: 42,
+            diag: &mut diag,
+        };
+        let r = exec(&mut task, &mut ctx);
+        assert_eq!(r, Exec::End);
+        assert_eq!(task.sp, 1, "SPAWN 把子句柄压回求值栈");
+        let child_idx = task.stack[0];
+        assert!(child_idx >= 0);
+        let c = &tasks.slots[child_idx as usize];
+        assert_eq!(c.owner_kind, OWNER_ENEMY, "owner 继承自当前任务");
+        assert_eq!(c.owner_index, 5);
+        assert_eq!(c.owner_gen, 2);
+        assert_eq!(c.parent, 7 + 1, "parent = 当前任务索引+1");
+        assert_eq!(c.born_frame, 42, "born_frame 戳为当前帧（次帧首跑）");
+        assert_eq!(c.pc, 0, "pc 戳为 ecl.entry(script)");
+    }
+
+    /// 坏脚本号（`script >= subs.len()`）→ `Fault(FAULT_BAD_OP)`（同 PUSHL/POPL 越界口径）。
+    #[test]
+    fn spawn_bad_script_id_faults() {
+        let mut tasks = TaskPool::new();
+        let ecl = EclImage::empty(); // subs 空——任何脚本号都越界
+        let mut diag = DiagCounters::default();
+        let mut budget = u32::MAX;
+        let mut task = Task::default();
+        let mut ctx = VmCtx {
+            code: &[OP_SPAWN as u32, 0],
+            budget: &mut budget,
+            tasks: &mut tasks,
+            ecl: &ecl,
+            self_index: 0,
+            frame: 0,
+            diag: &mut diag,
+        };
+        let r = exec(&mut task, &mut ctx);
+        assert_eq!(r, Exec::Fault(FAULT_BAD_OP));
+    }
+
+    /// 任务池满 → 压 -1 + `pool_full[POOL_TASK]` 计数（P4-a：确定性降级不 panic）。
+    #[test]
+    fn spawn_pushes_neg1_and_counts_pool_full_when_task_pool_exhausted() {
+        let mut tasks = TaskPool::new();
+        for _ in 0..TASK_CAP {
+            tasks
+                .spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0)
+                .expect("池未满前应成功");
+        }
+        let ecl = EclImage {
+            code: vec![OP_END as u32],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let mut diag = DiagCounters::default();
+        let mut budget = u32::MAX;
+        let mut task = Task::default();
+        let mut ctx = VmCtx {
+            code: &[OP_SPAWN as u32, 0, OP_END as u32],
+            budget: &mut budget,
+            tasks: &mut tasks,
+            ecl: &ecl,
+            self_index: 0,
+            frame: 0,
+            diag: &mut diag,
+        };
+        let r = exec(&mut task, &mut ctx);
+        assert_eq!(r, Exec::End);
+        assert_eq!(task.stack[0], -1, "池满压 -1");
+        assert_eq!(diag.pool_full[POOL_TASK], 1);
+    }
+
+    /// `KILL_CHILDREN`：只杀直系子（parent == 自己索引+1），孙辈与无关任务不受影响
+    /// （detached 语义，不递归）。
+    #[test]
+    fn kill_children_kills_only_direct_children() {
+        let mut tasks = TaskPool::new();
+        let self_idx = tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let child = tasks
+            .spawn(0, 0, (OWNER_STAGE, 0, 0), self_idx + 1, 0)
+            .unwrap();
+        let grandchild = tasks
+            .spawn(0, 0, (OWNER_STAGE, 0, 0), child + 1, 0)
+            .unwrap();
+        let unrelated = tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+
+        let ecl = EclImage::empty();
+        let mut diag = DiagCounters::default();
+        let mut budget = u32::MAX;
+        let mut task = tasks.slots[self_idx as usize];
+        let mut ctx = VmCtx {
+            code: &[OP_KILL_CHILDREN as u32, OP_END as u32],
+            budget: &mut budget,
+            tasks: &mut tasks,
+            ecl: &ecl,
+            self_index: self_idx,
+            frame: 0,
+            diag: &mut diag,
+        };
+        let r = exec(&mut task, &mut ctx);
+        assert_eq!(r, Exec::End);
+        assert!(!tasks.is_alive(child as usize), "直系子应被杀");
+        assert!(tasks.is_alive(grandchild as usize), "孙不应被杀（不递归）");
+        assert!(tasks.is_alive(unrelated as usize), "无关任务不受影响");
     }
 }

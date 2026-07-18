@@ -25,6 +25,11 @@ pub const EVT_PLAYER_DIED: u8 = 2;
 pub const EVT_FIELD_CLEARED: u8 = 3;
 /// 一颗道具被拾取（行 5 结算）：`a_index/a_gen` = 道具句柄位，`data = [item_type, player]`。
 pub const EVT_ITEM_PICKED: u8 = 4;
+/// ECL 任务确定性报错被杀（M1 T2，相位 2 ECL 调度租户产出）：`a_index` = 任务池索引
+/// （`a_gen` 恒 0——任务池无逐槽 generation，见 `ecl::task` 文档）、
+/// `data = [fault_code, script]`（fault 码见 `ecl::vm::FAULT_*`）。owner 死亡导致的静默回收
+/// **不**发本事件（owner 死是常态非错误，见 `ecl::vm::run_tasks` 文档）。
+pub const EVT_TASK_FAULT: u8 = 5;
 
 /// 一条碰撞命中（6 B）：矩阵行 + 主动/被动池索引。收集序天然按收集循环嵌套，无需排序。
 #[repr(C)]

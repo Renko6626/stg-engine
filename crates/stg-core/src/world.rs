@@ -43,6 +43,8 @@ pub const POOL_ENEMY: usize = 2;
 pub const POOL_FIELD: usize = 3;
 pub const POOL_XFORM: usize = 4;
 pub const POOL_ITEM: usize = 5;
+/// ECL 任务池（M1 T2；`pool_full` 数组容量 8，恰余两位——够用无需扩容）。
+pub const POOL_TASK: usize = 6;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
 pub const STATUS_STALE_HANDLE: u16 = 2;
@@ -109,6 +111,9 @@ pub struct DiagCounters {
     pub contract_viol: u32,
     pub hits_overflow: u32,   // hits 满丢弃计数（P4-a）
     pub events_overflow: u32, // events 满丢弃计数（P4-a）
+    /// ECL 任务确定性报错被杀的累计计数（M1 T2；`derive(Checksum)` 自动入校验和，
+    /// 与 owner 死亡的静默回收物理区分——owner 死不计这里）。
+    pub task_faults: u32,
 }
 
 /// 世界本体（最小切片）。构造走 `step::World::new`（堆零初始化 + 播种 rng）。
@@ -686,7 +691,12 @@ pub(crate) mod test_support {
     /// `step` 糖（M0-17 T2）：测试专用，固定喂 `&TABLES_V0`——生产/harness 调用方仍需显式
     /// 传入自己的 `&WorldTables`（D12 既定签名形态，见 `crate::step::step`）。
     pub(crate) fn step_t(w: &mut crate::step::World, input: &crate::input::InputFrame) {
-        crate::step::step(w, &crate::tables::TABLES_V0, input)
+        crate::step::step(
+            w,
+            &crate::tables::TABLES_V0,
+            &crate::ecl::image::EclImage::empty(),
+            input,
+        )
     }
 
     /// 造一颗停在 (x,y) 的哑弹（半径 2）。
