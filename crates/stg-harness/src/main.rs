@@ -15,10 +15,13 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("golden") => cmd_golden(&args[2..]),
+        Some("bench") => cmd_bench(&args[2..]),
         Some("bake-tables") => cmd_bake_tables(),
         Some("verify-tables") => cmd_verify_tables(),
         _ => {
-            eprintln!("usage: stg-harness <golden [--out FILE] | bake-tables | verify-tables>");
+            eprintln!(
+                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables>"
+            );
             ExitCode::FAILURE
         }
     }
@@ -29,6 +32,317 @@ fn parse_out(rest: &[String]) -> Option<String> {
     rest.iter()
         .position(|a| a == "--out")
         .and_then(|i| rest.get(i + 1).cloned())
+}
+
+/// benchmark（M0-18）—— step 性能基线 + rollback 成本账（ECL 指令预算/M3 快照环的实测依据）。
+///
+/// 场景阶梯：哑弹 1024/2048/4096/8192（纯积分+行1/2 碰撞）· xform 弹 512/1024/2048
+/// （SET_ANG_VEL 逐帧 sincos 回填 + 段池满载）· 全混合（敌/杀敌掉落/道具/每150帧消弹转星/
+/// 自机满火力四路+子机）。每档预热 120 帧、实测 `--frames`（默认 600）帧。
+///
+/// 三组耗时分开计：step 本体（含导演补弹）/ `copy_into` 整块快照 / 全量校验和——后两者
+/// 是 rollback 与联机采样的预算数。计时用 `std::time::Instant`（断层线之上，仅测不喂）。
+/// **务必 `--release` 跑**；debug 构建会打印警告（数字仅供相对比较）。
+fn cmd_bench(rest: &[String]) -> ExitCode {
+    use stg_core::step::World;
+
+    let frames: u32 = rest
+        .iter()
+        .position(|a| a == "--frames")
+        .and_then(|i| rest.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(600);
+
+    if cfg!(debug_assertions) {
+        println!("⚠ debug 构建——绝对数字无意义，请用 cargo run --release -p stg-harness -- bench");
+    }
+    let mb = |b: usize| b as f64 / (1024.0 * 1024.0);
+    let world_sz = std::mem::size_of::<World>();
+    println!("── 内存账（扁平无堆，size_of 即全部）──");
+    println!(
+        "World 总计 {:.2} MB（16 帧快照环 ≈ {:.1} MB）",
+        mb(world_sz),
+        mb(world_sz * 16)
+    );
+    println!(
+        "  弹池 {:.2} MB · 自机弹池 {:.3} MB · 敌池 {:.3} MB · 道具池 {:.3} MB · 其余(含变换段/globals/缓冲) {:.2} MB",
+        mb(std::mem::size_of::<stg_core::bullets::BulletPool>()),
+        mb(std::mem::size_of::<stg_core::shots::ShotPool>()),
+        mb(std::mem::size_of::<stg_core::enemy::EnemyPool>()),
+        mb(std::mem::size_of::<stg_core::items::ItemPool>()),
+        mb(world_sz
+            - std::mem::size_of::<stg_core::bullets::BulletPool>()
+            - std::mem::size_of::<stg_core::shots::ShotPool>()
+            - std::mem::size_of::<stg_core::enemy::EnemyPool>()
+            - std::mem::size_of::<stg_core::items::ItemPool>()),
+    );
+    println!();
+    println!(
+        "{:<16} {:>6} {:>9} {:>9} {:>9} {:>9} {:>9}",
+        "场景", "稳态弹", "step均µs", "p50µs", "p99µs", "快照µs", "校验和µs"
+    );
+    // 静默预热一轮：吃掉首场景的页错误/缓存冷启动/频率爬坡污染（首行数据曾实测虚高）。
+    bench_ladder("(预热丢弃)", 512, false, 60, false);
+    for &(name, target, xf) in &[
+        ("哑弹 1024", 1024usize, false),
+        ("哑弹 2048", 2048, false),
+        ("哑弹 4096", 4096, false),
+        ("哑弹 8192", 8192, false),
+        ("xform 512", 512, true),
+        ("xform 1024", 1024, true),
+        ("xform 2048", 2048, true),
+    ] {
+        bench_ladder(name, target, xf, frames, true);
+    }
+    bench_mix(frames);
+    ExitCode::SUCCESS
+}
+
+/// 单档阶梯：导演每帧把弹池补到 target（批量环，慢速外扩长寿命），自机满火力全程射击。
+fn bench_ladder(name: &str, target: usize, with_xform: bool, frames: u32, print: bool) {
+    use stg_core::bullets::BulletInit;
+    use stg_core::input::{BTN_LEFT, BTN_RIGHT, BTN_SHOT, InputFrame};
+    use stg_core::math::{Angle, Fx};
+    use stg_core::step::World;
+    use stg_core::xform::{OP_SET_ANG_VEL, XformSlot};
+
+    let template = BulletInit {
+        x: Fx::ZERO,
+        y: Fx::from_int(200),
+        vx: Fx::ZERO,
+        vy: Fx::ZERO,
+        speed: Fx::ZERO,
+        angle: Angle::ZERO,
+        ang_vel: 0,
+        accel: Fx::ZERO,
+        ax: Fx::ZERO,
+        ay: Fx::ZERO,
+        sprite: 0,
+        radius: Fx::from_int(3),
+        delay: 0,
+        life: 0xFFFF,
+        flags: 0,
+        grazed_by: 0,
+        transform_head: 0xFFFF,
+        xform_wait: 0,
+        xform_next: 0,
+    };
+    let seq = [XformSlot {
+        wait: 0,
+        op: OP_SET_ANG_VEL,
+        _pad: 0,
+        args: [96, 0], // 慢旋：POLAR_FX 逐帧 sincos 回填路径
+    }];
+    let mut w = World::new(0xBE9C);
+    w.body.players[0].power = 400; // 满火力：四路+子机的自机弹稳态负载
+    run_measured(
+        name,
+        print,
+        &mut w,
+        frames,
+        |b, frame| {
+            let alive = b.bullets.iter_alive().count();
+            if alive < target {
+                let deficit = (target - alive).min(512) as u16;
+                let astep = ((65536u32 / deficit.max(2) as u32) as u16) as i16;
+                let xform: &[XformSlot] = if with_xform { &seq } else { &[] };
+                b.create_bullets_batch(
+                    template,
+                    xform,
+                    deficit,
+                    Angle((frame.wrapping_mul(7919) & 0xFFFF) as u16),
+                    astep,
+                    1,
+                    Fx::from_raw(16384), // 0.25 px/帧外扩——OOB 前 >1000 帧，稳态可保
+                    Fx::ZERO,
+                );
+            }
+        },
+        |frame| {
+            let mut input = InputFrame::empty(frame);
+            input.actions[0].buttons = BTN_SHOT
+                | if (frame / 40) % 2 == 0 {
+                    BTN_RIGHT
+                } else {
+                    BTN_LEFT
+                };
+            input
+        },
+    );
+}
+
+/// 全混合：敌补位+杀敌掉落+道具磁吸+每 150 帧消弹转星+xform 环+自机满火力低速。
+fn bench_mix(frames: u32) {
+    use stg_core::bullets::BulletInit;
+    use stg_core::enemy::EnemyInit;
+    use stg_core::field::{FIELD_CLEAR_BULLETS, FIELD_RADIUS_FULLSCREEN, FieldInit};
+    use stg_core::input::{BTN_SHOT, BTN_SLOW, BTN_UP, InputFrame};
+    use stg_core::math::{Angle, Fx};
+    use stg_core::step::World;
+    use stg_core::xform::{OP_SET_ANG_VEL, XformSlot};
+
+    let bullet = |y: i32, life: u16| BulletInit {
+        x: Fx::ZERO,
+        y: Fx::from_int(y),
+        vx: Fx::ZERO,
+        vy: Fx::ZERO,
+        speed: Fx::ZERO,
+        angle: Angle::ZERO,
+        ang_vel: 0,
+        accel: Fx::ZERO,
+        ax: Fx::ZERO,
+        ay: Fx::ZERO,
+        sprite: 0,
+        radius: Fx::from_int(3),
+        delay: 0,
+        life,
+        flags: 0,
+        grazed_by: 0,
+        transform_head: 0xFFFF,
+        xform_wait: 0,
+        xform_next: 0,
+    };
+    let enemy = |x: i32| EnemyInit {
+        x: Fx::from_int(x),
+        y: Fx::from_int(80),
+        vx: Fx::ZERO,
+        vy: Fx::ZERO,
+        mv_from_x: Fx::ZERO,
+        mv_from_y: Fx::ZERO,
+        mv_to_x: Fx::ZERO,
+        mv_to_y: Fx::ZERO,
+        mv_t: 0,
+        mv_dur: 0,
+        mv_easing: 0,
+        mv_active: 0,
+        hp: 5,
+        hp_max: 5,
+        radius: Fx::from_int(12),
+        hurtbox: Fx::from_int(16),
+        invuln: 0,
+        hit_flash: 0,
+        flags: 0,
+        sprite: 0,
+        anm_state: 0,
+        main_task: 0,
+        death_script: 0,
+        drop_table: 1,
+        score: 100,
+    };
+    let seq = [XformSlot {
+        wait: 0,
+        op: OP_SET_ANG_VEL,
+        _pad: 0,
+        args: [128, 0],
+    }];
+    let mut w = World::new(0xBE9C);
+    w.body.players[0].power = 400;
+    run_measured(
+        "全混合",
+        true,
+        &mut w,
+        frames,
+        move |b, frame| {
+            if frame % 60 == 0 {
+                let alive = b.enemies.iter_alive().count();
+                for &ex in [-80i32, 0, 80].iter().skip(alive) {
+                    b.create_enemy(enemy(ex));
+                }
+            }
+            if frame % 8 == 0 {
+                b.create_bullets_batch(
+                    bullet(100, 300),
+                    &[],
+                    10,
+                    Angle((frame.wrapping_mul(797) & 0xFFFF) as u16),
+                    6554,
+                    1,
+                    Fx::from_int(2),
+                    Fx::ZERO,
+                );
+            }
+            if frame % 40 == 20 {
+                b.create_bullets_batch(
+                    bullet(150, 400),
+                    &seq,
+                    16,
+                    Angle::ZERO,
+                    4096,
+                    1,
+                    Fx::from_int(1),
+                    Fx::ZERO,
+                );
+            }
+            if frame % 150 == 145 {
+                b.create_field(FieldInit {
+                    x: Fx::ZERO,
+                    y: Fx::from_int(224),
+                    radius: FIELD_RADIUS_FULLSCREEN,
+                    dmg_per_frame: 0,
+                    life: 1,
+                    owner: 0,
+                    flags: FIELD_CLEAR_BULLETS,
+                });
+            }
+        },
+        |frame| {
+            let mut input = InputFrame::empty(frame);
+            input.actions[0].buttons =
+                BTN_SHOT | BTN_SLOW | if frame % 90 < 50 { BTN_UP } else { 0 };
+            input
+        },
+    );
+}
+
+/// 预热 120 帧 → 实测 N 帧；step/快照/校验和三组分计，出一行报告。
+fn run_measured(
+    name: &str,
+    print: bool,
+    w: &mut stg_core::step::World,
+    frames: u32,
+    mut director: impl FnMut(&mut stg_core::world::WorldBody, u32),
+    mut input_of: impl FnMut(u32) -> stg_core::input::InputFrame,
+) {
+    use std::time::Instant;
+    use stg_core::step::{World, step_with_director};
+    use stg_core::tables::TABLES_V0;
+
+    const WARMUP: u32 = 120;
+    let mut snap = World::new(0);
+    let mut step_ns: Vec<u64> = Vec::with_capacity(frames as usize);
+    let mut snap_ns: u64 = 0;
+    let mut sum_ns: u64 = 0;
+    for frame in 0..(WARMUP + frames) {
+        let input = input_of(frame);
+        let t0 = Instant::now();
+        step_with_director(w, &TABLES_V0, &input, |b| director(b, frame));
+        let dt = t0.elapsed().as_nanos() as u64;
+        if frame >= WARMUP {
+            step_ns.push(dt);
+            let t1 = Instant::now();
+            w.copy_into(&mut snap);
+            snap_ns += t1.elapsed().as_nanos() as u64;
+            let t2 = Instant::now();
+            std::hint::black_box(w.checksum());
+            sum_ns += t2.elapsed().as_nanos() as u64;
+        }
+    }
+    step_ns.sort_unstable();
+    if !print {
+        return;
+    }
+    let n = step_ns.len().max(1) as u64;
+    let us = |ns: u64| ns as f64 / 1000.0;
+    println!(
+        "{:<16} {:>6} {:>9.1} {:>9.1} {:>9.1} {:>9.1} {:>9.1}",
+        name,
+        w.body.bullets.iter_alive().count(),
+        us(step_ns.iter().sum::<u64>() / n),
+        us(step_ns[step_ns.len() / 2]),
+        us(step_ns[(step_ns.len() * 99 / 100).min(step_ns.len() - 1)]),
+        us(snap_ns / n),
+        us(sum_ns / n),
+    );
 }
 
 /// 金向量 —— 真实 step 演化的碰撞病态诊断场景，逐帧 World 校验和（CI 跨平台对拍的数据源）。
