@@ -644,6 +644,11 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | （内部）hits 满 | — | 丢弃（**debug panic**） | — | `diag.hits_dropped` |
 | （内部）frame_events 满 | — | 丢弃 | — | `diag.events_dropped` |
 
+注：ECL syscall 层已落地（M1）：号表 v1 见 `crates/stg-core/src/ecl/syscall.rs` 与
+[`docs/ecl-ops.md`](docs/ecl-ops.md)（编号即契约）；本表成员中 `emit_req` 仍属 M2，
+`create_player_shot` 不入 syscall（自机弹归世界相位 3）。`&EclImage` 与 `&WorldTables`
+同款参数穿线。
+
 注：`&WorldTables` 参数已实际穿线（M0-17）：`step`/`step_with_director` +1 参，读表的相位
 函数与写 API（掉落/入账/磁吸/移动/发弹）按需下传——本表"签名"列的 `（+ &WorldTables）`
 从设计变为实况。
@@ -692,6 +697,11 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 9. **§5.1**：`ActionInput.buttons` 建议 u8 → **u16**（A8 跨层备注）;
 10. **static_ecl** 概念拆分为 **WorldTables + EclImage**（A3），合并内容哈希语义不变；
 11. **§10 待拍板清单**：#5（变换槽/op 清单）关闭；#4（容量）初值已钉（D10）、留实测调参；#6/#3 维持已决。
+12. **§4.2-4.4（M1 落地，2026-07-18）**：ECL VM 草案全部落地并有修订——容量校准（求值栈
+    64→**32**、任务池 512→**256**、`CallFrame` 缩为裸 `ret_pc`）；双层指令预算（任务 1024 +
+    全局 65536/帧）**超限杀任务**；locals 任务全局共享（sub 无帧窗口）；rank=脚本变量（globals
+    槽）；`spawn_task_now` 维持不实现；§10.7（shooter locals 容量）**关闭**——64 字实证够用
+    （彩虹风铃卡：xform 暂存 + 计数器 + 累积角共存无压力）。速查表 `docs/ecl-ops.md`。
 
 > **回写状态**：本清单已于 M0-8 期整体索引进母文档开头的「⚠️ 阅读须知」表（母文档正文保持原貌
 > 作为历史记录）。**后续若再有推翻：先更新本清单，再同步母文档那张表。**

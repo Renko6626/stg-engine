@@ -6,17 +6,19 @@
 
 ## 现在（2026-07-18）
 
-- **位置**：Phase 1 · M0 世界层，推进至 **M0-18**（benchmark 基线：满池 step ~110µs=0.7%
-  帧预算、校验和 1.3-2ms 为最大单项、快照/回滚账实测可行——ECL VM 栈机路线已调研落档）；
-  main 全绿。
+- **位置**：Phase 1 · **M1 完成**——ECL 栈机 VM（字流解码/双层预算/五类 Fault/协程次帧
+  语义/syscall 白名单沙箱 fuzz 实证）+ builder DSL（临时形态）+ 彩虹风铃卡入金向量二号
+  （两段一文件，三平台对拍）；main 全绿。
 - **在飞**：无。
-- **下一步候选**：**M1 ECL**（栈机，grill 议程见 `docs/superpowers/specs/2026-07-18-ecl-vm-route-research.md`）· bomb · homing 单刀 · 激光池。
+- **下一步候选**：**真 ECL 表层语言 + 编译器**（置顶——builder 是凑数，T4 摩擦四条为需求
+  输入）· bomb · homing 单刀 · M2 前可见性收口刀 · M3 回滚。
 - **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；B1 剩余四池写 API 仍零覆盖）。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-18 | **M1** | ECL 栈机 VM + 协程池 + syscall 沙箱 + builder DSL——彩虹风铃卡入金向量二号 |
 | 2026-07-18 | M0-18 | bench 子命令 + 性能基线落档——step 曲线/快照/校验和账；ECL 栈机路线调研定案 |
 | 2026-07-18 | M0-17 | WorldTables 骨架全家入驻 + shottype 表通电——逐档弹型/子机/focus 表驱动 |
 | 2026-07-18 | M0-16 | 火力定标 0.00-4.00（一格 0.01）+ power_tier 档位取值器 |

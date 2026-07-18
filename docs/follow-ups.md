@@ -92,6 +92,12 @@ LOOP 跳回后 `[0, xform_next)` 收缩：活跃 STEP 冻结至重武装、武�
 的极端场景）会在 debug 触发溢出 panic、release 静默回绕——确定性不破（跨平台逐位一致仍成立）
 但入账值荒谬。修法：累加改 `saturating_add(1)`，蜡数比较从 `==` 改 `>=` 以抗直写越界。
 
+### B15. ECL 小测试缺口三件（M1 T3 复审分诊）
+
+`rand_range` 负 n 分支无独立测试（与 n=0 同分支，低危）；DSL `repeat(n≤0)` no-op 语义
+文档有测试无；弹 setter 族九连的坏 owner Fault 只有 1/9 有独立测试（余走共用助手）。
+三条都是覆盖缺口非缺陷，一刀补齐即可。
+
 ### B14. `WorldTables::validate()` 角色半径腿只有正向覆盖（M0-17 T1 复审分诊）
 
 `validate_rejects_bad` 的三条负向腿只压 shooter 的 interval/radius/option；角色
@@ -175,10 +181,28 @@ shottype 表 `Shooter.flags` bit0 已预留 homing。开刀时要拍的唯一悬
 
 ### C11. WorldTables 文件加载刀的前置三件套（M0-17 遗留占位）
 
-① `content_hash` 字段现恒 0——文件加载落地时做真哈希（A3：与 EclImage 合并进回放头/握手）；
-② `World::new` 内引 `TABLES_V0` 喂 spawn（v0 妥协避免百处调用点改签名）——多表时代补
-`new_with_tables`；③ 解释器热路径 `timer % interval` 无 interval=0 的 debug 断言（现靠
-`validate()` 单测钉 const 表）——外部表可加载后必须加载期强制校验 + 热路径 debug 兜底。
+① `content_hash` 字段现恒 0——文件加载落地时做真哈希（A3：与 EclImage 合并进回放头/握手，
+**EclImage.content_hash 同为占位**，M1 补记）；② `World::new` 内引 `TABLES_V0` 喂 spawn
+（v0 妥协避免百处调用点改签名）——多表时代补 `new_with_tables`；③ 解释器热路径
+`timer % interval` 无 interval=0 的 debug 断言（现靠 `validate()` 单测钉 const 表）——
+外部表可加载后必须加载期强制校验 + 热路径 debug 兜底。
+
+### C12. ECL 后续小件四包（M1 T5 分诊）
+
+① `spawn_task_now`（当帧 worklist drain 版）——design_doc §4.3 既定后期可选，真实用例窄；
+② 帧相对寻址指令族（sub 可重入）——locals 共享是 v0 拍板，重入需求出现时纯增量加；
+③ vm.rs 顶部 `#![allow(dead_code)]` 毯（T1 遗留）与 `run_tasks` 的 256 槽逐位扫描措辞
+   （复审 Minor：正确性无碍，可改按字跳空）；④ 敌 appearance 表（`spawn_enemy` syscall
+   现走直参，弹的 appearance 表已建——对称化留内容需要时）。
+
+### C13. 真 ECL 表层语言的需求输入（M1 T4 摩擦实录，开刀先读）
+
+用户拍板：builder DSL 是**临时凑数**，表层语言 + 编译器是 M1 后第一候选。T4 转写彩虹
+风铃卡的四条一手摩擦（详见 `.superpowers/sdd/task-4-report.md`，开刀前抄进 spec）：
+① 类型化 syscall 壳只吃编译期字面量——运行时栈值（rank/累积角）进不了 syscall 参数，
+  只能 if 分派预制变体（表层语言必须解决：表达式即参数）；
+② 有返回值的 syscall 忘 POP → 栈跨迭代累积、在远处 Fault(2)——表层语言应静态检查
+  表达式语句的值消费；③ `repeat` 单体复用限制；④ 字面量 Fx/BAM 手换算——要单位字面量语法。
 
 ---
 
