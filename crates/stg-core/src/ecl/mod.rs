@@ -12,7 +12,10 @@
 
 pub mod image;
 pub mod ops;
-pub(crate) mod syscall;
+/// syscall 号表 v1（`SYS_*` 常量，`pub`）——`stg-ecl-compiler` 的 builder DSL 靠它拼
+/// `OP_SYS` 指令（依赖方向 compiler→core 单向，只取常量，不碰 `dispatch`）。`dispatch` 本身
+/// 仍 `pub(crate)`：只有 `vm::exec` 能调用，编译器够不到派发逻辑，只够到号表。
+pub mod syscall;
 pub mod task;
 pub(crate) mod vm;
 

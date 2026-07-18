@@ -21,3 +21,11 @@ description  = "弹幕 STG 引擎的确定性内核（断层线以下：定点�
 stg-derive.workspace = true   # #[derive(Checksum)]（D11 防漏单一真相源）
 
 [dev-dependencies]
+# 【踩坑记录，勿重蹈】：本想加 `stg-ecl-compiler.workspace = true`（"反向 dev 依赖"，Cargo
+# 原生允许）好让本 crate 自己的单测直接摸 `TaskPool.slots`（`pub(crate)`）验证 DSL 生成码
+# 跑 VM 后的 locals/stack——但 Cargo 会为"被测 crate 自身"（`--cfg test`）与"作为
+# `stg-ecl-compiler` 的普通依赖"各编译一份 `stg-core`，两份是**不同的编译单元**，类型不互认
+# （`EclImage`≠`EclImage`，即使源码字节相同）——这不是配置问题，是 Cargo 对"自引用 dev 依赖"
+# 的固有限制，无法在单个测试二进制内规避。改走 `stg-ecl-compiler` 自己的测试模块，只用
+# 本 crate 暴露的公开面（`globals`/`diag`/`iter_alive().count()`）验证生成码，放弃摸池内部
+# SoA 数组（`pub(crate)`，P1 既定：调用方不直接触碰池内存）。

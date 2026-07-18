@@ -39,6 +39,9 @@ dependencies = [
 [[package]]
 name = "stg-ecl-compiler"
 version = "0.0.0"
+dependencies = [
+ "stg-core",
+]
 
 [[package]]
 name = "stg-harness"
