@@ -78,6 +78,18 @@ pub const SIGNAL_CHANNELS: usize = 8;
 /// 全局变量竞技场槽数（D12/A2，M1 ECL 状态地基）。
 pub const GLOBALS_CAP: usize = 1024;
 
+/// globals 段纪律（甲案，M1.5）：`[0, GLOBALS_SYS_SEGMENT)` 是**系统段**——只准 game 层
+/// 经 `WorldBody::set_var`（世界 API，本模块下方，调用方是 harness/绑定层场景搭建代码）写，
+/// **脚本经 `SYS_SET_VAR` 写这段一律 no-op + `diag.contract_viol` 计数**（P4-b：脚本作者
+/// 违约→确定性安全结果，不 Fault-kill 任务——见 `ecl::syscall::dispatch` 的 `SYS_SET_VAR` 分支
+/// 与 `ecl-ops.md` "作者须知"）。`GLOBALS_SYS_SEGMENT..GLOBALS_CAP` 是**自由段**，脚本读写皆
+/// 无限制。`SYS_GET_VAR`（脚本读）不受本纪律约束——两段皆可读，只有脚本写系统段被挡。
+pub const GLOBALS_SYS_SEGMENT: u16 = 16;
+
+/// 系统段内的 RANK（难度）槽——场景搭建代码经世界 API `set_var(GVAR_RANK, ..)` 写（见
+/// `stg-harness` 彩虹风铃卡 scene 2 建场），脚本只 `get_var(GVAR_RANK)` 读后自决（spec 拍板 5）。
+pub const GVAR_RANK: u16 = 0;
+
 pub(crate) const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
 pub(crate) const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
 pub(crate) const OOB_MARGIN: i32 = 64; // 越界回收边距

@@ -43,7 +43,14 @@
 | 3/4 | `self_x/y` | — | owner 实体坐标（STAGE 读 0） |
 | 5 | `self_hp` | — | owner 敌 hp（非敌读 0） |
 | 6 | `rand_range` | n | [0,n) 消耗世界 RNG；n≤0 压 0 不消耗 |
-| 7/8 | `get_var` / `set_var` | slot / slot,val | 值 / — |
+| 7/8 | `get_var` / `set_var` | slot / slot,val | 值 / —（`get_var` 两段皆无限制；`set_var` 写**系统段**
+  `slot<16` → no-op + `diag.contract_viol` 计数，**不 Fault**——见下方"globals 段纪律"及
+  `world::GLOBALS_SYS_SEGMENT` 文档） |
+| 9 | `self_age`（M1.5） | — | 任务龄（帧）= `frame - task.born_frame`（wrapping）。**语义故意
+  偏离 ZUN**：ZUN `-9988` 是"敌出生以来帧数"（只对敌有意义）；我们量的是**任务**的龄——零新
+  状态（复用既有 `Task.born_frame`），对全部 owner 种类（含 STAGE）均有意义。次帧首跑时
+  `age==1`（不是 0），见"作者须知" |
+| 10 | `self_hp_max`（M1.5） | — | owner 敌 `hp_max`（非敌读 0，同 `self_hp` 误用策略） |
 | 20 | `create_bullet` | appearance,x,y,speed,angle,xform_off,xform_cnt,task_script | 弹句柄或 -1 |
 | 21 | `create_bullets_batch` | appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step | 实发数 |
 | 22 | `spawn_enemy` | x,y,hp,drop_table,score | 敌句柄或 -1 |
@@ -58,6 +65,18 @@
 （每槽 3 字：`word0=(wait<<16)|(op<<8)`、`word1/2=args`，≤16 槽）；`xform_cnt=0` 哑弹；
 `task_script >= 0` 时绑定层再派子任务（owner=新弹）；appearance 查 `WorldTables.appearances`
 定默认 radius/sprite。
+
+## globals 段纪律（甲案，M1.5）
+
+`globals`（`GLOBALS_CAP=1024` 槽）拆两段，边界 `world::GLOBALS_SYS_SEGMENT=16`：
+
+- **系统段** `[0, 16)`：只准 **game 层经世界 API** `WorldBody::set_var` 写（场景搭建代码，如
+  `stg-harness` 建场时 `world.body.set_var(GVAR_RANK, ..)`）；**脚本经 `SYS 8 set_var` 写这段
+  一律 no-op**——真槽值不变 + `diag.contract_viol` +1 + `last_status=BAD_ARGS`，**不 Fault**
+  （P4-b 脚本作者违约的确定性安全结果，调度层不杀任务，脚本继续往下执行）。已命名槽：
+  `GVAR_RANK=0`（难度，见下方"作者须知"）。
+- **自由段** `[16, 1024)`：脚本读写皆无限制。
+- `SYS 7 get_var`（脚本读）**两段皆不受限**——只有脚本**写**系统段被挡，读不受影响。
 
 ## Fault 码（确定性报错：杀任务 + `EVT_TASK_FAULT{a_index=任务号, data=[码, script]}` + `diag.task_faults`）
 
@@ -84,4 +103,9 @@
 - **`KILL_CHILDREN` 按父槽号不带代际**：父任务死亡后其槽被无关新任务复用时，新任务的
   `KILL_CHILDREN` 会杀到前任占用者的孤儿子任务（确定性、detached 语义下孤儿本就随时可死，
   但语义上是跨族误杀——代际戳修法记 follow-ups C12⑤，介意就别依赖孤儿存活）。
-- 难度（rank）= `globals` 约定槽（场景开局 `set_var` 写入），脚本 `get_var` 后自决。
+- 难度（rank）= `globals` 约定槽（场景开局 `set_var` 写入），脚本 `get_var` 后自决——该槽
+  （`GVAR_RANK=0`）落在**系统段**，脚本自己 `set_var(0, ..)` 会被 no-op 挡下（见"globals 段
+  纪律"），想改 rank 得靠 game 层世界 API，不是脚本自己改自己的难度。
+- **`self_age` 是任务龄不是敌龄**：`SYS 9`（M1.5）量 `frame - task.born_frame`，次帧首跑时
+  已经是 `1`（不是 `0`，出生当帧被 born_frame 门禁跳过、根本不执行）；对 `SPAWN` 出的子任务
+  同理——子任务自己的 `born_frame` 是它的出生帧，不是父任务或 owner 实体的出生帧。

@@ -40,6 +40,14 @@ pub const SYS_SELF_HP: u16 = 5;
 pub const SYS_RAND_RANGE: u16 = 6;
 pub const SYS_GET_VAR: u16 = 7;
 pub const SYS_SET_VAR: u16 = 8;
+/// 任务龄（帧数，**M1.5 新增**）：`ctx.frame - task.born_frame`（wrapping）。**语义故意偏离
+/// ZUN**（ZUN `-9988` 是"敌出生以来帧数"，只对敌有意义）——我们量的是**任务**的龄，不是
+/// owner 实体的龄：零新状态（复用既有 `Task.born_frame`/`ctx.frame`），对全部 owner 种类
+/// （含 STAGE）均有意义。见 `docs/ecl-ops.md`/`docs/zun-ecl-v2-reference.md` 的偏离记档。
+pub const SYS_SELF_AGE: u16 = 9;
+/// owner 上限血量（M1.5 新增）：owner=ENEMY → `enemies.hp_max[idx]`；非敌 → 押 0
+/// （同 `SYS_SELF_HP` 误用策略：静默降级，不 Fault）。
+pub const SYS_SELF_HP_MAX: u16 = 10;
 
 // 2x：写——创建/世界变更
 /// 丙方案 8 参（正序压栈）：`appearance, x, y, speed, angle, xform_off, xform_cnt, task_script`。
@@ -115,6 +123,14 @@ fn self_hp(task: &Task, ctx: &VmCtx) -> i32 {
     }
 }
 
+/// owner 上限血量：ENEMY→`hp_max`／非敌恒 0（`SYS_SELF_HP_MAX`，M1.5；镜像 `self_hp`）。
+fn self_hp_max(task: &Task, ctx: &VmCtx) -> i32 {
+    match task.owner_kind {
+        OWNER_ENEMY => ctx.body.enemies.hp_max[task.owner_index as usize],
+        _ => 0,
+    }
+}
+
 /// self owner 必须是 BULLET，否则脚本作者违约 → `Fault`（misuse 策略，见模块文档）。
 fn self_bullet_handle(task: &Task) -> Result<BulletHandle, u8> {
     if task.owner_kind != OWNER_BULLET {
@@ -164,8 +180,24 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_SET_VAR => {
             let val = pop(task)?;
             let slot = pop(task)? as u16;
-            ctx.body.set_var(slot, val);
+            // globals 段纪律（甲案，M1.5）：脚本写系统段（slot < GLOBALS_SYS_SEGMENT）→
+            // no-op + contract_viol 计数（P4-b 确定性安全结果，不 Fault——见
+            // `world::GLOBALS_SYS_SEGMENT` 文档）。世界 API `set_var` 不经此门，见调用方。
+            if slot < crate::world::GLOBALS_SYS_SEGMENT {
+                ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+                ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+            } else {
+                ctx.body.set_var(slot, val);
+            }
             Ok(())
+        }
+        SYS_SELF_AGE => {
+            let age = ctx.frame.wrapping_sub(task.born_frame) as i32;
+            push(task, age)
+        }
+        SYS_SELF_HP_MAX => {
+            let hp_max = self_hp_max(task, ctx);
+            push(task, hp_max)
         }
         SYS_CREATE_BULLET => sys_create_bullet(task, ctx),
         SYS_CREATE_BULLETS_BATCH => sys_create_bullets_batch(task, ctx),
@@ -674,12 +706,107 @@ mod tests {
     fn sys_get_set_var_roundtrip() {
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
-        // SET_VAR(slot=5, val=42) —— 正序压栈 slot,val。
-        assert!(call(&mut w, &ecl, &mut task, SYS_SET_VAR, &[5, 42]).is_ok());
-        assert_eq!(w.body.globals[5], 42);
+        // SET_VAR(slot=20, val=42) —— 正序压栈 slot,val；slot=20 落自由段（≥
+        // GLOBALS_SYS_SEGMENT=16），非本测试关注点的系统段写保护见
+        // `sys_set_var_system_segment_slot_is_guarded_no_op` 单开测试。
+        assert!(call(&mut w, &ecl, &mut task, SYS_SET_VAR, &[20, 42]).is_ok());
+        assert_eq!(w.body.globals[20], 42);
         task.sp = 0;
-        assert!(call(&mut w, &ecl, &mut task, SYS_GET_VAR, &[5]).is_ok());
+        assert!(call(&mut w, &ecl, &mut task, SYS_GET_VAR, &[20]).is_ok());
         assert_eq!(task.stack[0], 42);
+    }
+
+    /// globals 段纪律（甲案，M1.5）：`SYS_SET_VAR` 写系统段（slot < `GLOBALS_SYS_SEGMENT`=16）
+    /// → **no-op**（真槽值不变）+ `diag.contract_viol` +1 + `last_status=BAD_ARGS`，**不 Fault**
+    /// （`dispatch` 仍返回 `Ok(())`——P4-b 脚本作者违约的确定性安全结果，非引擎 bug，调度层不杀
+    /// 任务）。边界精确钉死：slot=15（系统段最高位）挡、slot=16（自由段最低位）放行。
+    /// `SYS_GET_VAR` 两段皆不受限（读无保护）。世界 API `set_var` 直写不经此guard（仍可写系统段
+    /// ——game 层建场用它写 RANK，见 `world::GLOBALS_SYS_SEGMENT` 文档）。
+    #[test]
+    fn sys_set_var_system_segment_slot_is_guarded_no_op() {
+        let (mut w, ecl) = fresh();
+        w.body.set_var(crate::world::GVAR_RANK, 111); // 世界 API 先写系统段一个已知值（建场惯例）
+        let mut task = Task::default();
+
+        // 脚本经 SYS_SET_VAR 写 slot=0（系统段）→ no-op，dispatch 仍 Ok（非 Fault）。
+        assert!(
+            call(&mut w, &ecl, &mut task, SYS_SET_VAR, &[0, 999]).is_ok(),
+            "系统段写保护是 no-op，不是 Fault"
+        );
+        assert_eq!(w.body.globals[0], 111, "真槽值不变（未被脚本 999 覆盖）");
+        assert_eq!(w.body.diag.contract_viol, 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+
+        // 边界：slot=15 仍属系统段 → 同样挡。
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_SET_VAR, &[15, 999]).is_ok());
+        assert_eq!(w.body.globals[15], 0, "slot=15 系统段边界仍挡");
+        assert_eq!(w.body.diag.contract_viol, 2);
+
+        // 边界：slot=16 是自由段最低位 → 正常写入（guard 不越界误伤）。
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_SET_VAR, &[16, 999]).is_ok());
+        assert_eq!(w.body.globals[16], 999, "slot=16 自由段最低位正常写");
+        assert_eq!(w.body.diag.contract_viol, 2, "自由段写不应额外计数");
+
+        // 世界 API `set_var` 直写系统段不受本 guard 影响（不同门，见模块文档）。
+        w.body.set_var(crate::world::GVAR_RANK, 777);
+        assert_eq!(w.body.globals[0], 777, "世界 API 写系统段仍畅通");
+
+        // `SYS_GET_VAR` 读系统段不受限。
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_GET_VAR, &[0]).is_ok());
+        assert_eq!(task.stack[0], 777, "脚本读系统段不受限");
+    }
+
+    /// 任务龄 `SYS_SELF_AGE`（M1.5）：`ctx.frame - task.born_frame`（wrapping，i32 域）——
+    /// 纯 dispatch 层直调（不经调度门禁），钉死算式本身；跨帧调度语义的端到端 off-by 判别见
+    /// `step.rs` 的 `sys_self_age_ticks_task_age_each_frame_via_globals_relay`。
+    #[test]
+    fn sys_self_age_computes_frame_minus_born_frame() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task {
+            born_frame: 10,
+            ..Task::default()
+        };
+        w.body.frame = 13;
+        assert!(call(&mut w, &ecl, &mut task, SYS_SELF_AGE, &[]).is_ok());
+        assert_eq!(task.stack[0], 3, "13-10=3");
+
+        // wrapping：born_frame 数值上"晚于" frame（理论不该发生，但算式必须 wrapping 不 panic）。
+        let mut task2 = Task {
+            born_frame: 5,
+            ..Task::default()
+        };
+        w.body.frame = 0;
+        assert!(call(&mut w, &ecl, &mut task2, SYS_SELF_AGE, &[]).is_ok());
+        assert_eq!(task2.stack[0], 0i32.wrapping_sub(5), "wrapping 不 panic");
+    }
+
+    /// owner 上限血量 `SYS_SELF_HP_MAX`（M1.5）：ENEMY→`hp_max` 字段（与 `hp` 不同值，逐位命中
+    /// 排除"读混 hp/hp_max 两个同族字段"的变异）；非敌（STAGE/BULLET）→ 恒 0（同 `SYS_SELF_HP`
+    /// 误用策略）。
+    #[test]
+    fn sys_self_hp_max_dispatch_by_owner_kind() {
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let i = eh.index as usize;
+        w.body.enemies.hp_max[i] = 9999; // 与 hp=5 明显不同，逐位命中排除读混字段
+        let mut enemy_task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut enemy_task, SYS_SELF_HP_MAX, &[]).is_ok());
+        assert_eq!(enemy_task.stack[0], 9999);
+
+        let mut stage_task = Task {
+            owner_kind: OWNER_STAGE,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut stage_task, SYS_SELF_HP_MAX, &[]).is_ok());
+        assert_eq!(stage_task.stack[0], 0, "非敌 owner 恒 0");
     }
 
     /// `n==0` → 押 0、不消耗 RNG 流（拍板钉死：连续两次 n=0 调用后世界 RNG 状态与初始一致，

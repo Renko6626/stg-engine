@@ -313,6 +313,15 @@ impl SubBuilder {
     pub fn sys_self_hp(&mut self) {
         self.sys(syscall::SYS_SELF_HP);
     }
+    /// 任务龄（M1.5；`ctx.frame - task.born_frame`——**任务**龄非 ZUN 的敌龄，见 `syscall.rs`
+    /// `SYS_SELF_AGE` 文档的语义偏离记档）。
+    pub fn sys_self_age(&mut self) {
+        self.sys(syscall::SYS_SELF_AGE);
+    }
+    /// owner 上限血量（M1.5；非敌 owner 恒 0，同 `sys_self_hp` 误用策略）。
+    pub fn sys_self_hp_max(&mut self) {
+        self.sys(syscall::SYS_SELF_HP_MAX);
+    }
     pub fn sys_rand_range(&mut self, n: i32) {
         self.push_i(n);
         self.sys(syscall::SYS_RAND_RANGE);
@@ -832,19 +841,23 @@ mod tests {
     use stg_core::tables::TABLES_V0;
 
     /// 生成码经真实 VM 跑一遍：`repeat(3, body)` 里用 `sys_get_var`/`sys_set_var_from_stack`
-    /// 把 `globals[0]` 累加 3 次（0→3）——`push_i`/`add`/`repeat` 回填三方合验，观测点走
-    /// `WorldBody::globals`（真正公开字段，不借道任何 `pub(crate)` 内部）。
+    /// 把 `globals[20]` 累加 3 次（0→3）——`push_i`/`add`/`repeat` 回填三方合验，观测点走
+    /// `WorldBody::globals`（真正公开字段，不借道任何 `pub(crate)` 内部）。槽号取 20（≥
+    /// `stg_core::world::GLOBALS_SYS_SEGMENT`=16 的自由段）——M1.5 起 slot<16 是系统段，
+    /// 脚本经 `sys_set_var` 写会被 no-op 守卫挡下（见该常量文档），本测试关心的是 `repeat`/
+    /// `get_var`/`set_var_from_stack` 回填链路本身，不是系统段语义，故避开之。
     #[test]
     fn generated_repeat_code_roundtrips_through_real_vm() {
+        const SLOT: u16 = 20;
         let mut ib = ImageBuilder::new();
         let mut s = SubBuilder::new();
-        s.sys_set_var(0, 0); // globals[0] = 0
+        s.sys_set_var(SLOT, 0); // globals[SLOT] = 0
         s.repeat(3, |b| {
-            b.push_i(0); // 待写槽号（sys_set_var_from_stack 要求栈序 [slot, val]）
-            b.sys_get_var(0); // 读 globals[0]
+            b.push_i(SLOT as i32); // 待写槽号（sys_set_var_from_stack 要求栈序 [slot, val]）
+            b.sys_get_var(SLOT); // 读 globals[SLOT]
             b.push_i(1);
-            b.add(); // 栈：[0, globals[0]+1]
-            b.sys_set_var_from_stack(); // globals[0] = 旧值+1
+            b.add(); // 栈：[SLOT, globals[SLOT]+1]
+            b.sys_set_var_from_stack(); // globals[SLOT] = 旧值+1
         });
         s.end();
         let main_id = ib.add_sub(s);
@@ -860,11 +873,48 @@ mod tests {
         step(&mut w, &TABLES_V0, &image, &InputFrame::empty(1));
 
         assert_eq!(
-            w.body.globals[0], 3,
+            w.body.globals[SLOT as usize], 3,
             "repeat(3) 应恰累加 3 次（读写走 globals，真实 VM 执行）"
         );
         assert_eq!(w.body.diag.task_faults, 0, "全程不应产生 Fault");
         let _ = idx; // 任务已跑完自灭；本测试只关心可观测的世界效应
+    }
+
+    /// M1.5：`sys_self_age`/`sys_self_hp_max` 两个新读口 DSL 薄壳——经真实 VM 跑一遍，
+    /// 结果走 globals relay 观测（同上一测试的观测惯例）。owner=STAGE：`self_age` 次帧首跑时
+    /// 应为 1（出生帧 born_frame=0 不跑，`ctx.frame=1` 首次执行，`1-0=1`，与 `stg-core`
+    /// `step.rs` 的端到端 off-by 判别同一钉死值）；`self_hp_max` 非敌 owner 恒 0。
+    #[test]
+    fn sys_self_age_and_hp_max_wrappers_roundtrip_through_real_vm() {
+        const AGE_SLOT: u16 = 20;
+        const HP_MAX_SLOT: u16 = 21;
+        let mut ib = ImageBuilder::new();
+        let mut s = SubBuilder::new();
+        s.push_i(AGE_SLOT as i32);
+        s.sys_self_age();
+        s.sys_set_var_from_stack();
+        s.push_i(HP_MAX_SLOT as i32);
+        s.sys_self_hp_max();
+        s.sys_set_var_from_stack();
+        s.end();
+        let main_id = ib.add_sub(s);
+        let image = ib.build();
+
+        let mut w = World::new(1);
+        w.spawn_task(&image, main_id.0, (OWNER_STAGE, 0, 0))
+            .unwrap();
+        step(&mut w, &TABLES_V0, &image, &InputFrame::empty(0)); // born 帧：门禁跳过
+        step(&mut w, &TABLES_V0, &image, &InputFrame::empty(1)); // 次帧首跑
+
+        assert_eq!(
+            w.body.globals[AGE_SLOT as usize], 1,
+            "born_frame=0，次帧首跑 ctx.frame=1，self_age=1-0=1"
+        );
+        assert_eq!(
+            w.body.globals[HP_MAX_SLOT as usize], 0,
+            "STAGE owner 的 self_hp_max 恒 0"
+        );
+        assert_eq!(w.body.diag.task_faults, 0, "全程不应产生 Fault");
     }
 
     /// 端到端小脚本（plan 既定简化版：不涉及敌人）——`wait(1)` 后 `repeat(2)` 两轮 4-way

@@ -883,6 +883,182 @@ mod tests {
         assert_eq!(w.tasks.slots[idx as usize].wait, 5);
     }
 
+    /// M1.5：`SYS_SELF_AGE` 端到端 off-by 语义——任务出生帧 F（`spawn_task` 时 `body.frame`），
+    /// 出生当帧不跑（born_frame 门禁），**次帧首跑** `ctx.frame=F+1`，此时 `self_age = 1`（不是
+    /// 0）。脚本每帧把 `self_age` 写回一个自由段全局槽（`WAIT(0)+JMP` 回环，每帧恰写一次）——
+    /// 跑 N 次 `step` 后，槽值应精确等于 `N-1`（第 0 次 step 撞 born 门禁不写，随后 N-1 次各写
+    /// 一次，各次覆盖，终值 = 最后一次的 age = N-1）。此 off-by 是本刀刻意钉死的契约。
+    #[test]
+    fn sys_self_age_ticks_task_age_each_frame_via_globals_relay() {
+        use crate::ecl::syscall::{SYS_SELF_AGE, SYS_SET_VAR};
+        const SLOT: u16 = 20; // 自由段（≥ GLOBALS_SYS_SEGMENT）
+
+        let ecl = EclImage {
+            code: vec![
+                OP_PUSHI as u32,
+                SLOT as u32, // 0,1
+                OP_SYS as u32,
+                SYS_SELF_AGE as u32, // 2,3
+                OP_SYS as u32,
+                SYS_SET_VAR as u32, // 4,5
+                OP_PUSHI as u32,
+                0,              // 6,7：wait(0) 帧数
+                OP_WAIT as u32, // 8
+                OP_JMP as u32,
+                0, // 9,10：回环顶部
+            ],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let mut w = World::new(1);
+        w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+
+        const N: u32 = 5;
+        for f in 0..N {
+            step(
+                &mut w,
+                &crate::tables::TABLES_V0,
+                &ecl,
+                &InputFrame::empty(f),
+            );
+        }
+        assert_eq!(
+            w.body.globals[SLOT as usize],
+            (N - 1) as i32,
+            "born 帧不跑（第 0 次 step 撞门禁），随后每次 step 各写一次 age，\
+             终值 = 最后一次 step 时的 age = N-1"
+        );
+        assert_eq!(w.body.diag.task_faults, 0, "全程不应 Fault");
+    }
+
+    /// M1.5：`SYS_SELF_HP_MAX` 端到端（经 globals relay 观测）——owner=ENEMY 读到
+    /// `enemies.hp_max`（与该敌 `hp` 不同值，逐位命中排除读混字段）；owner=STAGE 恒 0
+    /// （同 `SYS_SELF_HP` 误用策略：静默降级不 Fault）。
+    #[test]
+    fn sys_self_hp_max_relays_via_globals_for_enemy_and_stage_owner() {
+        use crate::ecl::syscall::{SYS_SELF_HP_MAX, SYS_SET_VAR};
+        const SLOT: u16 = 21;
+
+        let ecl = EclImage {
+            code: vec![
+                OP_PUSHI as u32,
+                SLOT as u32, // 0,1
+                OP_SYS as u32,
+                SYS_SELF_HP_MAX as u32, // 2,3
+                OP_SYS as u32,
+                SYS_SET_VAR as u32, // 4,5
+                OP_END as u32,      // 6
+            ],
+            subs: vec![0],
+            content_hash: 0,
+        };
+
+        // owner=ENEMY：hp=5（存活门禁用）、hp_max 另设 9999——两字段判别式取值。
+        let mut w_enemy = World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w_enemy, 0, 80, 5);
+        w_enemy.body.enemies.hp_max[h.index as usize] = 9999;
+        w_enemy
+            .spawn_task(&ecl, 0, (OWNER_ENEMY, h.index, h.generation))
+            .unwrap();
+        step(
+            &mut w_enemy,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        );
+        step(
+            &mut w_enemy,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        );
+        assert_eq!(w_enemy.body.globals[SLOT as usize], 9999);
+        assert_eq!(w_enemy.body.diag.task_faults, 0);
+
+        // owner=STAGE：恒 0。
+        let mut w_stage = World::new(1);
+        w_stage.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+        step(
+            &mut w_stage,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        );
+        step(
+            &mut w_stage,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        );
+        assert_eq!(w_stage.body.globals[SLOT as usize], 0, "非敌 owner 恒 0");
+        assert_eq!(w_stage.body.diag.task_faults, 0);
+    }
+
+    /// M1.5：globals 系统段脚本写保护——端到端穿过真实调度器（`run_tasks`）钉死"no-op
+    /// 不是 Fault"：脚本 `set_var(GVAR_RANK, 999)` 撞系统段 guard 后**继续执行**（不被杀、
+    /// 不发 `EVT_TASK_FAULT`），紧随其后对自由段槽的写照常生效（用它反证任务没被腰斩）；
+    /// 世界 API `set_var` 直写系统段全程不受本 guard 影响（不同门，调用方是可信的 game 层）。
+    #[test]
+    fn sys_set_var_system_segment_guard_no_op_task_survives_and_world_api_unrestricted() {
+        use crate::ecl::syscall::SYS_SET_VAR;
+        use crate::world::GVAR_RANK;
+        const FREE_SLOT: u16 = 20;
+
+        let ecl = EclImage {
+            code: vec![
+                OP_PUSHI as u32,
+                GVAR_RANK as u32, // 0,1：系统段槽
+                OP_PUSHI as u32,
+                999, // 2,3
+                OP_SYS as u32,
+                SYS_SET_VAR as u32, // 4,5：应 no-op，不 Fault
+                OP_PUSHI as u32,
+                FREE_SLOT as u32, // 6,7：自由段槽
+                OP_PUSHI as u32,
+                555, // 8,9
+                OP_SYS as u32,
+                SYS_SET_VAR as u32, // 10,11：应正常写入——证明任务未被腰斩
+                OP_END as u32,      // 12
+            ],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let mut w = World::new(1);
+        w.body.set_var(GVAR_RANK, 111); // game 层建场惯例：世界 API 先写系统段已知基线值
+        w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        );
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        );
+
+        assert_eq!(
+            w.body.globals[GVAR_RANK as usize], 111,
+            "系统段 guard no-op：脚本 999 未落地，真槽值仍是建场基线"
+        );
+        assert_eq!(w.body.diag.contract_viol, 1);
+        assert_eq!(
+            w.body.globals[FREE_SLOT as usize], 555,
+            "guard 触发后任务继续执行，自由段的后续写正常生效"
+        );
+        assert_eq!(
+            w.body.diag.task_faults, 0,
+            "guard 是 no-op 不是 Fault，任务应正常跑完 END 自灭"
+        );
+
+        // 世界 API 直写系统段不受本 guard 影响。
+        w.body.set_var(GVAR_RANK, 777);
+        assert_eq!(w.body.get_var(GVAR_RANK), 777, "世界 API 写系统段仍畅通");
+    }
+
     /// M1 T2：owner=ENEMY 的敌人死亡（池释放）→ 任务次帧被静默回收——不发 `EVT_TASK_FAULT`、
     /// 不计 `task_faults`（owner 死是常态非错误，物理区分于确定性报错杀）。
     #[test]

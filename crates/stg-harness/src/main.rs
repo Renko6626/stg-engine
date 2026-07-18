@@ -913,8 +913,10 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
 
 /// RANK（难度）读取槽——scene 2 建场时 `world.body.set_var(RANK_SLOT, 2)` 写入
 /// （spec 拍板 5：难度是脚本变量，VM 零支持，脚本自己读）；主控任务用它给环 0 加密度
-/// （`28 + rank×2` → rank=2 时 32-way，见 [`fire_rainbow_rings`]）。
-const RANK_SLOT: u16 = 0;
+/// （`28 + rank×2` → rank=2 时 32-way，见 [`fire_rainbow_rings`]）。M1.5 起系统段纪律落地
+/// （`stg_core::world::GLOBALS_SYS_SEGMENT`）：本槽即系统段内的 `GVAR_RANK`，本常量直接
+/// 复用该单一权威定义，不重复写字面量 0。
+const RANK_SLOT: u16 = stg_core::world::GVAR_RANK;
 
 /// boss 出生点 / 弹幕发射原点。**DSL 摩擦**：`sys_create_bullet(s)_batch` 的 typed 薄壳
 /// 只吃 builder 期 `Fx`/`Angle`/`u16` 字面量（每个参数在构建时就地 `push_i` 成常量指令），
