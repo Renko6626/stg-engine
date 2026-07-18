@@ -485,6 +485,18 @@ mod tests {
         assert_eq!(t.stack[0], 42);
     }
 
+    /// WAIT 截断语义钉死（M1 终审 Minor）：取栈顶低 16 位——wait(-1)=65535 帧、
+    /// wait(65536)=0 帧。作者契约入 ecl-ops.md，此测试防"改成饱和/报错"的无声语义变化。
+    #[test]
+    fn wait_truncates_to_low_16_bits() {
+        let (r, t) = run(&[OP_PUSHI as u32, -1i32 as u32, OP_WAIT as u32, OP_END as u32]);
+        assert_eq!(r, Exec::Yield);
+        assert_eq!(t.wait, 65535, "wait(-1) 截断为 65535");
+        let (r, t) = run(&[OP_PUSHI as u32, 65536u32, OP_WAIT as u32, OP_END as u32]);
+        assert_eq!(r, Exec::Yield);
+        assert_eq!(t.wait, 0, "wait(65536) 截断为 0");
+    }
+
     /// wrapping 语义钉死（T1 复审 Important）：`i32::MIN / -1`（Rust 裸 `/` 在 release
     /// 也 panic 的经典向量）与 MOD/NEG 同族边界——必须回绕不 Fault 不 panic。此测试是
     /// "有人把 wrapping_div 改回 `/`" 的 CI 闸门（debug 跑测试即炸）。

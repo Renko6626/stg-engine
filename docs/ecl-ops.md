@@ -48,7 +48,7 @@
 | 21 | `create_bullets_batch` | appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step | 实发数 |
 | 22 | `spawn_enemy` | x,y,hp,drop_table,score | 敌句柄或 -1 |
 | 23 | `drop_item` | x,y,item_type | 道具句柄或 -1 |
-| 24 | `move_enemy_to` | x,y,dur,easing | —（owner 须为敌，否则 Fault） |
+| 24 | `move_enemy_to` | **dur,x,y,easing** | —（owner 须为敌，否则 Fault；参数序以 syscall.rs 为准，勿凭直觉写 x,y 在前） |
 | 25 | `boss_set` | slot,hp_ratio,spell_id,timer,phase_left,active | —（enemy 字段写 NULL，见 boss_ui 契约） |
 | 26 | `pulse_signal` | ch | — |
 | 30-38 | 弹 setter 族 | 按 motion.rs 九连 | —（owner 须为弹，否则 Fault） |
@@ -79,4 +79,9 @@
 - **次帧首跑**：`SPAWN`/`spawn_task` 的子任务出生当帧不执行——首个效果落在下一帧。
 - **owner 死 = 任务静默死**（无事件无计数，常态非错误）；显式拆树用 `KILL_CHILDREN`。
 - **死循环必须带 `WAIT`**：纯循环烧满 1024 条/帧即被杀（响亮地死，Fault 3）。
+- **`WAIT` 取栈顶低 16 位**：`wait(-1)` = 等 65535 帧、`wait(65536)` = 等 0 帧（截断语义，
+  测试钉死）——帧数走大数请分段。
+- **`KILL_CHILDREN` 按父槽号不带代际**：父任务死亡后其槽被无关新任务复用时，新任务的
+  `KILL_CHILDREN` 会杀到前任占用者的孤儿子任务（确定性、detached 语义下孤儿本就随时可死，
+  但语义上是跨族误杀——代际戳修法记 follow-ups C12⑤，介意就别依赖孤儿存活）。
 - 难度（rank）= `globals` 约定槽（场景开局 `set_var` 写入），脚本 `get_var` 后自决。

@@ -192,8 +192,14 @@ shottype 表 `Shooter.flags` bit0 已预留 homing。开刀时要拍的唯一悬
 ① `spawn_task_now`（当帧 worklist drain 版）——design_doc §4.3 既定后期可选，真实用例窄；
 ② 帧相对寻址指令族（sub 可重入）——locals 共享是 v0 拍板，重入需求出现时纯增量加；
 ③ vm.rs 顶部 `#![allow(dead_code)]` 毯（T1 遗留）与 `run_tasks` 的 256 槽逐位扫描措辞
-   （复审 Minor：正确性无碍，可改按字跳空）；④ 敌 appearance 表（`spawn_enemy` syscall
-   现走直参，弹的 appearance 表已建——对称化留内容需要时）。
+   （复审 Minor：正确性无碍，可改按字跳空；`KILL_CHILDREN` 同款 256 槽扫、预算只计 1 条
+   ——终审 Minor，病态脚本群最坏 ~16.8M 探测/帧，纯性能项）；④ 敌 appearance 表
+   （`spawn_enemy` syscall 现走直参，弹的 appearance 表已建——对称化留内容需要时）；
+⑤ `KILL_CHILDREN` 无代际戳（终审 Important 记档）：parent 按槽号+1 匹配，父死槽复用后
+   新占用者可跨族杀前任孤儿——确定性无害但语义糙，修法 = parent 带 gen 戳或杀任务时
+   顺手清孤儿 parent 标；⑥ spec syscall 清单三项**有意未入号表 v1**（终审 Minor 补记）：
+   `last_status`/`nearest_enemy`/`attract_all_items`（号表 v2 候补），`SPAWN` 的
+   "owner 来源枚举操作数"简化为恒继承——现实现更简且够用，记录在案防"悄悄丢"。
 
 ### C13. 真 ECL 表层语言的需求输入（M1 T4 摩擦实录，开刀先读）
 
