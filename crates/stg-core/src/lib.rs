@@ -39,6 +39,7 @@ pub mod player;
 pub mod rng;
 pub mod shots;
 pub mod step;
+pub mod tables;
 pub mod world;
 pub mod xform;
 
