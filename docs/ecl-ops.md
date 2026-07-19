@@ -1,6 +1,9 @@
 # ECL op / syscall 速查表（M1）
 
-> **这是什么**：脚本作者视角的 ECL VM 参考——opcode、syscall 号、fault 码、作者须知。
+> **字节码层参考**——脚本作者请看 [`ecl-lang.md`](ecl-lang.md)（表层语言手册，M1.9 起）；
+> 本表服务于 VM/编译器/绑定层开发与调试。
+>
+> **这是什么**：ECL VM 底层参考——opcode、syscall 号、fault 码、字节码级须知。
 > **权威来源**（冲突时以它们为准）：`crates/stg-core/src/ecl/{ops,syscall,vm}.rs` 常量
 > （**编号即契约**，冻结纪律同 D4：增删改 = 过评审 + bump engine_ver）·
 > spec `docs/superpowers/specs/2026-07-18-m1-ecl-vm-design.md`。
