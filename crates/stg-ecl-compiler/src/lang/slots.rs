@@ -33,9 +33,12 @@
 //!    集合为空（没有同步 caller，含"仅被 spawn/fire task 引用"或"完全孤立"两种情况）时
 //!    自然退化成 `0`；`spawn`/`fire task` 引用天生不出现在这个集合里，故它们对基址计算
 //!    **零贡献但也零阻碍**（"新任务根"语义是这条公式的自然推论，不需要额外分支——
-//!    见模块文档"为什么不需要显式 entry 集合"）。一个 sub 若同时被同步调用（非空集合，
-//!    给出正基址）又被 spawn（对集合无贡献），基址仍取同步调用一侧的值——这正是"MAX
-//!    胜出"的效果，任务书对这个场景的分析已在设计阶段验证正确，见本刀报告。
+//!    见模块文档"为什么不需要显式 entry 集合"）。**健全性依据 = async/同步途径强制分离**
+//!    （`lang::typeck` 三腿规则，T2 复审 Critical 修复）：`async sub` 只许被 spawn/fire-task
+//!    引用（无同步 caller ⇒ 本公式恒给基址 0，与 `OP_SPAWN` 拷实参进子任务 `locals[0..argc)`
+//!    对齐）；普通 `sub` 只许被同步 CALL（基址随链上浮）。"同一 sub 双途径"在类型检查层
+//!    即打回，本层永不可见——早期版本注释声称该场景"已验证正确"是**错的**（那正是
+//!    实参/参数槽错位的 Critical），以本条为准。
 //! 5. **落位**：`sub` 的槽区间 = `[base, base+width)`；区内先参数（声明序）、再变量（源码
 //!    遍历序），最后 xformdef 引用区（`TypedSub.xform_refs` 源码序，每个 `(off, cnt)`
 //!    对齐 3 字/槽）——这是"xformdef 区放在变量之后"的选定placement（pin，见下）。
@@ -503,7 +506,7 @@ mod tests {
 
     #[test]
     fn spawn_target_reroots_to_base_zero_independent_of_caller() {
-        let sm = ok("sub b() { var y: int = 1; } \
+        let sm = ok("async sub b() { var y: int = 1; } \
              sub a() { var x0: int=0; var x1: int=0; var x2: int=0; var x3: int=0; spawn b(); }");
         assert!(sm.subs["a"].width >= 4, "a 应该有非零宽度撑开对照");
         assert_eq!(
@@ -515,7 +518,7 @@ mod tests {
     /// fire 的 `task` 引用同理是"新任务根"，不产生同步调用边。
     #[test]
     fn fire_task_ref_also_reroots_to_base_zero() {
-        let sm = ok("sub on_hit() { var y: int = 1; } \
+        let sm = ok("async sub on_hit() { var y: int = 1; } \
              sub main() { var x0:int=0; var x1:int=0; var x2:int=0; var x3:int=0; \
                           _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, on_hit); }");
         assert!(sm.subs["main"].width >= 4);
@@ -669,7 +672,7 @@ mod tests {
     #[test]
     fn mixed_scenario_all_subs_get_a_slot_map_entry() {
         let sm = ok("xformdef RING { turn(90deg); } \
-             sub patrol() { loop { wait(1); } } \
+             async sub patrol() { loop { wait(1); } } \
              async sub timer_ui(spell: int) { var t: int = 600; } \
              sub main() { spawn patrol(); spawn timer_ui(1); \
                           var base: angle = 0deg; \

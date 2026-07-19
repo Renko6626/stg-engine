@@ -703,6 +703,16 @@ impl<'p> Checker<'p> {
         nested: bool,
     ) -> Option<(TypedCall, Option<Ty>)> {
         if let Some(sub) = self.subs.get(name).copied() {
+            // async/同步途径强制分离（T2 复审 Critical 修复）：async sub 的参数槽恒基址 0
+            // （SPAWN 把实参拷进子任务 locals[0..argc)），被同步 CALL 会让实参与参数槽错位
+            // ——语言层禁止，编译期打回。
+            if sub.is_async {
+                self.err(
+                    span,
+                    format!("'{name}' 是 async sub，只能被 spawn——需要同步执行请改为普通 sub"),
+                );
+                return None;
+            }
             let call_args = self.check_sub_call_args(&sub.params, args, span, locals)?;
             self.push_sync_call(name.to_string());
             if nested {
@@ -851,6 +861,17 @@ impl<'p> Checker<'p> {
                     RefKind::Sub => self.subs.contains_key(name),
                 };
                 if known {
+                    // fire 的 task 引用与 spawn 同途（新任务根 + 实参基址 0），
+                    // 同样只许 async sub（分离规则第三腿）。
+                    if let (RefKind::Sub, Some(sub)) = (kind, self.subs.get(name).copied())
+                        && !sub.is_async
+                    {
+                        self.err(
+                            *vspan,
+                            format!("'{name}' 用作 fire 的 task 引用必须声明为 async sub"),
+                        );
+                        return None;
+                    }
                     Some(Some(name.clone()))
                 } else {
                     let what = match kind {
@@ -1118,6 +1139,17 @@ impl<'p> Checker<'p> {
             },
             Stmt::Spawn { name, args, span } => match self.subs.get(name).copied() {
                 Some(target) => {
+                    // async/同步途径强制分离（对偶腿）：spawn 的实参落子任务 locals[0..argc)，
+                    // 目标必须是 async sub（参数槽保证在基址 0）。
+                    if !target.is_async {
+                        self.err(
+                            *span,
+                            format!(
+                                "spawn 目标 '{name}' 必须声明为 async sub——同步调用请用普通调用语句"
+                            ),
+                        );
+                        return None;
+                    }
                     let call_args =
                         self.check_sub_call_args(&target.params, args, *span, locals)?;
                     Some(TypedStmt::Spawn {
@@ -1794,7 +1826,7 @@ mod tests {
 
     #[test]
     fn spawn_arity_mismatch_is_an_error() {
-        let errors = err("sub helper(a: int) { } sub main() { spawn helper(); }");
+        let errors = err("async sub helper(a: int) { } sub main() { spawn helper(); }");
         assert!(
             errors.iter().any(|e| e.msg.contains("参数个数")),
             "{errors:?}"
@@ -1803,18 +1835,65 @@ mod tests {
 
     #[test]
     fn spawn_arg_type_mismatch_is_an_error() {
-        let errors = err("sub helper(a: int) { } sub main() { spawn helper(1.0fx); }");
+        let errors = err("async sub helper(a: int) { } sub main() { spawn helper(1.0fx); }");
         assert!(errors.iter().any(|e| e.msg.contains("cast")), "{errors:?}");
     }
 
     #[test]
     fn spawn_arity_and_type_match_is_ok_and_recorded_but_not_a_sync_call() {
-        let ti = ok("sub helper(a: int) { } sub main() { spawn helper(1); }");
+        let ti = ok("async sub helper(a: int) { } sub main() { spawn helper(1); }");
         let main = ti.subs.iter().find(|s| s.name == "main").unwrap();
         assert!(
             main.sync_calls.is_empty(),
             "spawn 不是同步调用边：{:?}",
             main.sync_calls
+        );
+    }
+
+    // ── async/同步途径强制分离（T2 复审 Critical 修复的判别腿）──────────────────────
+
+    /// 复审复现场景：同一 sub 既被 spawn 又被同步 CALL——修复前无声通过并给出错位槽，
+    /// 修复后是编译错误（此测试即当年 Critical 的墓碑）。
+    #[test]
+    fn sub_both_spawned_and_called_is_now_a_compile_error() {
+        let errors = err("async sub helper(p: int) { var v: int = p; } \
+             sub caller() { var pad: int = 0; helper(1); } \
+             sub main() { spawn helper(5); }");
+        assert!(
+            errors.iter().any(|e| e.msg.contains("只能被 spawn")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn spawn_on_plain_sub_is_an_error() {
+        let errors = err("sub helper() { } sub main() { spawn helper(); }");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.msg.contains("必须声明为 async sub")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn sync_call_on_async_sub_is_an_error() {
+        let errors = err("async sub helper() { } sub main() { helper(); }");
+        assert!(
+            errors.iter().any(|e| e.msg.contains("只能被 spawn")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn fire_task_ref_on_plain_sub_is_an_error() {
+        let errors = err("sub on_hit() { } \
+             sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, on_hit); }");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.msg.contains("必须声明为 async sub")),
+            "{errors:?}"
         );
     }
 
@@ -1855,7 +1934,7 @@ mod tests {
     #[test]
     fn fire_task_known_sub_is_ok() {
         ok(
-            "sub bullet_task() { } sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, bullet_task); }",
+            "async sub bullet_task() { } sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, bullet_task); }",
         );
     }
 
