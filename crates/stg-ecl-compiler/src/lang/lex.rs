@@ -247,14 +247,31 @@ impl<'s> Lexer<'s> {
                 let int_part: i64 = match int_digits.parse() {
                     Ok(v) => v,
                     Err(_) => {
-                        self.push_error(errors, span, format!("fx 字面量超出范围：{int_digits}"));
+                        self.push_error(
+                            errors,
+                            span,
+                            format!("fx 字面量整数部分超出范围：{int_digits}"),
+                        );
                         return None;
                     }
                 };
                 match fold_fx_decimal(int_part, frac_digits.as_deref()) {
-                    Some(raw) => Some(TokenKind::FxLit(raw)),
-                    None => {
-                        self.push_error(errors, span, format!("fx 字面量超出范围：{int_digits}"));
+                    Ok(raw) => Some(TokenKind::FxLit(raw)),
+                    Err(FxFoldError::IntPart) => {
+                        self.push_error(
+                            errors,
+                            span,
+                            format!("fx 字面量整数部分超出范围：{int_digits}"),
+                        );
+                        None
+                    }
+                    Err(FxFoldError::FracDigits) => {
+                        let frac = frac_digits.as_deref().unwrap_or("");
+                        self.push_error(
+                            errors,
+                            span,
+                            format!("fx 字面量小数位数过多（{} 位）：.{frac}", frac.len()),
+                        );
                         None
                     }
                 }
@@ -516,16 +533,28 @@ impl<'s> Lexer<'s> {
     }
 }
 
+/// `fold_fx_decimal` 的两类溢出（C17 复审修复）：调用方据此选报"整数部分超出范围"还是
+/// "小数位数过多"——旧版无差别统一报成前者，小数位过多、整数部分合法（如 `0.999…9fx`）时
+/// 会把读者导向错误的方向。
+enum FxFoldError {
+    /// 整数部分本身（`int_part × 65536`，或加上小数部分后的最终值）超出 `i32`/`i64` 范围。
+    IntPart,
+    /// 小数位数过多，使 `10^位数` 或 `小数分子 × 65536` 溢出 `i64`——与整数部分是否合法无关。
+    FracDigits,
+}
+
 /// `int_part.frac_digits` → Q16.16 原始值，精确十进制算术（round-half-to-even），不经过
-/// 浮点。`None` = 结果超出 `i32` 范围。
-fn fold_fx_decimal(int_part: i64, frac_digits: Option<&str>) -> Option<i32> {
-    let mut value: i64 = int_part.checked_mul(65536)?;
+/// 浮点。`Err` 见 [`FxFoldError`]。
+fn fold_fx_decimal(int_part: i64, frac_digits: Option<&str>) -> Result<i32, FxFoldError> {
+    let mut value: i64 = int_part.checked_mul(65536).ok_or(FxFoldError::IntPart)?;
     if let Some(f) = frac_digits
         && !f.is_empty()
     {
         let frac_num: i64 = f.parse().unwrap_or(0);
-        let denom: i64 = 10i64.checked_pow(f.len() as u32)?;
-        let numerator = frac_num.checked_mul(65536)?;
+        let denom: i64 = 10i64
+            .checked_pow(f.len() as u32)
+            .ok_or(FxFoldError::FracDigits)?;
+        let numerator = frac_num.checked_mul(65536).ok_or(FxFoldError::FracDigits)?;
         let quotient = numerator / denom;
         let remainder = numerator % denom;
         let double_rem = remainder * 2;
@@ -540,12 +569,12 @@ fn fold_fx_decimal(int_part: i64, frac_digits: Option<&str>) -> Option<i32> {
                 }
             }
         };
-        value = value.checked_add(rounded)?;
+        value = value.checked_add(rounded).ok_or(FxFoldError::IntPart)?;
     }
     if (i32::MIN as i64..=i32::MAX as i64).contains(&value) {
-        Some(value as i32)
+        Ok(value as i32)
     } else {
-        None
+        Err(FxFoldError::IntPart)
     }
 }
 
@@ -804,6 +833,32 @@ mod tests {
         assert!(
             !errors.is_empty(),
             "极端 deg 字面量应报错而不是静默产出垃圾角度：{tokens:?}"
+        );
+    }
+
+    /// C17 复审修复：小数位数过多（`fold_fx_decimal` 内部 `denom`/`numerator` 溢出）时，
+    /// 报错不该说"整数部分超出范围"——这里整数部分恰好是合法的 `0`，真正超限的是小数位数，
+    /// 旧版报错会把读者导向错误的方向。
+    #[test]
+    fn fx_literal_too_many_fractional_digits_reports_fractional_overflow_not_integer_overflow() {
+        let src = format!("0.{}fx", "9".repeat(20)); // 20 位小数，denom(10^20) 溢出 i64
+        let (tokens, errors) = Lexer::new(&src).lex();
+        assert!(
+            tokens
+                .iter()
+                .all(|t| !matches!(t.kind, TokenKind::FxLit(_))),
+            "小数位数过多应报错，不应产出 token：{tokens:?}"
+        );
+        assert!(!errors.is_empty(), "应报错：{tokens:?}");
+        assert!(
+            errors[0].msg.contains("小数"),
+            "报错应指向小数部分：{}",
+            errors[0].msg
+        );
+        assert!(
+            !errors[0].msg.contains("整数部分"),
+            "不应把小数位溢出误报成整数部分问题：{}",
+            errors[0].msg
         );
     }
 

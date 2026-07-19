@@ -259,16 +259,33 @@ impl CompileError {
     /// ```text
     /// {file}:{line}:{col}: {msg}
     ///   {src_line}
-    ///   {col-1 个空格}^
+    ///   {col-1 个字符的 caret 前缀}^
     /// ```
-    /// （前两行前缀两格缩进；caret 行同样两格缩进后再补 `col-1` 个空格，使 `^` 精确落在
+    /// （前两行前缀两格缩进；caret 行同样两格缩进后再补 `col-1` 个字符，使 `^` 精确落在
     /// `src_line` 里第 `col` 个字符正下方——`col` 是 1-based。）
+    ///
+    /// **C18 复审修复：caret 前缀逐字符对齐 `src_line`，tab 保留为 tab**——`col` 计数对 tab
+    /// 和普通字符一视同仁（各计 1 列，见 `lang::lex::Lexer::advance`），但若源码用 tab
+    /// 缩进，终端/编辑器会把 `src_line` 里的 tab 渲染成多列宽；caret 行若无差别地补等宽
+    /// 空格，`^` 会指偏。这里把 tab 前缀里的 tab 原样保留、其余字符替换成空格——两行的
+    /// tab 被同一套渲染规则展开成同样宽度，天然对齐。`src_line` 比 `col-1` 短（越界防御，
+    /// 理论上不该发生）时补空格，不 panic，同 `at()` 的越界退化精神。
     pub fn render(&self, file: &str) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "{file}:{}:{}: {}", self.line, self.col, self.msg);
         let _ = writeln!(out, "  {}", self.src_line);
-        let caret_pad = (self.col.saturating_sub(1)) as usize;
-        let _ = write!(out, "  {}^", " ".repeat(caret_pad));
+        let col_idx = self.col.saturating_sub(1) as usize;
+        let mut caret_pad: String = self
+            .src_line
+            .chars()
+            .take(col_idx)
+            .map(|c| if c == '\t' { '\t' } else { ' ' })
+            .collect();
+        let short_by = col_idx.saturating_sub(caret_pad.chars().count());
+        if short_by > 0 {
+            caret_pad.push_str(&" ".repeat(short_by));
+        }
+        let _ = write!(out, "  {caret_pad}^");
         out
     }
 }
@@ -294,6 +311,26 @@ mod tests {
             "          ^" // 2 缩进 + 8 空格（col=9 → col-1=8）+ '^'
         );
         assert_eq!(rendered, expected);
+    }
+
+    /// C18 复审修复：源行含 tab 缩进时，caret 行必须保留原 tab 字符（不是替换成等宽空格）——
+    /// 终端/编辑器把 src_line 和 caret 行里的 tab 展开成同样宽度，`^` 才能精确落在目标字符
+    /// 正下方。`col` 计数对 tab 和普通字符一视同仁（各计 1 列，见 `lang::lex::advance`），
+    /// 但如果 caret 行无差别地补等宽空格，tab 在渲染时展开的实际宽度会让 `^` 指偏。
+    #[test]
+    fn render_caret_preserves_tabs_in_src_line_prefix() {
+        let err = CompileError {
+            line: 1,
+            col: 2, // 'x' 在 tab 之后，lex 记的是第 2 列（tab 本身计 1 列）
+            msg: "占位".to_string(),
+            src_line: "\tx = 1".to_string(),
+        };
+        let rendered = err.render("t.ecl");
+        let caret_line = rendered.lines().nth(2).unwrap();
+        assert_eq!(
+            caret_line, "  \t^",
+            "caret 前缀应保留原 tab 字符，而不是替换成等宽空格"
+        );
     }
 
     /// `CompileError::at`：行号在 `src_lines` 范围内 → 摘录对应源行；越界 → 空串兜底不 panic。
