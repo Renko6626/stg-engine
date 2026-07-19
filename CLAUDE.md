@@ -109,6 +109,10 @@ docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
 docs/checksum-mechanism.md       校验和机制 + "新字段默认入校验" 保证
 docs/pool-memory-layout.md       池 SoA 布局与缓存精算（热路径驻 L2）
 docs/xform-ops.md                弹变换 op 速查表（编号即契约；作者视角参考）
+docs/ecl-lang.md                 【ECL 脚本作者第一入口】.ecl 表层语言手册（M1.9）
+docs/ecl-ops.md                  ECL 字节码层速查（op/syscall/fault 码；VM/编译器开发用）
+docs/zun-ecl-v2-reference.md     ZUN ECL V2 指令/变量表本地副本 + 逐条对照（源 Priw8）
+docs/bench-baseline.md           性能基线（step 曲线/快照/校验和账；大改后重跑续表）
 .github/workflows/ci.yml         三平台矩阵 + 校验和对拍 + fmt/clippy + 依赖防火墙
 crates/
   stg-core/         确定性内核（断层线以下）
@@ -117,15 +121,20 @@ crates/
     src/checksum.rs  vendored FNV-1a 64（D11）
     src/rng.rs       vendored PCG32（I3）
     src/{bullets,shots,enemy,field,items,player}.rs  实体数据模块（前五个是 define_pool! 实例；池即层）
+    src/{boss,tables}.rs  boss 公告板（A2）/ WorldTables 静态数据层（shottype+道具+角色参数+appearance；
+                     &'static 参数穿线不进 World，M0-15/17）
     src/xform.rs      变换段池（D4；手写特例，段即分配单位）
     src/{input,events}.rs                      输入抽象 / hits+events 缓冲类型
     src/world.rs     WorldBody 字段所有权 + 写 API + push_* + PhaseGuard + 场界常量
-    src/world/       【模块结构镜像相位骨架】player(相1+3) / transform(相4) / integrate(相5)
-                     / collide(相6) / settle(相7) / cleanup(相9) / motion(D3 运动写 API)
-    src/step.rs      P2 组装层：§3.5 宪法顺序的唯一持有者 + World + 快照
+    src/world/       【模块结构镜像相位骨架】player(相1+3，shottype 表驱动发弹) / transform(相4)
+                     / integrate(相5) / collide(相6) / settle(相7) / cleanup(相9) / motion(D3 运动写 API)
+    src/ecl/         【M1】栈机 VM：task(协程池 256) / ops(op 表+ARITY) / vm(解释核+相2调度租户)
+                     / image(EclImage) / syscall(号表+白名单沙箱绑定)
+    src/step.rs      P2 组装层：§3.5 宪法顺序的唯一持有者 + World{body,tasks} + 快照
   stg-derive/       proc-macro：#[derive(Checksum)] + define_pool!
-  stg-ecl-compiler/ 离线 ECL 编译器，产出 EclImage（M1）
-  stg-harness/      CLI：金向量对拍 + 烘焙表 bake/verify（允许浮点）
+  stg-ecl-compiler/ ECL 编译器：src/lang/【M1.9 表层语言】lex/parse/typeck(三型)/slots(静态槽分配)
+                    /codegen —— .ecl 源码启动时编译成 EclImage；lib.rs builder = codegen 后端
+  stg-harness/      CLI：golden 两段金向量（scenes/rainbow.ecl 符卡）+ bench 基线 + 烘焙表 bake/verify（允许浮点）
 ```
 
 ## 常用命令
@@ -144,10 +153,12 @@ cargo run -p stg-harness -- verify-tables        # 断言烘焙表字节 == comm
 > 本节只写各 milestone 的**静态定义**。走到哪 / 下一步候选见 [`PROGRESS.md`](PROGRESS.md)，
 > 开工前先读它 + `docs/follow-ups.md`。
 
-- **M0** `stg-core` 数学核 + 池（`define_pool!`）+ step 骨架 + 快照/校验和 + `stg-derive` Checksum；
-  `stg-harness` 金向量逐帧对拍。
-- **M1** `stg-core` ECL VM + syscall 表；`stg-ecl-compiler` Rust DSL 拼字节码，跑通一张非平凡符卡。
-- **M2** `stg-godot`（gdext）WorldBridge + MultiMesh + 请求分发器 —— **phase 后续，暂不建 crate**。
+- **M0 ✅**（2026-07-14~18，18 刀）`stg-core` 数学核 + 池 + step 骨架 + 快照/校验和 + Checksum derive
+  + 世界层全机制（碰撞/结算/道具/变换/批量/shottype 表/WorldTables）+ 金向量对拍 + bench 基线。
+- **M1 ✅**（2026-07-18）ECL 栈机 VM + 协程池 + syscall 白名单沙箱；**M1.9 ✅**（2026-07-19）
+  `.ecl` 表层语言 + 编译器（三型/具名函数/静态槽分配），风铃卡狗粮进金向量二号。
+- **M2** `stg-godot`（gdext）WorldBridge + MultiMesh + 请求分发器 —— **phase 后续，暂不建 crate**；
+  前置：可见性收口刀（follow-ups D 组）+ 通道 A WorldView。
 - **M3** 环形快照 + 本地回滚 harness（延迟/输入扰动/校验和风暴）。
 - **M4** `stg-net`（UDP + 会话/重同步）—— **phase 2 起点**。
 - **M5** `stg-py`（PyO3 headless 并行 env）。
