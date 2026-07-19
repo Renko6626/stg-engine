@@ -8,37 +8,60 @@
 //!
 //! `loop`/`END` 不开放：前者被词法占用且 LOOP 型控制流归任务弹（档三），后者由
 //! 序列尾零填充天然表达。
+//!
+//! ## `Reserved`（C15 复审修复）
+//!
+//! `spawn_pattern`（op 60）编号已在 `docs/xform-ops.md` 钉死、也在 `stg_core::xform` 里
+//! 定义了常量，但 `world/transform.rs` 的解释器还没实现它的分支——落进 `_` 兜底臂
+//! 安全降级（P4-b：计 `contract_viol` + 终止序列，不 panic），运行期**安静地什么都不
+//! 发生**，没有任何编译期或运行期的显眼信号。曾经的 [`lookup`] 把它当合法 op 收，
+//! 编译器毫无异议地放行——这正是这颗雷的成因。`Reserved` 让"编号存在但解释器不接"这个
+//! 状态在**单一权威表**里显式表达出来，调用方（`lang::slots`）据此在编译期就拒收，
+//! 报错措辞明确点出"预留/尚未实现"，不与真正的拼写错误（走 `None`/"未知操作名"）混同。
+//! 等 `world/transform.rs` 真正实现了这个 op，把这一行改回 `Op(...)` 即可，`lookup`
+//! 的调用方不需要跟着改。
 
 use stg_core::xform;
 
-/// (op 字节, 实参个数, 物理槽数)。
-pub(crate) fn lookup(name: &str) -> Option<(u8, usize, usize)> {
+/// [`lookup`] 的结果：真正可用的 op，或已知但解释器未实现的预留编号。
+pub(crate) enum XformOp {
+    /// (op 字节, 实参个数, 物理槽数)。
+    Op(u8, usize, usize),
+    /// 编号已知但运行期解释器未实现——编译期拒收（见模块文档）。
+    Reserved,
+}
+
+pub(crate) fn lookup(name: &str) -> Option<XformOp> {
+    use XformOp::Op;
     match name {
-        "set_speed" => Some((xform::OP_SET_SPEED, 1, 1)),
-        "add_speed" => Some((xform::OP_ADD_SPEED, 1, 1)),
-        "step_speed" => Some((xform::OP_STEP_SPEED, 2, 2)),
-        "set_angle" => Some((xform::OP_SET_ANGLE, 1, 1)),
-        "turn" => Some((xform::OP_TURN, 1, 1)),
-        "aim_player" => Some((xform::OP_AIM_PLAYER, 1, 1)),
-        "step_angle" => Some((xform::OP_STEP_ANGLE, 2, 2)),
-        "set_sprite" => Some((xform::OP_SET_SPRITE, 1, 1)),
-        "set_life" => Some((xform::OP_SET_LIFE, 1, 1)),
-        "set_ang_vel" => Some((xform::OP_SET_ANG_VEL, 1, 1)),
-        "set_accel" => Some((xform::OP_SET_ACCEL, 1, 1)),
-        "set_gravity" => Some((xform::OP_SET_GRAVITY, 2, 1)),
-        "stop_fx" => Some((xform::OP_STOP_FX, 0, 1)),
-        "wait_signal" => Some((xform::OP_WAIT_SIGNAL, 1, 1)),
-        "bounce_arm" => Some((xform::OP_BOUNCE_ARM, 2, 1)),
-        "spawn_pattern" => Some((xform::OP_SPAWN_PATTERN, 2, 1)),
+        "set_speed" => Some(Op(xform::OP_SET_SPEED, 1, 1)),
+        "add_speed" => Some(Op(xform::OP_ADD_SPEED, 1, 1)),
+        "step_speed" => Some(Op(xform::OP_STEP_SPEED, 2, 2)),
+        "set_angle" => Some(Op(xform::OP_SET_ANGLE, 1, 1)),
+        "turn" => Some(Op(xform::OP_TURN, 1, 1)),
+        "aim_player" => Some(Op(xform::OP_AIM_PLAYER, 1, 1)),
+        "step_angle" => Some(Op(xform::OP_STEP_ANGLE, 2, 2)),
+        "set_sprite" => Some(Op(xform::OP_SET_SPRITE, 1, 1)),
+        "set_life" => Some(Op(xform::OP_SET_LIFE, 1, 1)),
+        "set_ang_vel" => Some(Op(xform::OP_SET_ANG_VEL, 1, 1)),
+        "set_accel" => Some(Op(xform::OP_SET_ACCEL, 1, 1)),
+        "set_gravity" => Some(Op(xform::OP_SET_GRAVITY, 2, 1)),
+        "stop_fx" => Some(Op(xform::OP_STOP_FX, 0, 1)),
+        "wait_signal" => Some(Op(xform::OP_WAIT_SIGNAL, 1, 1)),
+        "bounce_arm" => Some(Op(xform::OP_BOUNCE_ARM, 2, 1)),
+        "spawn_pattern" => Some(XformOp::Reserved),
         _ => None,
     }
 }
 
-/// 一个 xformdef 的**物理**槽总数（未知 op 名按 1 计——报错责任在 slots 趟，
+/// 一个 xformdef 的**物理**槽总数（未知/预留 op 名按 1 计——报错责任在 slots 趟，
 /// 此处保证 sizing 不 panic 继续收集后续错误）。
 pub(crate) fn physical_len(slots: &[crate::lang::ast::XfSlotLit]) -> usize {
     slots
         .iter()
-        .map(|s| lookup(&s.op_name).map(|(_, _, p)| p).unwrap_or(1))
+        .map(|s| match lookup(&s.op_name) {
+            Some(XformOp::Op(_, _, p)) => p,
+            _ => 1,
+        })
         .sum()
 }

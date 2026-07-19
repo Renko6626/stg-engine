@@ -300,16 +300,27 @@ fn body_depth(body: &[TypedStmt]) -> usize {
 /// 文档"算法"）。
 pub fn allocate(prog: &Program, ti: &TypedInfo) -> Result<SlotMap, Vec<CompileError>> {
     // 区宽按**物理**槽数计（STEP 族双槽含引擎 scratch，`lang::xform_map` 单一权威）；
-    // 未知 op 名在此趟报错（早于 codegen——sizing 正确性依赖名字可解析）。
+    // 未知/预留 op 名在此趟报错（早于 codegen——sizing 正确性依赖名字可解析）。
     let mut xform_name_errors = Vec::new();
     let xformdef_len: BTreeMap<String, (usize, Span)> = prog
         .xformdefs
         .iter()
         .map(|x| {
             for s in &x.slots {
-                if crate::lang::xform_map::lookup(&s.op_name).is_none() {
-                    xform_name_errors
-                        .push(err(s.span, format!("未知的 xform 操作名 '{}'", s.op_name)));
+                match crate::lang::xform_map::lookup(&s.op_name) {
+                    None => xform_name_errors
+                        .push(err(s.span, format!("未知的 xform 操作名 '{}'", s.op_name))),
+                    Some(crate::lang::xform_map::XformOp::Reserved) => {
+                        xform_name_errors.push(err(
+                            s.span,
+                            format!(
+                                "xform 操作 '{}' 是预留编号，运行期解释器尚未实现\
+                                 （见 docs/xform-ops.md），暂不可用",
+                                s.op_name
+                            ),
+                        ));
+                    }
+                    Some(crate::lang::xform_map::XformOp::Op(..)) => {}
                 }
             }
             (
@@ -770,6 +781,22 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.msg.contains("未知的 xform 操作名")),
             "{errors:?}"
+        );
+    }
+
+    /// C15 复审修复：`spawn_pattern` 编号已预留（`docs/xform-ops.md` 标记"📋 预留"）但
+    /// `world/transform.rs` 解释器尚未实现——编译期拒收，报错须点明"预留/尚未实现"，
+    /// 不能跟真正的手滑拼错（`frobnicate` 那种）用同一句"未知的 xform 操作名"含糊过去，
+    /// 也绝不能悄悄编译通过（旧版行为：编译通过、运行期安静落进 `_` 兜底臂 no-op）。
+    #[test]
+    fn spawn_pattern_is_rejected_as_reserved_not_unknown() {
+        let errors = err_of(
+            "xformdef S { spawn_pattern(1, 0deg); } \
+             sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, S, none); }",
+        );
+        assert!(
+            errors.iter().any(|e| e.msg.contains("预留")),
+            "应点明是预留 op 而非泛泛的未知操作名：{errors:?}"
         );
     }
 

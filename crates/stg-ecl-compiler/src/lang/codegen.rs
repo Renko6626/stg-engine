@@ -93,6 +93,21 @@ fn eval_const_arg(e: &Expr, consts: &BTreeMap<String, i32>) -> Result<i32, Strin
     }
 }
 
+/// locals/xform 槽号窄化为 `u8`（`PUSHL`/`POPL`/`write_xform_locals` 操作数宽度，C19
+/// 复审修复）。`lang::slots::allocate` 已经在编译期把 `base+width ≤ 64`
+/// （`stg_core::ecl::task::LOCALS`）钉死（`slots.rs::locals_over_64_is_rejected` 单测
+/// 覆盖），正常 `.ecl` 源码走不到这条断言——这里是给"假如分配器自己有 bug、吐出一个
+/// 越界槽号"上的第二道防线：P4-c"引擎自身 bug"要求 debug 帧内断言就地 panic，release
+/// 零成本；不断言 = 分配器一旦真越界，这里会静默截断槽号，吐出一段指向错误槽位的
+/// 字节码而不是在 debug 构建炸出来。
+fn narrow_slot(slot: usize) -> u8 {
+    debug_assert!(
+        slot <= u8::MAX as usize,
+        "locals 槽号 {slot} 超出 u8 编码范围（lang::slots 分配器应已保证 ≤64）"
+    );
+    slot as u8
+}
+
 /// 弹 setter 族名单（模块文档"弹 setter 族 handle:int 首参"）。
 fn is_self_bullet_setter(name: &str) -> bool {
     matches!(
@@ -148,11 +163,12 @@ impl<'p> Gen<'p> {
             let mut built = Vec::with_capacity(xfdef.slots.len());
             for s in &xfdef.slots {
                 match crate::lang::xform_map::lookup(&s.op_name) {
-                    None => {
-                        // 未知 op 名：slots 趟已报错（sizing 单一权威在那边），此处防御性补位。
+                    None | Some(crate::lang::xform_map::XformOp::Reserved) => {
+                        // 未知/预留 op 名：slots 趟已报错（sizing 单一权威在那边），
+                        // 此处防御性补位，不重复报错。
                         built.push(XformSlot::default());
                     }
-                    Some((op, arity, physical)) => {
+                    Some(crate::lang::xform_map::XformOp::Op(op, arity, physical)) => {
                         if s.args.len() != arity {
                             self.err(
                                 s.span,
@@ -198,7 +214,7 @@ impl<'p> Gen<'p> {
                     }
                 }
             }
-            b.write_xform_locals(off as u8, &built);
+            b.write_xform_locals(narrow_slot(off), &built);
         }
     }
 
@@ -228,11 +244,11 @@ impl<'p> Gen<'p> {
         match stmt {
             TypedStmt::Var { name, init, .. } => {
                 self.gen_expr(b, slots, init);
-                b.pop_l(slots.locals[name] as u8);
+                b.pop_l(narrow_slot(slots.locals[name]));
             }
             TypedStmt::Assign { name, value } => {
                 self.gen_expr(b, slots, value);
-                b.pop_l(slots.locals[name] as u8);
+                b.pop_l(narrow_slot(slots.locals[name]));
             }
             TypedStmt::If {
                 cond,
@@ -297,7 +313,7 @@ impl<'p> Gen<'p> {
                 body,
             } => {
                 self.gen_expr(b, slots, from);
-                let var_slot = slots.locals[var] as u8;
+                let var_slot = narrow_slot(slots.locals[var]);
                 b.pop_l(var_slot);
                 let top = b.here();
                 b.push_l(var_slot);
@@ -338,7 +354,14 @@ impl<'p> Gen<'p> {
                     }
                 }
                 let id = self.name_to_id[&call.name];
-                b.spawn(id, call.args.len() as u8);
+                let argc = call.args.len();
+                // 同 `narrow_slot`：argc 经由目标 sub 参数落在其自身 locals 区间，间接
+                // 受同一条 ≤64 上限约束，正常源码走不到这条断言（C19 复审修复）。
+                debug_assert!(
+                    argc <= u8::MAX as usize,
+                    "spawn 实参数 {argc} 超出 u8 编码范围"
+                );
+                b.spawn(id, argc as u8);
                 b.pop(); // SPAWN 恒压任务句柄，语言无消费语法——自动丢弃（模块级说明同 typeck）
             }
             TypedStmt::ExprStmtDiscard { expr } => {
@@ -382,7 +405,7 @@ impl<'p> Gen<'p> {
             TypedExprKind::FxLit(v) => b.push_i(*v),
             TypedExprKind::AngleLit(v) => b.push_i(*v as i32),
             TypedExprKind::ConstRef(v) => b.push_i(*v),
-            TypedExprKind::LocalRef(name) => b.push_l(slots.locals[name] as u8),
+            TypedExprKind::LocalRef(name) => b.push_l(narrow_slot(slots.locals[name])),
             TypedExprKind::EngineVar(ev) => {
                 let info = builtins::engine_var_info(*ev);
                 b.sys(info.syscall);
@@ -520,7 +543,7 @@ impl<'p> Gen<'p> {
                     let target_slots = &self.sm.subs[&target_name];
                     self.sub_params[&target_name]
                         .iter()
-                        .map(|n| target_slots.locals[n] as u8)
+                        .map(|n| narrow_slot(target_slots.locals[n]))
                         .collect()
                 };
                 for (i, a) in call.args.iter().enumerate() {
@@ -579,6 +602,15 @@ impl<'p> Gen<'p> {
             }
         }
         if bi.is_op {
+            // `is_op` 直发路径的 `syscall` 字段实际装的是 VM op 码本身（`lang::builtins`
+            // 模块文档"Builtin 字段形状"）——v1 只有 sin/cos 两个硬编码小常量，但断言
+            // 挡住未来任何新增 `is_op:true` 条目手滑填了个超出 u8 的号（C19 复审修复）。
+            debug_assert!(
+                bi.syscall <= u8::MAX as u16,
+                "'{}' 的 is_op 直发 op 码 {} 超出 u8 编码范围",
+                bi.name,
+                bi.syscall
+            );
             b.raw_emit_op(bi.syscall as u8);
         } else {
             b.sys(bi.syscall);
@@ -677,6 +709,7 @@ mod tests {
     //! 本刀能绕开的）。改用**故意会 Fault 的右操作数**（`1/0`）：右操作数被跳过 ⇒
     //! 不 Fault；右操作数被求值 ⇒ Fault——`task_faults` 计数器同样是直接可读的公开字段，
     //! 精确反证"跳过"与"求值"两条路径分别对应哪种源码。
+    use super::generate;
     use crate::lang::compile;
     use stg_core::ecl::task::OWNER_STAGE;
     use stg_core::input::InputFrame;
@@ -988,5 +1021,29 @@ mod tests {
             errors.iter().any(|e| e.msg.contains("编译期常量")),
             "{errors:?}"
         );
+    }
+
+    // ── C19 复审修复：locals 槽号窄化为 u8 前的 debug_assert 兜底 ─────────────
+
+    /// `lang::slots` 已经把 locals 总量钉在 ≤64（`slots.rs::locals_over_64_is_rejected`），
+    /// 正常 `.ecl` 源码走不到"槽号超出 u8 范围"这条路——这条测试钉的是第二道防线：万一
+    /// 分配器自己出 bug、吐出一个越界槽号，codegen 必须在窄化为 `u8` 之前 debug 帧内断言
+    /// 就地 panic（P4-c"引擎自身 bug"），而不是静默截断槽号、吐出一段指向错误槽位的
+    /// 字节码。手工腐化一份合法编译产出的 `SlotMap`（模拟"分配器有 bug"）来触发它——同
+    /// `phase_guard`/`sys_set_var_system_segment_guard` 一脉的"直写内部状态触发断言"模式。
+    #[test]
+    #[should_panic(expected = "超出 u8 编码范围")]
+    fn narrow_slot_debug_asserts_when_slots_allocator_corrupted() {
+        let prog = crate::lang::parse("sub main() { var x: int = 1; var y: int = x; }", "t.ecl")
+            .expect("解析失败");
+        let ti = crate::lang::typeck::check(&prog).expect("判型失败");
+        let mut sm = crate::lang::slots::allocate(&prog, &ti).expect("槽分配失败");
+        *sm.subs
+            .get_mut("main")
+            .unwrap()
+            .locals
+            .get_mut("x")
+            .unwrap() = 999;
+        let _ = generate(&prog, &ti, &sm);
     }
 }
