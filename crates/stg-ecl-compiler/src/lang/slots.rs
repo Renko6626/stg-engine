@@ -300,10 +300,24 @@ fn body_depth(body: &[TypedStmt]) -> usize {
 /// 槽分配趟入口：调用图 DFS 着色 + 递归环检测 + 容量静态校验，产出 [`SlotMap`]（见模块
 /// 文档"算法"）。
 pub fn allocate(prog: &Program, ti: &TypedInfo) -> Result<SlotMap, Vec<CompileError>> {
+    // 区宽按**物理**槽数计（STEP 族双槽含引擎 scratch，`lang::xform_map` 单一权威）；
+    // 未知 op 名在此趟报错（早于 codegen——sizing 正确性依赖名字可解析）。
+    let mut xform_name_errors = Vec::new();
     let xformdef_len: BTreeMap<String, (usize, Span)> = prog
         .xformdefs
         .iter()
-        .map(|x| (x.name.clone(), (x.slots.len(), x.span)))
+        .map(|x| {
+            for s in &x.slots {
+                if crate::lang::xform_map::lookup(&s.op_name).is_none() {
+                    xform_name_errors
+                        .push(err(s.span, format!("未知的 xform 操作名 '{}'", s.op_name)));
+                }
+            }
+            (
+                x.name.clone(),
+                (crate::lang::xform_map::physical_len(&x.slots), x.span),
+            )
+        })
         .collect();
     let sub_span: BTreeMap<String, Span> =
         prog.subs.iter().map(|s| (s.name.clone(), s.span)).collect();
@@ -317,7 +331,7 @@ pub fn allocate(prog: &Program, ti: &TypedInfo) -> Result<SlotMap, Vec<CompileEr
         return Err(vec![err(span, msg)]);
     }
 
-    let mut errors = Vec::new();
+    let mut errors = xform_name_errors;
 
     // 每 sub 的局部名序 + xformdef 引用区宽度（与 base 无关，独立算）。
     struct Layout {
@@ -342,7 +356,9 @@ pub fn allocate(prog: &Program, ti: &TypedInfo) -> Result<SlotMap, Vec<CompileEr
             if cnt > 16 {
                 errors.push(err(
                     xf_span,
-                    format!("xformdef '{xf_name}' 序列长度 {cnt} 槽超出上限 16 槽"),
+                    format!(
+                        "xformdef '{xf_name}' 物理槽数 {cnt} 超出上限 16 槽（STEP 族每条占 2 槽）"
+                    ),
                 ));
             }
             xform_order.push((xf_name.clone(), cnt));
@@ -649,6 +665,35 @@ mod tests {
             "xformdef 区紧跟在变量之后"
         );
         assert_eq!(main.width, main.locals.len() + cnt * 3, "3×cnt 对齐");
+    }
+
+    /// STEP 族物理双槽计宽（T3 复审 Important 修法的 sizing 腿）：
+    /// authored 2 条（step_speed + turn）→ 物理 3 槽（scratch 计入区宽）。
+    #[test]
+    fn step_op_counts_two_physical_slots_in_region_width() {
+        let sm = ok("xformdef S { step_speed(2.0fx, 4); turn(90deg); } \
+             sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, S, none); }");
+        let main = &sm.subs["main"];
+        let (_off, cnt) = main.xform_regions["S"];
+        assert_eq!(cnt, 3, "step_speed 物理 2 槽 + turn 1 槽");
+        assert_eq!(
+            main.width,
+            main.locals.len() + 3 * 3,
+            "区宽按物理槽数 ×3 字"
+        );
+    }
+
+    /// 未知 xform 操作名在 slots 趟即报错（sizing 单一权威所在层）。
+    #[test]
+    fn unknown_xform_op_name_errors_in_slots_pass() {
+        let errors = err_of(
+            "xformdef S { frobnicate(1); } \
+             sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, S, none); }",
+        );
+        assert!(
+            errors.iter().any(|e| e.msg.contains("未知的 xform 操作名")),
+            "{errors:?}"
+        );
     }
 
     #[test]

@@ -78,27 +78,7 @@ use stg_core::xform::XformSlot;
 /// 收不到它，v1 xformdef 序列体里因此**打不出** `loop(...)`（LOOP 型复杂控制流留给
 /// 任务弹/档三，不是本趟范围，记录在案非遗漏）。`END`（op 0）同理不开放——序列尾部
 /// 零填充天然是 `END`，作者不需要显式写。
-fn xform_op_info(name: &str) -> Option<(u8, usize)> {
-    match name {
-        "set_speed" => Some((xform::OP_SET_SPEED, 1)),
-        "add_speed" => Some((xform::OP_ADD_SPEED, 1)),
-        "step_speed" => Some((xform::OP_STEP_SPEED, 2)),
-        "set_angle" => Some((xform::OP_SET_ANGLE, 1)),
-        "turn" => Some((xform::OP_TURN, 1)),
-        "aim_player" => Some((xform::OP_AIM_PLAYER, 1)),
-        "step_angle" => Some((xform::OP_STEP_ANGLE, 2)),
-        "set_sprite" => Some((xform::OP_SET_SPRITE, 1)),
-        "set_life" => Some((xform::OP_SET_LIFE, 1)),
-        "set_ang_vel" => Some((xform::OP_SET_ANG_VEL, 1)),
-        "set_accel" => Some((xform::OP_SET_ACCEL, 1)),
-        "set_gravity" => Some((xform::OP_SET_GRAVITY, 2)),
-        "stop_fx" => Some((xform::OP_STOP_FX, 0)),
-        "wait_signal" => Some((xform::OP_WAIT_SIGNAL, 1)),
-        "bounce_arm" => Some((xform::OP_BOUNCE_ARM, 2)),
-        "spawn_pattern" => Some((xform::OP_SPAWN_PATTERN, 2)),
-        _ => None,
-    }
-}
+// （op 名映射表已上移 `lang::xform_map`——slots 趟与本趟共用的单一权威，含物理槽数。）
 
 /// `xformdef` 槽参数的编译期常量求值：字面量 + 已声明 `const` 引用 + 一元 `-`，
 /// 其它一律拒绝（模块文档"xformdef 参数常量折叠"）。
@@ -174,12 +154,12 @@ impl<'p> Gen<'p> {
             let (off, _cnt) = slots.xform_regions[xf_name];
             let mut built = Vec::with_capacity(xfdef.slots.len());
             for s in &xfdef.slots {
-                match xform_op_info(&s.op_name) {
+                match crate::lang::xform_map::lookup(&s.op_name) {
                     None => {
-                        self.err(s.span, format!("未知的 xform 操作名 '{}'", s.op_name));
+                        // 未知 op 名：slots 趟已报错（sizing 单一权威在那边），此处防御性补位。
                         built.push(XformSlot::default());
                     }
-                    Some((op, arity)) => {
+                    Some((op, arity, physical)) => {
                         if s.args.len() != arity {
                             self.err(
                                 s.span,
@@ -216,6 +196,12 @@ impl<'p> Gen<'p> {
                             _pad: 0,
                             args,
                         });
+                        // STEP 族物理双槽：第二槽是引擎 scratch，表层作者不可见——
+                        // 编译器自动补零槽（不补则运行期 scratch 写入覆写下一条 authored
+                        // 槽，T3 复审 Important 的修法；区宽已由 slots 趟按物理数计）。
+                        for _ in 1..physical {
+                            built.push(XformSlot::default());
+                        }
                     }
                 }
             }
@@ -919,6 +905,27 @@ mod tests {
              反证 xformdef staging → fire xf 解析 → OP_TURN 派发链路生效"
         );
         assert_eq!(w2.body.diag.task_faults, 0);
+    }
+
+    /// STEP 族 scratch 自动补槽的行为学判别（T3 复审 Important 修法）：
+    /// `step_speed` 物理双槽——编译器不补 scratch 时，紧随其后的 `set_life(1)` 会落在
+    /// scratch 槽位、被引擎运行期覆写而**永不执行**（弹永生）；补了则 set_life 照常
+    /// 生效（弹快速回收）。本测试在"补"分支断言弹死——把足枪钉死成可红命题。
+    #[test]
+    fn step_op_auto_scratch_keeps_following_slot_alive() {
+        let src = "xformdef S { step_speed(2.0fx, 4); set_life(1); }\n\
+                    sub main() {\n\
+                      _ = fire(0, 0fx, 100fx, 0.5fx, 0deg, S, none);\n\
+                      wait(1000);\n\
+                    }";
+        let w = run(src, 20);
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            0,
+            "set_life(1) 必须在 STEP 的 scratch 槽之后照常执行——弹应已回收；\
+             若此断言红 = scratch 未自动补，set_life 被引擎 scratch 覆写"
+        );
+        assert_eq!(w.body.diag.task_faults, 0);
     }
 
     // ── cast 往返 ───────────────────────────────────────────────────────

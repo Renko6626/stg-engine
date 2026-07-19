@@ -13,6 +13,7 @@ pub mod lex;
 pub mod parse;
 pub mod slots;
 pub mod typeck;
+pub(crate) mod xform_map;
 
 pub use ast::{CompileError, Program};
 pub use stg_core::ecl::image::EclImage;
