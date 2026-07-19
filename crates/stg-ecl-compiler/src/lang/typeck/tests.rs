@@ -1,4 +1,5 @@
 use super::*;
+use crate::lang::ast::Ty;
 use crate::lang::parse as parse_program;
 
 /// 便于按源码片段快速构造 `Program`（复用 T1 前端；本趟测试不手搭 AST，除非要覆盖
