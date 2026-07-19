@@ -31,10 +31,6 @@ fn zero(e: &Expr) -> Expr {
         Expr::AngleLit(v) => Expr::AngleLit(*v),
         Expr::Var(n, _) => Expr::Var(n.clone(), Span::default()),
         Expr::EngineVar(ev, _) => Expr::EngineVar(*ev, Span::default()),
-        Expr::GlobalRead { slot, .. } => Expr::GlobalRead {
-            slot: Box::new(zero(slot)),
-            span: Span::default(),
-        },
         Expr::Call { name, args, .. } => Expr::Call {
             name: name.clone(),
             args: args.iter().map(zero).collect(),
@@ -564,12 +560,16 @@ fn unknown_engine_var_is_an_error() {
 }
 
 #[test]
-fn global_read_is_a_dedicated_ast_node() {
+fn global_is_a_generic_call_symmetric_with_set_global() {
+    // C16 复审修复：`global(n)` 曾是专属 AST 节点 `Expr::GlobalRead`（parser 特判字符串
+    // "global"），永远绕过 `check_call` 的"先查 subs、再查 builtins"顺序——同名用户 sub
+    // 静默调不到。现在它跟 `set_global` 一样是普通 `Expr::Call`，见 `lang::builtins` 表。
     let e = expr_of("global(RANK_SLOT)");
     assert_eq!(
         e,
-        Expr::GlobalRead {
-            slot: Box::new(var("RANK_SLOT")),
+        Expr::Call {
+            name: "global".to_string(),
+            args: vec![var("RANK_SLOT")],
             span: Span::default(),
         }
     );

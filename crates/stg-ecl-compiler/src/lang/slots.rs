@@ -222,7 +222,6 @@ fn expr_depth(e: &TypedExpr) -> usize {
         | TypedExprKind::ConstRef(_)
         | TypedExprKind::LocalRef(_)
         | TypedExprKind::EngineVar(_) => 1,
-        TypedExprKind::GlobalRead(inner) => expr_depth(inner),
         TypedExprKind::Call(call) => call_args_depth(&call.args).max(1),
         TypedExprKind::Binary { l, r, .. } => expr_depth(l).max(1 + expr_depth(r)),
         TypedExprKind::Unary { e, .. } => expr_depth(e),

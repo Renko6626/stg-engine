@@ -454,6 +454,26 @@ fn global_read_types_int_and_requires_int_slot() {
 }
 
 #[test]
+fn sub_named_global_shadows_the_builtin_when_called_as_a_statement() {
+    // C16 复审修复：`global` 曾是 parser 特判出的专属 AST 节点，永远绕过 `check_call` 的
+    // "先查 subs、再查 builtins" 解析顺序——用户声明的同名 sub 编译进镜像但永远调不到。
+    // 现在 `global` 是普通 builtin 表项，走跟 `set_global` 完全一样的调用解析路径：sub 优先。
+    ok("sub global(n: int) { set_global(16, n); } sub main() { global(5); }");
+}
+
+#[test]
+fn sub_named_global_shadows_the_builtin_and_rejects_expression_position() {
+    // 同一颗雷的判别式对照：sub 调用无返回值，不能用作表达式的值——这条报错本身就是
+    // "global(5) 被解析成了对用户 sub 的调用，而不是内建 GlobalRead"的实锤证据。
+    let errors =
+        err("sub global(n: int) { set_global(16, n); } sub main() { var x: int = global(5); }");
+    assert!(
+        errors.iter().any(|e| e.msg.contains("不能用作表达式的值")),
+        "{errors:?}"
+    );
+}
+
+#[test]
 fn set_global_is_a_void_call_checked_like_a_builtin() {
     ok("sub main() { set_global(1, 2); }");
     let errors = err("sub main() { set_global(1, 2.0fx); }");

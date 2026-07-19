@@ -680,20 +680,12 @@ impl<'s> Parser<'s> {
                 self.advance();
                 if *self.peek_kind() == TokenKind::LParen {
                     self.advance(); // '('
-                    if name == "global" {
-                        // `global(n)`：契约块钉死的独立 AST 节点（区别于普通 `Call`），
-                        // 恰好一个参数。
-                        let slot = self.parse_top_expr()?;
-                        self.expect(TokenKind::RParen, "期待 ')'")?;
-                        Ok(Expr::GlobalRead {
-                            slot: Box::new(slot),
-                            span,
-                        })
-                    } else {
-                        let args = self.parse_args()?;
-                        self.expect(TokenKind::RParen, "期待 ')'")?;
-                        Ok(Expr::Call { name, args, span })
-                    }
+                    // `global(n)` 不再特判——它是 `lang::builtins` 表里的普通一员（C16
+                    // 复审修复：特判会让它永远绕过 `check_call` 的"先查 subs、再查
+                    // builtins"顺序，同名 sub 静默调不到，见 `lang::builtins` 模块文档）。
+                    let args = self.parse_args()?;
+                    self.expect(TokenKind::RParen, "期待 ')'")?;
+                    Ok(Expr::Call { name, args, span })
                 } else {
                     Ok(Expr::Var(name, span))
                 }

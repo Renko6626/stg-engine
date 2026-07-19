@@ -15,14 +15,13 @@
 //! `syscall` 字段其实装的是 VM op 码本身，T3 需要直接发那条 op（不套 `OP_SYS` 壳）；v1 只有
 //! `sin`/`cos` 走这条支路，其余全部 `is_op=false` 正常 syscall 派发。
 //!
-//! ## `global(n)` 为何不在本表
+//! ## `global(n)` 为何在本表（C16 复审修复，曾经不在）
 //!
-//! `global(n)` 在 T1 的 parser 里已经是独立 AST 节点 `Expr::GlobalRead`（不是 `Expr::Call`，
-//! 见 `lang::parse::parse_primary` 对标识符 `global` 的特判、以及
-//! `parse::tests::global_read_is_a_dedicated_ast_node`），永远不会经 [`lookup`] 查询——故本表
-//! 不收录它；它的判型规则（`slot: int`、结果 `int`）直接写在 `lang::typeck` 里处理
-//! `GlobalRead` 节点的分支。`set_global(n, v)` 则相反，parser 明确把它当**普通 `Call`**处理
-//! （`parse::tests::set_global_is_a_generic_call_not_global_read`），故它正常收录本表。
+//! `global(n)` 曾是 parser 特判出的专属 AST 节点，绕开本表、也绕开 `check_call` 的调用解析——
+//! 代价是它永远轮不到"先查 subs、再查 builtins"这条顺序：一个用户声明的同名
+//! `sub global(...)` 会静默编译进镜像却永远调不到，没有任何错误或警告（follow-ups.md C16）。
+//! 现在 `global(n)` 是普通表项（见下方 `syscall::SYS_GET_VAR`），与 `set_global(n, v)` 完全
+//! 对称——两者都走 `Expr::Call` → `check_call`，都会被同名 sub 正常遮蔽，不再有特权通道。
 
 use crate::lang::ast::{EngVar, Ty};
 use stg_core::ecl::ops::{OP_COSB, OP_SINB};
@@ -127,6 +126,13 @@ const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "rand",
         syscall: syscall::SYS_RAND_RANGE,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Int),
+    },
+    Builtin {
+        name: "global",
+        syscall: syscall::SYS_GET_VAR,
         is_op: false,
         params: &[Val(Int)],
         ret: Some(Int),
@@ -269,6 +275,7 @@ mod tests {
             "boss_set",
             "pulse_signal",
             "rand",
+            "global",
             "set_global",
             "aim_player",
             "sin",
@@ -295,11 +302,12 @@ mod tests {
     }
 
     #[test]
-    fn global_is_not_in_the_table_it_is_a_dedicated_ast_node() {
-        assert!(
-            lookup("global").is_none(),
-            "global(n) 走 Expr::GlobalRead，不经本表"
-        );
+    fn global_signature_matches_set_global_symmetrically() {
+        let g = lookup("global").expect("global(n) 是普通 builtin 表项（C16 复审修复）");
+        assert_eq!(g.ret, Some(Int));
+        assert_eq!(g.params, &[Val(Int)]);
+        assert_eq!(g.syscall, syscall::SYS_GET_VAR);
+        assert!(!g.is_op);
     }
 
     #[test]

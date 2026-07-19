@@ -45,7 +45,6 @@ pub enum TypedExprKind {
     /// 只留名字。
     LocalRef(String),
     EngineVar(EngVar),
-    GlobalRead(Box<TypedExpr>),
     /// 调用，恒有返回值（`ret: Some(_)`）——`ret: None` 的调用只会出现在
     /// `TypedStmt::ExprStmtVoid`/`TypedStmt::Spawn` 里的 [`TypedCall`]，不会包进这里，
     /// 维持"每个 `TypedExpr` 恒有一个确定 `Ty`"的不变量。

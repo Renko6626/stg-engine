@@ -201,14 +201,8 @@ pub enum Expr {
     Var(String, Span),
     /// `$xxx`：见 [`EngVar`]。
     EngineVar(EngVar, Span),
-    /// `global(n)`：读全局槽——AST 里与普通 `Call` 区分开（不是 syscall 号表里的一员，是
-    /// 编译器认识的特殊读口），契约块钉死的独立变体。
-    GlobalRead {
-        slot: Box<Expr>,
-        span: Span,
-    },
     /// 具名调用：目标是某个 `sub`，或内建函数表（`lang::builtins`，T2/T3 落地）里的一员——
-    /// T1 不区分，统一存字符串名字，解析在后续趟。
+    /// `global(n)` 读全局槽也是这里的普通一员。T1 不区分，统一存字符串名字，解析在后续趟。
     Call {
         name: String,
         args: Vec<Expr>,

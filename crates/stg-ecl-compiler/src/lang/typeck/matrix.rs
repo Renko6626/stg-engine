@@ -93,7 +93,6 @@ pub(super) fn expr_span(e: &Expr) -> Option<Span> {
         Expr::IntLit(_) | Expr::FxLit(_) | Expr::AngleLit(_) => None,
         Expr::Var(_, s)
         | Expr::EngineVar(_, s)
-        | Expr::GlobalRead { span: s, .. }
         | Expr::Call { span: s, .. }
         | Expr::Binary { span: s, .. }
         | Expr::Unary { span: s, .. }

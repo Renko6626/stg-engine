@@ -34,13 +34,6 @@ impl<'p> Checker<'p> {
                 );
                 None
             }
-            Expr::GlobalRead { span, .. } => {
-                self.err(
-                    *span,
-                    "常量表达式不能引用 `global()`（非编译期可求值）".into(),
-                );
-                None
-            }
             Expr::Call { span, name, .. } => {
                 self.err(
                     *span,

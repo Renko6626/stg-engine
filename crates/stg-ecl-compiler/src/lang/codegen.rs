@@ -68,7 +68,6 @@ use crate::lang::typeck::{
 use crate::{ImageBuilder, ScriptId, SubBuilder};
 use std::collections::BTreeMap;
 use stg_core::ecl::image::EclImage;
-use stg_core::ecl::syscall;
 use stg_core::xform::XformSlot;
 
 // xformdef 操作名映射表已上移 `lang::xform_map`（slots 趟与本趟共用的单一权威，含物理
@@ -387,10 +386,6 @@ impl<'p> Gen<'p> {
             TypedExprKind::EngineVar(ev) => {
                 let info = builtins::engine_var_info(*ev);
                 b.sys(info.syscall);
-            }
-            TypedExprKind::GlobalRead(inner) => {
-                self.gen_expr(b, slots, inner);
-                b.sys(syscall::SYS_GET_VAR);
             }
             TypedExprKind::Call(call) => self.gen_call(b, slots, call),
             TypedExprKind::Binary { op, l, r, intent } => {

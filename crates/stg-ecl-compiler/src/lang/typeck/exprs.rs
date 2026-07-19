@@ -64,20 +64,6 @@ impl<'p> Checker<'p> {
                     kind: TypedExprKind::EngineVar(*ev),
                 })
             }
-            Expr::GlobalRead { slot, span } => {
-                let slot_t = self.type_expr(slot, locals)?;
-                if slot_t.ty != Ty::Int {
-                    self.push_type_mismatch(
-                        expr_span(slot).unwrap_or(*span),
-                        format!("global(n) 的 n 必须是 int，实际 {:?}", slot_t.ty),
-                    );
-                    return None;
-                }
-                Some(TypedExpr {
-                    ty: Ty::Int,
-                    kind: TypedExprKind::GlobalRead(Box::new(slot_t)),
-                })
-            }
             Expr::Call { name, args, span } => {
                 let (call, ret) = self.check_call(name, args, *span, locals, true)?;
                 let ty = ret.expect("nested=true 分支已确保 ret 非 None，否则上面已 return None");

@@ -217,6 +217,46 @@ shottype 表 `Shooter.flags` bit0 已预留 homing。开刀时要拍的唯一悬
 文件加载刀同期议（都属"资产管线"）。同族小件：T1 复审四 Minor（parser 无递归深度护栏/
 链式比较左结合未钉/`@70000` wait 越界测试缺/`i32::MIN` 字面量不可拼写）一并清。
 
+### C15. `spawn_pattern` 编译器接受、运行时未实现——作者体验陷阱（typeck 拆分后复审分诊，2026-07-19）
+
+`lang::xform_map::lookup` 把 `spawn_pattern` 当合法 xformdef op 收，`stg_core::xform::OP_SPAWN_PATTERN`
+本身也已定义（值 60），但 `world/transform.rs` 的解释器没有它的分支——落进 `_` 兜底臂：
+计一次 `contract_viol` + `FireResult::Terminate`（P4-b 安全降级，不 panic，已核实）。脚本
+作者写 `spawn_pattern(...)` 会**编译通过、跑起来却安静地什么都不发生**，唯一信号是校验和里
+悄悄 +1 的 `contract_viol`，没有任何编译期或运行期的显眼提示。`xform.rs` 注释写"预留（随
+图样描述符表另立一刀）"——op 号本就是给未来占的位。**修法二选一**：编译器暂时拒收
+`spawn_pattern`（`xform_map::lookup` 去掉这一分支，等 stg-core 真实现了再放行）；或原样保留
+但加一句编译期诊断/文档说明"当前是 no-op"。两个都便宜，选哪个看要不要现在就让脚本作者摸到
+这个占位符号。
+
+### C17. `fold_fx_decimal` 溢出报错文案在小数位过多时具有误导性（lex 复审分诊，2026-07-19）
+
+`fold_fx_decimal`（lex.rs:521）里 `10i64.checked_pow(f.len() as u32)` 在小数位数超过约
+18-19 位时溢出返回 `None`，调用方（约行 254-259）把它统一报成"fx 字面量超出范围：
+{int_digits}"——但 `int_digits` 本身可能是合法的 `0`，真正超限的是**小数位数**，不是整数
+部分。例如 `0.1234567890123456789fx` 会报"fx 字面量超出范围：0"，读者容易去检查整数部分
+而找错方向。修法：分支拆开——`checked_pow` 失败单独报"小数位数过多"，整数部分溢出
+（`int_part.checked_mul`/最终 `checked_add` 失败）才报"超出范围"。
+
+### C18. `CompileError::render` 的 caret 行遇 tab 缩进会错位（纯 cosmetic，ast 复审分诊，2026-07-19）
+
+`Span` 的列号在 `lex.rs` 的 `advance()` 里对每个字符（含 `\t`）一律 `col += 1`，
+`ast.rs::render()` 的 caret 行用等宽 `" ".repeat(caret_pad)` 补空格对齐（约行 276-277）。
+若源码用 tab 缩进，`src_line` 打印时终端/编辑器把 tab 渲染成多列宽，caret 用的却是"一个
+tab=一个空格"的补齐，`^` 会指偏。纯展示问题，不影响判型/编译结果，`.ecl` 建议约定用空格
+缩进即可绕开；真要修得在 render 时把 tab 也按同样宽度展开成空格再补 caret。
+
+### C19. codegen.rs 多处 `as u8` 窄化转换没有 debug_assert 兜底（codegen 复审分诊，2026-07-19）
+
+`lang::slots` 分配 locals 槽/xform 偏移，`codegen.rs` 消费时多处直接 `as u8`
+（`pop_l`/`push_l` 的 slot 号、`write_xform_locals` 的 off、`spawn` 的 argc，约行
+202/232/236/301/342/386/528）——全文件目前只有一处 `debug_assert`（行 651）。隐含假设是
+"上游 `lang::slots` 的分配器永远不会超过 u8 范围"，这个假设现在成立，但没有任何断言钉住
+它：万一 slots 侧出现分配 bug 产出越界索引，`as u8` 会静默截断，codegen 吐出一段指向错误
+槽位的字节码，而不是 P4-c 要求的"引擎自身 bug → debug 帧内断言就地 panic"。修法：这几处
+窄化前补 `debug_assert!(v <= u8::MAX as usize)`，成本是几行，收益是把"槽分配器越界"这类
+bug 从"运行时读错数据"提前到"debug 编译期炸出来"。
+
 ---
 
 ## D. 设计层面的已知裂缝
