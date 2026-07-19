@@ -883,6 +883,93 @@ mod tests {
         assert_eq!(w.tasks.slots[idx as usize].wait, 5);
     }
 
+    /// M1.9 T3 Commit A：`OP_SPAWN` 带参端到端——**次帧首跑语义不受带参扩展影响**（子任务
+    /// 出生帧不跑，locals 在出生帧就已经落好实参、只是脚本还没读到它们），且实参在次帧首跑
+    /// 时确实可用（子脚本对 `locals[0]+locals[1]` 求和写回 globals，观测真实经过 VM 执行）。
+    /// root 正序压栈 `11, 22` 后 `SPAWN` script1 argc=2；`vm.rs` 单测已钉死"落位即声明序"，
+    /// 本测试钉的是跨帧调度门禁与真实执行链路的组合，属于纯 `exec` 单测覆盖不到的一层。
+    #[test]
+    fn opspawn_with_args_next_frame_first_run_and_args_usable() {
+        use crate::ecl::syscall::SYS_SET_VAR;
+        const SLOT: u16 = 20; // 自由段（≥ GLOBALS_SYS_SEGMENT）
+
+        let root_code = vec![
+            OP_PUSHI as u32,
+            11, // 0,1
+            OP_PUSHI as u32,
+            22, // 2,3
+            OP_SPAWN as u32,
+            1,               // 4,5：script1
+            2,               // 6：argc=2
+            OP_POP as u32,   // 7：丢弃子句柄
+            OP_PUSHI as u32, // 8
+            1000,            // 9
+            OP_WAIT as u32,  // 10：root 存活，槽号不被复用
+        ];
+        let child_entry = root_code.len() as u32;
+        let child_code = vec![
+            OP_PUSHI as u32,
+            SLOT as u32, // +0,+1：待写槽号
+            OP_PUSHL as u32,
+            0, // +2,+3：locals[0]
+            OP_PUSHL as u32,
+            1,             // +4,+5：locals[1]
+            OP_ADD as u32, // +6：栈 = [SLOT, locals[0]+locals[1]]
+            OP_SYS as u32,
+            SYS_SET_VAR as u32, // +7,+8
+            OP_END as u32,      // +9
+        ];
+        let mut code = root_code.clone();
+        code.extend_from_slice(&child_code);
+        let ecl = EclImage {
+            code,
+            subs: vec![0, child_entry],
+            content_hash: 0,
+        };
+
+        let mut w = World::new(1);
+        let root = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(0),
+        ); // root 出生帧：不跑
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(1),
+        ); // root 首跑：SPAWN child（born_frame=当前帧）
+
+        let child = (0..TASK_CAP)
+            .find(|&i| w.tasks.is_alive(i) && w.tasks.slots[i].parent == root + 1)
+            .expect("child 应已生成");
+        assert_eq!(
+            &w.tasks.slots[child].locals[0..2],
+            &[11, 22],
+            "child 出生当帧 locals 已落好实参（声明序）——只是脚本还没跑到读它们"
+        );
+        assert_eq!(
+            w.body.globals[SLOT as usize], 0,
+            "child 出生当帧不跑（次帧首跑门禁不受带参扩展影响）：globals 尚未被写"
+        );
+
+        step(
+            &mut w,
+            &crate::tables::TABLES_V0,
+            &ecl,
+            &InputFrame::empty(2),
+        ); // child 次帧首跑
+        assert_eq!(
+            w.body.globals[SLOT as usize], 33,
+            "次帧首跑：11+22=33 经真实 VM 执行写入 globals"
+        );
+        assert!(!w.tasks.is_alive(child), "child 执行到 END 自灭");
+        assert_eq!(w.body.diag.task_faults, 0, "全程不应产生 Fault");
+    }
+
     /// M1.5：`SYS_SELF_AGE` 端到端 off-by 语义——任务出生帧 F（`spawn_task` 时 `body.frame`），
     /// 出生当帧不跑（born_frame 门禁），**次帧首跑** `ctx.frame=F+1`，此时 `self_age = 1`（不是
     /// 0）。脚本每帧把 `self_age` 写回一个自由段全局槽（`WAIT(0)+JMP` 回环，每帧恰写一次）——
@@ -1200,21 +1287,22 @@ mod tests {
     /// 若调度确实按池索引升序执行，先注册的任务（低索引）先跑、先抢到更低的子任务槽位。
     #[test]
     fn scheduler_executes_in_ascending_pool_index_order() {
-        // 父模板（script0，入口 idx0）：SPAWN script1 → POP 丢弃句柄 → PUSHI 1000 → WAIT
+        // 父模板（script0，入口 idx0）：SPAWN script1（argc=0） → POP 丢弃句柄 → PUSHI 1000 → WAIT
         // （**故意不让父在本帧 END**——若父当帧死亡，它的槽会被同帧后续任务的 SPAWN 复用，
         // 破坏槽号与"谁先跑"的对应关系；WAIT 让父存活，子任务的槽号才干净地反映执行序）。
-        // 子模板（script1，入口 idx6）：纯 END（次帧首跑门禁下本帧不会被调度到，无所谓）。
+        // 子模板（script1，入口 idx7）：纯 END（次帧首跑门禁下本帧不会被调度到，无所谓）。
         let ecl = EclImage {
             code: vec![
                 OP_SPAWN as u32,
                 1,               // 0,1: SPAWN script1
-                OP_POP as u32,   // 2
-                OP_PUSHI as u32, // 3
-                1000,            // 4
-                OP_WAIT as u32,  // 5
-                OP_END as u32,   // 6: script1 入口
+                0,               // 2: argc=0（M1.9 T3 起 SPAWN 元数 2）
+                OP_POP as u32,   // 3
+                OP_PUSHI as u32, // 4
+                1000,            // 5
+                OP_WAIT as u32,  // 6
+                OP_END as u32,   // 7: script1 入口
             ],
-            subs: vec![0, 6],
+            subs: vec![0, 7],
             content_hash: 0,
         };
         let mut w = World::new(1);
@@ -1336,30 +1424,32 @@ mod tests {
     /// grandchild）。
     #[test]
     fn kill_children_through_real_frames_kills_only_direct_child() {
-        // root: SPAWN mid(script1,入口3) ; POP(丢弃句柄) ; PUSHI 5 ; WAIT ; KILL_CHILDREN ; END
-        // mid : SPAWN grandchild(script2,入口16) ; POP ; PUSHI 200 ; WAIT ; END
+        // root: SPAWN mid(script1,入口4) ; POP(丢弃句柄) ; PUSHI 5 ; WAIT ; KILL_CHILDREN ; END
+        // mid : SPAWN grandchild(script2,入口12) ; POP ; PUSHI 200 ; WAIT ; END
         // grandchild: PUSHI 200 ; WAIT ; END
         let root_code = [
             OP_SPAWN as u32,
             1,                       // 0,1: SPAWN script1(mid)
-            OP_POP as u32,           // 2
-            OP_PUSHI as u32,         // 3
-            5,                       // 4
-            OP_WAIT as u32,          // 5
-            OP_KILL_CHILDREN as u32, // 6
-            OP_END as u32,           // 7
+            0,                       // 2: argc=0
+            OP_POP as u32,           // 3
+            OP_PUSHI as u32,         // 4
+            5,                       // 5
+            OP_WAIT as u32,          // 6
+            OP_KILL_CHILDREN as u32, // 7
+            OP_END as u32,           // 8
         ];
-        let mid_code_at = root_code.len() as u32; // 8
+        let mid_code_at = root_code.len() as u32; // 9
         let mid_code = [
             OP_SPAWN as u32,
             2,               // +0,+1: SPAWN script2(grandchild)
-            OP_POP as u32,   // +2
-            OP_PUSHI as u32, // +3
-            200,             // +4
-            OP_WAIT as u32,  // +5
-            OP_END as u32,   // +6
+            0,               // +2: argc=0
+            OP_POP as u32,   // +3
+            OP_PUSHI as u32, // +4
+            200,             // +5
+            OP_WAIT as u32,  // +6
+            OP_END as u32,   // +7
         ];
-        let grandchild_code_at = mid_code_at + mid_code.len() as u32; // 15
+        let grandchild_code_at = mid_code_at + mid_code.len() as u32;
         let grandchild_code = [
             OP_PUSHI as u32,
             200,            // +0,+1

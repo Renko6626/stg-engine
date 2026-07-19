@@ -47,8 +47,10 @@ pub const OP_KILL_CHILDREN: u8 = 52;
 // ── 6x：syscall（语义 T3 落地：派发进 ecl::syscall::dispatch，见 vm.rs/syscall.rs）──
 pub const OP_SYS: u8 = 60;
 
-/// 元数表：opcode → 内联操作数字数（JMP/JZ/CALL=1 目标字；PUSHI/PUSHL/POPL=1；SPAWN=1
-/// script id；SYS=1 syscall 号；其余 0；未实现 op 元数 0）。全 u8 域可安全索引。
+/// 元数表：opcode → 内联操作数字数（JMP/JZ/CALL=1 目标字；PUSHI/PUSHL/POPL=1；
+/// SPAWN=**2**（script id 字 + argc 字，M1.9 T3 起——表层语言 `spawn f(args)` 传参地基，
+/// 见 `vm.rs::exec` 的 `OP_SPAWN` 分支文档）；SYS=1 syscall 号；其余 0；未实现 op 元数 0）。
+/// 全 u8 域可安全索引。
 pub const ARITY: [u8; 256] = {
     let mut a = [0u8; 256];
     a[OP_JMP as usize] = 1;
@@ -57,7 +59,7 @@ pub const ARITY: [u8; 256] = {
     a[OP_PUSHI as usize] = 1;
     a[OP_PUSHL as usize] = 1;
     a[OP_POPL as usize] = 1;
-    a[OP_SPAWN as usize] = 1;
+    a[OP_SPAWN as usize] = 2;
     a[OP_SYS as usize] = 1;
     a
 };
@@ -179,7 +181,10 @@ mod tests {
         assert_eq!(ARITY[OP_PUSHI as usize], 1);
         assert_eq!(ARITY[OP_PUSHL as usize], 1);
         assert_eq!(ARITY[OP_POPL as usize], 1);
-        assert_eq!(ARITY[OP_SPAWN as usize], 1);
+        assert_eq!(
+            ARITY[OP_SPAWN as usize], 2,
+            "M1.9 T3：script id + argc 两字"
+        );
         assert_eq!(ARITY[OP_SYS as usize], 1);
         assert_eq!(ARITY[OP_END as usize], 0);
         assert_eq!(ARITY[OP_RET as usize], 0);

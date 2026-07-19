@@ -288,16 +288,43 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
                 push!((a >= b) as i32);
             }
             ops::OP_SPAWN => {
-                // 操作数 = script id（立即数内联，不弹栈——与 PUSHI/JMP 目标同款编码）。
+                // 操作数 = script id（立即数内联，不弹栈）+ argc（M1.9 T3：表层语言
+                // `spawn f(args)` 传参地基）。**拍板顺序**：argc 上限门 → 脚本号在册门 →
+                // 父栈够不够门——三门都过才真的弹栈+spawn（早失败早止损，任何一门不过
+                // 都零副作用：不碰父栈、不占任务池槽）。
+                //
+                // **弹栈约定（与编译器 pin 死的 ABI）**：编译器把实参按**声明顺序正序压栈**
+                // （arg0 先压…argN 后压，栈顶 = 最后一个实参），故这里必须**逆序**弹出——
+                // 第一次 pop 拿到的是 argN（栈顶），落进 `args[argc-1]`；最后一次 pop 拿到
+                // 的是 arg0，落进 `args[0]`——弹完 `args[0..argc)` 才是声明序，与
+                // `SubBuilder::spawn`/表层 codegen 的压栈序严格配对（同 syscall "正序压栈、
+                // 逆序弹出"惯例的同款镜像）。
                 let script = ctx.code[opnd_start] as u16;
+                let argc = ctx.code[opnd_start + 1] as usize;
+                if argc > LOCALS {
+                    return Exec::Fault(FAULT_STACK);
+                }
                 let Some(pc0) = ctx.ecl.entry(script) else {
                     // 坏脚本号：同 PUSHL/POPL 越界处置口径，复用 FAULT_BAD_OP。
                     return Exec::Fault(FAULT_BAD_OP);
                 };
+                if (task.sp as usize) < argc {
+                    // 父栈不够 argc 个值：确定性拒绝，复用 FAULT_STACK（同求值栈上溢下溢口径）。
+                    return Exec::Fault(FAULT_STACK);
+                }
+                let mut args = [0i32; LOCALS];
+                for k in (0..argc).rev() {
+                    args[k] = pop!();
+                }
                 let owner = (task.owner_kind, task.owner_index, task.owner_gen);
                 let parent = ctx.self_index + 1;
                 match ctx.tasks.spawn(script, pc0, owner, parent, ctx.frame) {
-                    Some(idx) => push!(idx as i32),
+                    Some(idx) => {
+                        // 子任务 locals 已被 TaskPool::spawn 全零初始化（复用槽写满纪律）——
+                        // 只需覆写 [0..argc) 段，argc=0 时这是 no-op（金向量两段不变的地基）。
+                        ctx.tasks.slots[idx as usize].locals[..argc].copy_from_slice(&args[..argc]);
+                        push!(idx as i32)
+                    }
                     None => {
                         push!(-1);
                         ctx.body.diag.pool_full[POOL_TASK] =
@@ -936,8 +963,10 @@ mod tests {
         );
     }
 
-    /// `SPAWN` 成功路径：owner 从当前任务继承、parent 戳为自身索引+1、born_frame 戳为当前帧、
-    /// pc 戳为 `ecl.entry(script)`——句柄（池索引）压回求值栈。
+    /// `SPAWN` 成功路径（argc=0，M1.9 T3 金向量等价基线）：owner 从当前任务继承、parent
+    /// 戳为自身索引+1、born_frame 戳为当前帧、pc 戳为 `ecl.entry(script)`——句柄（池索引）
+    /// 压回求值栈；argc=0 时子任务 locals 必须原封不动（全零，`TaskPool::spawn` 零初始化，
+    /// 无任何覆写）——这是"argc=0 与带参扩展前行为逐位等价"的判别式。
     #[test]
     fn spawn_op_inherits_owner_and_stamps_child_fields() {
         let mut w = test_world();
@@ -954,7 +983,7 @@ mod tests {
             ..Task::default()
         };
         let mut ctx = VmCtx {
-            code: &[OP_SPAWN as u32, 0, OP_END as u32],
+            code: &[OP_SPAWN as u32, 0, 0, OP_END as u32],
             budget: &mut budget,
             tasks: &mut w.tasks,
             ecl: &ecl,
@@ -975,6 +1004,101 @@ mod tests {
         assert_eq!(c.parent, 7 + 1, "parent = 当前任务索引+1");
         assert_eq!(c.born_frame, 42, "born_frame 戳为当前帧（次帧首跑）");
         assert_eq!(c.pc, 0, "pc 戳为 ecl.entry(script)");
+        assert_eq!(
+            c.locals, [0; LOCALS],
+            "argc=0：子任务 locals 全零，未被触碰"
+        );
+    }
+
+    /// 带参 `SPAWN`：父栈按**声明顺序正序压栈**（11,22,33），`SPAWN` 逆序弹出 argc 个值
+    /// 落进子任务 `locals[0..argc)`——弹完后 `locals` 顺序仍是**声明序**（不是弹出序），
+    /// 判别式核心：若弹出顺序与落位顺序不镜像（例如直接顺序落位不反转），本测试会红。
+    #[test]
+    fn spawn_with_args_lands_in_child_locals_in_declaration_order() {
+        let mut w = test_world();
+        let ecl = EclImage {
+            code: vec![OP_END as u32],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let mut budget = u32::MAX;
+        let mut task = Task::default();
+        let mut ctx = VmCtx {
+            code: &[
+                OP_PUSHI as u32,
+                11,
+                OP_PUSHI as u32,
+                22,
+                OP_PUSHI as u32,
+                33,
+                OP_SPAWN as u32,
+                0,
+                3, // script=0, argc=3
+                OP_END as u32,
+            ],
+            budget: &mut budget,
+            tasks: &mut w.tasks,
+            ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
+            self_index: 0,
+            frame: 0,
+        };
+        let r = exec(&mut task, &mut ctx);
+        assert_eq!(r, Exec::End);
+        assert_eq!(task.sp, 1, "argc 个实参已被弹栈消费，只剩子句柄");
+        let child_idx = task.stack[0] as usize;
+        let c = &w.tasks.slots[child_idx];
+        assert_eq!(
+            &c.locals[0..3],
+            &[11, 22, 33],
+            "locals[0..3] = 声明序（第一个压栈的实参落 locals[0]）"
+        );
+        assert_eq!(
+            &c.locals[3..],
+            &[0; LOCALS - 3],
+            "argc 之外的 locals 仍全零"
+        );
+    }
+
+    /// `argc > 64`（`LOCALS`）→ `Fault(FAULT_STACK)`——检查先于脚本号在册/父栈够不够门，
+    /// 空求值栈 + 空镜像也照样在 argc 这一门就短路拒绝。
+    #[test]
+    fn spawn_argc_over_64_faults() {
+        let (r, _) = run(&[OP_SPAWN as u32, 0, (LOCALS + 1) as u32]);
+        assert_eq!(r, Exec::Fault(FAULT_STACK));
+    }
+
+    /// 父栈不够 argc 个值（栈下溢）→ `Fault(FAULT_STACK)`；脚本号本身在册（越过脚本号门后
+    /// 才轮到"父栈够不够"门），零副作用（任务池未新增槽）。
+    #[test]
+    fn spawn_insufficient_parent_stack_faults() {
+        let mut w = test_world();
+        let ecl = EclImage {
+            code: vec![OP_END as u32],
+            subs: vec![0],
+            content_hash: 0,
+        };
+        let mut budget = u32::MAX;
+        let mut task = Task::default();
+        let alive_before = w.tasks.iter_alive().count();
+        let mut ctx = VmCtx {
+            code: &[OP_SPAWN as u32, 0, 3], // argc=3，但父栈空
+            budget: &mut budget,
+            tasks: &mut w.tasks,
+            ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
+            self_index: 0,
+            frame: 0,
+        };
+        let r = exec(&mut task, &mut ctx);
+        assert_eq!(r, Exec::Fault(FAULT_STACK));
+        assert_eq!(
+            w.tasks.iter_alive().count(),
+            alive_before,
+            "父栈不够门未过：不该新增任何任务池槽"
+        );
     }
 
     /// 坏脚本号（`script >= subs.len()`）→ `Fault(FAULT_BAD_OP)`（同 PUSHL/POPL 越界口径）。
@@ -985,7 +1109,7 @@ mod tests {
         let mut budget = u32::MAX;
         let mut task = Task::default();
         let mut ctx = VmCtx {
-            code: &[OP_SPAWN as u32, 0],
+            code: &[OP_SPAWN as u32, 0, 0],
             budget: &mut budget,
             tasks: &mut w.tasks,
             ecl: &ecl,
@@ -1015,7 +1139,7 @@ mod tests {
         let mut budget = u32::MAX;
         let mut task = Task::default();
         let mut ctx = VmCtx {
-            code: &[OP_SPAWN as u32, 0, OP_END as u32],
+            code: &[OP_SPAWN as u32, 0, 0, OP_END as u32],
             budget: &mut budget,
             tasks: &mut w.tasks,
             ecl: &ecl,

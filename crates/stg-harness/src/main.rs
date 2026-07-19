@@ -1077,9 +1077,9 @@ fn build_rainbow_image() -> (stg_core::ecl::image::EclImage, stg_ecl_compiler::S
     let timer_id = ib.add_sub(timer);
 
     let mut main = SubBuilder::new();
-    main.spawn(patrol_id);
+    main.spawn(patrol_id, 0);
     main.pop(); // 丢弃子句柄（同 vm.rs 调度升序测试的既定糖法）
-    main.spawn(timer_id);
+    main.spawn(timer_id, 0);
     main.pop();
 
     // 风铃摆 TURN 模板：一次性暂存，供 fire_turn_ring 的 16 发共用（locals 任务全局共享）。

@@ -209,11 +209,18 @@ impl SubBuilder {
     }
 
     /// 协程派生（`OP_SPAWN`）：操作数是**纯 script id 数值**（VM 运行期自己
-    /// `ecl.entry(script)` 查入口，见 `vm.rs::OP_SPAWN`），故不需要回填——立即写定。
-    /// owner 继承自当前任务（VM 既定语义）；子句柄（池索引，失败 -1）留在求值栈顶。
-    pub fn spawn(&mut self, sub: ScriptId) {
+    /// `ecl.entry(script)` 查入口，见 `vm.rs::OP_SPAWN`）+ **argc**（M1.9 T3 起——表层语言
+    /// `spawn f(args)` 传参地基），均不需要回填——立即写定。owner 继承自当前任务
+    /// （VM 既定语义）；子句柄（池索引，失败 -1）留在求值栈顶。
+    ///
+    /// **调用前置条件**：调用方须已把 `argc` 个实参**按声明顺序正序压栈**（`push_i`/
+    /// 表达式求值链），`OP_SPAWN` 会逆序弹出落进子任务 `locals[0..argc)`——弹完后
+    /// `locals` 顺序仍是声明序，见 `vm.rs::exec` 的 `OP_SPAWN` 分支文档。`argc=0` 是
+    /// 既有零参调用点的等价形态（不弹栈、子任务 locals 全零，逐位不变）。
+    pub fn spawn(&mut self, sub: ScriptId, argc: u8) {
         self.emit(OP_SPAWN as u32);
         self.emit(sub.0 as u32);
+        self.emit(argc as u32);
     }
 
     /// `end()`：追加 `OP_END`（`build()` 时若某 sub 未调用过本方法会自动补一次，
@@ -739,9 +746,9 @@ mod tests {
         );
     }
 
-    /// `spawn`：操作数是纯 script id 数值（不回填、不随拼接偏移变化）。
+    /// `spawn`：操作数是纯 script id 数值 + argc（不回填、不随拼接偏移变化）。
     #[test]
-    fn spawn_operand_is_plain_script_id_no_fixup() {
+    fn spawn_operand_is_plain_script_id_and_argc_no_fixup() {
         let mut ib = ImageBuilder::new();
         let mut a = SubBuilder::new();
         a.push_i(0);
@@ -749,7 +756,7 @@ mod tests {
         let a_id = ib.add_sub(a);
 
         let mut b = SubBuilder::new();
-        b.spawn(a_id);
+        b.spawn(a_id, 3);
         b.end();
         let b_id = ib.add_sub(b);
 
@@ -761,6 +768,7 @@ mod tests {
             a_id.0 as u32,
             "SPAWN 操作数恒 = script id"
         );
+        assert_eq!(image.code[b_entry + 2], 3, "第二操作数 = argc");
     }
 
     /// `sys_create_bullet` 生成的压栈序 == 手写 8 参正序（`SYS_CREATE_BULLET` 号紧随其后）。
