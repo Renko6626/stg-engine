@@ -69,16 +69,10 @@ use crate::{ImageBuilder, ScriptId, SubBuilder};
 use std::collections::BTreeMap;
 use stg_core::ecl::image::EclImage;
 use stg_core::ecl::syscall;
-use stg_core::xform;
 use stg_core::xform::XformSlot;
 
-/// xformdef 操作名（小写助记，`docs/xform-ops.md` 表）→ (VM op 字节, 表层参数个数)。
-/// **已知限制**：`loop`（`xform.rs::OP_LOOP`）与语言关键字 `loop {}` 撞名——`lang::lex`
-/// 把裸标识符 `loop` 词法成专用 `TokenKind::Loop`，`parse_xf_slot` 的 `expect_ident`
-/// 收不到它，v1 xformdef 序列体里因此**打不出** `loop(...)`（LOOP 型复杂控制流留给
-/// 任务弹/档三，不是本趟范围，记录在案非遗漏）。`END`（op 0）同理不开放——序列尾部
-/// 零填充天然是 `END`，作者不需要显式写。
-// （op 名映射表已上移 `lang::xform_map`——slots 趟与本趟共用的单一权威，含物理槽数。）
+// xformdef 操作名映射表已上移 `lang::xform_map`（slots 趟与本趟共用的单一权威，含物理
+// 槽数与 STEP 族 scratch 语义）；`loop`/`END` 不开放的已知限制也记录在该模块文档。
 
 /// `xformdef` 槽参数的编译期常量求值：字面量 + 已声明 `const` 引用 + 一元 `-`，
 /// 其它一律拒绝（模块文档"xformdef 参数常量折叠"）。
