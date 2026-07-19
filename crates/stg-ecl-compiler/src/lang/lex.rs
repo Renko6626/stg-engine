@@ -244,7 +244,13 @@ impl<'s> Lexer<'s> {
                 }
             }
             "fx" | "px" => {
-                let int_part: i64 = int_digits.parse().unwrap_or(0);
+                let int_part: i64 = match int_digits.parse() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        self.push_error(errors, span, format!("fx 字面量超出范围：{int_digits}"));
+                        return None;
+                    }
+                };
                 match fold_fx_decimal(int_part, frac_digits.as_deref()) {
                     Some(raw) => Some(TokenKind::FxLit(raw)),
                     None => {
@@ -255,8 +261,14 @@ impl<'s> Lexer<'s> {
             }
             "deg" => {
                 let text = format!("{int_digits}.{}", frac_digits.as_deref().unwrap_or("0"));
-                let deg_val: f64 = text.parse().unwrap_or(0.0);
-                Some(TokenKind::AngleLit(fold_deg_to_bam(deg_val)))
+                let deg_val: Option<f64> = text.parse().ok();
+                match deg_val.and_then(fold_deg_to_bam) {
+                    Some(bam) => Some(TokenKind::AngleLit(bam)),
+                    None => {
+                        self.push_error(errors, span, format!("deg 字面量超出范围：{int_digits}"));
+                        None
+                    }
+                }
             }
             "bam" => {
                 if frac_digits.is_some() {
@@ -538,9 +550,17 @@ fn fold_fx_decimal(int_part: i64, frac_digits: Option<&str>) -> Option<i32> {
 }
 
 /// 十进制角度 → BAM u16（`deg × 65536 / 360`，round-half-to-even，天然回绕）。
-fn fold_deg_to_bam(deg: f64) -> u16 {
+/// `None` = 输入不是有限值（字面量位数过多导致 f64 解析饱和为 `inf`，`round_half_even`
+/// 对 `inf - inf = NaN` 会算出溢出的 `i64` 加法——在此提前挡住，不留给它）。
+fn fold_deg_to_bam(deg: f64) -> Option<u16> {
+    if !deg.is_finite() {
+        return None;
+    }
     let raw = deg * 65536.0 / 360.0;
-    round_half_even(raw).rem_euclid(65536) as u16
+    if !raw.is_finite() {
+        return None;
+    }
+    Some(round_half_even(raw).rem_euclid(65536) as u16)
 }
 
 /// f64 的 round-half-to-even（银行家舍入）到 `i64`。
@@ -755,6 +775,35 @@ mod tests {
                     span: Span { line: 1, col: 5 }
                 },
             ]
+        );
+    }
+
+    /// 负例：fx/px 整数部分溢出应报错，不能被 `unwrap_or(0)` 静默吞成 `FxLit(0)`
+    /// （对照裸整数/bam 分支：同样的溢出场景两者都正确报错）。
+    #[test]
+    fn fx_literal_integer_part_overflow_is_an_error_not_silent_zero() {
+        let src = "999999999999999999999999999999fx"; // 30 位 9，远超 i64/Q16.16 范围
+        let (tokens, errors) = Lexer::new(src).lex();
+        assert!(
+            !errors.is_empty(),
+            "整数部分溢出应报错，不应静默产出 token：{tokens:?}"
+        );
+        assert!(
+            tokens
+                .iter()
+                .all(|t| !matches!(t.kind, TokenKind::FxLit(_))),
+            "溢出不应产出任何 FxLit token（哪怕是 0）：{tokens:?}"
+        );
+    }
+
+    /// 负例：deg 字面量极端溢出（f64 解析饱和为 `inf`）不应让编译器 panic，必须走词法错误。
+    #[test]
+    fn deg_literal_extreme_overflow_is_an_error_not_a_panic() {
+        let src = format!("{}deg", "9".repeat(320));
+        let (tokens, errors) = Lexer::new(&src).lex();
+        assert!(
+            !errors.is_empty(),
+            "极端 deg 字面量应报错而不是静默产出垃圾角度：{tokens:?}"
         );
     }
 
