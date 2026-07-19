@@ -46,7 +46,7 @@ use stg_core::ecl::image::EclImage;
 use stg_core::ecl::ops::{
     OP_ADD, OP_CALL, OP_COSB, OP_DIV, OP_DIVF, OP_DUP, OP_END, OP_EQ, OP_GE, OP_GT, OP_JMP, OP_JZ,
     OP_KILL_CHILDREN, OP_KILL_SELF, OP_LE, OP_LT, OP_MOD, OP_MUL, OP_MULF, OP_NE, OP_NEG, OP_POP,
-    OP_POPL, OP_PUSHI, OP_PUSHL, OP_SINB, OP_SPAWN, OP_SUB, OP_SYS, OP_WAIT,
+    OP_POPL, OP_PUSHI, OP_PUSHL, OP_RET, OP_SINB, OP_SPAWN, OP_SUB, OP_SYS, OP_WAIT,
 };
 use stg_core::ecl::syscall;
 use stg_core::ecl::task::LOCALS;
@@ -96,20 +96,68 @@ impl SubBuilder {
     }
 
     #[inline]
-    fn emit(&mut self, word: u32) -> usize {
+    pub(crate) fn emit(&mut self, word: u32) -> usize {
         let p = self.code.len();
         self.code.push(word);
         p
     }
 
     #[inline]
-    fn here(&self) -> usize {
+    pub(crate) fn here(&self) -> usize {
         self.code.len()
     }
 
     #[inline]
-    fn patch(&mut self, pos: usize, local_target: usize) {
+    pub(crate) fn patch(&mut self, pos: usize, local_target: usize) {
         self.code[pos] = local_target as u32;
+    }
+
+    // ── codegen 专用 raw 原语（`lang::codegen` 消费；`pub(crate)`——仅本 crate 内部，
+    // 不是公开契约）：表层语言控制流降低模板（if/while/for/`&&`/`||`）需要裸
+    // `JZ`/`JMP` + 手动回填，既有的 `if_ge`/`loop_forever`/`repeat` 结构化糖形状太窄
+    // （各自钉死一种控制流形状），故在既有 `emit`/`here`/`patch` 基础之上加这一薄层，
+    // 复用同一套 `jump_fixups` 回填机制（不是另起一条路），符合"extend it, don't
+    // fork"的指导──────────────────────────────────────────────────────────────
+
+    /// 裸 `JZ`：占位操作数记入 `jump_fixups`（`build()` 时随 sub 基址平移），返回该
+    /// 操作数在本 sub 本地 `code` 里的位置，供调用方稍后 `patch` 到真实（本地）目标。
+    pub(crate) fn raw_jz(&mut self) -> usize {
+        self.emit(OP_JZ as u32);
+        let p = self.emit(0);
+        self.jump_fixups.push(p);
+        p
+    }
+
+    /// 同 [`Self::raw_jz`]，裸 `JMP`。
+    pub(crate) fn raw_jmp(&mut self) -> usize {
+        self.emit(OP_JMP as u32);
+        let p = self.emit(0);
+        self.jump_fixups.push(p);
+        p
+    }
+
+    /// `wait(e)`（`e` 是任意表达式，不是编译期常量）：调用方已把等待帧数表达式的求值
+    /// 结果留在栈顶，本方法只发 `OP_WAIT`——区别于 [`Self::wait`] 那个自己 `push_i`
+    /// 一个 `u16` 编译期常量的糖。
+    pub(crate) fn raw_wait(&mut self) {
+        self.emit(OP_WAIT as u32);
+    }
+
+    /// `return;` 降低（call-style sub 专用——只被同步 `CALL` 过的 sub 必须以 `OP_RET`
+    /// 收尾/早退，好让调用方从调用栈弹回；entry-style sub 用 [`Self::end`]，见
+    /// `lang::codegen` 模块文档"call-style vs entry-style"判定）：发 `OP_RET` 并标记
+    /// `ended`（阻止 [`ImageBuilder::build`] 误给这条早退路径再补一条多余 `OP_END`——
+    /// `ended` 只在"这是本 sub 最终真正落地的收尾指令"时才该标记为真，早退路径同样
+    /// 满足这个条件，故一律标记，不区分"是不是函数体最后一条语句"）。
+    pub(crate) fn raw_ret(&mut self) {
+        self.emit(OP_RET as u32);
+        self.ended = true;
+    }
+
+    /// 直发一条无操作数 op（`sin`/`cos` 等 `is_op` 内建的直译，见 `lang::builtins`
+    /// 模块文档"`is_op` 消歧"——这类内建底层不是 `OP_SYS` 派发，是一条裸算术 op）。
+    pub(crate) fn raw_emit_op(&mut self, op: u8) {
+        self.emit(op as u32);
     }
 
     // ── raw 发射器（薄壳，逐 op 一对一）─────────────────────────────────────
@@ -299,7 +347,7 @@ impl SubBuilder {
     // 正序压栈——与 `dispatch` 的逆序弹出严格配对，见该模块文档）────────────────────
 
     #[inline]
-    fn sys(&mut self, no: u16) {
+    pub(crate) fn sys(&mut self, no: u16) {
         self.emit(OP_SYS as u32);
         self.emit(no as u32);
     }
