@@ -1192,4 +1192,46 @@ mod tests {
         );
         assert!(w.tasks.is_alive(unrelated as usize), "无关任务不受影响");
     }
+
+    /// C12⑤ 复审修复：`parent` 曾无代际戳——父任务死后，其存活的孤儿子任务的 `parent`
+    /// 字段会继续悬挂指向那个已死槽号；槽一旦被复用（最低空位分配器天然会捡它），新
+    /// 占用者调 `KILL_CHILDREN` 会因"槽号+1"数值巧合而误杀前任毫不相干的孤儿。
+    /// `TaskPool::kill` 现在在父死的瞬间就清空孤儿的 `parent`（单元级钉法见
+    /// `task::tests::kill_detaches_surviving_children_parent_pointer`），这里钉端到端场景。
+    #[test]
+    fn kill_children_does_not_kill_a_reused_slots_previous_orphans() {
+        let mut w = test_world();
+        let ecl = EclImage::empty();
+
+        let parent_a = w.tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let orphan = w
+            .tasks
+            .spawn(0, 0, (OWNER_STAGE, 0, 0), parent_a + 1, 0)
+            .unwrap();
+        w.tasks.kill(parent_a as usize); // A 死——orphan 存活，但按 detached 语义应彻底断亲。
+
+        // 最低空位分配器：A 的槽此刻是最低空位，D 的 spawn 天然捡回它——这正是本条测试
+        // 要钉的"槽复用"场景，不是巧合。
+        let d = w.tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        assert_eq!(d, parent_a, "复用同一槽号，才是本条测试要钉的场景");
+
+        let mut budget = u32::MAX;
+        let mut task = w.tasks.slots[d as usize];
+        let mut ctx = VmCtx {
+            code: &[OP_KILL_CHILDREN as u32, OP_END as u32],
+            budget: &mut budget,
+            tasks: &mut w.tasks,
+            ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
+            self_index: d,
+            frame: 0,
+        };
+        let r = exec(&mut task, &mut ctx);
+        assert_eq!(r, Exec::End);
+        assert!(
+            w.tasks.is_alive(orphan as usize),
+            "D 从未 spawn 过 orphan，KILL_CHILDREN 不应因槽号复用误杀前任的孤儿"
+        );
+    }
 }

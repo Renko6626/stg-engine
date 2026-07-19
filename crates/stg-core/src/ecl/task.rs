@@ -130,10 +130,27 @@ impl TaskPool {
         None
     }
 
-    /// 按索引释放（清 alive 位）；越界属引擎 bug（P4-c debug 断言，release no-op）。
+    /// 按索引释放（清 alive 位 + 顺手清空存活子任务的 `parent` 引用）；越界属引擎 bug
+    /// （P4-c debug 断言，release no-op）。
+    ///
+    /// **C12⑤ 复审修复"`KILL_CHILDREN` 无代际戳"**：本池无逐槽 generation（模块文档
+    /// "手写特例"），`parent` 只是"槽号+1"，父死后若不处理，孤儿的 `parent` 会继续悬挂
+    /// 指向那个已死槽号——槽一旦被最低空位分配器复用，新占用者调 `KILL_CHILDREN` 会因
+    /// 槽号数值巧合而误杀前任毫不相干的孤儿（`ecl::vm::tests::
+    /// kill_children_does_not_kill_a_reused_slots_previous_orphans` 端到端复现过）。
+    /// 用"父死的瞬间断开亲子关系"代替代际戳：`kill` 时把所有存活的直系子（`parent == i+1`）
+    /// 的 `parent` 清零，使其成为永久无父的独立任务——语义上与既有的"孙辈不递归杀、
+    /// 视为与本任务无关的独立任务"（`OP_KILL_CHILDREN` 文档）完全一致，只是把这层
+    /// "detached"提前到父死那一刻兑现，不再等到槽复用才暴露风险。
     pub(crate) fn kill(&mut self, i: usize) {
         debug_assert!(i < TASK_CAP, "kill 越界（引擎 bug）");
         if i < TASK_CAP {
+            let orphaned_parent = (i + 1) as u16;
+            for j in 0..TASK_CAP {
+                if self.is_alive(j) && self.slots[j].parent == orphaned_parent {
+                    self.slots[j].parent = 0;
+                }
+            }
             self.alive[i / 64] &= !(1 << (i % 64));
         }
     }
@@ -207,6 +224,26 @@ mod tests {
         assert!(!p.is_alive(a as usize));
         let b = p.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
         assert_eq!(b, a, "还槽后复用最低位");
+    }
+
+    /// C12⑤ 复审修复"`KILL_CHILDREN` 无代际戳"：`kill()` 必须顺手清空存活子任务的
+    /// `parent` 引用——本池无逐槽 generation（模块文档"手写特例"），故用"父死的瞬间
+    /// 断开亲子关系"代替代际戳，关掉"槽复用后新占用者继承前任孤儿"的窗口（端到端复现见
+    /// `ecl::vm::tests::kill_children_does_not_kill_a_reused_slots_previous_orphans`）。
+    #[test]
+    fn kill_detaches_surviving_children_parent_pointer() {
+        let mut p = TaskPool::new();
+        let parent = p.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let child = p.spawn(0, 0, (OWNER_STAGE, 0, 0), parent + 1, 0).unwrap();
+        p.kill(parent as usize);
+        assert!(
+            p.is_alive(child as usize),
+            "子任务本身不受父死牵连（detached 语义，不递归杀）"
+        );
+        assert_eq!(
+            p.slots[child as usize].parent, 0,
+            "父死后子任务的 parent 引用应被立即清空，不能悬挂指向已死槽号"
+        );
     }
 
     #[test]
