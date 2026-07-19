@@ -835,9 +835,9 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
 
         lines.push_str("# scene: ecl-rainbow\n");
 
-        let (image, main_id) = build_rainbow_image();
+        let image = compile_rainbow_image();
         let mut world2 = World::new(SEED2);
-        world2.body.set_var(RANK_SLOT, 2); // 环密度算式：28+rank×2 → rank=2 时环 0 达 32-way
+        world2.body.set_var(RANK_SLOT, 2); // 环密度算式：28+rank×2 → rank=2 时 32-way
 
         let boss = world2.body.create_enemy(EnemyInit {
             x: Fx::from_int(BOSS_X),
@@ -866,10 +866,14 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
             drop_table: 0,
             score: 10000,
         });
+        // `EclImage` 没有名字表（见 stg-core/src/ecl/image.rs），script id = 源码声明序；
+        // rainbow.ecl 保留语言草图原始顺序（const→xformdef→patrol→timer_ui→main），
+        // main 是最后一个声明的 sub，故取 `subs.len() - 1`（见 rainbow.ecl 头部注释）。
+        let main_script = (image.subs.len() - 1) as u16;
         world2
             .spawn_task(
                 &image,
-                main_id.0,
+                main_script,
                 (OWNER_ENEMY, boss.index, boss.generation),
             )
             .expect("main 任务应能派生（新镜像/新池，容量均未耗尽）");
@@ -908,237 +912,40 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// M1 T4：彩虹风铃卡（金向量二号）—— builder DSL 现场拼字节码。
+// M1.9 T4：彩虹风铃卡（金向量二号）—— `.ecl` 表层语言源码，启动时编译。
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// RANK（难度）读取槽——scene 2 建场时 `world.body.set_var(RANK_SLOT, 2)` 写入
-/// （spec 拍板 5：难度是脚本变量，VM 零支持，脚本自己读）；主控任务用它给环 0 加密度
-/// （`28 + rank×2` → rank=2 时 32-way，见 [`fire_rainbow_rings`]）。M1.5 起系统段纪律落地
-/// （`stg_core::world::GLOBALS_SYS_SEGMENT`）：本槽即系统段内的 `GVAR_RANK`，本常量直接
-/// 复用该单一权威定义，不重复写字面量 0。
+/// （spec 拍板 5：难度是脚本变量，VM 零支持，脚本自己读）；rainbow.ecl 里的 `main` 用它给
+/// 五环整体密度算式 `28 + global(RANK_SLOT) * 2` 供值（C13①还账，见 rainbow.ecl 头部注释）。
+/// 系统段纪律（`stg_core::world::GLOBALS_SYS_SEGMENT`）：本槽即系统段内的 `GVAR_RANK`，
+/// 本常量直接复用该单一权威定义，不重复写字面量 0。
 const RANK_SLOT: u16 = stg_core::world::GVAR_RANK;
 
-/// boss 出生点 / 弹幕发射原点。**DSL 摩擦**：`sys_create_bullet(s)_batch` 的 typed 薄壳
-/// 只吃 builder 期 `Fx`/`Angle`/`u16` 字面量（每个参数在构建时就地 `push_i` 成常量指令），
-/// 接不住 `sys_self_x`/`sys_self_y` 这类运行期栈值——本卡弹幕固定从出生点发射，不跟随
-/// boss 巡游位移（真实符卡想要"跟机身走"需要 DSL 补一层"栈值直传"薄壳，见 task-4 报告）。
+/// boss 出生点（`.ecl` 版弹幕原点改读运行期 `$self_x`/`$self_y`，只有 boss 的初始出生坐标
+/// 仍需要 Rust 侧字面量——见 rainbow.ecl 头部注释"附带修复一处摩擦"）。
 const BOSS_X: i32 = 0;
 const BOSS_Y: i32 = 100;
-const PATROL_LEFT_X: i32 = -120;
-const PATROL_RIGHT_X: i32 = 120;
 
-/// 主控任务 locals 槽位（低位手动分配，避开 `repeat()` 从 `LOCALS-1` 往下借用的计数槽）。
-const VOLLEY_LOCAL: u8 = 0;
-/// 风铃摆 TURN 序列丙方案暂存区（2 槽 × 3 字 = `locals[2..8)`）。
-const XFORM_LOCAL_OFF: u8 = 2;
+/// rainbow.ecl 源码文本——`include_str!` 相对路径从本文件（`stg-harness/src/main.rs`）
+/// 出发，`scenes/` 是其同级 crate 根下的兄弟目录。
+const RAINBOW_SRC: &str = include_str!("../scenes/rainbow.ecl");
 
-/// 五重彩环单轮（`appearance` 循环 4 色——`TABLES_V0.appearances` 只有 4 行 SMALL/MEDIUM/
-/// LARGE/STAR，"五色"第 5 环复用 id 0，见摩擦记录）。`angle0` 由调用方给两个 builder 期
-/// 字面量变体之一（偶/奇轮切换，见 [`build_rainbow_image`]），`apply_rank_bonus` 只在环 0
-/// 生效——环密度算式 `28 + rank×2`（rank=2 时 32-way）经两级 `if_ge` 运行期读
-/// `get_var(RANK_SLOT)` 决定是否落地补环，而不是让 `n_angle` 本身变成运行期值
-/// （typed 薄壳做不到，同款摩擦）。
-fn fire_rainbow_rings(
-    s: &mut stg_ecl_compiler::SubBuilder,
-    angle0: stg_core::math::Angle,
-    apply_rank_bonus: bool,
-) {
-    use stg_core::math::{Angle, Fx};
-    use stg_core::tables::{
-        APPEARANCE_LARGE, APPEARANCE_MEDIUM, APPEARANCE_SMALL, APPEARANCE_STAR,
-    };
-
-    const APPEARANCES: [u16; 4] = [
-        APPEARANCE_SMALL,
-        APPEARANCE_MEDIUM,
-        APPEARANCE_LARGE,
-        APPEARANCE_STAR,
-    ];
-    for ring in 0..5i32 {
-        let appearance = APPEARANCES[(ring as usize) % 4];
-        // 速度 = 1.0 + 环序 × 0.25（builder 期算好的 Fx 字面量，脚本内不必重算）。
-        let speed = Fx::from_int(1) + Fx::from_raw(16_384 * ring);
-        s.sys_create_bullets_batch(
-            appearance,
-            Fx::from_int(BOSS_X),
-            Fx::from_int(BOSS_Y),
-            28,
-            angle0,
-            2341, // ≈65536/28，28-way 近似闭合（非整除，视觉近圆即可）
-            1,
-            speed,
-            Fx::ZERO,
-        );
-        s.pop(); // 丢弃批量返回的实发数——DSL 摩擦：所有有返回值的 sys_* 薄壳都不自动清栈，
-        // 忘配 pop() 不会立刻报错，而是残留一路累加，几个 loop_forever 回环后才在遥远的
-        // 调用点 FAULT_STACK（本卡开发中真实踩过，详记 task-4 报告）。
-        if ring == 0 && apply_rank_bonus {
-            s.sys_get_var(RANK_SLOT);
-            s.push_i(1);
-            s.ge();
-            s.if_ge(|s2| {
-                s2.sys_create_bullets_batch(
-                    appearance,
-                    Fx::from_int(BOSS_X),
-                    Fx::from_int(BOSS_Y),
-                    2,
-                    Angle::ZERO,
-                    -32768, // 半圆步进（i16 无 +32768，回绕语义下 -32768 位模式等价 180°）
-                    1,
-                    speed,
-                    Fx::ZERO,
-                );
-                s2.pop();
-            });
-            s.sys_get_var(RANK_SLOT);
-            s.push_i(2);
-            s.ge();
-            s.if_ge(|s2| {
-                s2.sys_create_bullets_batch(
-                    appearance,
-                    Fx::from_int(BOSS_X),
-                    Fx::from_int(BOSS_Y),
-                    2,
-                    Angle::QUARTER,
-                    -32768,
-                    1,
-                    speed,
-                    Fx::ZERO,
-                );
-                s2.pop();
-            });
+/// 编译彩虹风铃卡（M1.9 T4——`.ecl` 表层语言，启动时源码编译，spec 拍板 4）。编译失败即
+/// 引擎/场景搭建代码自身的 bug（不是运行期可恢复的场景），照 P4-c 就地 panic，把渲染好的
+/// 逐条错误（文件:行:列 + 源行摘录 + `^` 定位）打到终端，不吞诊断信息。
+fn compile_rainbow_image() -> stg_core::ecl::image::EclImage {
+    match stg_ecl_compiler::lang::compile(RAINBOW_SRC, "rainbow.ecl") {
+        Ok(image) => image,
+        Err(errors) => {
+            let rendered: String = errors
+                .iter()
+                .map(|e| e.render("rainbow.ecl"))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            panic!("rainbow.ecl 编译失败：\n{rendered}");
         }
     }
-}
-
-/// 风铃摆 TURN 环：16-way，逐发 builder 期字面量角度展开（**DSL 摩擦**：`repeat()` 的
-/// `body` 闭包只在构建期调用一次生成一份字节码，`sys_create_bullet` 的 `angle: Angle`
-/// 参数又是 builder 期常量——`repeat(16, ...)` 生成的 16 次运行期循环会是 16 发**同一角度**
-/// 的弹，不是一个扇形环；要"运行期变化的角度"只能在 builder 期就展开成 16 个不同字面量的
-/// 调用点，牺牲 `repeat()` 的字节码复用换取几何正确——见 task-4 报告的完整记录）。
-/// 每发引用同一份预暂存 xform 模板（`XFORM_LOCAL_OFF`，任务启动时写一次、locals 任务
-/// 全局共享跨帧存活，见 [`stg_ecl_compiler::SubBuilder::write_xform_locals`] 文档）。
-fn fire_turn_ring(s: &mut stg_ecl_compiler::SubBuilder) {
-    use stg_core::math::{Angle, Fx};
-    use stg_core::tables::APPEARANCE_MEDIUM;
-
-    for k in 0..16u32 {
-        s.sys_create_bullet(
-            APPEARANCE_MEDIUM,
-            Fx::from_int(BOSS_X),
-            Fx::from_int(BOSS_Y),
-            Fx::ZERO, // 初速交给 xform 模板首槽 SET_SPEED 落地（同金向量一号 D4 之字弹惯例）
-            Angle((k * 4096) as u16),
-            XFORM_LOCAL_OFF as i32,
-            2,
-            None,
-        );
-        s.pop(); // 丢弃返回的弹句柄——同批量调用的摩擦，见 fire_rainbow_rings 注释。
-    }
-}
-
-/// 彩虹风铃符卡镜像构建（M1 T4——builder DSL 临时形态拼字节码，见 `stg-ecl-compiler` 文档）。
-///
-/// 结构（三 sub）：`main`（主控，`loop_forever` 五重彩环 + 隔轮 TURN 环 + rank 密度，
-/// 出场即 `spawn` 下方两个异步子）、`patrol`（async，boss 左右巡游：`move_to` 左→wait90→
-/// 右→wait90 循环，owner 继承自 main= boss 敌人本体）、`timer`（async，符卡计时公告板：
-/// `boss_set` 10 步字面量倒计时 600→...→60，每步 60 帧，10×60=600 恰与金向量二号长度
-/// 同周期）。返回 `(镜像, main 的 ScriptId)`。
-fn build_rainbow_image() -> (stg_core::ecl::image::EclImage, stg_ecl_compiler::ScriptId) {
-    use stg_core::math::Fx;
-    use stg_core::xform::{OP_SET_SPEED, OP_TURN, XformSlot};
-    use stg_ecl_compiler::{ImageBuilder, SubBuilder};
-
-    let mut ib = ImageBuilder::new();
-
-    // patrol：boss 左右巡游（owner 继承自当前任务——main 由 world.spawn_task 以
-    // owner=(ENEMY,boss) 派生，`spawn()` 内派生的子任务同款继承，见 ecl/vm.rs OP_SPAWN 文档）。
-    let mut patrol = SubBuilder::new();
-    patrol.loop_forever(|s| {
-        s.sys_move_enemy_to(90, Fx::from_int(PATROL_LEFT_X), Fx::from_int(BOSS_Y), 2);
-        s.wait(90);
-        s.sys_move_enemy_to(90, Fx::from_int(PATROL_RIGHT_X), Fx::from_int(BOSS_Y), 2);
-        s.wait(90);
-    });
-    let patrol_id = ib.add_sub(patrol);
-
-    // timer：符卡计时公告板——`sys_boss_set` 薄壳的 `timer_frames` 是 builder 期字面量
-    // （接不住运行期 locals 倒计时，同款摩擦），故直接展开 10 步字面量倒计时
-    // （600,540,...,60），每步 60 帧。
-    let mut timer = SubBuilder::new();
-    timer.loop_forever(|s| {
-        let mut t: u16 = 600;
-        while t > 0 {
-            s.sys_boss_set(0, Fx::ONE, 1, t, 1, 1);
-            s.wait(60);
-            t -= 60;
-        }
-    });
-    let timer_id = ib.add_sub(timer);
-
-    let mut main = SubBuilder::new();
-    main.spawn(patrol_id, 0);
-    main.pop(); // 丢弃子句柄（同 vm.rs 调度升序测试的既定糖法）
-    main.spawn(timer_id, 0);
-    main.pop();
-
-    // 风铃摆 TURN 模板：一次性暂存，供 fire_turn_ring 的 16 发共用（locals 任务全局共享）。
-    main.write_xform_locals(
-        XFORM_LOCAL_OFF,
-        &[
-            XformSlot {
-                wait: 0,
-                op: OP_SET_SPEED,
-                _pad: 0,
-                args: [Fx::from_int(2).raw(), 0],
-            },
-            XformSlot {
-                wait: 30,
-                op: OP_TURN,
-                _pad: 0,
-                args: [16_384, 0], // 30 帧后转 90°，风铃摆一记
-            },
-        ],
-    );
-
-    main.push_i(0);
-    main.pop_l(VOLLEY_LOCAL); // volley 计数器 = 0
-
-    main.loop_forever(|s| {
-        use stg_core::math::Angle;
-
-        // 偶数轮（volley%2==0）：angle0=ZERO 变体 + rank 密度 + 隔轮 TURN 环。
-        s.push_l(VOLLEY_LOCAL);
-        s.push_i(2);
-        s.rem();
-        s.push_i(0);
-        s.eq();
-        s.if_ge(|s2| {
-            fire_rainbow_rings(s2, Angle::ZERO, true);
-            fire_turn_ring(s2);
-        });
-
-        // 奇数轮：angle0=HALF 变体——"旋进"两态交替（DSL 摩擦：typed 薄壳吃不进运行期
-        // 累加角度，只能靠 if_ge 在 builder 期两个字面量变体间二选一，见摩擦记录）。
-        s.push_l(VOLLEY_LOCAL);
-        s.push_i(2);
-        s.rem();
-        s.push_i(0);
-        s.ne();
-        s.if_ge(|s2| {
-            fire_rainbow_rings(s2, Angle::HALF, false);
-        });
-
-        s.push_l(VOLLEY_LOCAL);
-        s.push_i(1);
-        s.add();
-        s.pop_l(VOLLEY_LOCAL);
-
-        s.wait(50);
-    });
-    let main_id = ib.add_sub(main);
-
-    (ib.build(), main_id)
 }
 
 /// 烘焙 sin/cos/easing 表 —— 用 f64 生成原始字节并写入 stg-core 源目录（§2.1）。
@@ -1205,33 +1012,44 @@ mod ecl_rainbow_tests {
         }
     }
 
-    /// 镜像结构：三 sub（patrol/timer/main，加入序）、字节码非空、`main_id` 在册。
+    /// 编译干净：rainbow.ecl 应零错误编译（狗粮验收的地基——语言真的能表达这张卡）。
+    /// 镜像结构：三 sub（patrol/timer_ui/main，声明序）、字节码非空。
     #[test]
-    fn build_rainbow_image_has_three_subs_and_nonempty_code() {
-        let (image, main_id) = build_rainbow_image();
-        assert_eq!(image.subs.len(), 3, "patrol + timer + main");
+    fn rainbow_ecl_compiles_clean_with_three_subs() {
+        let image = compile_rainbow_image();
+        assert_eq!(image.subs.len(), 3, "patrol + timer_ui + main（声明序）");
         assert!(!image.code.is_empty());
-        assert!((main_id.0 as usize) < image.subs.len());
     }
 
-    /// 稳态判别（同金向量二号真实建场路径）：600 帧后弹数 >100（持续环流）、boss 存活
-    /// （hp 9999 全程免死）、`boss_ui[0].active==1`（计时器保持刷新）、任务数 >=3
-    /// （main+patrol+timer 三子全存活——三者皆 `loop_forever`，不自灭）。
+    /// 稳态判别（输入脚本同金向量二号真实建场路径——全程持 BTN_SHOT + 左右缓移，自机弹真的
+    /// 会打中 boss，见下方 `hp_ratio` 断言）：600 帧后弹数 >100（持续环流）、boss 存活
+    /// （hp_max 9999 扛得住 600 帧的自机火力，不会归零死亡）、`boss_ui[0].active==1` 且
+    /// `hp_ratio` 是真值（非零、≤1.0fx——C13②"ratio = $self_hp/$self_hp_max 真算"的行为学
+    /// 证据：真实建场下自机弹确实打中 boss，`hp_ratio` 实测 <1.0，不是恒为 1.0 的占位符）、
+    /// 任务数 >=3（main+patrol+timer_ui 三子全存活——三者皆 `loop {}`，不自灭）、全程零 Fault。
     #[test]
     fn rainbow_scene_reaches_steady_state() {
-        let (image, main_id) = build_rainbow_image();
+        let image = compile_rainbow_image();
+        let main_script = (image.subs.len() - 1) as u16;
         let mut w = World::new(0x524E_424F_5701);
         w.body.set_var(RANK_SLOT, 2);
         let boss = w.body.create_enemy(boss_init());
         w.spawn_task(
             &image,
-            main_id.0,
+            main_script,
             (OWNER_ENEMY, boss.index, boss.generation),
         )
         .expect("spawn 应成功（新镜像/新池）");
 
         for frame in 0..600u32 {
-            let input = InputFrame::empty(frame);
+            let mut input = InputFrame::empty(frame);
+            let mut btn = stg_core::input::BTN_SHOT;
+            btn |= if (frame / 60) % 2 == 0 {
+                stg_core::input::BTN_LEFT
+            } else {
+                stg_core::input::BTN_RIGHT
+            };
+            input.actions[0].buttons = btn;
             step_with_director(&mut w, &stg_core::tables::TABLES_V0, &image, &input, |_| {});
         }
         assert_eq!(w.body.diag.task_faults, 0, "全程不应产生 Fault");
@@ -1239,13 +1057,19 @@ mod ecl_rainbow_tests {
         assert!(bullet_count > 100, "稳态弹数应 >100（实测 {bullet_count}）");
         assert!(
             w.body.enemies.get(boss).is_some(),
-            "boss 应存活满 600 帧（hp 9999 免死）"
+            "boss 应存活满 600 帧（hp_max 9999 扛住火力）"
         );
         assert_eq!(w.body.boss_ui[0].active, 1, "符卡计时器应保持 active=1");
+        let ratio = w.body.boss_ui[0].hp_ratio;
+        assert!(
+            ratio.raw() > 0 && ratio.raw() <= Fx::ONE.raw(),
+            "hp_ratio 应是非零、≤1.0fx 的真值（实测 raw={}）——C13②证据",
+            ratio.raw()
+        );
         let task_count = w.tasks.iter_alive().count();
         assert!(
             task_count >= 3,
-            "main+patrol+timer 三任务应全存活（实测 {task_count}）"
+            "main+patrol+timer_ui 三任务应全存活（实测 {task_count}）"
         );
     }
 }
