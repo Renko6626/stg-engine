@@ -863,14 +863,27 @@ impl<'p> Checker<'p> {
                 if known {
                     // fire 的 task 引用与 spawn 同途（新任务根 + 实参基址 0），
                     // 同样只许 async sub（分离规则第三腿）。
-                    if let (RefKind::Sub, Some(sub)) = (kind, self.subs.get(name).copied())
-                        && !sub.is_async
-                    {
-                        self.err(
-                            *vspan,
-                            format!("'{name}' 用作 fire 的 task 引用必须声明为 async sub"),
-                        );
-                        return None;
+                    if let (RefKind::Sub, Some(sub)) = (kind, self.subs.get(name).copied()) {
+                        if !sub.is_async {
+                            self.err(
+                                *vspan,
+                                format!("'{name}' 用作 fire 的 task 引用必须声明为 async sub"),
+                            );
+                            return None;
+                        }
+                        // 分离规则第四腿（M1.9 终审 Critical）：fire 的派生走 syscall 内部
+                        // spawn，**不带实参**——带参 async sub 在此通道参数恒读零（T2 那颗
+                        // 实参错位 Critical 的孪生路径）。语言层拒绝：fire task 引用必须无参。
+                        if !sub.params.is_empty() {
+                            self.err(
+                                *vspan,
+                                format!(
+                                    "'{name}' 用作 fire 的 task 引用必须是无参 async sub\
+                                     （fire 派生不带实参——需要传参请用 spawn）"
+                                ),
+                            );
+                            return None;
+                        }
                     }
                     Some(Some(name.clone()))
                 } else {
@@ -1891,6 +1904,18 @@ mod tests {
         let errors = err("async sub helper() { } sub main() { helper(); }");
         assert!(
             errors.iter().any(|e| e.msg.contains("只能被 spawn")),
+            "{errors:?}"
+        );
+    }
+
+    /// 分离规则第四腿（M1.9 终审 Critical 墓碑）：fire 派生不带实参——带参 async sub
+    /// 当 fire task 引用时参数恒读零（T2 实参错位的孪生路径），语言层必须拒绝。
+    #[test]
+    fn fire_task_ref_with_params_is_an_error() {
+        let errors = err("async sub trail(spd: fx) { wait(1); } \
+             sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, trail); }");
+        assert!(
+            errors.iter().any(|e| e.msg.contains("无参 async sub")),
             "{errors:?}"
         );
     }

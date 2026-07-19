@@ -331,6 +331,59 @@ pub fn allocate(prog: &Program, ti: &TypedInfo) -> Result<SlotMap, Vec<CompileEr
         return Err(vec![err(span, msg)]);
     }
 
+    // 同步调用链深静态检查（M1.9 终审 Important——让 ecl-lang.md"调用深 ≤8 编译期检查"
+    // 成为真话）：链上每次 CALL 压一层调用栈，链的**边数**即运行时 csp 峰值，超
+    // `CALL_DEPTH`(8) 原本要到运行期才 FAULT_CALL_DEPTH——现在编译期拒绝并给出最深链。
+    {
+        use stg_core::ecl::task::CALL_DEPTH;
+        let edges: BTreeMap<&str, &[String]> = ti
+            .subs
+            .iter()
+            .map(|s| (s.name.as_str(), s.sync_calls.as_slice()))
+            .collect();
+        fn depth_of<'a>(
+            name: &'a str,
+            edges: &BTreeMap<&'a str, &'a [String]>,
+            memo: &mut BTreeMap<&'a str, usize>,
+        ) -> usize {
+            if let Some(&d) = memo.get(name) {
+                return d;
+            }
+            let d = edges
+                .get(name)
+                .map(|cs| {
+                    cs.iter()
+                        .map(|c| {
+                            if edges.contains_key(c.as_str()) {
+                                1 + depth_of(c.as_str(), edges, memo)
+                            } else {
+                                0
+                            }
+                        })
+                        .max()
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0);
+            memo.insert(name, d);
+            d
+        }
+        let mut memo: BTreeMap<&str, usize> = BTreeMap::new();
+        for sub in &ti.subs {
+            let d = depth_of(sub.name.as_str(), &edges, &mut memo);
+            if d > CALL_DEPTH {
+                let span = sub_span.get(&sub.name).copied().unwrap_or_default();
+                return Err(vec![err(
+                    span,
+                    format!(
+                        "从 '{}' 起的同步调用链深 {d} 超出调用栈上限 {CALL_DEPTH}\
+                         （每层 CALL 压一层栈；请拆平调用链或改 spawn）",
+                        sub.name
+                    ),
+                )]);
+            }
+        }
+    }
+
     let mut errors = xform_name_errors;
 
     // 每 sub 的局部名序 + xformdef 引用区宽度（与 base 无关，独立算）。
@@ -665,6 +718,31 @@ mod tests {
             "xformdef 区紧跟在变量之后"
         );
         assert_eq!(main.width, main.locals.len() + cnt * 3, "3×cnt 对齐");
+    }
+
+    /// 同步调用链深编译期检查（M1.9 终审 Important 修法）：8 边链恰过、9 边链拒——
+    /// 与运行时 CALL_DEPTH=8 的 csp 峰值语义严格对齐（链边数 = csp 峰值）。
+    #[test]
+    fn sync_call_chain_depth_eight_ok_nine_rejected() {
+        let chain = |n: usize| -> String {
+            let mut s = String::new();
+            for i in 0..n {
+                if i + 1 < n {
+                    s.push_str(&format!("sub s{i}() {{ s{}(); }} ", i + 1));
+                } else {
+                    s.push_str(&format!("sub s{i}() {{ }} "));
+                }
+            }
+            s
+        };
+        // 9 个 sub = 8 条边：恰在上限内。
+        let _ = ok(&chain(9));
+        // 10 个 sub = 9 条边：编译期拒绝。
+        let errors = err_of(&chain(10));
+        assert!(
+            errors.iter().any(|e| e.msg.contains("调用链深")),
+            "{errors:?}"
+        );
     }
 
     /// STEP 族物理双槽计宽（T3 复审 Important 修法的 sizing 腿）：
