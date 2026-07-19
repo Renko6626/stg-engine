@@ -1455,6 +1455,16 @@ mod tests {
         assert!(errors.iter().any(|e| e.msg.contains("cast")), "{errors:?}");
     }
 
+    /// 矩阵非法格的**真判别**腿（T5 变异①存活的教训）：上面两条 angle-乘测试的声明型
+    /// 恰好也不匹配，"非法格放行"的变异会被 var 声明二次错误掩护而存活。此处声明为
+    /// `int`——变异放行后表达式恰好判 Int、整句零错误，err() 助手立刻炸——矩阵格本身
+    /// 被钉死，二次错误无从掩护。
+    #[test]
+    fn mul_angle_angle_illegal_cell_pinned_without_secondary_mask() {
+        let errors = err("sub main() { var x: int = 90deg * 45deg; }");
+        assert!(errors.iter().any(|e| e.msg.contains("cast")), "{errors:?}");
+    }
+
     // ── 类型矩阵：`/`（asymmetric fx//int）───────────────────────────────────────
 
     #[test]
