@@ -16,6 +16,10 @@ fn err(src: &str) -> Vec<CompileError> {
     check(&prog(src)).expect_err(&format!("期望判型失败，源码：\n{src}"))
 }
 
+fn check_err(src: &str) -> Vec<CompileError> {
+    err(src)
+}
+
 fn main_body(ti: &TypedInfo) -> &[TypedStmt] {
     &ti.subs
         .iter()
@@ -639,6 +643,26 @@ fn spawn_arity_and_type_match_is_ok_and_recorded_but_not_a_sync_call() {
 }
 
 // ── async/同步途径强制分离（T2 复审 Critical 修复的判别腿）──────────────────────
+
+#[test]
+fn main_cannot_be_a_sync_call_target() {
+    let errors = check_err("sub main() {} sub helper() { main(); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.msg.contains("main 只能作为关卡根入口启动"))
+    );
+}
+
+#[test]
+fn main_cannot_be_spawned() {
+    let errors = check_err("sub main() { spawn main(); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.msg.contains("spawn 目标 'main' 必须声明为 async"))
+    );
+}
 
 /// 复审复现场景：同一 sub 既被 spawn 又被同步 CALL——修复前无声通过并给出错位槽，
 /// 修复后是编译错误（此测试即当年 Critical 的墓碑）。

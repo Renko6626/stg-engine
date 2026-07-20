@@ -9,6 +9,7 @@
 pub mod ast;
 pub mod builtins;
 pub mod codegen;
+mod entryck;
 pub mod lex;
 pub mod parse;
 pub mod slots;
@@ -37,18 +38,23 @@ pub fn parse(src: &str, _file: &str) -> Result<Program, Vec<CompileError>> {
 
 /// 核心接口块钉死的全管线入口：`compile(src, file) -> Result<EclImage, Vec<CompileError>>`。
 ///
-/// **T3 起管线全线贯通**：`parse → typeck::check → slots::allocate → codegen::generate`，
-/// 四趟任何一趟报错都会被收集进最终 `Err`；全部通过则产出可执行的 [`EclImage`]（`stg-core`
-/// VM 直接消费的镜像格式，`content_hash` 占位 0，同 `ImageBuilder::build` 既有惯例——文件
-/// 加载/内容哈希整包归 C11 刀）。
+/// **T3 起管线全线贯通**：`parse → entryck::check → typeck::check` →
+/// `slots::allocate → codegen::generate`，五趟任何一趟报错都会被收集进最终 `Err`；全部通过则
+/// 产出可执行的 [`EclImage`]（`stg-core` VM 直接消费的镜像格式，`content_hash` 占位 0，同
+/// `ImageBuilder::build` 既有惯例——文件加载/内容哈希整包归 C11 刀）。
 ///
-/// **`CompileError.src_line` 在这里被回填**：`typeck::check`/`slots::allocate`/
-/// `codegen::generate` 都没有原始源码文本（签名只收 `&Program`/`&TypedInfo`/`&SlotMap`），
+/// **`CompileError.src_line` 在这里被回填**：`entryck::check`/`typeck::check`/
+/// `slots::allocate`/`codegen::generate` 都没有原始源码文本（签名只收
+/// `&Program`/`&TypedInfo`/`&SlotMap`），
 /// 产出的错误 `src_line` 恒为空串（见各模块文档）——本函数是唯一持有 `src` 的地方，用
 /// `src.lines()` 把这些错误的 `src_line` 补全，让最终交给用户的 `CompileError::render()`
 /// 仍是完整契约格式。
 pub fn compile(src: &str, file: &str) -> Result<EclImage, Vec<CompileError>> {
     let program = parse(src, file)?;
+    if let Err(mut errors) = entryck::check(&program) {
+        attach_src_lines(&mut errors, src);
+        return Err(errors);
+    }
     let typed = match typeck::check(&program) {
         Ok(t) => t,
         Err(mut errors) => {
@@ -169,7 +175,7 @@ mod tests {
     /// 都合法，只有槽分配趟才能发现）。
     #[test]
     fn compile_surfaces_slots_errors() {
-        let errors = expect_compile_err("sub a() { a(); }", "smoke.ecl");
+        let errors = expect_compile_err("sub a() { a(); } sub main() { a(); }", "smoke.ecl");
         assert!(errors.iter().any(|e| e.msg.contains("递归")), "{errors:?}");
     }
 
@@ -185,6 +191,30 @@ mod tests {
         assert!(
             rendered.contains(src),
             "render() 应带上真实源行：{rendered}"
+        );
+    }
+
+    #[test]
+    fn compile_requires_exact_zero_arg_plain_main() {
+        let cases = [
+            ("async sub worker() {}", "缺少唯一根入口 'sub main()'"),
+            ("async sub main() {}", "main 不能声明为 async"),
+            ("sub main(x: int) {}", "main 必须是零参数"),
+            ("sub main() {} sub main() {}", "sub 名称 'main' 重复"),
+        ];
+        for (src, needle) in cases {
+            let errors = expect_compile_err(src, "root.ecl");
+            assert!(errors.iter().any(|e| e.msg.contains(needle)), "{errors:?}");
+        }
+    }
+
+    #[test]
+    fn compile_rejects_calling_main() {
+        let errors = expect_compile_err("sub main() {} sub helper() { main(); }", "root.ecl");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.msg.contains("main 只能作为关卡根入口启动"))
         );
     }
 }

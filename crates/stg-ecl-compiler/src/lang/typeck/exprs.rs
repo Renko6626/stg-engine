@@ -162,6 +162,13 @@ impl<'p> Checker<'p> {
         locals: &LocalScope,
         nested: bool,
     ) -> Option<(TypedCall, Option<Ty>)> {
+        if name == "main" {
+            self.err(
+                span,
+                "main 只能作为关卡根入口启动，不能同步调用".to_string(),
+            );
+            return None;
+        }
         if let Some(sub) = self.subs.get(name).copied() {
             // async/同步途径强制分离（T2 复审 Critical 修复）：async sub 的参数槽恒基址 0
             // （SPAWN 把实参拷进子任务 locals[0..argc)），被同步 CALL 会让实参与参数槽错位
