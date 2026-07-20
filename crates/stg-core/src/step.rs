@@ -18,6 +18,10 @@ use crate::world::{
 pub struct World {
     pub body: WorldBody,
     pub tasks: crate::ecl::task::TaskPool,
+    /// One-shot flag: 1 after a successful `start_main`, stays 1 even after
+    /// the main task ends or faults.  Prevents re-starting the root script.
+    /// Copied in `copy_into` and automatically included in checksum via derive.
+    pub(crate) ecl_main_started: u8,
 }
 
 impl World {
@@ -77,6 +81,7 @@ impl World {
             d.phase_guard = s.phase_guard;
         }
         self.tasks.copy_into(&mut dst.tasks);
+        dst.ecl_main_started = self.ecl_main_started;
     }
 
     #[inline]
@@ -84,15 +89,14 @@ impl World {
         crate::checksum::Checksum::checksum(self)
     }
 
-    /// 世界侧任务派生入口（供绑定层/harness/测试；组装层辅助，非 ECL 类型泄漏进 `WorldBody`——
-    /// P1 仍持：`World`（本结构）知道 ECL，`WorldBody` 不知道）。次帧首跑（`born_frame` 戳当前
-    /// 帧）；`owner=(kind,index,gen)` 由调用方指定；`parent=0`（无父——本入口是"从任务外部"
-    /// 创建，没有"当前正在跑的任务"可归属，仅 `OP_SPAWN`（脚本内派生）才建立 parent 链）。
+    /// Internal task spawn (pub(crate) for VM opcodes/syscalls; used by SPAWN op
+    /// and sys_create_bullet in ecl::vm and ecl::syscall).
     ///
-    /// 坏脚本号（`script` 不在 `ecl.subs` 范围）→ `None` + `contract_viol` 计数（P4-b：调用方
-    /// 违约）；任务池满 → `None` + `pool_full[POOL_TASK]` 计数（P4-a：资源耗尽确定性降级）。
-    #[doc(hidden)]
-    pub fn spawn_task(
+    /// Validates the script exists in the image, checks it is not CallOnly,
+    /// verifies arg count matches parameters.  Bad args → contract_viol + STATUS_BAD_ARGS;
+    /// pool full → pool_full[POOL_TASK] + STATUS_POOL_FULL.
+    /// Returns `None` on failure (no task created, caller gets -1 or None).
+    pub(crate) fn spawn_sub_internal(
         &mut self,
         ecl: &EclImage,
         script: SubId,
@@ -214,7 +218,7 @@ mod tests {
         raw: u16,
         owner: (u8, u16, u16),
     ) -> Option<u16> {
-        world.spawn_task(image, image.sub_id(raw)?, &[], owner)
+        world.spawn_sub_internal(image, image.sub_id(raw)?, &[], owner)
     }
 
     fn straight(x: i32, y: i32, vx: i32, vy: i32, life: u16) -> BulletInit {

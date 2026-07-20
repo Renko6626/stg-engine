@@ -868,7 +868,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
         });
         let main_script = image.root().expect("镜像应有 main root");
         world2
-            .spawn_task(
+            .spawn_sub_id(
                 &image,
                 main_script,
                 &[],
@@ -1032,7 +1032,7 @@ mod ecl_rainbow_tests {
         let mut w = World::new(0x524E_424F_5701);
         w.body.set_var(RANK_SLOT, 2);
         let boss = w.body.create_enemy(boss_init());
-        w.spawn_task(
+        w.spawn_sub_id(
             &image,
             main_script,
             &[],

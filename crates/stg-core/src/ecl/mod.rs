@@ -12,6 +12,8 @@
 
 pub mod image;
 pub mod ops;
+/// safe named-entry binding API (Task 3)
+pub mod binding;
 /// syscall 号表 v1（`SYS_*` 常量，`pub`）——`stg-ecl-compiler` 的 builder DSL 靠它拼
 /// `OP_SYS` 指令（依赖方向 compiler→core 单向，只取常量，不碰 `dispatch`）。`dispatch` 本身
 /// 仍 `pub(crate)`：只有 `vm::exec` 能调用，编译器够不到派发逻辑，只够到号表。
@@ -63,7 +65,7 @@ mod fuzz_smoke {
         for i in 0..256u64 {
             let img = random_image(&mut rng, false);
             let mut w = World::new(0x1000 + i);
-            w.spawn_task(&img, img.root().unwrap(), &[], (OWNER_STAGE, 0, 0));
+            w.spawn_sub_internal(&img, img.root().unwrap(), &[], (OWNER_STAGE, 0, 0));
             for f in 0..60u32 {
                 step(&mut w, &TABLES_V0, &img, &InputFrame::empty(f));
             }
@@ -80,7 +82,7 @@ mod fuzz_smoke {
             let img = random_image(&mut rng, true);
             let seed = 0x2000 + i;
             let mut wa = World::new(seed);
-            wa.spawn_task(&img, img.root().unwrap(), &[], (OWNER_STAGE, 0, 0));
+            wa.spawn_sub_internal(&img, img.root().unwrap(), &[], (OWNER_STAGE, 0, 0));
             let mut wb = World::new(seed);
             for f in 0..60u32 {
                 step(&mut wa, &TABLES_V0, &img, &InputFrame::empty(f));

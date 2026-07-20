@@ -74,6 +74,10 @@ impl RuntimeSubMeta {
     pub const fn kind(self) -> SubKind {
         self.kind
     }
+
+    pub const fn param_count(self) -> u8 {
+        self.param_count
+    }
 }
 
 #[repr(C)]
@@ -485,6 +489,19 @@ impl<'a> ResolvedEntry<'a> {
         self.image
             .sub_meta(self.sub())
             .expect("entry sub validated")
+    }
+}
+
+// Test-only: construct a ResolvedEntry from a raw entry index.
+// Used by binding tests to exercise InvalidEntryId.
+#[cfg(test)]
+impl<'a> ResolvedEntry<'a> {
+    #[allow(dead_code)]
+    pub(crate) fn test_from_raw(image: &'a EclImage, raw: u16) -> Self {
+        ResolvedEntry {
+            image,
+            id: EntryId(raw),
+        }
     }
 }
 

@@ -731,7 +731,6 @@ mod tests {
     //! 精确反证"跳过"与"求值"两条路径分别对应哪种源码。
     use super::generate;
     use crate::lang::compile;
-    use stg_core::ecl::task::OWNER_STAGE;
     use stg_core::input::InputFrame;
     use stg_core::step::{World, step};
     use stg_core::tables::TABLES_V0;
@@ -742,13 +741,7 @@ mod tests {
     fn run(src: &str, frames: u32) -> Box<World> {
         let image = compile(src, "e2e.ecl").unwrap_or_else(|e| panic!("编译失败：{e:?}"));
         let mut w = World::new(1);
-        w.spawn_task(
-            &image,
-            image.root().expect("应有 main root"),
-            &[],
-            (OWNER_STAGE, 0, 0),
-        )
-        .expect("main 应能派生");
+        w.start_main(&image).expect("main 应能派生");
         for f in 0..frames {
             step(&mut w, &TABLES_V0, &image, &InputFrame::empty(f));
         }

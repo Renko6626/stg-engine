@@ -1159,7 +1159,6 @@ mod tests {
     // 两份类型不互认），故改走 `globals`/`diag`/`iter_alive().count()` 这些真正公开的
     // 世界读口，见 `stg-core/Cargo.toml` 踩坑记录）───────────────────────────────
 
-    use stg_core::ecl::task::OWNER_STAGE;
     use stg_core::input::InputFrame;
     use stg_core::step::{World, step};
     use stg_core::tables::TABLES_V0;
@@ -1189,9 +1188,7 @@ mod tests {
         let image = ib.build().unwrap();
 
         let mut w = World::new(1);
-        let idx = w
-            .spawn_task(&image, image.root().unwrap(), &[], (OWNER_STAGE, 0, 0))
-            .unwrap();
+        let _ = w.start_main(&image).expect("start_main 应成功");
 
         // 出生帧跳过；次帧首跑——无 WAIT，一次 exec 应跑到 END（3 次迭代远小于 1024 预算）。
         step(&mut w, &TABLES_V0, &image, &InputFrame::empty(0));
@@ -1202,7 +1199,6 @@ mod tests {
             "repeat(3) 应恰累加 3 次（读写走 globals，真实 VM 执行）"
         );
         assert_eq!(w.body.diag.task_faults, 0, "全程不应产生 Fault");
-        let _ = idx; // 任务已跑完自灭；本测试只关心可观测的世界效应
     }
 
     /// M1.5：`sys_self_age`/`sys_self_hp_max` 两个新读口 DSL 薄壳——经真实 VM 跑一遍，
@@ -1227,8 +1223,7 @@ mod tests {
         let image = ib.build().unwrap();
 
         let mut w = World::new(1);
-        w.spawn_task(&image, image.root().unwrap(), &[], (OWNER_STAGE, 0, 0))
-            .unwrap();
+        w.start_main(&image).expect("start_main 应成功");
         step(&mut w, &TABLES_V0, &image, &InputFrame::empty(0)); // born 帧：门禁跳过
         step(&mut w, &TABLES_V0, &image, &InputFrame::empty(1)); // 次帧首跑
 
@@ -1273,8 +1268,7 @@ mod tests {
         let image = ib.build().unwrap();
 
         let mut w = World::new(1);
-        w.spawn_task(&image, image.root().unwrap(), &[], (OWNER_STAGE, 0, 0))
-            .unwrap();
+        w.start_main(&image).expect("start_main 应成功");
 
         for f in 0..20u32 {
             step(&mut w, &TABLES_V0, &image, &InputFrame::empty(f));
