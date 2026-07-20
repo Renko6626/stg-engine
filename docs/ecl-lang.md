@@ -75,8 +75,33 @@ sub main() {
 
 ## `$` 引擎变量（只读；读取即 syscall）
 
-`$frame:int` · `$player_x/$player_y:fx` · `$self_x/$self_y:fx` · `$self_hp/$self_hp_max:int` ·
-`$self_age:int`（**任务**出生帧龄）。`self_*` 按任务 owner 解析（敌/弹/关卡）。
+| 变量 | 类型 | 含义 |
+|---|---|---|
+| `$frame` | `int` | 当前世界帧号 |
+| `$player_x` / `$player_y` | `fx` | 玩家 0 的位置 |
+| `$self_x` / `$self_y` | `fx` | 任务 owner 的位置——敌→敌池坐标，弹→弹池坐标，关卡(STAGE)→`(0,0)` |
+| `$self_hp` | `int` | owner 当前血量——仅敌（ENEMY）有意义，其余 owner 种类恒 0 |
+| `$self_hp_max` | `int` | owner 上限血量——仅敌（ENEMY）有意义，其余 owner 种类恒 0 |
+| `$self_age` | `int` | **任务**（不是 owner 实体）出生以来的帧数，对全部 owner 种类（含关卡）均有意义 |
+
+## 引擎提供的全局状态：`globals` / `boss_ui` / `signals`
+
+三套独立的"状态通道"，语义不同、别混用：
+
+| 通道 | 范围 | 脚本读 | 脚本写 | 内容 / 语义 |
+|---|---|:---:|:---:|---|
+| `globals` 系统段 | `[0, 16)` | ✓ | ✗（no-op + `contract_viol` 计数，不 Fault） | **目前仅槽 0 有意义**：`GVAR_RANK`（难度值，game 层建场代码经世界 API 写入，脚本只读后自决）；槽 1-15 保留未用 |
+| `globals` 自由段 | `[16, 1024)` | ✓ | ✓ | 脚本自定义草稿区，语义靠作者自己约定；`n` 是任意运行期表达式（不限编译期常量，可以是循环变量） |
+| `boss_ui[]` | 每 boss 一份 | ✗（无读 syscall） | ✓（`boss_set`） | 血条/spell/计时状态，写给表现层 UI 消费，脚本读不回自己刚写的值 |
+| `signals[8]` | 8 通道 | — | — | 不是存值用的：`pulse_signal(ch)` 发边沿脉冲，`wait_signal` xform op 在变换序列里等；只唤醒当帧已在等待的弹，不锁存 |
+
+`globals`/`set_global` 读写走 `global(n)`/`set_global(n,v)`。同一 `.ecl` 文件内建议配 `const`
+给自由段槽号起名（如样例里的 `const RANK_SLOT: int = 0;`）避免魔数；**跨 `.ecl` 文件没有
+共享机制**（见"已知限制"）——多个脚本文件各自手选槽号，选中同一个存不同东西不会有任何
+编译或运行期报错，纯靠作者自律对齐。
+
+字节码层完整规则（segment 边界钉法、校验和归属等）见 [`ecl-ops.md`](ecl-ops.md)——本节只讲
+脚本作者需要知道的部分。
 
 ## 内建函数（签名以 `builtins.rs` 为准）
 
