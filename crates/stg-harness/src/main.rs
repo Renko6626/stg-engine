@@ -969,6 +969,7 @@ fn cmd_verify_tables() -> ExitCode {
 mod ecl_rainbow_tests {
     use super::*;
     use stg_core::ecl::binding::EclOwner;
+    use stg_core::ecl::image::ResolveError;
     use stg_core::enemy::EnemyInit;
     use stg_core::input::InputFrame;
     use stg_core::math::Fx;
@@ -1005,12 +1006,40 @@ mod ecl_rainbow_tests {
     }
 
     /// 编译干净：rainbow.ecl 应零错误编译（狗粮验收的地基——语言真的能表达这张卡）。
-    /// 镜像结构：三 sub（patrol/timer_ui/main，声明序）、字节码非空。
+    /// 镜像结构：三 sub（patrol/timer_ui/main，规范排序）、named entry 解析正确、
+    /// Root 不可通过 resolve_entry("main") 获取（须走 start_main）。
     #[test]
-    fn rainbow_ecl_compiles_clean_with_three_subs() {
+    fn rainbow_ecl_compiles_clean_with_named_entries() {
         let image = compile_rainbow_image();
         assert_eq!(image.sub_count(), 3, "patrol + timer_ui + main");
-        assert!(!image.code().is_empty());
+        assert!(image.root().is_some(), "main 应被标记为 Root");
+        assert!(
+            image.resolve_entry("patrol").is_ok(),
+            "async sub patrol 应是可解析的 named entry"
+        );
+        assert!(
+            image.resolve_entry("timer_ui").is_ok(),
+            "async sub timer_ui 应是可解析的 named entry"
+        );
+        assert_eq!(
+            image.resolve_entry("main"),
+            Err(ResolveError::RootRequiresStartMain),
+            "main 作为 Root 只能通过 start_main 启动"
+        );
+    }
+
+    /// 编译确定性（声明序置换测试）：交换 sub 的声明顺序后两次编译应产出逐字节相同的
+    /// `EclImage`——因为规范排序按名称字典序，与声明序无关。
+    #[test]
+    fn compile_twice_declaration_order_permutation_yields_equal_image() {
+        let src1 = "sub a() { wait(1); } sub b() { wait(2); } sub main() { a(); b(); }";
+        let src2 = "sub b() { wait(2); } sub a() { wait(1); } sub main() { a(); b(); }";
+        let img1 = stg_ecl_compiler::lang::compile(src1, "test.ecl").expect("order 1 should compile");
+        let img2 = stg_ecl_compiler::lang::compile(src2, "test.ecl").expect("order 2 should compile");
+        assert_eq!(
+            img1, img2,
+            "canonical sort by name = declaration-order independent"
+        );
     }
 
     /// 稳态判别（输入脚本同金向量二号真实建场路径——全程持 BTN_SHOT + 左右缓移，自机弹真的

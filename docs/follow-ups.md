@@ -181,6 +181,11 @@ shottype 表 `Shooter.flags` bit0 已预留 homing。开刀时要拍的唯一悬
 `timer % interval` 无 interval=0 的 debug 断言（现靠 `validate()` 单测钉 const 表）——
 外部表可加载后必须加载期强制校验 + 热路径 debug 兜底。
 
+注：Named entry ABI（2026-07-20）已完成——`EclImage` 现包含规范排序的 `(SubId, code_entry)` 元数据 +
+named entry 表 + Root 单例保护。C11 的 `content_hash`/`EclImage.content_hash` 串行化/文件加载
+仍保持开放（与 named entry 正交）：运行期 `EclImage` 的确定性比较走 `PartialEq`，持久化/跨进程
+校验仍需真实的 `content_hash`，该字段仍为占位 0。
+
 ### C12. ECL 后续小件四包（M1 T5 分诊）
 
 ① `spawn_task_now`（当帧 worklist drain 版）——design_doc §4.3 既定后期可选，真实用例窄；
@@ -198,7 +203,12 @@ shottype 表 `Shooter.flags` bit0 已预留 homing。开刀时要拍的唯一悬
 **已还**（M1.9，2026-07-19）：①表达式即参数 ✔（类型化内建 + 运行时表达式直通）；
 ②值消费静态检查 ✔（`_ =` 显式丢弃）；③repeat 限制 ✔（真 `for`/`while`/`loop`）；
 ④单位字面量 ✔（`1.5fx`/`90deg`/`bam`）；⑥引擎状态变量化 ✔（`$` 前缀，随机数变量
-仍拒绝）。**遗留**：⑤时间标签 `+N:` 糖（未进 v1，用户拍板显式 wait；备胎保留）；
+仍拒绝）。**Named entry ABI**（2026-07-20）：⑧强制 `sub main()` + singleton 生命周期 ✔；
+⑨async sub 自动注册为公共 named entry ✔；⑩普通 sub 为 CallOnly（不注册 entry）✔；
+⑪CALL/SPAWN 操作数为规范 `SubId`，运行时执行 SubKind 检查 ✔；
+⑫安全绑定层（`start_main`/`spawn_entry`/`spawn_entry_named`）替代裸 `spawn_task` ✔；
+⑬编译器可选调试符号侧载（`DebugInfo::Full`），`EclImage` 本身不变 ✔。
+**遗留**：⑤时间标签 `+N:` 糖（未进 v1，用户拍板显式 wait；备胎保留）；
 ⑦`jnz` 收编（纯密度优化，降低模板实证不需要）。
 
 ### C14. .ecl 跨语言常量引用缺失（M1.9 T4 复审分诊，三 Minor 共同根因）

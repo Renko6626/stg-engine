@@ -1,11 +1,9 @@
 // 彩虹风铃符卡（M1.9 T4 —— .ecl 表层语言重写，金向量二号 scene 2 的脚本源）
 //
-// 结构照 docs/superpowers/specs/2026-07-18-m19-ecl-language.md 语言草图（"语言草图 v1"
-// 就是目标形状）：main 五环 loop + patrol/timer_ui 两个 async 子任务。声明序即
-// EclImage 的 script id（`EclImage` 不带名字表，见 stg-core/src/ecl/image.rs 文档）——
-// 本文件保留草图原始顺序 const → xformdef → patrol → timer_ui → main，故
-// main 的 script id = 声明序最后一个 sub = `image.subs.len() - 1`
-// （stg-harness/src/main.rs 建场处这样取，注释同步解释，不要在这份源码里插队声明新 sub）。
+// 结构照 docs/superpowers/specs/2026-07-18-m19-ecl-language.md 语言草图：main 五环 loop +
+// patrol/timer_ui 两个 async 子任务。声明序不再决定 SubId——编译器按名称字典序规范排序
+// （named entry ABI，2026-07-20），建场处走 `resolve_entry("patrol")` 等名字查询而非
+// 位置索引。
 //
 // follow-ups C13 摩擦逐条还账（本刀兑现，builder 版占位符全部退役）：
 //   ① 环密度 `28 + global(RANK_SLOT) * 2`、环速度 `1.0fx + i as fx * 0.25fx`——两处都是

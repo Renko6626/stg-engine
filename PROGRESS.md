@@ -4,22 +4,25 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-07-18）
+## 现在（2026-07-20）
 
-- **位置**：Phase 1 **引擎内容层阶段性收官**（2026-07-19）——M0 世界层（18 刀）+ M1 ECL
-  栈机 VM + M1.9 `.ecl` 表层语言全部落地：从定点数学核到"写一段带类型检查的脚本语言、
-  启动时编译、驱动符卡进三平台金向量对拍"的完整纵深已打通。main 全绿（508 测试 /
-  两段金向量 / fuzz 沙箱 / bench 基线）。
+- **位置**：Phase 1 **引擎内容层阶段性收官 + Named Entry ABI 完成**——M0 世界层（18 刀）+ M1 ECL
+  栈机 VM + M1.9 `.ecl` 表层语言 + Named Entry ABI（规范 SubId/EntryId 排序、singleton main
+  保护、安全绑定层、可选调试符号侧载）全部落地：从定点数学核到"带类型检查的脚本语言、
+  启动时编译、安全 API 启动带名入口、驱动符卡进三平台金向量对拍"的完整纵深已打通。
+  main 全绿（测试数见 CI / 两段金向量 / fuzz 沙箱 / bench 基线）。
 - **在飞**：无。
 - **下一阶段候选**（开工前先 grill 定序）：**M2 前置刀**（可见性收口 D 组 + WorldView 通道 A）
   · M3 回滚 harness（快照账已实测）· bomb/homing 玩法小刀 · C11 资产管线（表文件加载 +
-  跨语言常量引用 C14）· F2 校验和轻量化（M3 前免费窗口）。
+  `EclImage` 真 content_hash + 跨语言常量引用 C14）· F2 校验和轻量化（M3 前免费窗口）。
 - **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；B1 剩余四池写 API 仍零覆盖）。
+  Named entry ABI 已完成，C11 的 `EclImage.content_hash` 持久化/文件加载仍保持开放。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-20 | **Named Entry ABI** | 规范排序 SubId/EntryId、singleton main 保护、安全绑定层、可选调试符号侧载 |
 | 2026-07-19 | **M1.9** | ECL 表层语言+编译器——三型/具名函数/$变量/值消费检查；风铃卡 .ecl 化狗粮验收 |
 | 2026-07-18 | M1.5 | ECL 读口补齐（self_age/self_hp_max）+ globals 系统段脚本写保护（ZUN 变量表对账驱动） |
 | 2026-07-18 | **M1** | ECL 栈机 VM + 协程池 + syscall 沙箱 + builder DSL——彩虹风铃卡入金向量二号 |

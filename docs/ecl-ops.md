@@ -22,7 +22,7 @@
 | 1 | `WAIT` | — | 弹 1（帧数） | 写 `wait` 并让出；帧首 `wait>0` 递减跳过 |
 | 2 | `JMP` | 目标 pc | — | 无条件跳 |
 | 3 | `JZ` | 目标 pc | 弹 1（条件） | 条件==0 跳，否则顺序 |
-| 4 | `CALL` | canonical `SubId` | — | 目标须为 `CallOnly`；压返回地址进调用栈（深 8），跳入 sub |
+| 4 | `CALL` | canonical `SubId` | — | 目标须为 `CallOnly`（否则 Fault(0)）；压返回地址进调用栈（深 8），跳入 sub |
 | 5 | `RET` | — | — | 弹返回地址跳回 |
 | 10 | `PUSHI` | 立即数 | 压 1 | |
 | 11 | `PUSHL` | 槽号 <64 | 压 1 | 读 locals |
@@ -36,6 +36,35 @@
 | 51 | `KILL_SELF` | — | — | 即刻完成语义 |
 | 52 | `KILL_CHILDREN` | — | — | 升序杀**直系**子任务（不递归） |
 | 60 | `SYS` | syscall 号 | 按号 | 一切副作用唯一通道（白名单） |
+
+### SubKind 检查（Root / Async / CallOnly）
+
+`EclImage` 中每个 sub 有且仅有以下三类之一：
+
+- **`Root`**：唯一的 `sub main()`。只能通过引擎 API `start_main` / `start_main_with_owner` 启动。
+  运行时 `CALL` 或 `SPAWN` 指向 Root 会触发 Fault(0)（坏操作数值）。
+- **`Async`**：`async sub` 声明。注册为 public named entry，可通过 `image.resolve_entry(name)` 按名解析，
+  然后经 `world.spawn_entry` / `world.spawn_entry_named` 或运行期 `SPAWN` 指令启动。
+  `CALL` 指向 Async sub 触发 Fault(0)。
+- **`CallOnly`**：普通 `sub` 声明。只能被 `CALL` 指令（来自其他 sub 的同步调用）进入。
+  不在 `EclImage` 的 entry 表中；`SPAWN` 指向 CallOnly sub 触发 Fault(0)。
+  名称只存在于调试符号侧载（`DebugInfo::Full` 模式）。
+
+### 外部绑定错误边界（binding error boundary）
+
+引擎层（`stg_core::ecl::binding`）提供三个安全入口替代裸 `spawn_task`：
+
+1. **`world.start_main(&image)`** / **`world.start_main_with_owner(&image, owner)`** —— 启动 Root
+   (main)，单次生命周期（`MainAlreadyStarted` 保护）。
+2. **`world.spawn_entry(entry, args, owner)`** —— 以已解析的 `ResolvedEntry` 和 `&[i32]` 参数启动，
+   快路径（仅校验参数数量）。
+3. **`world.spawn_entry_named(&image, name, &[EclArg], owner)`** —— 按名解析 + 类型化参数校验（数量+类型）。
+
+入口在失败时写入 `diag.contract_viol` / `pool_full` / `last_status` 并返回
+`TaskStartError` 枚举（`NoRoot` / `MainAlreadyStarted` / `UnknownEntry` /
+`RootRequiresStartMain` / `InvalidEntryId` / `WrongArgCount` / `WrongArgType` /
+`InvalidOwner` / `PoolFull`），调用方据此决定重试/回退/报错。**不 Fault、不 panic**
+（P4-b 确定性安全结果）。
 
 ## syscall 号表 v1（参数正序压栈、派发逆序弹栈；返回值压栈**须消费或 POP**）
 

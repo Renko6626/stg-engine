@@ -66,12 +66,38 @@ sub main() {
 
 ## sub 与 async sub（调用途径强制分离）
 
-- **`sub`**：只能被**同步调用**（`f(args);` 语句）。参数/局部变量由编译器静态分配 locals 槽
-  （调用图着色）；**禁递归**（直接/间接均编译错误，报错含环路径）；sub 无返回值。
+### 根入口 `sub main()`
+
+每一份 `.ecl` 文件**必须且仅有一个**零参数 `sub main()`（`async` 不可修饰 main）。
+它是关卡的根入口脚本，只能通过引擎的 `start_main` / `start_main_with_owner` API 启动。
+生命周期是**singleton**：每个 `World` 实例最多成功启动一次——即使 main 任务自然结束
+或 fault，再次调用 `start_main` 也会返回 `MainAlreadyStarted`（同时触发 `contract_viol`
+计数）。这一保护确保确定性回放中 main 不会重复派发。
+
+### 普通 sub vs async sub
+
+- **`sub`**：只能被**同步调用**（`f(args);` 语句或通过 `CALL` op 从其他 sub 调用）。
+  参数/局部变量由编译器静态分配 locals 槽（调用图着色）；**禁递归**（直接/间接均编译错误，
+  报错含环路径）；sub 无返回值。普通 sub 的形式名称（如 `helper`）只存在于调试符号侧载
+  （`DebugInfo::Full`），运行时 `EclImage` 不为其保留 named entry——它们是 `CallOnly` sub，
+  只能被其他 sub 通过 `call` 指令调用，不能 `spawn`、不能从引擎层按名解析。
 - **`async sub`**：只能被 **`spawn`**（或 `fire` 的 task 引用）——开新协程（次帧首跑），
-  实参拷进新任务；**不能被同步调用**（编译错误）。
+  实参拷进新任务；**不能被同步调用**（编译错误）。每个 `async sub` 都是一个**公共 named
+  entry**，其名称注册在 `EclImage` 的 entry 表中。引擎层（C/Rust 宿主）可通过
+  `image.resolve_entry("patrol")` 按名解析，然后通过 `world.spawn_entry()` 或
+  `world.spawn_entry_named()` 启动——这是跨语言/跨脚本引用的确定性基础。
 - 同一 sub 想两用？拆成两个——这是实参槽位健全性的硬约束，编译器不放行。
 - 容量红线（编译期检查）：单任务 locals 总量 ≤64 字、求值栈深 ≤32、调用深 ≤8。
+
+### 持久引用使用名称
+
+脚本之间的持久引用（`spawn` 目标、`fire` 的 task 参数）一律使用 **sub 名称字符串**：
+编译器在编译期解析名称并编码为 `canonical SubId`（运行时 `EclImage` 无字符串表，
+只有 `(SubId, code_entry)` 的扁平元数据）。这意味着：
+- `spawn patrol()` 在编译期解析 `patrol` 到其 `SubId`，存入 `SPAWN` 指令的操作数。
+- `fire(1, $self_x, $self_y, 0fx, 0deg, WIND_CHIME, timer_ui)` 同理——`timer_ui` 作为
+  `async sub` 的名称在编译期被解析并编码。
+- **不存在的 sub 名称在编译期即报错**，不存在运行期"名字未找到"的分支。
 
 ## `$` 引擎变量（只读；读取即 syscall）
 

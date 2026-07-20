@@ -78,9 +78,21 @@ sub main() {
 ## 编译流水线（crate 内部结构）
 
 ```
-.ecl 源码 → lex → parse → typeck → slots → codegen → EclImage
+.ecl 源码 → lex → parse → entryck → typeck → slots → codegen → EclImage
+                                    └─ (若 DebugInfo::Full) → EclDebugSymbols
 ```
 
 `src/lang/` 下每个阶段一个模块，模块文档写了各自的契约（判型规则、槽分配算法、
 codegen 降低模板等）。`src/lib.rs` 的 `ImageBuilder`/`SubBuilder` 是 M1 阶段遗留、
 现已降级为 codegen 后端的 builder DSL，不是脚本作者应该直接使用的接口。
+
+## 编译产出
+
+`compile(src, file)` 返回纯运行时镜像 `EclImage`（字节码 + 入口表 + 内容哈希）。
+调试信息**永不出现在运行时镜像中**——`EclImage` 在有无调试信息时逐字节完全相同。
+
+`compile_with_options(src, file, CompileOptions { debug_info: DebugInfo::Full })`
+返回 `CompiledEcl { image, debug: Some(EclDebugSymbols) }`——结果是两件分离的产物：
+- `.image`：与 `compile` 输出逐字节相同的运行时镜像（可传入 `step` / `step_with_director`）。
+- `.debug`：可选的调试符号侧载（`EclDebugSymbols`），包含 sub 名称/参数名/PC 区间/
+  源码定位（文件/行/列）——**不参与确定性计算**，仅用于开发期诊断、反汇编、PC → 源码映射。`EclImage` 本身不会因调试信息的开启或关闭产生任何字节差异，这一属性在编译期测试中被断言押运。
