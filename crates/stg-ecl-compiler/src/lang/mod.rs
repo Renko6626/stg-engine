@@ -9,6 +9,7 @@
 pub mod ast;
 pub mod builtins;
 pub mod codegen;
+pub mod debug;
 mod entryck;
 pub mod lex;
 pub mod parse;
@@ -17,7 +18,31 @@ pub mod typeck;
 pub(crate) mod xform_map;
 
 pub use ast::{CompileError, Program};
+pub use debug::{DebugParamMeta, DebugSubMeta, EclDebugSymbols, PcSourceSpan};
 pub use stg_core::ecl::image::EclImage;
+
+/// 调试信息产出级别（Task 4 侧载开关）。`None` 侧载不存在（默认，`compile` 便利包装使用）；
+/// `Full` 侧载包含完整 sub/参数/PC 区间/源码定位信息，EclImage 本身保持不变。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugInfo {
+    None,
+    Full,
+}
+
+/// 编译选项。当前只有 `debug_info` 一个字段，未来可扩展（如优化级别、目标平台等）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompileOptions {
+    pub debug_info: DebugInfo,
+}
+
+/// 编译产出：运行时镜像 + 可选的调试符号侧载。
+///
+/// `.image` 在 `DebugInfo::None` 与 `Full` 模式下**逐字节相同**（确定性契约：
+/// 调试信息不参与运行时行为）。`.debug` 为 `Some` 当且仅当 `debug_info == Full`。
+pub struct CompiledEcl {
+    pub image: EclImage,
+    pub debug: Option<EclDebugSymbols>,
+}
 
 /// **本刀（T1）的契约入口**：源码 → AST，无类型检查/无 codegen。
 ///
@@ -36,20 +61,19 @@ pub fn parse(src: &str, _file: &str) -> Result<Program, Vec<CompileError>> {
     }
 }
 
-/// 核心接口块钉死的全管线入口：`compile(src, file) -> Result<EclImage, Vec<CompileError>>`。
+/// 编译选项总入口：`parse → entryck::check → typeck::check` →
+/// `slots::allocate → codegen::generate → (if Full) build_debug_symbols`。
 ///
-/// **T3 起管线全线贯通**：`parse → entryck::check → typeck::check` →
-/// `slots::allocate → codegen::generate`，五趟任何一趟报错都会被收集进最终 `Err`；全部通过则
-/// 产出可执行的 [`EclImage`]（`stg-core` VM 直接消费的镜像格式，`content_hash` 占位 0，同
-/// `ImageBuilder::build` 既有惯例——文件加载/内容哈希整包归 C11 刀）。
+/// 管线始终产生同一份 `EclImage`（与 `debug_info` 无关）；仅在 `DebugInfo::Full` 时
+/// 额外构建调试符号侧载（见 [`CompiledEcl.debug`]）。`None` 模式等价于 [`compile`]。
 ///
-/// **`CompileError.src_line` 在这里被回填**：`entryck::check`/`typeck::check`/
-/// `slots::allocate`/`codegen::generate` 都没有原始源码文本（签名只收
-/// `&Program`/`&TypedInfo`/`&SlotMap`），
-/// 产出的错误 `src_line` 恒为空串（见各模块文档）——本函数是唯一持有 `src` 的地方，用
-/// `src.lines()` 把这些错误的 `src_line` 补全，让最终交给用户的 `CompileError::render()`
-/// 仍是完整契约格式。
-pub fn compile(src: &str, file: &str) -> Result<EclImage, Vec<CompileError>> {
+/// **`CompileError.src_line` 在这里被回填**：各下游模块的 `CompileError` 没有原始源码
+/// 文本（签名只收 `&Program`/`&TypedInfo`/`&SlotMap`），本函数用 `src.lines()` 补全。
+pub fn compile_with_options(
+    src: &str,
+    file: &str,
+    options: CompileOptions,
+) -> Result<CompiledEcl, Vec<CompileError>> {
     let program = parse(src, file)?;
     if let Err(mut errors) = entryck::check(&program) {
         attach_src_lines(&mut errors, src);
@@ -69,13 +93,29 @@ pub fn compile(src: &str, file: &str) -> Result<EclImage, Vec<CompileError>> {
             return Err(errors);
         }
     };
-    match codegen::generate(&program, &typed, &slot_map) {
-        Ok(image) => Ok(image),
+    let image = match codegen::generate(&program, &typed, &slot_map) {
+        Ok(image) => image,
         Err(mut errors) => {
             attach_src_lines(&mut errors, src);
-            Err(errors)
+            return Err(errors);
         }
-    }
+    };
+
+    let debug = if options.debug_info == DebugInfo::Full {
+        Some(debug::build_debug_symbols(&program, &typed, &image, file))
+    } else {
+        None
+    };
+
+    Ok(CompiledEcl { image, debug })
+}
+
+/// 便利包装等价于 `compile_with_options(src, file, CompileOptions { debug_info: DebugInfo::None }).map(|ce| ce.image)`。
+///
+/// 见 [`compile_with_options`] 的完整文档。
+pub fn compile(src: &str, file: &str) -> Result<EclImage, Vec<CompileError>> {
+    compile_with_options(src, file, CompileOptions { debug_info: DebugInfo::None })
+        .map(|ce| ce.image)
 }
 
 /// 回填 `typeck`/`slots` 产出的 [`CompileError`] 的 `src_line`（它们构造时没有源码文本，
@@ -95,6 +135,7 @@ fn attach_src_lines(errors: &mut [CompileError], src: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stg_core::ecl::image::SubKind;
 
     /// `compile()` 失败路径断言助手——`EclImage`（`compile` 的 `Ok` 类型）不 derive
     /// `Debug`（**有意**：stg-core 唯一触碰面钉死在 T3 Commit A，见 plan Self-Review
@@ -215,5 +256,52 @@ mod tests {
                 .iter()
                 .any(|e| e.msg.contains("main 只能作为关卡根入口启动"))
         );
+    }
+
+    // ── Task 4：调试符号侧载 ─────────────────────────────────────────────
+
+    /// `DebugInfo::None` 与 `Full` 产出逐字节相同的 `EclImage`；`None` 无侧载，
+    /// `Full` 有侧载。
+    #[test]
+    fn debug_mode_does_not_change_runtime_image() {
+        let src = "sub main() { helper(1); } sub helper(x: int) {}";
+        let none = compile_with_options(
+            src,
+            "stage.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::None,
+            },
+        )
+        .unwrap();
+        let full = compile_with_options(
+            src,
+            "stage.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::Full,
+            },
+        )
+        .unwrap();
+        assert_eq!(none.image, full.image);
+        assert!(none.debug.is_none());
+        assert!(full.debug.is_some());
+    }
+
+    /// `DebugInfo::Full` 侧载保留 `CallOnly` sub 的名称、参数名、源码定位。
+    #[test]
+    fn full_debug_symbols_keep_call_only_and_parameter_names() {
+        let src = "sub main() { helper(1); } sub helper(value: int) {}";
+        let out = compile_with_options(
+            src,
+            "stage.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::Full,
+            },
+        )
+        .unwrap();
+        let debug = out.debug.unwrap();
+        let helper = debug.symbol("helper").unwrap();
+        assert_eq!(helper.kind(), SubKind::CallOnly);
+        assert_eq!(debug.param_name(helper, 0), Some("value"));
+        assert_eq!(debug.source_at(helper.pc_start()).unwrap().file(), "stage.ecl");
     }
 }
