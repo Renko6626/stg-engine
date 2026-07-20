@@ -24,7 +24,8 @@
 1. 一个 `.ecl` 文件独立描述一关或一个完整场景控制单元。
 2. 每个正常镜像有唯一、零参数、单例启动的 `main` 根入口。
 3. 所有 async sub 都是公开命名入口；普通 sub 只允许同步调用。
-4. 镜像保留所有 sub 的名称、类型、参数名称和参数类型。
+4. 运行镜像只保留公开 async 入口名称与执行 ABI；完整 sub/参数/源码名称进入可选 debug
+   sidecar。
 5. 名称是跨编译引用的正式身份；`SubId`/`EntryId` 只在当前镜像加载期间有效。
 6. 仅调整 sub 声明顺序时，符号 ID、字节码和未来的内容哈希保持不变。
 
@@ -62,8 +63,8 @@
 | `async sub name(...)` | `Async` | `spawn`、`fire(..., task)`、外部命名/ID 启动 |
 | `sub name(...)` | `CallOnly` | 仅同步 `CALL` |
 
-所有 sub 共用一个命名空间，名称必须唯一。所有 sub 均保留符号元数据，不因 `CallOnly` 而
-匿名化。
+所有 sub 共用一个命名空间，名称必须唯一。编译器始终掌握完整符号；运行镜像只保留外部
+解析必需的 async 名称，完整符号按编译选项写入独立 debug sidecar。
 
 ### 3.3 main 规则
 
@@ -86,7 +87,8 @@ root 类型。
 
 ## 4. 镜像数据模型
 
-以下类型定义在 `stg-core::ecl::image`，供 VM、编译器和绑定层共享：
+以下运行时类型定义在 `stg-core::ecl::image`，供 VM、编译器和绑定层共享。所有动态数组都
+冻结为连续 slice，名称集中进单一字节池，不为每个 sub 或参数单独分配 `String`/`Vec`：
 
 ```rust
 #[repr(transparent)]
@@ -100,44 +102,74 @@ pub struct ResolvedEntry<'a> {
     id: EntryId,
 }
 
+#[repr(u8)]
 pub enum EclValueType {
     Int,
     Fx,
     Angle,
 }
 
+#[repr(u8)]
 pub enum SubKind {
     Root,
     Async,
     CallOnly,
 }
 
-pub struct EclParam {
-    pub name: String,
-    pub ty: EclValueType,
+struct NameRef {
+    offset: u32,
+    len: u16,
 }
 
-pub struct SubMeta {
-    pub name: String,
+pub struct RuntimeSubMeta {
     pub code_entry: u32,
     pub kind: SubKind,
-    pub params: Vec<EclParam>,
+    param_start: u16,
+    param_count: u8,
+}
+
+struct RuntimeEntryMeta {
+    name: NameRef,
+    sub: SubId,
 }
 
 pub struct EclImage {
-    code: Vec<u32>,
-    subs: Vec<SubMeta>,
-    entries: Vec<SubId>,
+    code: Box<[u32]>,
+    subs: Box<[RuntimeSubMeta]>,
+    entries: Box<[RuntimeEntryMeta]>,
+    param_types: Box<[EclValueType]>,
+    entry_name_bytes: Box<[u8]>,
     root: Option<SubId>,
     content_hash: u64,
 }
 ```
 
+编译器的完整输出容器与 debug sidecar 定义在 `stg-ecl-compiler`，不传给 VM，也不让
+`stg-core` 依赖编译器侧诊断类型：
+
+```rust
+pub struct CompiledEcl {
+    pub image: EclImage,
+    pub debug: Option<EclDebugSymbols>,
+}
+
+pub struct EclDebugSymbols {
+    string_bytes: Box<[u8]>,
+    subs: Box<[DebugSubMeta]>,
+    params: Box<[DebugParamMeta]>,
+    pc_spans: Box<[PcSourceSpan]>,
+}
+```
+
+`EclDebugSymbols` 保存全部 sub 名、参数名以及 PC 到文件/行列的映射；未来局部变量名和调用图
+也只扩展 sidecar。sidecar 缺失不影响镜像加载或执行，且不参与执行镜像 `content_hash`。
+
 ### 4.1 ID 语义
 
-- `SubId` 覆盖镜像中的全部 sub，下标指向按名称严格升序排列的 `subs`。
-- `EntryId` 只覆盖 `Async` sub，下标指向同样按名称严格升序排列的 `entries`。
-- `entries[entry_id]` 得到对应 `SubId`。
+- `SubId` 覆盖镜像中的全部 sub；编译器按完整 sub 名严格升序分配 ID，发布镜像可以不保存
+  call-only 名称本身。
+- `EntryId` 只覆盖 `Async` sub，下标指向按公开名称严格升序排列的 `entries`。
+- `entries[entry_id].sub` 得到对应 `SubId`。
 - `main` 只由 `root` 指向，不进入 `entries`。
 - `SubId` 与 `EntryId` 的内部整数不能由外部调用方任意构造。
 - 数字 ID 不得写入关卡配置、存档或跨资源引用；持久化层必须保存名称并在镜像加载后解析。
@@ -149,19 +181,20 @@ pub struct EclImage {
 
 ### 4.2 封装与构造
 
-`EclImage` 的内部表改为私有，防止调用方直接构造相互失配的 `code/subs/entries/root`。
+`EclImage` 的内部表改为私有，防止调用方直接构造相互失配的 code、ABI、名称池和入口表。
 正常镜像只能通过带结构校验的构造入口创建。构造入口返回 `Result<EclImage,
 ImageBuildError>`；`EclImage::empty()` 保留为无分配、无 root 的显式哨兵。
 
 本次结构校验包括：
 
-- 名称合法、唯一且严格排序；
-- 非空镜像有且仅有一个名为 `main` 的 `Root`；
-- root 零参数且 `root` 字段指向它；
+- async 入口名称池是合法 UTF-8/ASCII ECL 标识符，引用范围无越界；
+- async 入口名称唯一且严格排序；
+- 非空镜像有且仅有一个 `Root`，root 零参数且 `root` 字段指向它；语言编译器在剥离名称前
+  另行保证该 Root 源码名为 `main`；
 - 每个 `Async` sub 在 `entries` 中恰好出现一次；
 - `entries` 不包含 `Root` 或 `CallOnly`；
 - sub/entry 数量能编码为 `u16`；
-- 每个参数列表不超过 VM locals 容量；
+- 参数类型 range 无越界，每个参数列表不超过 VM locals 容量；
 - 每个 `code_entry` 位于 code 范围内；
 - Builder/codegen 的所有窄化转换为 checked conversion。
 
@@ -171,24 +204,24 @@ ImageBuildError>`；`EclImage::empty()` 保留为无分配、无 root 的显式�
 
 ```rust
 impl EclImage {
-    pub fn symbol(&self, name: &str) -> Option<(SubId, &SubMeta)>;
     pub fn resolve_entry(&self, name: &str) -> Result<ResolvedEntry<'_>, ResolveError>;
-    pub fn entry_meta(&self, id: EntryId) -> Option<&SubMeta>;
-    pub fn sub_meta(&self, id: SubId) -> Option<&SubMeta>;
+    pub fn sub_meta(&self, id: SubId) -> Option<&RuntimeSubMeta>;
     pub fn root(&self) -> Option<SubId>;
     pub fn code(&self) -> &[u32];
     pub fn content_hash(&self) -> u64;
 }
 ```
 
-`symbol` 对 `subs` 做名称二分。`resolve_entry` 先查完整符号表，以便区分：
+`resolve_entry` 对紧凑 async 入口名称表做二分，并特别识别保留名 `main`，以便区分：
 
-- `UnknownSymbol`；
 - `RootRequiresStartMain`；
-- `CallOnly`。
+- `UnknownEntry`。
 
-`ResolvedEntry` 内部携带来源镜像引用和 EntryId，避免把镜像 A 解析出的有效数字误用于镜像
-B。它可以被绑定层缓存，但不能脱离来源镜像存活。查询不修改 World，也不触碰诊断计数。
+发布镜像没有 call-only 名称，因此运行时不会泄漏或识别它们；查询 call-only 名称与查询未知
+名称同样返回 `UnknownEntry`。调试器可通过配套 `EclDebugSymbols::symbol(name)` 给出
+`CallOnly` 等精确说明。`ResolvedEntry` 内部携带来源镜像引用和 EntryId，避免把镜像 A 解析
+出的有效数字误用于镜像 B。它可以被绑定层缓存，但不能脱离来源镜像存活。查询不修改
+World，也不触碰诊断计数。
 
 ## 5. 编译器与 Builder
 
@@ -207,7 +240,28 @@ B。它可以被绑定层缓存，但不能脱离来源镜像存活。查询不�
 `CALL` 可继续回填为绝对 code pc；`OP_SPAWN` 和 `fire(..., task)` 编码 canonical `SubId`。
 生成器必须按目标 `SubKind` 检查引用方式。
 
-### 5.2 Builder 两阶段声明
+### 5.2 显式调试信息选项
+
+调试信息不能绑定 Rust crate 自身的 `cfg(debug_assertions)`，否则同一 ECL 源码会因宿主
+Debug/Release 构建方式不同而隐式改变资产。编译器提供显式选项：
+
+```rust
+pub enum DebugInfo {
+    None,
+    Full,
+}
+
+pub struct CompileOptions {
+    pub debug_info: DebugInfo,
+}
+```
+
+`compile_with_options` 返回 `CompiledEcl`；`DebugInfo::None` 时 `debug` 为 `None`，
+`DebugInfo::Full` 时生成完整 sidecar。现有 `compile(src, file)` 保留为运行模式便利封装，等价
+于 `DebugInfo::None` 并直接返回 `EclImage`。两种模式产生逐字相同的 `EclImage`；差异只在
+sidecar 是否存在。
+
+### 5.3 Builder 两阶段声明
 
 当前 `ImageBuilder::add_sub` 立即返回声明顺序 `ScriptId`，与 canonical ID 冲突。Builder 改为
 先声明符号、后定义代码：
@@ -227,6 +281,9 @@ builder.define_sub(patrol, |code| {
 `declare_sub` 返回的 `BuilderSubRef` 是仅在当前 Builder 有效的构建期句柄，不等于最终
 `SubId`。`call`、`spawn` 等 fixup 接受 `BuilderSubRef`；`build()` 完成名称排序、ID 分配、
 代码拼接和结构校验后才产出正式镜像。
+
+低层 Builder 只生成运行时 `EclImage`，不伪造源码行号 sidecar；需要完整 debug symbols 的
+作者入口是 `.ecl` 语言编译器。
 
 Builder 必须拒绝：
 
@@ -344,9 +401,11 @@ root/entries 失配或构建期引用错误。此错误发生在镜像进入 Wor
 
 `ResolveError` 至少区分：
 
-- `UnknownSymbol`；
 - `RootRequiresStartMain`；
-- `CallOnly`。
+- `UnknownEntry`。
+
+debug 工具可结合 sidecar 在展示层进一步把 `UnknownEntry` 解释成“该名称存在，但属于
+CallOnly”；该增强不改变运行时错误枚举或 World 状态。
 
 解析是纯操作，不修改 World 诊断状态。
 
@@ -358,10 +417,9 @@ root/entries 失配或构建期引用错误。此错误发生在镜像进入 Wor
 - `MainAlreadyStarted`；
 - `UnknownEntry`；
 - `RootRequiresStartMain`；
-- `CallOnly`；
 - `InvalidEntryId`（仅内部防御路径，安全公开 API 无法构造）；
 - `WrongArgCount`；
-- `WrongArgType { param, expected, actual }`；
+- `WrongArgType { index, expected, actual }`；
 - `InvalidOwner`；
 - `PoolFull`。
 
@@ -377,6 +435,8 @@ root/entries 失配或构建期引用错误。此错误发生在镜像进入 Wor
 
 - 现有 `ScriptId` 替换为职责清晰的 `SubId`/`EntryId`；
 - `EclImage` 公开字段改为私有查询接口；
+- 编译结果可通过显式 `CompileOptions` 附带独立 `EclDebugSymbols`，VM 接口仍只接收
+  `&EclImage`；
 - `World::spawn_task` 调用点迁移到 `start_main`、`spawn_entry` 或
   `spawn_entry_named`；
 - Builder 调用点迁移到两阶段 declare/define；
@@ -393,12 +453,15 @@ checksum 很可能发生一次性变化。实施时必须核对脚本可见行�
 - 不同 sub 声明顺序生成完全相同的符号表、EntryId、字节码和镜像。
 - 新增字典序靠后的名称不改变之前已有的 SubId/EntryId。
 - 缺失 main、async main、带参 main 和非法 main 引用均产生定位明确的编译错误。
-- Root、Async、CallOnly 的 symbol 查询结果完整且正确。
-- `resolve_entry` 能区分未知、root 与 call-only。
+- 运行镜像只保存 async 公开名称；debug sidecar 能查询 Root、Async、CallOnly 全部符号。
+- `resolve_entry` 能区分 root 与未知入口；发布运行时把 call-only 名称视为未知入口。
+- `DebugInfo::None` 与 `DebugInfo::Full` 产生逐字相同的 `EclImage`。
+- 运行镜像名称和参数表使用连续存储，没有 per-sub/per-param `String` 或 `Vec` 分配。
 
 ### 9.2 参数与启动
 
-- 类型化入口逐项检查 `int/fx/angle`，错误包含参数名、期望类型和实际类型。
+- 类型化入口逐项检查 `int/fx/angle`；运行时错误包含参数索引、期望类型和实际类型，debug
+  工具可借 sidecar 补充参数名。
 - 快速入口跳过类型检查但拒绝错误 argc。
 - 参数按声明顺序写入 `locals[0..argc]`。
 - main 只能成功启动一次，owner 固定为 stage。
