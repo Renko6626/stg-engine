@@ -490,6 +490,12 @@ impl<'a> ResolvedEntry<'a> {
             .sub_meta(self.sub())
             .expect("entry sub validated")
     }
+
+    /// Returns `true` if the entry ID is within the image's entry table.
+    /// Used by `spawn_entry` to reject out-of-range entry IDs.
+    pub(crate) fn is_valid_entry_id(self) -> bool {
+        (self.id.0 as usize) < self.image.entries.len()
+    }
 }
 
 // Test-only: construct a ResolvedEntry from a raw entry index.

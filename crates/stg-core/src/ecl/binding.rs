@@ -98,33 +98,29 @@ pub enum TaskStartError {
 // ── World extension methods ────────────────────────────────────────────────
 
 impl World {
-    /// Low-level spawn by raw `SubId`.
-    ///
-    /// This is an advanced API for cases where the safe entry-point APIs
-    /// (`start_main`, `spawn_entry`, `spawn_entry_named`) cannot express the
-    /// required owner kind or sub type (e.g. spawning a root sub with an
-    /// enemy owner, as done by the rainbow-scene harness).
-    ///
-    /// Validates the script exists in the image, is not `CallOnly`, and that
-    /// the arg count matches the sub's parameter list.  Increments diagnostics
-    /// on failure.  Returns `None` on error (bad args or pool full).
-    pub fn spawn_sub_id(
-        &mut self,
-        ecl: &EclImage,
-        script: SubId,
-        args: &[i32],
-        owner: (u8, u16, u16),
-    ) -> Option<u16> {
-        self.spawn_sub_internal(ecl, script, args, owner)
-    }
-
-    /// Start the root (main) script.
     /// Start the root (main) script.
     ///
     /// Uses stage owner and zero arguments.  Succeeds at most once per `World`
     /// lifetime — even after the main task ends or faults, a second call
     /// returns `MainAlreadyStarted`.
     pub fn start_main(&mut self, image: &EclImage) -> Result<u16, TaskStartError> {
+        self.start_main_with_owner(image, EclOwner::Stage)
+    }
+
+    /// Start the root script with a specific owner.
+    ///
+    /// Like `start_main` but allows specifying the owner kind (stage, enemy,
+    /// or bullet).  The one-shot constraint is still enforced: `ecl_main_started`
+    /// must be 0, and is set to 1 after a successful spawn.
+    ///
+    /// This is primarily for test-harness scenarios where a root script
+    /// represents entity-specific behavior (e.g., enemy AI) that must be
+    /// enemy-owned rather than stage-owned.
+    pub fn start_main_with_owner(
+        &mut self,
+        image: &EclImage,
+        owner: EclOwner,
+    ) -> Result<u16, TaskStartError> {
         if self.ecl_main_started != 0 {
             self.body.diag.contract_viol = self.body.diag.contract_viol.wrapping_add(1);
             self.body.last_status = STATUS_BAD_ARGS;
@@ -134,8 +130,21 @@ impl World {
         let meta = image
             .sub_meta(root)
             .expect("root validated at image construction");
+
+        if !owner.validate(&self.body) {
+            self.body.diag.contract_viol = self.body.diag.contract_viol.wrapping_add(1);
+            self.body.last_status = STATUS_BAD_ARGS;
+            return Err(TaskStartError::InvalidOwner);
+        }
+
+        let owner_tuple = match owner {
+            EclOwner::Stage => (OWNER_STAGE, 0u16, 0u16),
+            EclOwner::Enemy(h) => (OWNER_ENEMY, h.index, h.generation),
+            EclOwner::Bullet(h) => (OWNER_BULLET, h.index, h.generation),
+        };
+
         let frame = self.body.frame;
-        match self.tasks.spawn(root, meta.code_entry(), (OWNER_STAGE, 0, 0), 0, frame) {
+        match self.tasks.spawn(root, meta.code_entry(), owner_tuple, 0, frame) {
             Some(idx) => {
                 self.ecl_main_started = 1;
                 Ok(idx)
@@ -161,6 +170,13 @@ impl World {
         args: &[i32],
         owner: EclOwner,
     ) -> Result<u16, TaskStartError> {
+        // Reject out-of-range entry IDs (defensive; production callers always
+        // go through `resolve_entry`, which guarantees a valid ID).
+        if !entry.is_valid_entry_id() {
+            self.body.diag.contract_viol = self.body.diag.contract_viol.wrapping_add(1);
+            self.body.last_status = STATUS_BAD_ARGS;
+            return Err(TaskStartError::InvalidEntryId);
+        }
         let sub = entry.sub();
         self.spawn_resolved_sub(sub, entry.meta(), args, owner)
     }
@@ -489,9 +505,20 @@ mod tests {
     }
 
     #[test]
-    fn invalid_entry_id_variant_is_present() {
-        let err = TaskStartError::InvalidEntryId;
-        assert!(matches!(err, TaskStartError::InvalidEntryId));
+    fn spawn_entry_rejects_invalid_entry_id() {
+        let image = root_and_async_image();
+        // Use test_from_raw with an out-of-range entry index.
+        let bad_entry = ResolvedEntry::test_from_raw(&image, u16::MAX);
+        let mut world = World::new(1);
+        let alive_before = world.tasks.iter_alive().count();
+        let cv_before = world.body.diag.contract_viol;
+        assert_eq!(
+            world.spawn_entry(bad_entry, &[], EclOwner::Stage),
+            Err(TaskStartError::InvalidEntryId)
+        );
+        assert_eq!(world.tasks.iter_alive().count(), alive_before);
+        assert_eq!(world.body.diag.contract_viol, cv_before + 1);
+        assert_eq!(world.body.last_status, STATUS_BAD_ARGS);
     }
 
     #[test]
@@ -581,6 +608,7 @@ mod tests {
             "after freeing one, start_main should succeed: {:?}",
             result
         );
+        assert_eq!(world.ecl_main_started, 1, "flag should be set after successful retry");
     }
 
     #[test]

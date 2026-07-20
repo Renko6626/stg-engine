@@ -828,7 +828,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
     // 输入拍板（brief 二选一）：全程持 BTN_SHOT + 左右缓移（非全程 idle）——让弹幕的
     // 碰撞/擦弹路径真的被自机踩到，符卡本体仍是主角，移动只是"不空闲"。
     {
-        use stg_core::ecl::task::OWNER_ENEMY;
+        use stg_core::ecl::binding::EclOwner;
 
         const FRAMES2: u32 = 600;
         const SEED2: u64 = 0x524E_424F_5701; // "RNBW"
@@ -866,14 +866,8 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
             drop_table: 0,
             score: 10000,
         });
-        let main_script = image.root().expect("镜像应有 main root");
         world2
-            .spawn_sub_id(
-                &image,
-                main_script,
-                &[],
-                (OWNER_ENEMY, boss.index, boss.generation),
-            )
+            .start_main_with_owner(&image, EclOwner::Enemy(boss))
             .expect("main 任务应能派生（新镜像/新池，容量均未耗尽）");
 
         for frame in 0..FRAMES2 {
@@ -974,7 +968,7 @@ fn cmd_verify_tables() -> ExitCode {
 #[cfg(test)]
 mod ecl_rainbow_tests {
     use super::*;
-    use stg_core::ecl::task::OWNER_ENEMY;
+    use stg_core::ecl::binding::EclOwner;
     use stg_core::enemy::EnemyInit;
     use stg_core::input::InputFrame;
     use stg_core::math::Fx;
@@ -1028,17 +1022,11 @@ mod ecl_rainbow_tests {
     #[test]
     fn rainbow_scene_reaches_steady_state() {
         let image = compile_rainbow_image();
-        let main_script = image.root().expect("镜像应有 main root");
         let mut w = World::new(0x524E_424F_5701);
         w.body.set_var(RANK_SLOT, 2);
         let boss = w.body.create_enemy(boss_init());
-        w.spawn_sub_id(
-            &image,
-            main_script,
-            &[],
-            (OWNER_ENEMY, boss.index, boss.generation),
-        )
-        .expect("spawn 应成功（新镜像/新池）");
+        w.start_main_with_owner(&image, EclOwner::Enemy(boss))
+            .expect("spawn 应成功（新镜像/新池）");
 
         for frame in 0..600u32 {
             let mut input = InputFrame::empty(frame);

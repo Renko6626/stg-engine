@@ -96,6 +96,7 @@ impl World {
     /// verifies arg count matches parameters.  Bad args → contract_viol + STATUS_BAD_ARGS;
     /// pool full → pool_full[POOL_TASK] + STATUS_POOL_FULL.
     /// Returns `None` on failure (no task created, caller gets -1 or None).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn spawn_sub_internal(
         &mut self,
         ecl: &EclImage,
