@@ -237,8 +237,9 @@ World，也不触碰诊断计数。
 
 参数元数据保持源码声明顺序，因为参数位置属于 ABI。
 
-`CALL` 可继续回填为绝对 code pc；`OP_SPAWN` 和 `fire(..., task)` 编码 canonical `SubId`。
-生成器必须按目标 `SubKind` 检查引用方式。
+`CALL`、`OP_SPAWN` 和 `fire(..., task)` 均编码 canonical `SubId`。VM 执行 `CALL` 时通过
+`RuntimeSubMeta` 解析 `code_entry` 并验证目标为 `CallOnly`；不再把跨 sub 绝对 PC 固化进
+CALL 操作数。`JMP/JZ` 仍使用绝对 code pc。生成器必须按目标 `SubKind` 检查引用方式。
 
 ### 5.2 显式调试信息选项
 
@@ -375,7 +376,7 @@ impl World {
 
 - `OP_SPAWN` 的目标必须为 `Async`，argc 必须匹配参数元数据。
 - `fire(..., task)` 的目标必须为零参数 `Async`。
-- `CALL` 的目标必须为 `CallOnly`。
+- `CALL` 的 SubId 目标必须为 `CallOnly`，VM 从元数据取得 code entry。
 - 没有任何普通 opcode 路径能启动 `Root`。
 - VM 对损坏镜像或手工错误字节码继续做运行时 kind/argc 防御，失败转成当前任务的确定性
   Fault，不 panic。
@@ -434,6 +435,7 @@ CallOnly”；该增强不改变运行时错误枚举或 World 状态。
 这是有意的内部 ABI 更新：
 
 - 现有 `ScriptId` 替换为职责清晰的 `SubId`/`EntryId`；
+- `CALL` 操作数由绝对 code pc 改为 canonical `SubId`，`JMP/JZ` 绝对 pc 语义不变；
 - `EclImage` 公开字段改为私有查询接口；
 - 编译结果可通过显式 `CompileOptions` 附带独立 `EclDebugSymbols`，VM 接口仍只接收
   `&EclImage`；
