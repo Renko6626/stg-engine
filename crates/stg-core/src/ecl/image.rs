@@ -5,32 +5,510 @@
 //! 同一性/哈希保证，不随快照回滚。无脚本场景传 [`EclImage::empty`]（零任务即零成本，
 //! T2 金向量一号逐位不变门）。
 
-/// 脚本镜像：`code` 是全部子程序共享的扁平字流（`Task.pc` 是其**绝对**字索引，不是相对
-/// 某个 sub 入口的偏移——`JMP`/`CALL`/`RET` 的目标字面量与 `pc` 同一坐标系）；
-/// `subs[i]` = 脚本 i 的入口字索引；`content_hash` 占位（同 `WorldTables` 惯例，编译器
-/// 落地时填真哈希，供回放头/联机握手核对两机镜像一致，本刀恒 0）。
-pub struct EclImage {
+use crate::ecl::task::LOCALS;
+
+#[repr(transparent)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, crate::checksum::Checksum,
+)]
+pub struct SubId(u16);
+
+impl SubId {
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntryId(u16);
+
+impl EntryId {
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResolvedEntry<'a> {
+    image: &'a EclImage,
+    id: EntryId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolveError {
+    RootRequiresStartMain,
+    UnknownEntry,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EclValueType {
+    Int = 0,
+    Fx = 1,
+    Angle = 2,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubKind {
+    Root = 0,
+    Async = 1,
+    CallOnly = 2,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimeSubMeta {
+    code_entry: u32,
+    param_start: u16,
+    param_count: u8,
+    kind: SubKind,
+}
+
+impl RuntimeSubMeta {
+    pub const fn code_entry(self) -> u32 {
+        self.code_entry
+    }
+
+    pub const fn kind(self) -> SubKind {
+        self.kind
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimeEntryMeta {
+    name_offset: u32,
+    name_len: u16,
+    sub: SubId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubInit {
+    code_entry: u32,
+    kind: SubKind,
+    params: Vec<EclValueType>,
+}
+
+impl SubInit {
+    pub fn new(code_entry: u32, kind: SubKind, params: Vec<EclValueType>) -> Self {
+        Self {
+            code_entry,
+            kind,
+            params,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EntryInit {
+    name: String,
+    sub: u16,
+}
+
+impl EntryInit {
+    pub fn new(name: impl Into<String>, sub: u16) -> Self {
+        Self {
+            name: name.into(),
+            sub,
+        }
+    }
+}
+
+pub struct ImageParts {
     pub code: Vec<u32>,
-    pub subs: Vec<u32>,
+    pub subs: Vec<SubInit>,
+    pub entries: Vec<EntryInit>,
+    pub root: Option<u16>,
     pub content_hash: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageBuildError {
+    TooManySubs {
+        actual: usize,
+    },
+    TooManyEntries {
+        actual: usize,
+    },
+    CodeTooLong {
+        words: usize,
+    },
+    NamePoolTooLarge {
+        bytes: usize,
+    },
+    NameTooLong {
+        name: String,
+        bytes: usize,
+    },
+    InvalidEntryName {
+        name: String,
+    },
+    EntriesNotStrictlySorted,
+    MissingRoot,
+    MultipleRoots,
+    RootIndexMismatch,
+    RootHasParameters,
+    CodeEntryOutOfRange {
+        sub: usize,
+        code_entry: u32,
+    },
+    TooManyParameters {
+        sub: usize,
+        actual: usize,
+    },
+    ParameterTableTooLarge {
+        actual: usize,
+    },
+    EntrySubOutOfRange {
+        entry: usize,
+        sub: u16,
+    },
+    EntryKindMismatch {
+        entry: usize,
+        kind: SubKind,
+    },
+    MissingAsyncEntry {
+        sub: usize,
+    },
+    DuplicateAsyncEntry {
+        sub: usize,
+    },
+    DuplicateSubName {
+        name: String,
+    },
+    InvalidRootName {
+        name: String,
+    },
+    ReservedMainKind {
+        kind: SubKind,
+    },
+    InvalidBuilderRef,
+    UndefinedSub {
+        name: String,
+    },
+    DuplicateDefinition {
+        name: String,
+    },
+    WrongTargetKind {
+        target: String,
+        expected: SubKind,
+        actual: SubKind,
+    },
+    WrongTargetArity {
+        target: String,
+        expected: u8,
+        actual: u8,
+    },
+    OperandOverflow,
+}
+
+/// 脚本镜像：`code` 是全部子程序共享的扁平字流（`Task.pc` 是其**绝对**字索引）。
+/// 构造期将可读的初始化记录压紧成不可变运行表，运行期不再持有名字 `String` 或参数 `Vec`。
+#[derive(Debug, PartialEq, Eq)]
+pub struct EclImage {
+    pub(crate) code: Box<[u32]>,
+    subs: Box<[RuntimeSubMeta]>,
+    param_types: Box<[EclValueType]>,
+    entries: Box<[RuntimeEntryMeta]>,
+    entry_names: Box<[u8]>,
+    root: Option<SubId>,
+    content_hash: u64,
+}
+
 impl EclImage {
-    /// 零脚本镜像。`Vec::new()` 是 const fn 且无堆分配（长度/容量 0，指针悬空不解引用）——
-    /// 空镜像构造与消费都是零成本，金向量一号场景用它穿线即可验证"空镜像零行为"。
-    pub const fn empty() -> EclImage {
+    pub fn empty() -> EclImage {
         EclImage {
-            code: Vec::new(),
-            subs: Vec::new(),
+            code: Box::new([]),
+            subs: Box::new([]),
+            param_types: Box::new([]),
+            entries: Box::new([]),
+            entry_names: Box::new([]),
+            root: None,
             content_hash: 0,
         }
     }
 
-    /// 脚本 id → 入口字索引；越界（未知脚本号）→ `None`（`OP_SPAWN`/`World::spawn_task`
-    /// 用此判定坏号，确定性报错/计数，不 panic）。
-    pub fn entry(&self, script: u16) -> Option<u32> {
-        self.subs.get(script as usize).copied()
+    pub fn try_from_parts(parts: ImageParts) -> Result<Self, ImageBuildError> {
+        const U16_DOMAIN: usize = u16::MAX as usize + 1;
+
+        if parts.subs.len() > U16_DOMAIN {
+            return Err(ImageBuildError::TooManySubs {
+                actual: parts.subs.len(),
+            });
+        }
+        if parts.entries.len() > U16_DOMAIN {
+            return Err(ImageBuildError::TooManyEntries {
+                actual: parts.entries.len(),
+            });
+        }
+        if u32::try_from(parts.code.len()).is_err() {
+            return Err(ImageBuildError::CodeTooLong {
+                words: parts.code.len(),
+            });
+        }
+
+        if parts.code.is_empty()
+            && parts.subs.is_empty()
+            && parts.entries.is_empty()
+            && parts.root.is_none()
+        {
+            return Ok(Self {
+                content_hash: parts.content_hash,
+                ..Self::empty()
+            });
+        }
+
+        let roots: Vec<usize> = parts
+            .subs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, sub)| (sub.kind == SubKind::Root).then_some(index))
+            .collect();
+        let root_index = match roots.as_slice() {
+            [] => return Err(ImageBuildError::MissingRoot),
+            [root] => *root,
+            _ => return Err(ImageBuildError::MultipleRoots),
+        };
+        if parts.root.map(usize::from) != Some(root_index) {
+            return Err(ImageBuildError::RootIndexMismatch);
+        }
+        if !parts.subs[root_index].params.is_empty() {
+            return Err(ImageBuildError::RootHasParameters);
+        }
+
+        let mut param_total = 0usize;
+        for (sub_index, sub) in parts.subs.iter().enumerate() {
+            if sub.code_entry as usize >= parts.code.len() {
+                return Err(ImageBuildError::CodeEntryOutOfRange {
+                    sub: sub_index,
+                    code_entry: sub.code_entry,
+                });
+            }
+            if sub.params.len() > LOCALS {
+                return Err(ImageBuildError::TooManyParameters {
+                    sub: sub_index,
+                    actual: sub.params.len(),
+                });
+            }
+            param_total = param_total
+                .checked_add(sub.params.len())
+                .ok_or(ImageBuildError::ParameterTableTooLarge { actual: usize::MAX })?;
+        }
+        if param_total > U16_DOMAIN {
+            return Err(ImageBuildError::ParameterTableTooLarge {
+                actual: param_total,
+            });
+        }
+
+        for entry in &parts.entries {
+            if entry.name.len() > u16::MAX as usize {
+                return Err(ImageBuildError::NameTooLong {
+                    name: entry.name.clone(),
+                    bytes: entry.name.len(),
+                });
+            }
+            if entry.name == "main" || !is_valid_identifier(&entry.name) {
+                return Err(ImageBuildError::InvalidEntryName {
+                    name: entry.name.clone(),
+                });
+            }
+        }
+        if parts
+            .entries
+            .windows(2)
+            .any(|pair| pair[0].name >= pair[1].name)
+        {
+            return Err(ImageBuildError::EntriesNotStrictlySorted);
+        }
+
+        let mut async_entry_seen = vec![false; parts.subs.len()];
+        for (entry_index, entry) in parts.entries.iter().enumerate() {
+            let Some(sub) = parts.subs.get(entry.sub as usize) else {
+                return Err(ImageBuildError::EntrySubOutOfRange {
+                    entry: entry_index,
+                    sub: entry.sub,
+                });
+            };
+            if sub.kind != SubKind::Async {
+                return Err(ImageBuildError::EntryKindMismatch {
+                    entry: entry_index,
+                    kind: sub.kind,
+                });
+            }
+            if async_entry_seen[entry.sub as usize] {
+                return Err(ImageBuildError::DuplicateAsyncEntry {
+                    sub: entry.sub as usize,
+                });
+            }
+            async_entry_seen[entry.sub as usize] = true;
+        }
+        for (sub_index, sub) in parts.subs.iter().enumerate() {
+            if sub.kind == SubKind::Async && !async_entry_seen[sub_index] {
+                return Err(ImageBuildError::MissingAsyncEntry { sub: sub_index });
+            }
+        }
+
+        let mut param_types = Vec::with_capacity(param_total);
+        let mut runtime_subs = Vec::with_capacity(parts.subs.len());
+        for sub in &parts.subs {
+            let param_start = if sub.params.is_empty() {
+                0
+            } else {
+                u16::try_from(param_types.len()).map_err(|_| {
+                    ImageBuildError::ParameterTableTooLarge {
+                        actual: param_total,
+                    }
+                })?
+            };
+            let param_count =
+                u8::try_from(sub.params.len()).map_err(|_| ImageBuildError::TooManyParameters {
+                    sub: runtime_subs.len(),
+                    actual: sub.params.len(),
+                })?;
+            param_types.extend_from_slice(&sub.params);
+            runtime_subs.push(RuntimeSubMeta {
+                code_entry: sub.code_entry,
+                param_start,
+                param_count,
+                kind: sub.kind,
+            });
+        }
+
+        let mut entry_names = Vec::new();
+        let mut runtime_entries = Vec::with_capacity(parts.entries.len());
+        for entry in parts.entries {
+            let name_offset = u32::try_from(entry_names.len()).map_err(|_| {
+                ImageBuildError::NamePoolTooLarge {
+                    bytes: entry_names.len(),
+                }
+            })?;
+            let name_len =
+                u16::try_from(entry.name.len()).map_err(|_| ImageBuildError::NameTooLong {
+                    name: entry.name.clone(),
+                    bytes: entry.name.len(),
+                })?;
+            let new_len = entry_names
+                .len()
+                .checked_add(entry.name.len())
+                .ok_or(ImageBuildError::NamePoolTooLarge { bytes: usize::MAX })?;
+            if new_len > u32::MAX as usize {
+                return Err(ImageBuildError::NamePoolTooLarge { bytes: new_len });
+            }
+            entry_names.extend_from_slice(entry.name.as_bytes());
+            runtime_entries.push(RuntimeEntryMeta {
+                name_offset,
+                name_len,
+                sub: SubId(entry.sub),
+            });
+        }
+
+        Ok(Self {
+            code: parts.code.into_boxed_slice(),
+            subs: runtime_subs.into_boxed_slice(),
+            param_types: param_types.into_boxed_slice(),
+            entries: runtime_entries.into_boxed_slice(),
+            entry_names: entry_names.into_boxed_slice(),
+            root: Some(SubId(u16::try_from(root_index).map_err(|_| {
+                ImageBuildError::TooManySubs {
+                    actual: parts.subs.len(),
+                }
+            })?)),
+            content_hash: parts.content_hash,
+        })
     }
+
+    pub fn code(&self) -> &[u32] {
+        &self.code
+    }
+
+    pub const fn content_hash(&self) -> u64 {
+        self.content_hash
+    }
+
+    pub fn sub_count(&self) -> usize {
+        self.subs.len()
+    }
+
+    pub fn sub_id(&self, raw: u16) -> Option<SubId> {
+        self.subs.get(raw as usize).map(|_| SubId(raw))
+    }
+
+    pub const fn root(&self) -> Option<SubId> {
+        self.root
+    }
+
+    pub fn sub_meta(&self, sub: SubId) -> Option<&RuntimeSubMeta> {
+        self.subs.get(sub.0 as usize)
+    }
+
+    pub fn param_types(&self, sub: SubId) -> Option<&[EclValueType]> {
+        let meta = self.subs.get(sub.0 as usize)?;
+        let start = meta.param_start as usize;
+        let end = start.checked_add(meta.param_count as usize)?;
+        self.param_types.get(start..end)
+    }
+
+    pub fn resolve_entry(&self, name: &str) -> Result<ResolvedEntry<'_>, ResolveError> {
+        if name == "main" {
+            return Err(ResolveError::RootRequiresStartMain);
+        }
+        let index = self
+            .entries
+            .binary_search_by(|entry| self.entry_name(*entry).cmp(name))
+            .map_err(|_| ResolveError::UnknownEntry)?;
+        Ok(ResolvedEntry {
+            image: self,
+            id: EntryId(u16::try_from(index).expect("validated entry count fits u16 domain")),
+        })
+    }
+
+    fn entry_name(&self, entry: RuntimeEntryMeta) -> &str {
+        let start = entry.name_offset as usize;
+        let end = start + entry.name_len as usize;
+        std::str::from_utf8(&self.entry_names[start..end])
+            .expect("constructor stores validated ASCII entry names")
+    }
+}
+
+impl<'a> ResolvedEntry<'a> {
+    pub const fn id(self) -> EntryId {
+        self.id
+    }
+
+    pub fn sub(self) -> SubId {
+        self.image.entries[self.id.0 as usize].sub
+    }
+
+    pub fn meta(self) -> &'a RuntimeSubMeta {
+        self.image
+            .sub_meta(self.sub())
+            .expect("entry sub validated")
+    }
+}
+
+pub(crate) fn is_valid_identifier(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+#[cfg(test)]
+pub(crate) fn test_image(
+    code: Vec<u32>,
+    subs: Vec<SubInit>,
+    entries: Vec<EntryInit>,
+    root: Option<u16>,
+) -> EclImage {
+    EclImage::try_from_parts(ImageParts {
+        code,
+        subs,
+        entries,
+        root,
+        content_hash: 0,
+    })
+    .expect("test image must satisfy the runtime image contract")
 }
 
 impl Default for EclImage {
@@ -42,24 +520,358 @@ impl Default for EclImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecl::task::LOCALS;
 
     #[test]
-    fn empty_has_no_entries() {
-        let img = EclImage::empty();
-        assert!(img.code.is_empty());
-        assert!(img.subs.is_empty());
-        assert_eq!(img.entry(0), None);
+    fn image_freezes_compact_tables_and_resolves_async_names() {
+        let image = EclImage::try_from_parts(ImageParts {
+            code: vec![0, 0, 0],
+            subs: vec![
+                SubInit::new(0, SubKind::Async, vec![EclValueType::Fx]),
+                SubInit::new(1, SubKind::Root, vec![]),
+                SubInit::new(2, SubKind::CallOnly, vec![]),
+            ],
+            entries: vec![EntryInit::new("bullet_task", 0)],
+            root: Some(1),
+            content_hash: 0,
+        })
+        .unwrap();
+
+        assert_eq!(image.code(), &[0, 0, 0]);
+        assert_eq!(image.resolve_entry("bullet_task").unwrap().id().get(), 0);
+        assert_eq!(
+            image.resolve_entry("main"),
+            Err(ResolveError::RootRequiresStartMain)
+        );
+        assert_eq!(
+            image.resolve_entry("helper"),
+            Err(ResolveError::UnknownEntry)
+        );
+        assert_eq!(
+            image.sub_meta(image.root().unwrap()).unwrap().kind(),
+            SubKind::Root
+        );
     }
 
     #[test]
-    fn entry_resolves_in_range_and_none_out_of_range() {
-        let img = EclImage {
-            code: vec![0, 1, 2, 3],
-            subs: vec![0, 2],
+    fn runtime_records_are_compact() {
+        assert_eq!(std::mem::size_of::<RuntimeSubMeta>(), 8);
+        assert_eq!(std::mem::size_of::<RuntimeEntryMeta>(), 8);
+    }
+
+    fn parts_with_entries(entries: Vec<EntryInit>) -> ImageParts {
+        ImageParts {
+            code: vec![0, 0, 0],
+            subs: vec![
+                SubInit::new(0, SubKind::Async, vec![]),
+                SubInit::new(1, SubKind::Async, vec![]),
+                SubInit::new(2, SubKind::Root, vec![]),
+            ],
+            entries,
+            root: Some(2),
+            content_hash: 7,
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_and_unsorted_entry_names() {
+        let duplicate = EclImage::try_from_parts(parts_with_entries(vec![
+            EntryInit::new("same", 0),
+            EntryInit::new("same", 1),
+        ]));
+        assert_eq!(duplicate, Err(ImageBuildError::EntriesNotStrictlySorted));
+
+        let unsorted = EclImage::try_from_parts(parts_with_entries(vec![
+            EntryInit::new("zeta", 0),
+            EntryInit::new("alpha", 1),
+        ]));
+        assert_eq!(unsorted, Err(ImageBuildError::EntriesNotStrictlySorted));
+    }
+
+    #[test]
+    fn rejects_non_ascii_or_invalid_ecl_entry_identifiers() {
+        for name in ["弹幕", "9worker", "with-dash", ""] {
+            let result = EclImage::try_from_parts(parts_with_entries(vec![
+                EntryInit::new(name, 0),
+                EntryInit::new("valid", 1),
+            ]));
+            assert_eq!(
+                result,
+                Err(ImageBuildError::InvalidEntryName {
+                    name: name.to_owned()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_async_entry_named_main() {
+        let result = EclImage::try_from_parts(parts_with_entries(vec![
+            EntryInit::new("main", 0),
+            EntryInit::new("worker", 1),
+        ]));
+        assert_eq!(
+            result,
+            Err(ImageBuildError::InvalidEntryName {
+                name: "main".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn accepts_only_the_exact_empty_sentinel_without_a_root() {
+        assert_eq!(
+            EclImage::try_from_parts(ImageParts {
+                code: vec![],
+                subs: vec![],
+                entries: vec![],
+                root: None,
+                content_hash: 0,
+            }),
+            Ok(EclImage::empty())
+        );
+
+        let nonempty = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: vec![SubInit::new(0, SubKind::CallOnly, vec![])],
+            entries: vec![],
+            root: None,
             content_hash: 0,
-        };
-        assert_eq!(img.entry(0), Some(0));
-        assert_eq!(img.entry(1), Some(2));
-        assert_eq!(img.entry(2), None, "越界脚本号 → None");
+        });
+        assert_eq!(nonempty, Err(ImageBuildError::MissingRoot));
+    }
+
+    #[test]
+    fn rejects_multiple_roots_root_mismatch_and_root_parameters() {
+        let multiple = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(0, SubKind::Root, vec![]),
+            ],
+            entries: vec![],
+            root: Some(0),
+            content_hash: 0,
+        });
+        assert_eq!(multiple, Err(ImageBuildError::MultipleRoots));
+
+        let mismatch = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(0, SubKind::CallOnly, vec![]),
+            ],
+            entries: vec![],
+            root: Some(1),
+            content_hash: 0,
+        });
+        assert_eq!(mismatch, Err(ImageBuildError::RootIndexMismatch));
+
+        let params = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: vec![SubInit::new(0, SubKind::Root, vec![EclValueType::Int])],
+            entries: vec![],
+            root: Some(0),
+            content_hash: 0,
+        });
+        assert_eq!(params, Err(ImageBuildError::RootHasParameters));
+    }
+
+    #[test]
+    fn rejects_entries_that_do_not_name_exactly_one_async_sub() {
+        let wrong_kind = EclImage::try_from_parts(ImageParts {
+            code: vec![0, 0],
+            subs: vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(1, SubKind::CallOnly, vec![]),
+            ],
+            entries: vec![EntryInit::new("helper", 1)],
+            root: Some(0),
+            content_hash: 0,
+        });
+        assert_eq!(
+            wrong_kind,
+            Err(ImageBuildError::EntryKindMismatch {
+                entry: 0,
+                kind: SubKind::CallOnly,
+            })
+        );
+
+        let missing =
+            EclImage::try_from_parts(parts_with_entries(vec![EntryInit::new("worker_a", 0)]));
+        assert_eq!(missing, Err(ImageBuildError::MissingAsyncEntry { sub: 1 }));
+
+        let duplicate = EclImage::try_from_parts(parts_with_entries(vec![
+            EntryInit::new("worker_a", 0),
+            EntryInit::new("worker_b", 0),
+        ]));
+        assert_eq!(
+            duplicate,
+            Err(ImageBuildError::DuplicateAsyncEntry { sub: 0 })
+        );
+    }
+
+    #[test]
+    fn rejects_parameter_count_and_flattened_table_overflow() {
+        let per_sub = EclImage::try_from_parts(ImageParts {
+            code: vec![0, 0],
+            subs: vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(1, SubKind::CallOnly, vec![EclValueType::Int; LOCALS + 1]),
+            ],
+            entries: vec![],
+            root: Some(0),
+            content_hash: 0,
+        });
+        assert_eq!(
+            per_sub,
+            Err(ImageBuildError::TooManyParameters {
+                sub: 1,
+                actual: LOCALS + 1,
+            })
+        );
+
+        let mut subs = Vec::with_capacity(u16::MAX as usize + 1);
+        subs.push(SubInit::new(0, SubKind::Root, vec![]));
+        subs.push(SubInit::new(
+            0,
+            SubKind::CallOnly,
+            vec![EclValueType::Int; 3],
+        ));
+        subs.extend(
+            (2..=u16::MAX).map(|_| SubInit::new(0, SubKind::CallOnly, vec![EclValueType::Int])),
+        );
+        let overflow = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs,
+            entries: vec![],
+            root: Some(0),
+            content_hash: 0,
+        });
+        assert_eq!(
+            overflow,
+            Err(ImageBuildError::ParameterTableTooLarge { actual: 65_537 })
+        );
+    }
+
+    #[test]
+    fn pins_u16_sub_and_entry_count_domains() {
+        let mut max_subs = Vec::with_capacity(u16::MAX as usize + 1);
+        max_subs.push(SubInit::new(0, SubKind::Root, vec![]));
+        max_subs.extend((1..=u16::MAX).map(|_| SubInit::new(0, SubKind::CallOnly, vec![])));
+        let image = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: max_subs,
+            entries: vec![],
+            root: Some(0),
+            content_hash: 0,
+        })
+        .unwrap();
+        assert_eq!(image.sub_id(u16::MAX).unwrap().get(), u16::MAX);
+
+        let too_many_subs = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: (0..65_537)
+                .map(|_| SubInit::new(0, SubKind::CallOnly, vec![]))
+                .collect(),
+            entries: vec![],
+            root: None,
+            content_hash: 0,
+        });
+        assert_eq!(
+            too_many_subs,
+            Err(ImageBuildError::TooManySubs { actual: 65_537 })
+        );
+
+        let too_many_entries = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: vec![SubInit::new(0, SubKind::Root, vec![])],
+            entries: (0..65_537).map(|_| EntryInit::new("x", 0)).collect(),
+            root: Some(0),
+            content_hash: 0,
+        });
+        assert_eq!(
+            too_many_entries,
+            Err(ImageBuildError::TooManyEntries { actual: 65_537 })
+        );
+    }
+
+    #[test]
+    fn zero_length_param_ranges_canonicalize_start_and_nonempty_end_may_equal_65536() {
+        let mut subs = Vec::with_capacity(u16::MAX as usize + 1);
+        subs.push(SubInit::new(0, SubKind::Root, vec![]));
+        subs.extend(
+            (1..u16::MAX).map(|_| SubInit::new(0, SubKind::CallOnly, vec![EclValueType::Int])),
+        );
+        subs.push(SubInit::new(
+            0,
+            SubKind::CallOnly,
+            vec![EclValueType::Int; 2],
+        ));
+        let image = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs,
+            entries: vec![],
+            root: Some(0),
+            content_hash: 0,
+        })
+        .unwrap();
+        assert!(image.param_types(image.root().unwrap()).unwrap().is_empty());
+        assert_eq!(
+            image.param_types(image.sub_id(u16::MAX).unwrap()).unwrap(),
+            &[EclValueType::Int, EclValueType::Int]
+        );
+    }
+
+    #[test]
+    fn rejects_code_entry_and_entry_sub_out_of_range() {
+        let code_entry = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: vec![SubInit::new(1, SubKind::Root, vec![])],
+            entries: vec![],
+            root: Some(0),
+            content_hash: 0,
+        });
+        assert_eq!(
+            code_entry,
+            Err(ImageBuildError::CodeEntryOutOfRange {
+                sub: 0,
+                code_entry: 1,
+            })
+        );
+
+        let entry_sub = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: vec![SubInit::new(0, SubKind::Root, vec![])],
+            entries: vec![EntryInit::new("worker", 1)],
+            root: Some(0),
+            content_hash: 0,
+        });
+        assert_eq!(
+            entry_sub,
+            Err(ImageBuildError::EntrySubOutOfRange { entry: 0, sub: 1 })
+        );
+    }
+
+    #[test]
+    fn rejects_names_longer_than_u16() {
+        let name = "a".repeat(u16::MAX as usize + 1);
+        let result = EclImage::try_from_parts(ImageParts {
+            code: vec![0, 0],
+            subs: vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(1, SubKind::Async, vec![]),
+            ],
+            entries: vec![EntryInit::new(name.clone(), 1)],
+            root: Some(0),
+            content_hash: 0,
+        });
+        assert_eq!(
+            result,
+            Err(ImageBuildError::NameTooLong {
+                name,
+                bytes: u16::MAX as usize + 1,
+            })
+        );
     }
 }

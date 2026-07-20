@@ -19,6 +19,7 @@ pub const LOCALS: usize = 64;
 pub const OWNER_STAGE: u8 = 0;
 pub const OWNER_ENEMY: u8 = 1;
 pub const OWNER_BULLET: u8 = 2;
+use crate::ecl::image::SubId;
 
 /// 一个 ECL 任务（协程）的完整可 memcpy 状态（I5：模拟协程完整状态位于可 memcpy 的扁平内存）。
 #[repr(C)]
@@ -27,7 +28,7 @@ pub struct Task {
     /// `EclImage.subs` 入口索引（T2 起穿线：`pc` 由 spawn 调用方解析 `ecl.entry(script)`
     /// 一次性戳入，运行期不重解——脚本号只用于 owner 门禁之外的一处校验：调度层每帧确认
     /// `ecl.entry(script)` 仍在册，越界即 Fault）。
-    pub script: u16,
+    pub script: SubId,
     /// 程序计数器：`VmCtx.code` 的字（word）索引——**全局绝对索引**（不是相对脚本入口的偏移），
     /// spawn 时由调用方戳为 `ecl.entry(script)` 的值。
     pub pc: u32,
@@ -54,7 +55,7 @@ impl Default for Task {
     /// (`OWNER_STAGE`)、`pc/wait/born_frame=0`、栈/调用栈/locals 全零。
     fn default() -> Self {
         Task {
-            script: 0,
+            script: SubId::default(),
             pc: 0,
             wait: 0,
             born_frame: 0,
@@ -95,7 +96,7 @@ impl TaskPool {
     /// `step::World::spawn_task` 是目前的两个调用方）。
     pub(crate) fn spawn(
         &mut self,
-        script: u16,
+        script: SubId,
         pc: u32,
         owner: (u8, u16, u16),
         parent: u16,
@@ -195,13 +196,17 @@ mod tests {
     #[test]
     fn spawn_is_lowest_free_and_writes_all_fields() {
         let mut p = TaskPool::new();
-        let a = p.spawn(3, 99, (OWNER_ENEMY, 7, 1), 0, 10).unwrap();
-        let b = p.spawn(4, 0, (OWNER_BULLET, 9, 2), a + 1, 11).unwrap();
+        let a = p
+            .spawn(SubId::default(), 99, (OWNER_ENEMY, 7, 1), 0, 10)
+            .unwrap();
+        let b = p
+            .spawn(SubId::default(), 0, (OWNER_BULLET, 9, 2), a + 1, 11)
+            .unwrap();
         assert_eq!((a, b), (0, 1), "最低空位升序");
         assert!(p.is_alive(a as usize));
         assert!(p.is_alive(b as usize));
         let t = &p.slots[a as usize];
-        assert_eq!(t.script, 3);
+        assert_eq!(t.script, SubId::default());
         assert_eq!(t.pc, 99, "pc 由调用方传入戳死（T2 起不再硬编码 0）");
         assert_eq!(t.wait, 0);
         assert_eq!(t.born_frame, 10);
@@ -219,10 +224,14 @@ mod tests {
     #[test]
     fn kill_frees_slot_for_reuse() {
         let mut p = TaskPool::new();
-        let a = p.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let a = p
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .unwrap();
         p.kill(a as usize);
         assert!(!p.is_alive(a as usize));
-        let b = p.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let b = p
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .unwrap();
         assert_eq!(b, a, "还槽后复用最低位");
     }
 
@@ -233,8 +242,12 @@ mod tests {
     #[test]
     fn kill_detaches_surviving_children_parent_pointer() {
         let mut p = TaskPool::new();
-        let parent = p.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
-        let child = p.spawn(0, 0, (OWNER_STAGE, 0, 0), parent + 1, 0).unwrap();
+        let parent = p
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .unwrap();
+        let child = p
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), parent + 1, 0)
+            .unwrap();
         p.kill(parent as usize);
         assert!(
             p.is_alive(child as usize),
@@ -249,10 +262,16 @@ mod tests {
     #[test]
     fn iter_alive_ascending_matches_alive_bits() {
         let mut p = TaskPool::new();
-        let a = p.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
-        let b = p.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let a = p
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .unwrap();
+        let b = p
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .unwrap();
         p.kill(a as usize);
-        let c = p.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let c = p
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .unwrap();
         assert_eq!(c, a, "复用最低位");
         let alive: Vec<usize> = p.iter_alive().collect();
         assert_eq!(alive, vec![a as usize, b as usize], "升序遍历（I4）");
@@ -263,12 +282,14 @@ mod tests {
         let mut p = TaskPool::new();
         for k in 0..TASK_CAP {
             assert!(
-                p.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).is_some(),
+                p.spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+                    .is_some(),
                 "第 {k} 个应成功"
             );
         }
         assert!(
-            p.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).is_none(),
+            p.spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+                .is_none(),
             "256 个耗尽"
         );
     }
@@ -276,7 +297,9 @@ mod tests {
     #[test]
     fn copy_into_full_roundtrip_and_checksum_matches() {
         let mut p = TaskPool::new();
-        let a = p.spawn(9, 0, (OWNER_ENEMY, 3, 1), 0, 5).unwrap();
+        let a = p
+            .spawn(SubId::default(), 0, (OWNER_ENEMY, 3, 1), 0, 5)
+            .unwrap();
         p.slots[a as usize].locals[10] = 77;
         let mut dst = TaskPool::new();
         p.copy_into(&mut dst);

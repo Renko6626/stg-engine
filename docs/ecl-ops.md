@@ -22,7 +22,7 @@
 | 1 | `WAIT` | — | 弹 1（帧数） | 写 `wait` 并让出；帧首 `wait>0` 递减跳过 |
 | 2 | `JMP` | 目标 pc | — | 无条件跳 |
 | 3 | `JZ` | 目标 pc | 弹 1（条件） | 条件==0 跳，否则顺序 |
-| 4 | `CALL` | 目标 pc | — | 压返回地址进调用栈（深 8），跳入 sub |
+| 4 | `CALL` | canonical `SubId` | — | 目标须为 `CallOnly`；压返回地址进调用栈（深 8），跳入 sub |
 | 5 | `RET` | — | — | 弹返回地址跳回 |
 | 10 | `PUSHI` | 立即数 | 压 1 | |
 | 11 | `PUSHL` | 槽号 <64 | 压 1 | 读 locals |
@@ -32,7 +32,7 @@
 | 20-25 | `ADD SUB MUL DIV MOD NEG` | — | 弹 2 压 1（NEG 弹 1 压 1） | i32 **wrapping** 语义；DIV/MOD 除零 Fault(4)、`MIN/-1` 回绕 |
 | 30-33 | `MULF DIVF SINB COSB` | — | 同上/弹 1 压 1 | Q16.16（i64 中间量）；SINB/COSB 取栈顶低 16 位 BAM 查表 |
 | 40-45 | `EQ NE LT LE GT GE` | — | 弹 2 压 1 | 压 0/1 |
-| 50 | `SPAWN` | script id | 压 1（任务号或 -1） | 派子任务：owner 继承、parent=自己、**次帧首跑**；池满压 -1 + `pool_full[POOL_TASK]` |
+| 50 | `SPAWN` | canonical `SubId`, argc | 弹 argc，压 1（任务号或 -1） | 目标须为 `Async` 且参数数目精确匹配；owner 继承、parent=自己、**次帧首跑**；池满压 -1 + `pool_full[POOL_TASK]` |
 | 51 | `KILL_SELF` | — | — | 即刻完成语义 |
 | 52 | `KILL_CHILDREN` | — | — | 升序杀**直系**子任务（不递归） |
 | 60 | `SYS` | syscall 号 | 按号 | 一切副作用唯一通道（白名单） |
@@ -54,7 +54,7 @@
   状态（复用既有 `Task.born_frame`），对全部 owner 种类（含 STAGE）均有意义。次帧首跑时
   `age==1`（不是 0），见"作者须知" |
 | 10 | `self_hp_max`（M1.5） | — | owner 敌 `hp_max`（非敌读 0，同 `self_hp` 误用策略） |
-| 20 | `create_bullet` | appearance,x,y,speed,angle,xform_off,xform_cnt,task_script | 弹句柄或 -1 |
+| 20 | `create_bullet` | appearance,x,y,speed,angle,xform_off,xform_cnt,task_sub | 弹句柄或 -1 |
 | 21 | `create_bullets_batch` | appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step | 实发数 |
 | 22 | `spawn_enemy` | x,y,hp,drop_table,score | 敌句柄或 -1 |
 | 23 | `drop_item` | x,y,item_type | 道具句柄或 -1 |
@@ -66,7 +66,8 @@
 
 `create_bullet` 走**丙方案**：`(xform_off, xform_cnt)` 指向本任务 locals 内打包槽
 （每槽 3 字：`word0=(wait<<16)|(op<<8)`、`word1/2=args`，≤16 槽）；`xform_cnt=0` 哑弹；
-`task_script >= 0` 时绑定层再派子任务（owner=新弹）；appearance 查 `WorldTables.appearances`
+`task_sub >= 0` 时其值是 canonical `SubId`，且必须指向零参数 `Async` sub；绑定层再派子任务
+（owner=新弹）；appearance 查 `WorldTables.appearances`
 定默认 radius/sprite。
 
 ## globals 段纪律（甲案，M1.5）

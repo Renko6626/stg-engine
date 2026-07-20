@@ -30,6 +30,7 @@
 //!
 //! ```
 //! use stg_core::math::{Angle, Fx};
+//! use stg_core::ecl::image::SubKind;
 //! use stg_ecl_compiler::{ImageBuilder, SubBuilder};
 //!
 //! let mut ib = ImageBuilder::new();
@@ -40,14 +41,18 @@
 //!     8, Angle::ZERO, 8192, 1, Fx::from_int(2), Fx::ZERO,
 //! );
 //! main.end();
-//! let main_id = ib.add_sub(main);
-//! let image = ib.build();
-//! assert_eq!(image.subs[main_id.0 as usize], 0);
+//! let main_id = ib.declare_sub("main", SubKind::Root, &[])?;
+//! ib.define_sub(main_id, main)?;
+//! let image = ib.build()?;
+//! assert_eq!(image.root().unwrap().get(), 0);
+//! # Ok::<(), stg_core::ecl::image::ImageBuildError>(())
 //! ```
 
 pub mod lang;
 
-use stg_core::ecl::image::EclImage;
+use stg_core::ecl::image::{
+    EclImage, EclValueType, EntryInit, ImageBuildError, ImageParts, SubInit, SubKind,
+};
 use stg_core::ecl::ops::{
     OP_ADD, OP_CALL, OP_COSB, OP_DIV, OP_DIVF, OP_DUP, OP_END, OP_EQ, OP_GE, OP_GT, OP_JMP, OP_JZ,
     OP_KILL_CHILDREN, OP_KILL_SELF, OP_LE, OP_LT, OP_MOD, OP_MUL, OP_MULF, OP_NE, OP_NEG, OP_POP,
@@ -58,10 +63,28 @@ use stg_core::ecl::task::LOCALS;
 use stg_core::math::{Angle, Fx};
 use stg_core::xform::XformSlot;
 
-/// 脚本号——只能经 [`ImageBuilder::add_sub`] 取得（构造顺序即号——`build()` 时按此顺序
-/// 把各 sub 的本地字节码依次拼进同一份扁平 `code`）。`call`/`spawn` 用它跨 sub 引用。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct ScriptId(pub u16);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BuilderSubRef(u32);
+
+#[derive(Clone, Copy, Debug)]
+struct JumpFixup {
+    operand: usize,
+    target: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TargetUse {
+    Call,
+    Spawn { argc: u8 },
+    Fire,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TargetFixup {
+    operand: usize,
+    target: BuilderSubRef,
+    usage: TargetUse,
+}
 
 /// 一段子程序的构建器：raw 发射器 + 结构化糖（回填跳转）+ 类型化 syscall 薄壳。
 ///
@@ -75,10 +98,8 @@ pub struct SubBuilder {
     /// 位置（本 sub 本地 code 下标）→ 该处操作数已经是"本 sub 本地目标 pc"，`build()` 拼接时
     /// 整体 `+= base_offset` 即得全局绝对 pc（`JMP`/`JZ` 回填目标，`repeat`/`if_ge`/
     /// `loop_forever` 用它）。
-    jump_fixups: Vec<usize>,
-    /// 位置 → 目标 `ScriptId`：`build()` 时改写为该脚本的绝对入口（`call` 用；`spawn` 的
-    /// 操作数是纯 script id 数值，VM 运行期自己查 `ecl.entry()`，故不需要这张表）。
-    call_fixups: Vec<(usize, ScriptId)>,
+    jump_fixups: Vec<JumpFixup>,
+    target_fixups: Vec<TargetFixup>,
     next_repeat_slot: u8,
     ended: bool,
 }
@@ -94,7 +115,7 @@ impl SubBuilder {
         SubBuilder {
             code: Vec::new(),
             jump_fixups: Vec::new(),
-            call_fixups: Vec::new(),
+            target_fixups: Vec::new(),
             next_repeat_slot: (LOCALS - 1) as u8,
             ended: false,
         }
@@ -114,7 +135,11 @@ impl SubBuilder {
 
     #[inline]
     pub(crate) fn patch(&mut self, pos: usize, local_target: usize) {
-        self.code[pos] = local_target as u32;
+        self.jump_fixups
+            .iter_mut()
+            .find(|fixup| fixup.operand == pos)
+            .expect("patch target must refer to a recorded jump operand")
+            .target = local_target;
     }
 
     // ── codegen 专用 raw 原语（`lang::codegen` 消费；`pub(crate)`——仅本 crate 内部，
@@ -129,7 +154,10 @@ impl SubBuilder {
     pub(crate) fn raw_jz(&mut self) -> usize {
         self.emit(OP_JZ as u32);
         let p = self.emit(0);
-        self.jump_fixups.push(p);
+        self.jump_fixups.push(JumpFixup {
+            operand: p,
+            target: 0,
+        });
         p
     }
 
@@ -137,7 +165,10 @@ impl SubBuilder {
     pub(crate) fn raw_jmp(&mut self) -> usize {
         self.emit(OP_JMP as u32);
         let p = self.emit(0);
-        self.jump_fixups.push(p);
+        self.jump_fixups.push(JumpFixup {
+            operand: p,
+            target: 0,
+        });
         p
     }
 
@@ -255,10 +286,14 @@ impl SubBuilder {
 
     /// 子程序调用（`OP_CALL`）：目标是另一 sub 的绝对入口，`build()` 时回填
     /// （`call_fixups`——此刻还不知道目标 sub 在最终拼接后的绝对偏移）。
-    pub fn call(&mut self, sub: ScriptId) {
+    pub fn call(&mut self, sub: BuilderSubRef) {
         self.emit(OP_CALL as u32);
         let p = self.emit(0);
-        self.call_fixups.push((p, sub));
+        self.target_fixups.push(TargetFixup {
+            operand: p,
+            target: sub,
+            usage: TargetUse::Call,
+        });
     }
 
     /// 协程派生（`OP_SPAWN`）：操作数是**纯 script id 数值**（VM 运行期自己
@@ -270,10 +305,15 @@ impl SubBuilder {
     /// 表达式求值链），`OP_SPAWN` 会逆序弹出落进子任务 `locals[0..argc)`——弹完后
     /// `locals` 顺序仍是声明序，见 `vm.rs::exec` 的 `OP_SPAWN` 分支文档。`argc=0` 是
     /// 既有零参调用点的等价形态（不弹栈、子任务 locals 全零，逐位不变）。
-    pub fn spawn(&mut self, sub: ScriptId, argc: u8) {
+    pub fn spawn(&mut self, sub: BuilderSubRef, argc: u8) {
         self.emit(OP_SPAWN as u32);
-        self.emit(sub.0 as u32);
+        let p = self.emit(0);
         self.emit(argc as u32);
+        self.target_fixups.push(TargetFixup {
+            operand: p,
+            target: sub,
+            usage: TargetUse::Spawn { argc },
+        });
     }
 
     /// `end()`：追加 `OP_END`（`build()` 时若某 sub 未调用过本方法会自动补一次，
@@ -293,7 +333,10 @@ impl SubBuilder {
         body(self);
         self.emit(OP_JMP as u32);
         let p = self.emit(0);
-        self.jump_fixups.push(p);
+        self.jump_fixups.push(JumpFixup {
+            operand: p,
+            target: 0,
+        });
         self.patch(p, top);
     }
 
@@ -303,7 +346,10 @@ impl SubBuilder {
     pub fn if_ge(&mut self, body: impl FnOnce(&mut Self)) {
         self.emit(OP_JZ as u32);
         let jz_pos = self.emit(0);
-        self.jump_fixups.push(jz_pos);
+        self.jump_fixups.push(JumpFixup {
+            operand: jz_pos,
+            target: 0,
+        });
         body(self);
         let after = self.here();
         self.patch(jz_pos, after);
@@ -335,11 +381,17 @@ impl SubBuilder {
 
         self.emit(OP_JZ as u32);
         let jz_pos = self.emit(0);
-        self.jump_fixups.push(jz_pos);
+        self.jump_fixups.push(JumpFixup {
+            operand: jz_pos,
+            target: 0,
+        });
 
         self.emit(OP_JMP as u32);
         let jmp_pos = self.emit(0);
-        self.jump_fixups.push(jmp_pos);
+        self.jump_fixups.push(JumpFixup {
+            operand: jmp_pos,
+            target: 0,
+        });
         self.patch(jmp_pos, top);
 
         let after = self.here();
@@ -414,7 +466,7 @@ impl SubBuilder {
         angle: Angle,
         xform_off: i32,
         xform_cnt: i32,
-        task_script: Option<ScriptId>,
+        task_script: Option<BuilderSubRef>,
     ) {
         self.push_i(appearance as i32);
         self.push_i(x.raw());
@@ -423,8 +475,23 @@ impl SubBuilder {
         self.push_i(angle.raw() as i32);
         self.push_i(xform_off);
         self.push_i(xform_cnt);
-        self.push_i(task_script.map_or(-1, |s| s.0 as i32));
+        self.push_task_ref(task_script);
         self.sys(syscall::SYS_CREATE_BULLET);
+    }
+
+    pub(crate) fn push_task_ref(&mut self, task: Option<BuilderSubRef>) {
+        match task {
+            None => self.push_i(-1),
+            Some(target) => {
+                self.emit(OP_PUSHI as u32);
+                let operand = self.emit(0);
+                self.target_fixups.push(TargetFixup {
+                    operand,
+                    target,
+                    usage: TargetUse::Fire,
+                });
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -561,333 +628,498 @@ impl SubBuilder {
     }
 }
 
-/// 镜像构建器：`add_sub` 收集各 sub 的构建器（赋 [`ScriptId`] = 加入序），`build` 拼接成
-/// 一份扁平 `EclImage`（回填跨 sub `call` 目标 + 平移每 sub 内部的局部跳转目标）。
+struct SubDecl {
+    name: String,
+    kind: SubKind,
+    params: Vec<EclValueType>,
+    body: Option<SubBuilder>,
+}
+
 #[derive(Default)]
 pub struct ImageBuilder {
-    subs: Vec<SubBuilder>,
+    subs: Vec<SubDecl>,
 }
 
 impl ImageBuilder {
     pub fn new() -> Self {
-        ImageBuilder { subs: Vec::new() }
+        Self { subs: Vec::new() }
     }
 
-    /// 登记一个已构建的子程序，返回其 [`ScriptId`]（= 当前 `subs.len()`，即加入顺序）。
-    pub fn add_sub(&mut self, sub: SubBuilder) -> ScriptId {
-        let id = ScriptId(self.subs.len() as u16);
-        self.subs.push(sub);
-        id
+    pub fn declare_sub(
+        &mut self,
+        name: &str,
+        kind: SubKind,
+        params: &[EclValueType],
+    ) -> Result<BuilderSubRef, ImageBuildError> {
+        if !valid_identifier(name) {
+            return Err(ImageBuildError::InvalidEntryName {
+                name: name.to_owned(),
+            });
+        }
+        if self.subs.iter().any(|decl| decl.name == name) {
+            return Err(ImageBuildError::DuplicateSubName {
+                name: name.to_owned(),
+            });
+        }
+        if kind == SubKind::Root && name != "main" {
+            return Err(ImageBuildError::InvalidRootName {
+                name: name.to_owned(),
+            });
+        }
+        if name == "main" && kind != SubKind::Root {
+            return Err(ImageBuildError::ReservedMainKind { kind });
+        }
+        if kind == SubKind::Root && !params.is_empty() {
+            return Err(ImageBuildError::RootHasParameters);
+        }
+        if params.len() > LOCALS {
+            return Err(ImageBuildError::TooManyParameters {
+                sub: self.subs.len(),
+                actual: params.len(),
+            });
+        }
+        let id = u32::try_from(self.subs.len()).map_err(|_| ImageBuildError::OperandOverflow)?;
+        self.subs.push(SubDecl {
+            name: name.to_owned(),
+            kind,
+            params: params.to_vec(),
+            body: None,
+        });
+        Ok(BuilderSubRef(id))
     }
 
-    /// 拼接为 `EclImage`：
-    /// 1. 未调用过 [`SubBuilder::end`] 的 sub 自动补一条 `OP_END`（宁可正常收尾，不留
-    ///    悬空字节码——脚本作者忘写 `end()` 不该变成 `FAULT_PC_OOB`）。
-    /// 2. 逐 sub 顺序拼接本地 `code` 进最终扁平数组，记下各自的绝对基址（= 入口，
-    ///    `EclImage.subs[i]`）。
-    /// 3. 局部跳转回填（`jump_fixups`）：每处操作数原本是"sub 本地目标 pc"，整体
-    ///    `+= base_offset` 变成全局绝对 pc。
-    /// 4. 跨 sub 调用回填（`call_fixups`）：每处操作数原本是占位 0，改写为目标 sub 的
-    ///    绝对入口（`base_offset[target]`）。
-    ///
-    /// `content_hash` 占位 0（同 `WorldTables`/`EclImage` 现有惯例，文件加载刀再补真哈希）。
-    pub fn build(mut self) -> EclImage {
-        for s in &mut self.subs {
-            if !s.ended {
-                s.end();
+    pub fn define_sub(
+        &mut self,
+        sub: BuilderSubRef,
+        body: SubBuilder,
+    ) -> Result<(), ImageBuildError> {
+        let Some(decl) = self.subs.get_mut(sub.0 as usize) else {
+            return Err(ImageBuildError::InvalidBuilderRef);
+        };
+        if decl.body.is_some() {
+            return Err(ImageBuildError::DuplicateDefinition {
+                name: decl.name.clone(),
+            });
+        }
+        decl.body = Some(body);
+        Ok(())
+    }
+
+    pub fn build(mut self) -> Result<EclImage, ImageBuildError> {
+        if self.subs.is_empty() {
+            return Ok(EclImage::empty());
+        }
+        if !self.subs.iter().any(|decl| decl.kind == SubKind::Root) {
+            return Err(ImageBuildError::MissingRoot);
+        }
+        for decl in &self.subs {
+            if decl.body.is_none() {
+                return Err(ImageBuildError::UndefinedSub {
+                    name: decl.name.clone(),
+                });
+            }
+        }
+        if self.subs.len() > u16::MAX as usize + 1 {
+            return Err(ImageBuildError::TooManySubs {
+                actual: self.subs.len(),
+            });
+        }
+
+        for decl in &mut self.subs {
+            let body = decl.body.as_mut().expect("definitions checked above");
+            if !body.ended {
+                if decl.kind == SubKind::CallOnly {
+                    body.raw_ret();
+                } else {
+                    body.end();
+                }
             }
         }
 
-        let mut base_offsets: Vec<usize> = Vec::with_capacity(self.subs.len());
-        let mut code: Vec<u32> = Vec::new();
-        for s in &self.subs {
-            base_offsets.push(code.len());
-            code.extend_from_slice(&s.code);
+        let mut order: Vec<usize> = (0..self.subs.len()).collect();
+        order.sort_by(|&left, &right| self.subs[left].name.cmp(&self.subs[right].name));
+
+        let mut canonical = vec![0u16; self.subs.len()];
+        let mut bases = vec![0usize; self.subs.len()];
+        let mut code = Vec::new();
+        for (canonical_index, &decl_index) in order.iter().enumerate() {
+            canonical[decl_index] =
+                u16::try_from(canonical_index).map_err(|_| ImageBuildError::OperandOverflow)?;
+            bases[decl_index] = code.len();
+            code.extend_from_slice(
+                &self.subs[decl_index]
+                    .body
+                    .as_ref()
+                    .expect("definitions checked above")
+                    .code,
+            );
+            if code.len() > u32::MAX as usize {
+                return Err(ImageBuildError::CodeTooLong { words: code.len() });
+            }
         }
 
-        for (i, s) in self.subs.iter().enumerate() {
-            let base = base_offsets[i];
-            for &p in &s.jump_fixups {
-                code[base + p] += base as u32;
+        for &decl_index in &order {
+            let base = bases[decl_index];
+            let body = self.subs[decl_index]
+                .body
+                .as_ref()
+                .expect("definitions checked above");
+            for fixup in &body.jump_fixups {
+                let absolute = base
+                    .checked_add(fixup.target)
+                    .ok_or(ImageBuildError::OperandOverflow)?;
+                let word = u32::try_from(absolute).map_err(|_| ImageBuildError::OperandOverflow)?;
+                let operand = base
+                    .checked_add(fixup.operand)
+                    .ok_or(ImageBuildError::OperandOverflow)?;
+                *code
+                    .get_mut(operand)
+                    .ok_or(ImageBuildError::OperandOverflow)? = word;
             }
-            for &(p, target) in &s.call_fixups {
-                code[base + p] = base_offsets[target.0 as usize] as u32;
+            for fixup in &body.target_fixups {
+                let target_index = fixup.target.0 as usize;
+                let target = self
+                    .subs
+                    .get(target_index)
+                    .ok_or(ImageBuildError::InvalidBuilderRef)?;
+                let (expected_kind, expected_arity, actual_arity) = match fixup.usage {
+                    TargetUse::Call => (SubKind::CallOnly, None, None),
+                    TargetUse::Spawn { argc } => (
+                        SubKind::Async,
+                        Some(
+                            u8::try_from(target.params.len())
+                                .map_err(|_| ImageBuildError::OperandOverflow)?,
+                        ),
+                        Some(argc),
+                    ),
+                    TargetUse::Fire => (SubKind::Async, Some(0), Some(0)),
+                };
+                if target.kind != expected_kind {
+                    return Err(ImageBuildError::WrongTargetKind {
+                        target: target.name.clone(),
+                        expected: expected_kind,
+                        actual: target.kind,
+                    });
+                }
+                if let (Some(expected), Some(actual)) = (expected_arity, actual_arity)
+                    && expected != actual
+                {
+                    return Err(ImageBuildError::WrongTargetArity {
+                        target: target.name.clone(),
+                        expected,
+                        actual,
+                    });
+                }
+                let operand = base
+                    .checked_add(fixup.operand)
+                    .ok_or(ImageBuildError::OperandOverflow)?;
+                *code
+                    .get_mut(operand)
+                    .ok_or(ImageBuildError::OperandOverflow)? = canonical[target_index] as u32;
             }
         }
 
-        let subs: Vec<u32> = base_offsets.into_iter().map(|o| o as u32).collect();
-        EclImage {
+        let mut subs = Vec::with_capacity(order.len());
+        let mut entries = Vec::new();
+        let mut root = None;
+        for (canonical_index, &decl_index) in order.iter().enumerate() {
+            let decl = &self.subs[decl_index];
+            let code_entry =
+                u32::try_from(bases[decl_index]).map_err(|_| ImageBuildError::OperandOverflow)?;
+            subs.push(SubInit::new(code_entry, decl.kind, decl.params.clone()));
+            let sub =
+                u16::try_from(canonical_index).map_err(|_| ImageBuildError::OperandOverflow)?;
+            match decl.kind {
+                SubKind::Root => root = Some(sub),
+                SubKind::Async => entries.push(EntryInit::new(&decl.name, sub)),
+                SubKind::CallOnly => {}
+            }
+        }
+        EclImage::try_from_parts(ImageParts {
             code,
             subs,
+            entries,
+            root,
             content_hash: 0,
-        }
+        })
     }
+}
+
+fn valid_identifier(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stg_core::ecl::image::{EclValueType, ImageBuildError, SubKind};
 
-    /// 空 `ImageBuilder`（无 sub）→ 空镜像，等价 `EclImage::empty()` 的形状。
     #[test]
-    fn empty_builder_yields_empty_image() {
-        let image = ImageBuilder::new().build();
-        assert!(image.code.is_empty());
-        assert!(image.subs.is_empty());
-    }
-
-    /// `end()` 未显式调用 → `build()` 自动补一条（入口仍指向 sub 起点，序列以 END 收尾）。
-    #[test]
-    fn missing_end_is_auto_appended() {
-        let mut ib = ImageBuilder::new();
-        let mut s = SubBuilder::new();
-        s.push_i(1);
-        let id = ib.add_sub(s);
-        let image = ib.build();
-        assert_eq!(image.subs[id.0 as usize], 0);
-        assert_eq!(*image.code.last().unwrap(), OP_END as u32, "自动补 END");
-    }
-
-    /// 两个 sub 顺序拼接：第二个 sub 的入口 = 第一个 sub 的 code 长度（基址平移正确）。
-    #[test]
-    fn two_subs_entries_are_sequential_base_offsets() {
-        let mut ib = ImageBuilder::new();
-        let mut a = SubBuilder::new();
-        a.push_i(1);
-        a.end();
-        let a_len = a.code.len() as u32;
-        let a_id = ib.add_sub(a);
-
-        let mut b = SubBuilder::new();
-        b.push_i(2);
-        b.end();
-        let b_id = ib.add_sub(b);
-
-        let image = ib.build();
-        assert_eq!(image.subs[a_id.0 as usize], 0);
-        assert_eq!(image.subs[b_id.0 as usize], a_len);
-    }
-
-    /// `loop_forever`：回填的 `JMP` 目标必须精确落在 `body` 起点（哪怕空 `body`）。
-    #[test]
-    fn loop_forever_backpatches_to_body_start_even_when_empty() {
-        let mut ib = ImageBuilder::new();
-        let mut s = SubBuilder::new();
-        s.loop_forever(|_| {}); // 空 body：应生成恰一条自跳转 JMP 0
-        let id = ib.add_sub(s);
-        let image = ib.build();
-        let entry = image.subs[id.0 as usize] as usize;
-        assert_eq!(image.code[entry], OP_JMP as u32);
-        assert_eq!(
-            image.code[entry + 1],
-            entry as u32,
-            "空 body 回环：JMP 目标 = 自身起点"
-        );
-    }
-
-    /// `if_ge`：`JZ` 回填目标必须精确落在 `body` 之后（空 body 时紧挨 JZ 自身之后）。
-    #[test]
-    fn if_ge_backpatches_past_empty_body() {
-        let mut ib = ImageBuilder::new();
-        let mut s = SubBuilder::new();
-        s.if_ge(|_| {});
-        s.push_i(42);
-        s.end();
-        let id = ib.add_sub(s);
-        let image = ib.build();
-        let entry = image.subs[id.0 as usize] as usize;
-        assert_eq!(image.code[entry], OP_JZ as u32);
-        // JZ 头字(entry) + 操作数字(entry+1) 之后紧跟 PUSHI 42（entry+2）——目标应指向此处。
-        assert_eq!(image.code[entry + 1], (entry + 2) as u32);
-        assert_eq!(image.code[entry + 2], OP_PUSHI as u32);
-    }
-
-    /// 嵌套 `repeat`：外层 slot=63、内层 slot=62（自动降一格，不与外层计数器相撞）——
-    /// 通过读取生成码里 `POPL`/`PUSHL` 的槽号操作数间接验证（结构细节，非公开 API，
-    /// 但值得钉死以防"忘记降格"回归）。
-    #[test]
-    fn nested_repeat_uses_distinct_locals_slots() {
-        let mut ib = ImageBuilder::new();
-        let mut s = SubBuilder::new();
-        s.repeat(2, |outer| {
-            outer.repeat(3, |_inner| {});
-        });
-        s.end();
-        let id = ib.add_sub(s);
-        let image = ib.build();
-        let entry = image.subs[id.0 as usize] as usize;
-        // 布局：PUSHI 2, POPL slot_outer, [PUSHI 3, POPL slot_inner, ... inner loop-back ...],
-        // PUSHL slot_outer, PUSHI 1, SUB, DUP, POPL slot_outer, JZ, JMP, END
-        assert_eq!(image.code[entry], OP_PUSHI as u32);
-        assert_eq!(image.code[entry + 1], 2);
-        assert_eq!(image.code[entry + 2], OP_POPL as u32);
-        let outer_slot = image.code[entry + 3];
-        assert_eq!(outer_slot, 63, "外层 repeat 计数槽 = LOCALS-1");
-        assert_eq!(image.code[entry + 4], OP_PUSHI as u32);
-        assert_eq!(image.code[entry + 5], 3);
-        assert_eq!(image.code[entry + 6], OP_POPL as u32);
-        let inner_slot = image.code[entry + 7];
-        assert_eq!(inner_slot, 62, "内层 repeat 降一格，不与外层相撞");
-    }
-
-    /// 空 `repeat` body（`n>0`）：body 内无指令，但计数/跳转骨架仍完整生成
-    /// （回填不因空 body 而错位——恰跳过 0 条指令）。
-    #[test]
-    fn repeat_empty_body_boundary() {
-        let mut ib = ImageBuilder::new();
-        let mut s = SubBuilder::new();
-        s.repeat(5, |_| {});
-        s.push_i(9);
-        s.end();
-        let id = ib.add_sub(s);
-        let image = ib.build();
-        let entry = image.subs[id.0 as usize] as usize;
-        // PUSHI 5, POPL slot [body 空], PUSHL slot, PUSHI 1, SUB, DUP, POPL slot, JZ tgt, JMP top
-        // top = entry+4（body 起点，空）；JZ 落在 body 之后的判定序列结束处。
-        let top = entry + 4;
-        assert_eq!(image.code[entry], OP_PUSHI as u32);
-        assert_eq!(image.code[entry + 1], 5);
-        assert_eq!(image.code[entry + 2], OP_POPL as u32);
-        assert_eq!(
-            image.code[top], OP_PUSHL as u32,
-            "body 空——判定序列紧跟计数器初始化"
-        );
-        // JZ/JMP 位置：top + [PUSHL,slot(2), PUSHI,1(2), SUB(1), DUP(1), POPL,slot(2)] = top+8
-        let jz_pos = top + 8;
-        assert_eq!(image.code[jz_pos], OP_JZ as u32);
-        let jmp_pos = jz_pos + 2;
-        assert_eq!(image.code[jmp_pos], OP_JMP as u32);
-        assert_eq!(
-            image.code[jmp_pos + 1],
-            top as u32,
-            "JMP 回环目标 = body 起点（top）"
-        );
-        let after = jmp_pos + 2;
-        assert_eq!(
-            image.code[jz_pos + 1],
-            after as u32,
-            "JZ 目标 = 循环之后（PUSHI 9）"
-        );
-        assert_eq!(image.code[after], OP_PUSHI as u32);
-        assert_eq!(image.code[after + 1], 9);
-    }
-
-    /// B15 覆盖缺口补齐：`repeat(n<=0, body)` 是 **build 期** no-op——`body` 闭包本身
-    /// 不被调用（不是"发出一个跑 0 次的运行期循环骨架"），且不发出任何 repeat 相关字节码
-    /// （计数器初始化/跳转骨架整段缺席），前后语句紧邻拼接。n=0 与负数同律（模块文档
-    /// "repeat" 既有拍板），此处 0/-1/-100 三档一并钉死。
-    #[test]
-    fn repeat_zero_or_negative_n_is_a_build_time_noop() {
-        for n in [0, -1, -100] {
+    fn builder_assigns_ids_and_code_layout_by_name_not_declaration_order() {
+        fn build(reverse: bool) -> EclImage {
             let mut ib = ImageBuilder::new();
-            let mut s = SubBuilder::new();
-            let mut invoked = false;
-            s.repeat(n, |_| invoked = true);
-            s.push_i(9);
-            s.end();
-            assert!(
-                !invoked,
-                "n={n}：body 闭包不应被调用——build 期 no-op，不是运行期 0 次循环"
-            );
-            let id = ib.add_sub(s);
-            let image = ib.build();
-            let entry = image.subs[id.0 as usize] as usize;
-            assert_eq!(
-                image.code[entry], OP_PUSHI as u32,
-                "n={n}：不应发出任何 repeat 骨架，紧接着的语句直接落在入口"
-            );
-            assert_eq!(image.code[entry + 1], 9, "n={n}");
-            assert_eq!(image.code[entry + 2], OP_END as u32, "n={n}");
+            let main = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
+            let worker = ib
+                .declare_sub("worker", SubKind::Async, &[EclValueType::Int])
+                .unwrap();
+            let helper = ib.declare_sub("helper", SubKind::CallOnly, &[]).unwrap();
+            let order = if reverse {
+                [worker, helper, main]
+            } else {
+                [main, helper, worker]
+            };
+            for id in order {
+                let mut sub = SubBuilder::new();
+                if id == helper {
+                    sub.raw_ret();
+                } else {
+                    sub.end();
+                }
+                ib.define_sub(id, sub).unwrap();
+            }
+            ib.build().unwrap()
         }
+        assert_eq!(build(false), build(true));
     }
 
-    /// `call`：跨 sub 回填——操作数最终等于目标 sub 的绝对入口（`base_offsets[target]`），
-    /// 不论目标 sub 是在调用方之前还是之后 `add_sub`。
     #[test]
-    fn call_backpatches_to_absolute_target_entry_regardless_of_add_order() {
-        // 目标 sub 在调用方**之前**添加（callee 先 add_sub，拿到 ScriptId 后 caller 才引用）。
+    fn call_and_spawn_operands_are_canonical_sub_ids() {
         let mut ib = ImageBuilder::new();
-        let mut callee = SubBuilder::new();
-        callee.push_i(77);
-        callee.end();
-        let callee_id = ib.add_sub(callee);
+        let worker = ib.declare_sub("worker", SubKind::Async, &[]).unwrap();
+        let main = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
+        let helper = ib.declare_sub("helper", SubKind::CallOnly, &[]).unwrap();
 
-        let mut caller = SubBuilder::new();
-        caller.call(callee_id);
-        caller.end();
-        let caller_id = ib.add_sub(caller);
+        let mut main_body = SubBuilder::new();
+        main_body.call(helper);
+        main_body.spawn(worker, 0);
+        main_body.end();
+        ib.define_sub(main, main_body).unwrap();
 
-        let image = ib.build();
-        let caller_entry = image.subs[caller_id.0 as usize] as usize;
-        let callee_entry = image.subs[callee_id.0 as usize] as usize;
-        assert_eq!(image.code[caller_entry], OP_CALL as u32);
+        for id in [worker, helper] {
+            let mut body = SubBuilder::new();
+            if id == helper {
+                body.raw_ret();
+            } else {
+                body.end();
+            }
+            ib.define_sub(id, body).unwrap();
+        }
+
+        let image = ib.build().unwrap();
+        let pc = image.sub_meta(image.root().unwrap()).unwrap().code_entry() as usize;
         assert_eq!(
-            image.code[caller_entry + 1],
-            callee_entry as u32,
-            "CALL 操作数回填为目标绝对入口"
+            &image.code()[pc..pc + 5],
+            &[OP_CALL as u32, 0, OP_SPAWN as u32, 2, 0],
         );
     }
 
-    /// `spawn`：操作数是纯 script id 数值 + argc（不回填、不随拼接偏移变化）。
+    fn defined_body(kind: SubKind) -> SubBuilder {
+        let mut body = SubBuilder::new();
+        if kind == SubKind::CallOnly {
+            body.raw_ret();
+        } else {
+            body.end();
+        }
+        body
+    }
+
     #[test]
-    fn spawn_operand_is_plain_script_id_and_argc_no_fixup() {
+    fn builder_rejects_duplicate_declaration_and_invalid_ref() {
         let mut ib = ImageBuilder::new();
-        let mut a = SubBuilder::new();
-        a.push_i(0);
-        a.end();
-        let a_id = ib.add_sub(a);
-
-        let mut b = SubBuilder::new();
-        b.spawn(a_id, 3);
-        b.end();
-        let b_id = ib.add_sub(b);
-
-        let image = ib.build();
-        let b_entry = image.subs[b_id.0 as usize] as usize;
-        assert_eq!(image.code[b_entry], OP_SPAWN as u32);
+        ib.declare_sub("main", SubKind::Root, &[]).unwrap();
         assert_eq!(
-            image.code[b_entry + 1],
-            a_id.0 as u32,
-            "SPAWN 操作数恒 = script id"
+            ib.declare_sub("main", SubKind::Root, &[]),
+            Err(ImageBuildError::DuplicateSubName {
+                name: "main".to_owned()
+            })
         );
-        assert_eq!(image.code[b_entry + 2], 3, "第二操作数 = argc");
+        assert_eq!(
+            ib.define_sub(BuilderSubRef(u32::MAX), SubBuilder::new()),
+            Err(ImageBuildError::InvalidBuilderRef)
+        );
     }
 
-    /// `sys_create_bullet` 生成的压栈序 == 手写 8 参正序（`SYS_CREATE_BULLET` 号紧随其后）。
     #[test]
-    fn sys_create_bullet_emits_forward_order_args_and_sys_number() {
-        let mut s = SubBuilder::new();
-        s.sys_create_bullet(
-            2,
-            Fx::from_int(10),
-            Fx::from_int(-20),
-            Fx::from_int(3),
-            Angle::QUARTER,
-            5,
-            1,
-            Some(ScriptId(7)),
+    fn builder_rejects_undefined_and_duplicate_definitions() {
+        let mut undefined = ImageBuilder::new();
+        undefined.declare_sub("main", SubKind::Root, &[]).unwrap();
+        assert_eq!(
+            undefined.build(),
+            Err(ImageBuildError::UndefinedSub {
+                name: "main".to_owned()
+            })
         );
-        let expect = vec![
-            OP_PUSHI as u32,
-            2,
-            OP_PUSHI as u32,
-            Fx::from_int(10).raw() as u32,
-            OP_PUSHI as u32,
-            Fx::from_int(-20).raw() as u32,
-            OP_PUSHI as u32,
-            Fx::from_int(3).raw() as u32,
-            OP_PUSHI as u32,
-            Angle::QUARTER.raw() as u32,
-            OP_PUSHI as u32,
-            5,
-            OP_PUSHI as u32,
-            1,
-            OP_PUSHI as u32,
-            7,
-            OP_SYS as u32,
-            syscall::SYS_CREATE_BULLET as u32,
-        ];
-        assert_eq!(s.code, expect);
+
+        let mut duplicate = ImageBuilder::new();
+        let main = duplicate.declare_sub("main", SubKind::Root, &[]).unwrap();
+        duplicate
+            .define_sub(main, defined_body(SubKind::Root))
+            .unwrap();
+        assert_eq!(
+            duplicate.define_sub(main, defined_body(SubKind::Root)),
+            Err(ImageBuildError::DuplicateDefinition {
+                name: "main".to_owned()
+            })
+        );
+    }
+
+    fn wrong_target_image(op: impl FnOnce(&mut SubBuilder, BuilderSubRef)) -> ImageBuilder {
+        let mut ib = ImageBuilder::new();
+        let main = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
+        let target = ib.declare_sub("target", SubKind::Async, &[]).unwrap();
+        let mut body = SubBuilder::new();
+        op(&mut body, target);
+        body.end();
+        ib.define_sub(main, body).unwrap();
+        ib.define_sub(target, defined_body(SubKind::Async)).unwrap();
+        ib
+    }
+
+    #[test]
+    fn builder_rejects_call_to_root_or_async() {
+        let async_call = wrong_target_image(|body, target| body.call(target));
+        assert_eq!(
+            async_call.build(),
+            Err(ImageBuildError::WrongTargetKind {
+                target: "target".to_owned(),
+                expected: SubKind::CallOnly,
+                actual: SubKind::Async,
+            })
+        );
+
+        let mut root_call = ImageBuilder::new();
+        let main = root_call.declare_sub("main", SubKind::Root, &[]).unwrap();
+        let helper = root_call
+            .declare_sub("helper", SubKind::CallOnly, &[])
+            .unwrap();
+        let mut helper_body = SubBuilder::new();
+        helper_body.call(main);
+        helper_body.raw_ret();
+        root_call
+            .define_sub(main, defined_body(SubKind::Root))
+            .unwrap();
+        root_call.define_sub(helper, helper_body).unwrap();
+        assert_eq!(
+            root_call.build(),
+            Err(ImageBuildError::WrongTargetKind {
+                target: "main".to_owned(),
+                expected: SubKind::CallOnly,
+                actual: SubKind::Root,
+            })
+        );
+    }
+
+    #[test]
+    fn builder_rejects_spawn_to_root_or_call_only_and_wrong_arity() {
+        for (kind, name) in [(SubKind::Root, "main"), (SubKind::CallOnly, "helper")] {
+            let mut ib = ImageBuilder::new();
+            let main = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
+            let target = if kind == SubKind::Root {
+                main
+            } else {
+                ib.declare_sub(name, kind, &[]).unwrap()
+            };
+            let mut body = SubBuilder::new();
+            body.spawn(target, 0);
+            body.end();
+            ib.define_sub(main, body).unwrap();
+            if target != main {
+                ib.define_sub(target, defined_body(kind)).unwrap();
+            }
+            assert_eq!(
+                ib.build(),
+                Err(ImageBuildError::WrongTargetKind {
+                    target: name.to_owned(),
+                    expected: SubKind::Async,
+                    actual: kind,
+                })
+            );
+        }
+
+        let mut arity = ImageBuilder::new();
+        let main = arity.declare_sub("main", SubKind::Root, &[]).unwrap();
+        let worker = arity
+            .declare_sub("worker", SubKind::Async, &[EclValueType::Int])
+            .unwrap();
+        let mut body = SubBuilder::new();
+        body.spawn(worker, 0);
+        body.end();
+        arity.define_sub(main, body).unwrap();
+        arity
+            .define_sub(worker, defined_body(SubKind::Async))
+            .unwrap();
+        assert_eq!(
+            arity.build(),
+            Err(ImageBuildError::WrongTargetArity {
+                target: "worker".to_owned(),
+                expected: 1,
+                actual: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn builder_requires_zero_param_root_named_main() {
+        let mut missing = ImageBuilder::new();
+        let worker = missing.declare_sub("worker", SubKind::Async, &[]).unwrap();
+        missing
+            .define_sub(worker, defined_body(SubKind::Async))
+            .unwrap();
+        assert_eq!(missing.build(), Err(ImageBuildError::MissingRoot));
+
+        let mut params = ImageBuilder::new();
+        assert_eq!(
+            params.declare_sub("main", SubKind::Root, &[EclValueType::Int]),
+            Err(ImageBuildError::RootHasParameters)
+        );
+    }
+
+    #[test]
+    fn builder_checks_jump_operand_overflow() {
+        let mut ib = ImageBuilder::new();
+        let main = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
+        let body = SubBuilder {
+            code: vec![OP_JMP as u32, 0],
+            jump_fixups: vec![JumpFixup {
+                operand: 1,
+                target: usize::MAX,
+            }],
+            target_fixups: vec![],
+            next_repeat_slot: (LOCALS - 1) as u8,
+            ended: true,
+        };
+        ib.define_sub(main, body).unwrap();
+        assert_eq!(ib.build(), Err(ImageBuildError::OperandOverflow));
+    }
+
+    #[test]
+    fn fire_target_is_canonicalized_and_must_be_zero_arg_async() {
+        let mut ib = ImageBuilder::new();
+        let worker = ib.declare_sub("worker", SubKind::Async, &[]).unwrap();
+        let main = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
+        let mut body = SubBuilder::new();
+        body.sys_create_bullet(
+            0,
+            Fx::ZERO,
+            Fx::ZERO,
+            Fx::ZERO,
+            Angle::ZERO,
+            0,
+            0,
+            Some(worker),
+        );
+        body.end();
+        ib.define_sub(main, body).unwrap();
+        ib.define_sub(worker, defined_body(SubKind::Async)).unwrap();
+        let image = ib.build().unwrap();
+        assert!(
+            image
+                .code()
+                .windows(2)
+                .any(|pair| pair == [OP_PUSHI as u32, 1])
+        );
     }
 
     /// `write_xform_locals`：逐槽生成 3 对 `PUSHI+POPL`，`word0` 打包位精确。
@@ -952,12 +1184,13 @@ mod tests {
             b.sys_set_var_from_stack(); // globals[SLOT] = 旧值+1
         });
         s.end();
-        let main_id = ib.add_sub(s);
-        let image = ib.build();
+        let main_id = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
+        ib.define_sub(main_id, s).unwrap();
+        let image = ib.build().unwrap();
 
         let mut w = World::new(1);
         let idx = w
-            .spawn_task(&image, main_id.0, (OWNER_STAGE, 0, 0))
+            .spawn_task(&image, image.root().unwrap(), &[], (OWNER_STAGE, 0, 0))
             .unwrap();
 
         // 出生帧跳过；次帧首跑——无 WAIT，一次 exec 应跑到 END（3 次迭代远小于 1024 预算）。
@@ -989,11 +1222,12 @@ mod tests {
         s.sys_self_hp_max();
         s.sys_set_var_from_stack();
         s.end();
-        let main_id = ib.add_sub(s);
-        let image = ib.build();
+        let main_id = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
+        ib.define_sub(main_id, s).unwrap();
+        let image = ib.build().unwrap();
 
         let mut w = World::new(1);
-        w.spawn_task(&image, main_id.0, (OWNER_STAGE, 0, 0))
+        w.spawn_task(&image, image.root().unwrap(), &[], (OWNER_STAGE, 0, 0))
             .unwrap();
         step(&mut w, &TABLES_V0, &image, &InputFrame::empty(0)); // born 帧：门禁跳过
         step(&mut w, &TABLES_V0, &image, &InputFrame::empty(1)); // 次帧首跑
@@ -1034,11 +1268,12 @@ mod tests {
             s.wait(5);
         });
         main.end();
-        let main_id = ib.add_sub(main);
-        let image = ib.build();
+        let main_id = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
+        ib.define_sub(main_id, main).unwrap();
+        let image = ib.build().unwrap();
 
         let mut w = World::new(1);
-        w.spawn_task(&image, main_id.0, (OWNER_STAGE, 0, 0))
+        w.spawn_task(&image, image.root().unwrap(), &[], (OWNER_STAGE, 0, 0))
             .unwrap();
 
         for f in 0..20u32 {

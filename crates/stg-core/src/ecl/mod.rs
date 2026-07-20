@@ -27,7 +27,7 @@ pub use image::EclImage;
 #[cfg(test)]
 mod fuzz_smoke {
     use crate::checksum::Checksum;
-    use crate::ecl::image::EclImage;
+    use crate::ecl::image::{EclImage, SubInit, SubKind, test_image};
     use crate::ecl::ops;
     use crate::ecl::task::OWNER_STAGE;
     use crate::input::InputFrame;
@@ -48,11 +48,12 @@ mod fuzz_smoke {
             }
             code.push(w);
         }
-        EclImage {
+        test_image(
             code,
-            subs: vec![0],
-            content_hash: 0,
-        }
+            vec![SubInit::new(0, SubKind::Root, vec![])],
+            vec![],
+            Some(0),
+        )
     }
 
     /// ① 256 份全随机镜像 × 60 帧：不 panic、不越界，Fault 走确定性通道。
@@ -62,7 +63,7 @@ mod fuzz_smoke {
         for i in 0..256u64 {
             let img = random_image(&mut rng, false);
             let mut w = World::new(0x1000 + i);
-            w.spawn_task(&img, 0, (OWNER_STAGE, 0, 0));
+            w.spawn_task(&img, img.root().unwrap(), &[], (OWNER_STAGE, 0, 0));
             for f in 0..60u32 {
                 step(&mut w, &TABLES_V0, &img, &InputFrame::empty(f));
             }
@@ -79,7 +80,7 @@ mod fuzz_smoke {
             let img = random_image(&mut rng, true);
             let seed = 0x2000 + i;
             let mut wa = World::new(seed);
-            wa.spawn_task(&img, 0, (OWNER_STAGE, 0, 0));
+            wa.spawn_task(&img, img.root().unwrap(), &[], (OWNER_STAGE, 0, 0));
             let mut wb = World::new(seed);
             for f in 0..60u32 {
                 step(&mut wa, &TABLES_V0, &img, &InputFrame::empty(f));

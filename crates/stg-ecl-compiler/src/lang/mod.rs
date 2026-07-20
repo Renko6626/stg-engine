@@ -127,8 +127,8 @@ mod tests {
     #[test]
     fn compile_produces_executable_image_with_one_entry() {
         let image = compile("sub main() { }", "smoke.ecl").expect("应编译成功");
-        assert_eq!(image.subs.len(), 1, "一个 sub = 一个入口");
-        assert!(!image.code.is_empty(), "至少要有一条终结 op");
+        assert_eq!(image.sub_count(), 1, "一个 sub = 一个入口");
+        assert!(!image.code().is_empty(), "至少要有一条终结 op");
     }
 
     /// 编译器确定性（全管线级别，plan 明文钉死）：同源码两次 `compile` 必须产出逐字节相同
@@ -140,8 +140,7 @@ mod tests {
                    sub main() { helper(5); loop { wait(1); } }";
         let img1 = compile(src, "a.ecl").expect("应编译成功");
         let img2 = compile(src, "a.ecl").expect("应编译成功");
-        assert_eq!(img1.code, img2.code, "两次编译的字节码必须逐字相同");
-        assert_eq!(img1.subs, img2.subs, "两次编译的入口表必须逐字相同");
+        assert_eq!(img1, img2, "两次编译的镜像必须逐字段相同");
     }
 
     /// 编译器确定性的最小切片（T1 范围）：同源码两次 `parse` 必须产出逐字段相等的

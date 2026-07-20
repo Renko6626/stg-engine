@@ -866,14 +866,12 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
             drop_table: 0,
             score: 10000,
         });
-        // `EclImage` 没有名字表（见 stg-core/src/ecl/image.rs），script id = 源码声明序；
-        // rainbow.ecl 保留语言草图原始顺序（const→xformdef→patrol→timer_ui→main），
-        // main 是最后一个声明的 sub，故取 `subs.len() - 1`（见 rainbow.ecl 头部注释）。
-        let main_script = (image.subs.len() - 1) as u16;
+        let main_script = image.root().expect("镜像应有 main root");
         world2
             .spawn_task(
                 &image,
                 main_script,
+                &[],
                 (OWNER_ENEMY, boss.index, boss.generation),
             )
             .expect("main 任务应能派生（新镜像/新池，容量均未耗尽）");
@@ -1017,8 +1015,8 @@ mod ecl_rainbow_tests {
     #[test]
     fn rainbow_ecl_compiles_clean_with_three_subs() {
         let image = compile_rainbow_image();
-        assert_eq!(image.subs.len(), 3, "patrol + timer_ui + main（声明序）");
-        assert!(!image.code.is_empty());
+        assert_eq!(image.sub_count(), 3, "patrol + timer_ui + main");
+        assert!(!image.code().is_empty());
     }
 
     /// 稳态判别（输入脚本同金向量二号真实建场路径——全程持 BTN_SHOT + 左右缓移，自机弹真的
@@ -1030,13 +1028,14 @@ mod ecl_rainbow_tests {
     #[test]
     fn rainbow_scene_reaches_steady_state() {
         let image = compile_rainbow_image();
-        let main_script = (image.subs.len() - 1) as u16;
+        let main_script = image.root().expect("镜像应有 main root");
         let mut w = World::new(0x524E_424F_5701);
         w.body.set_var(RANK_SLOT, 2);
         let boss = w.body.create_enemy(boss_init());
         w.spawn_task(
             &image,
             main_script,
+            &[],
             (OWNER_ENEMY, boss.index, boss.generation),
         )
         .expect("spawn 应成功（新镜像/新池）");

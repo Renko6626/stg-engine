@@ -11,7 +11,7 @@
 //! `World.tasks`，owner 门禁 → 次帧首跑门禁 → wait 门禁 → 全局预算门禁 → `exec`。
 #![allow(dead_code)]
 
-use crate::ecl::image::EclImage;
+use crate::ecl::image::{EclImage, SubId, SubKind};
 use crate::ecl::ops::{self, ARITY};
 use crate::ecl::syscall;
 use crate::ecl::task::{
@@ -153,10 +153,21 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
                 if task.csp as usize >= CALL_DEPTH {
                     return Exec::Fault(FAULT_CALL_DEPTH);
                 }
-                let target = ctx.code[opnd_start];
+                let Ok(raw) = u16::try_from(ctx.code[opnd_start]) else {
+                    return Exec::Fault(FAULT_BAD_OP);
+                };
+                let Some(target) = ctx.ecl.sub_id(raw) else {
+                    return Exec::Fault(FAULT_BAD_OP);
+                };
+                let Some(meta) = ctx.ecl.sub_meta(target) else {
+                    return Exec::Fault(FAULT_BAD_OP);
+                };
+                if meta.kind() != SubKind::CallOnly {
+                    return Exec::Fault(FAULT_BAD_OP);
+                }
                 task.calls[task.csp as usize] = next_pc;
                 task.csp += 1;
-                task.pc = target;
+                task.pc = meta.code_entry();
                 continue;
             }
             ops::OP_RET => {
@@ -299,15 +310,30 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
                 // 的是 arg0，落进 `args[0]`——弹完 `args[0..argc)` 才是声明序，与
                 // `SubBuilder::spawn`/表层 codegen 的压栈序严格配对（同 syscall "正序压栈、
                 // 逆序弹出"惯例的同款镜像）。
-                let script = ctx.code[opnd_start] as u16;
+                let Ok(raw) = u16::try_from(ctx.code[opnd_start]) else {
+                    return Exec::Fault(FAULT_BAD_OP);
+                };
                 let argc = ctx.code[opnd_start + 1] as usize;
                 if argc > LOCALS {
                     return Exec::Fault(FAULT_STACK);
                 }
-                let Some(pc0) = ctx.ecl.entry(script) else {
+                let Some(script) = ctx.ecl.sub_id(raw) else {
                     // 坏脚本号：同 PUSHL/POPL 越界处置口径，复用 FAULT_BAD_OP。
                     return Exec::Fault(FAULT_BAD_OP);
                 };
+                let Some(meta) = ctx.ecl.sub_meta(script) else {
+                    return Exec::Fault(FAULT_BAD_OP);
+                };
+                if meta.kind() != SubKind::Async {
+                    return Exec::Fault(FAULT_BAD_OP);
+                }
+                if ctx
+                    .ecl
+                    .param_types(script)
+                    .is_none_or(|params| params.len() != argc)
+                {
+                    return Exec::Fault(FAULT_BAD_OP);
+                }
                 if (task.sp as usize) < argc {
                     // 父栈不够 argc 个值：确定性拒绝，复用 FAULT_STACK（同求值栈上溢下溢口径）。
                     return Exec::Fault(FAULT_STACK);
@@ -318,7 +344,10 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
                 }
                 let owner = (task.owner_kind, task.owner_index, task.owner_gen);
                 let parent = ctx.self_index + 1;
-                match ctx.tasks.spawn(script, pc0, owner, parent, ctx.frame) {
+                match ctx
+                    .tasks
+                    .spawn(script, meta.code_entry(), owner, parent, ctx.frame)
+                {
                     Some(idx) => {
                         // 子任务 locals 已被 TaskPool::spawn 全零初始化（复用槽写满纪律）——
                         // 只需覆写 [0..argc) 段，argc=0 时这是 no-op（金向量两段不变的地基）。
@@ -357,14 +386,14 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
 
 /// 组一条 `EVT_TASK_FAULT` 事件（`a_index` = 任务池索引，`data = [fault_code, script]`，
 /// 见 `events.rs` 文档）。
-fn fault_event(task_index: u16, fault_code: u8, script: u16) -> Event {
+fn fault_event(task_index: u16, fault_code: u8, script: SubId) -> Event {
     Event {
         kind: EVT_TASK_FAULT,
         a_index: task_index,
         a_gen: 0,
         x: Fx::ZERO,
         y: Fx::ZERO,
-        data: [fault_code as i32, script as i32],
+        data: [fault_code as i32, script.get() as i32],
     }
 }
 
@@ -434,7 +463,7 @@ pub(crate) fn run_tasks(
             continue; // 本帧没轮到：不是它的错，次帧满血重跑（不 Fault，见函数文档）
         }
 
-        let Some(pc0) = ecl.entry(t.script) else {
+        let Some(_meta) = ecl.sub_meta(t.script) else {
             // 脚本号已不在册（画面外情形——正常 spawn 路径已在创建时校验，这里是防御）：
             // 视同确定性坏行为，杀 + 事件 + 计数。
             tasks.kill(i);
@@ -442,10 +471,8 @@ pub(crate) fn run_tasks(
             body.push_event(fault_event(i as u16, FAULT_BAD_OP, t.script));
             continue;
         };
-        let _ = pc0; // 入口只在 spawn 时戳一次 pc；此处仅确认脚本仍在册，不重置 pc（履历续跑）。
-
         let mut ctx = VmCtx {
-            code: &ecl.code,
+            code: ecl.code(),
             budget: &mut budget,
             tasks: &mut *tasks,
             ecl,
@@ -476,12 +503,45 @@ pub(crate) fn run_tasks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecl::image::{EntryInit, SubInit, SubKind, test_image};
     use crate::ecl::ops::*;
+
+    fn async_image(code: Vec<u32>, params: usize) -> EclImage {
+        test_image(
+            code,
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(
+                    0,
+                    SubKind::Async,
+                    vec![crate::ecl::image::EclValueType::Int; params],
+                ),
+            ],
+            vec![EntryInit::new("worker", 1)],
+            Some(0),
+        )
+    }
+
+    fn call_image(code: Vec<u32>, call_entry: u32) -> EclImage {
+        test_image(
+            code,
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(call_entry, SubKind::CallOnly, vec![]),
+            ],
+            vec![],
+            Some(0),
+        )
+    }
 
     /// 测试专用最小世界（`World::new` 提供 `body`/`tasks`；`&TABLES_V0` 提供静态表）——
     /// T3 起 `VmCtx` 扩出 `body`/`tables`，测试构造从"裸 `TaskPool`+`DiagCounters`"改走此路。
     fn test_world() -> Box<crate::step::World> {
         crate::step::World::new(1)
+    }
+
+    fn sid() -> SubId {
+        SubId::default()
     }
 
     /// 通用 op 走格用：空任务池 + 空镜像（不涉及 `SPAWN`/`KILL_CHILDREN` 的测试用它即可）。
@@ -733,7 +793,7 @@ mod tests {
 
     #[test]
     fn call_ret_roundtrip_shares_locals_across_call() {
-        // main: idx0 PUSHI 5；idx2 POPL 0；idx4 CALL 9；idx6 PUSHL 0；idx8 END
+        // main: idx0 PUSHI 5；idx2 POPL 0；idx4 CALL sub=1；idx6 PUSHL 0；idx8 END
         // sub : idx9 PUSHL 0；idx11 PUSHI 1；idx13 ADD；idx14 POPL 0；idx16 RET
         let code = [
             OP_PUSHI as u32,
@@ -741,7 +801,7 @@ mod tests {
             OP_POPL as u32,
             0, // 2,3
             OP_CALL as u32,
-            9, // 4,5
+            1, // 4,5
             OP_PUSHL as u32,
             0,             // 6,7
             OP_END as u32, // 8
@@ -754,7 +814,22 @@ mod tests {
             0,             // 14,15
             OP_RET as u32, // 16
         ];
-        let (r, t) = run(&code);
+        let ecl = call_image(code.to_vec(), 9);
+        let mut task = Task::default();
+        let mut budget = u32::MAX;
+        let mut w = test_world();
+        let mut ctx = VmCtx {
+            code: ecl.code(),
+            budget: &mut budget,
+            tasks: &mut w.tasks,
+            ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
+            self_index: 0,
+            frame: 0,
+        };
+        let r = exec(&mut task, &mut ctx);
+        let t = task;
         assert_eq!(r, Exec::End);
         assert_eq!(t.sp, 1);
         assert_eq!(
@@ -767,8 +842,23 @@ mod tests {
     #[test]
     fn call_depth_exceeded_at_9th_call() {
         // 自递归 CALL：前 8 层成功压栈，第 9 层触发 Fault(5)。
-        let code = [OP_CALL as u32, 0];
-        let (r, t) = run(&code);
+        let code = [OP_CALL as u32, 1];
+        let ecl = call_image(code.to_vec(), 0);
+        let mut task = Task::default();
+        let mut budget = u32::MAX;
+        let mut w = test_world();
+        let mut ctx = VmCtx {
+            code: ecl.code(),
+            budget: &mut budget,
+            tasks: &mut w.tasks,
+            ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
+            self_index: 0,
+            frame: 0,
+        };
+        let r = exec(&mut task, &mut ctx);
+        let t = task;
         assert_eq!(r, Exec::Fault(FAULT_CALL_DEPTH));
         assert_eq!(t.csp as usize, CALL_DEPTH, "恰用满 8 层后第 9 层拒");
     }
@@ -970,11 +1060,7 @@ mod tests {
     #[test]
     fn spawn_op_inherits_owner_and_stamps_child_fields() {
         let mut w = test_world();
-        let ecl = EclImage {
-            code: vec![OP_END as u32],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = async_image(vec![OP_END as u32], 0);
         let mut budget = u32::MAX;
         let mut task = Task {
             owner_kind: OWNER_ENEMY,
@@ -983,7 +1069,7 @@ mod tests {
             ..Task::default()
         };
         let mut ctx = VmCtx {
-            code: &[OP_SPAWN as u32, 0, 0, OP_END as u32],
+            code: &[OP_SPAWN as u32, 1, 0, OP_END as u32],
             budget: &mut budget,
             tasks: &mut w.tasks,
             ecl: &ecl,
@@ -1016,11 +1102,7 @@ mod tests {
     #[test]
     fn spawn_with_args_lands_in_child_locals_in_declaration_order() {
         let mut w = test_world();
-        let ecl = EclImage {
-            code: vec![OP_END as u32],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = async_image(vec![OP_END as u32], 3);
         let mut budget = u32::MAX;
         let mut task = Task::default();
         let mut ctx = VmCtx {
@@ -1032,7 +1114,7 @@ mod tests {
                 OP_PUSHI as u32,
                 33,
                 OP_SPAWN as u32,
-                0,
+                1,
                 3, // script=0, argc=3
                 OP_END as u32,
             ],
@@ -1074,16 +1156,12 @@ mod tests {
     #[test]
     fn spawn_insufficient_parent_stack_faults() {
         let mut w = test_world();
-        let ecl = EclImage {
-            code: vec![OP_END as u32],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = async_image(vec![OP_END as u32], 3);
         let mut budget = u32::MAX;
         let mut task = Task::default();
         let alive_before = w.tasks.iter_alive().count();
         let mut ctx = VmCtx {
-            code: &[OP_SPAWN as u32, 0, 3], // argc=3，但父栈空
+            code: &[OP_SPAWN as u32, 1, 3], // argc=3，但父栈空
             budget: &mut budget,
             tasks: &mut w.tasks,
             ecl: &ecl,
@@ -1128,18 +1206,14 @@ mod tests {
         let mut w = test_world();
         for _ in 0..TASK_CAP {
             w.tasks
-                .spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0)
+                .spawn(sid(), 0, (OWNER_STAGE, 0, 0), 0, 0)
                 .expect("池未满前应成功");
         }
-        let ecl = EclImage {
-            code: vec![OP_END as u32],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = async_image(vec![OP_END as u32], 0);
         let mut budget = u32::MAX;
         let mut task = Task::default();
         let mut ctx = VmCtx {
-            code: &[OP_SPAWN as u32, 0, 0, OP_END as u32],
+            code: &[OP_SPAWN as u32, 1, 0, OP_END as u32],
             budget: &mut budget,
             tasks: &mut w.tasks,
             ecl: &ecl,
@@ -1159,16 +1233,16 @@ mod tests {
     #[test]
     fn kill_children_kills_only_direct_children() {
         let mut w = test_world();
-        let self_idx = w.tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let self_idx = w.tasks.spawn(sid(), 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
         let child = w
             .tasks
-            .spawn(0, 0, (OWNER_STAGE, 0, 0), self_idx + 1, 0)
+            .spawn(sid(), 0, (OWNER_STAGE, 0, 0), self_idx + 1, 0)
             .unwrap();
         let grandchild = w
             .tasks
-            .spawn(0, 0, (OWNER_STAGE, 0, 0), child + 1, 0)
+            .spawn(sid(), 0, (OWNER_STAGE, 0, 0), child + 1, 0)
             .unwrap();
-        let unrelated = w.tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let unrelated = w.tasks.spawn(sid(), 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
 
         let ecl = EclImage::empty();
         let mut budget = u32::MAX;
@@ -1203,16 +1277,16 @@ mod tests {
         let mut w = test_world();
         let ecl = EclImage::empty();
 
-        let parent_a = w.tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let parent_a = w.tasks.spawn(sid(), 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
         let orphan = w
             .tasks
-            .spawn(0, 0, (OWNER_STAGE, 0, 0), parent_a + 1, 0)
+            .spawn(sid(), 0, (OWNER_STAGE, 0, 0), parent_a + 1, 0)
             .unwrap();
         w.tasks.kill(parent_a as usize); // A 死——orphan 存活，但按 detached 语义应彻底断亲。
 
         // 最低空位分配器：A 的槽此刻是最低空位，D 的 spawn 天然捡回它——这正是本条测试
         // 要钉的"槽复用"场景，不是巧合。
-        let d = w.tasks.spawn(0, 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
+        let d = w.tasks.spawn(sid(), 0, (OWNER_STAGE, 0, 0), 0, 0).unwrap();
         assert_eq!(d, parent_a, "复用同一槽号，才是本条测试要钉的场景");
 
         let mut budget = u32::MAX;

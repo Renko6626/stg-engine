@@ -13,14 +13,12 @@
 //! 复用的是同一套 `jump_fixups` 回填机制（sub 内本地 target，`build()` 时随 sub 基址
 //! 整体平移）——不是绕开既有机制另建一条路。
 //!
-//! ## sub 名 → `ScriptId`：声明序，一次性算好（不依赖 `ImageBuilder::add_sub` 的调用序）
+//! ## sub 名 → `BuilderSubRef`：先声明、后定义
 //!
 //! `call`/`spawn`/`fire` 的 `task` 引用都需要在**生成目标 sub 自己的字节码之前**就知道
-//! 引用者的 `ScriptId`（互相调用是常态，A 调 B 时 B 可能还没生成）。`ImageBuilder::add_sub`
-//! 的 `ScriptId` 分配规则是"调用序"（`self.subs.len()`），故只要本模块按 `Program.subs`
-//! 的**声明序**依次生成每个 sub 并依次 `add_sub`，declaration-order 与 add-order 天然重合
-//! ——`generate` 因此可以在生成任何 sub 体之前，先用纯声明序枚举出完整的
-//! `name → ScriptId` 映射表，全程只读，不需要"先占位后回填"的两趟。
+//! 引用者（互相调用是常态，A 调 B 时 B 可能还没生成）。`generate` 因此先声明全部 sub，
+//! 得到稳定的 `name → BuilderSubRef` 映射，再生成并定义各个 body。最终 `build()` 按名字
+//! 排序并把引用重写为 canonical `SubId`，产物不依赖源码声明顺序。
 //!
 //! ## call-style vs entry-style：`return;` 降低成 `OP_RET` 还是 `OP_END`
 //!
@@ -65,9 +63,9 @@ use crate::lang::typeck::{
     BinIntent, CallArg, CallTarget, CastIntent, TypedCall, TypedExpr, TypedExprKind, TypedInfo,
     TypedStmt, TypedSub, UnIntent,
 };
-use crate::{ImageBuilder, ScriptId, SubBuilder};
+use crate::{BuilderSubRef, ImageBuilder, SubBuilder};
 use std::collections::BTreeMap;
-use stg_core::ecl::image::EclImage;
+use stg_core::ecl::image::{EclImage, EclValueType, ImageBuildError, SubKind};
 use stg_core::xform::XformSlot;
 
 // xformdef 操作名映射表已上移 `lang::xform_map`（slots 趟与本趟共用的单一权威，含物理
@@ -135,9 +133,8 @@ struct LoopCtx {
 struct Gen<'p> {
     sm: &'p SlotMap,
     xformdefs: BTreeMap<String, &'p crate::lang::ast::XformDef>,
-    name_to_id: BTreeMap<String, ScriptId>,
+    name_to_ref: BTreeMap<String, BuilderSubRef>,
     sub_params: BTreeMap<String, Vec<String>>,
-    call_style: BTreeMap<String, bool>,
     consts: BTreeMap<String, i32>,
     errors: Vec<CompileError>,
 }
@@ -353,7 +350,7 @@ impl<'p> Gen<'p> {
                         }
                     }
                 }
-                let id = self.name_to_id[&call.name];
+                let id = self.name_to_ref[&call.name];
                 let argc = call.args.len();
                 // 同 `narrow_slot`：argc 经由目标 sub 参数落在其自身 locals 区间，间接
                 // 受同一条 ≤64 上限约束，正常源码走不到这条断言（C19 复审修复）。
@@ -372,10 +369,10 @@ impl<'p> Gen<'p> {
                 self.gen_call(b, slots, call);
             }
             TypedStmt::Return => {
-                if *self.call_style.get(&sub.name).unwrap_or(&false) {
-                    b.raw_ret();
-                } else {
+                if sub.name == "main" || sub.is_async {
                     b.end();
+                } else {
+                    b.raw_ret();
                 }
             }
             TypedStmt::Break => {
@@ -557,7 +554,7 @@ impl<'p> Gen<'p> {
                         }
                     }
                 }
-                let id = self.name_to_id[&target_name];
+                let id = self.name_to_ref[&target_name];
                 b.call(id);
             }
             CallTarget::Builtin(bi) => self.gen_builtin_call(b, slots, bi, &call.args),
@@ -593,10 +590,9 @@ impl<'p> Gen<'p> {
                 },
                 (CallArg::SubRef(name_opt), ParamKind::SubRef) => match name_opt {
                     Some(name) => {
-                        let id = self.name_to_id[name];
-                        b.push_i(id.0 as i32);
+                        b.push_task_ref(Some(self.name_to_ref[name]));
                     }
-                    None => b.push_i(-1),
+                    None => b.push_task_ref(None),
                 },
                 _ => unreachable!("typeck 已保证 CallArg 与 ParamKind 一一对应"),
             }
@@ -619,18 +615,41 @@ impl<'p> Gen<'p> {
 }
 
 /// codegen 趟入口：`TypedInfo`/`SlotMap`/原始 `Program`（xformdef 常量折叠用）→
-/// `EclImage`。sub 名 → `ScriptId` 按 `Program.subs` 声明序分配（模块文档）。
+/// `EclImage`。所有 sub 先声明再生成；Builder 按名字确定最终 ABI。
 pub fn generate(
     prog: &Program,
     ti: &TypedInfo,
     sm: &SlotMap,
 ) -> Result<EclImage, Vec<CompileError>> {
-    let name_to_id: BTreeMap<String, ScriptId> = prog
-        .subs
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.name.clone(), ScriptId(i as u16)))
-        .collect();
+    let mut ib = ImageBuilder::new();
+    let mut name_to_ref = BTreeMap::new();
+    for sub in &ti.subs {
+        let kind = if sub.name == "main" {
+            SubKind::Root
+        } else if sub.is_async {
+            SubKind::Async
+        } else {
+            SubKind::CallOnly
+        };
+        let params: Vec<EclValueType> = sub
+            .params
+            .iter()
+            .map(|(_, ty)| match ty {
+                crate::lang::ast::Ty::Int => EclValueType::Int,
+                crate::lang::ast::Ty::Fx => EclValueType::Fx,
+                crate::lang::ast::Ty::Angle => EclValueType::Angle,
+            })
+            .collect();
+        let span = prog
+            .subs
+            .iter()
+            .find(|source| source.name == sub.name)
+            .map_or(Span { line: 1, col: 1 }, |source| source.span);
+        let id = ib
+            .declare_sub(&sub.name, kind, &params)
+            .map_err(|error| image_error_at(span, error))?;
+        name_to_ref.insert(sub.name.clone(), id);
+    }
     let sub_params: BTreeMap<String, Vec<String>> = ti
         .subs
         .iter()
@@ -641,13 +660,6 @@ pub fn generate(
             )
         })
         .collect();
-    let mut call_style: BTreeMap<String, bool> =
-        ti.subs.iter().map(|s| (s.name.clone(), false)).collect();
-    for s in &ti.subs {
-        for callee in &s.sync_calls {
-            call_style.insert(callee.clone(), true);
-        }
-    }
     let consts: BTreeMap<String, i32> = ti.consts.iter().map(|(n, _, v)| (n.clone(), *v)).collect();
     let xformdefs: BTreeMap<String, &crate::lang::ast::XformDef> =
         prog.xformdefs.iter().map(|x| (x.name.clone(), x)).collect();
@@ -655,34 +667,42 @@ pub fn generate(
     let mut g = Gen {
         sm,
         xformdefs,
-        name_to_id,
+        name_to_ref,
         sub_params,
-        call_style,
         consts,
         errors: Vec::new(),
     };
 
-    let mut ib = ImageBuilder::new();
     for sub in &ti.subs {
         let slots = &sm.subs[&sub.name];
         let mut b = SubBuilder::new();
         g.gen_xformdef_staging(&mut b, slots, sub);
         let mut loops: Vec<LoopCtx> = Vec::new();
         g.gen_block(&mut b, &mut loops, slots, sub, &sub.body);
-        if *g.call_style.get(&sub.name).unwrap_or(&false) {
-            b.raw_ret();
-        } else {
+        if sub.name == "main" || sub.is_async {
             b.end();
+        } else {
+            b.raw_ret();
         }
-        let id = ib.add_sub(b);
-        debug_assert_eq!(id, g.name_to_id[&sub.name], "add_sub 序必须与声明序一致");
+        ib.define_sub(g.name_to_ref[&sub.name], b)
+            .map_err(|error| image_error_at(Span { line: 1, col: 1 }, error))?;
     }
 
     if g.errors.is_empty() {
-        Ok(ib.build())
+        ib.build()
+            .map_err(|error| image_error_at(Span { line: 1, col: 1 }, error))
     } else {
         Err(g.errors)
     }
+}
+
+fn image_error_at(span: Span, error: ImageBuildError) -> Vec<CompileError> {
+    vec![CompileError {
+        line: span.line,
+        col: span.col,
+        msg: format!("image build error: {error:?}"),
+        src_line: String::new(),
+    }]
 }
 
 #[cfg(test)]
@@ -722,12 +742,13 @@ mod tests {
     fn run(src: &str, frames: u32) -> Box<World> {
         let image = compile(src, "e2e.ecl").unwrap_or_else(|e| panic!("编译失败：{e:?}"));
         let mut w = World::new(1);
-        let main_id = *image.subs.first().expect("应至少有一个 sub");
-        // sub 名→ScriptId 是声明序，源码里第一个声明的 sub 恒是 script 0——本模块全部
-        // 测试脚本都遵循"main 是源码里第一个 sub"的约定（xformdef/const 不计入 sub 序）。
-        let _ = main_id;
-        w.spawn_task(&image, 0, (OWNER_STAGE, 0, 0))
-            .expect("main 应能派生");
+        w.spawn_task(
+            &image,
+            image.root().expect("应有 main root"),
+            &[],
+            (OWNER_STAGE, 0, 0),
+        )
+        .expect("main 应能派生");
         for f in 0..frames {
             step(&mut w, &TABLES_V0, &image, &InputFrame::empty(f));
         }
@@ -1003,8 +1024,7 @@ mod tests {
                     }";
         let img1 = compile(src, "det.ecl").unwrap_or_else(|e| panic!("{e:?}"));
         let img2 = compile(src, "det.ecl").unwrap_or_else(|e| panic!("{e:?}"));
-        assert_eq!(img1.code, img2.code);
-        assert_eq!(img1.subs, img2.subs);
+        assert_eq!(img1, img2);
     }
 
     // ── 错误路径：xformdef 参数非编译期常量 ─────────────────────────────

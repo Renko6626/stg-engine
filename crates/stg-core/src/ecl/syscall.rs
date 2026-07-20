@@ -21,6 +21,7 @@
 
 use crate::boss::BossUiSlot;
 use crate::bullets::{BulletHandle, BulletInit};
+use crate::ecl::image::{SubId, SubKind};
 use crate::ecl::task::{LOCALS, OWNER_BULLET, OWNER_ENEMY, Task};
 use crate::ecl::vm::{FAULT_BAD_OP, FAULT_STACK, VmCtx};
 use crate::enemy::{EnemyHandle, EnemyInit};
@@ -340,9 +341,22 @@ fn sys_create_bullet(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     };
 
     // task_script 号必须在册（先查，不建弹）——空指针式坏号同 OP_SPAWN 口径复用 FAULT_BAD_OP。
-    if task_script >= 0 && ctx.ecl.entry(task_script as u16).is_none() {
-        return Err(FAULT_BAD_OP);
-    }
+    let task_sub: Option<SubId> = if task_script >= 0 {
+        let raw = u16::try_from(task_script).map_err(|_| FAULT_BAD_OP)?;
+        let sub = ctx.ecl.sub_id(raw).ok_or(FAULT_BAD_OP)?;
+        let meta = ctx.ecl.sub_meta(sub).ok_or(FAULT_BAD_OP)?;
+        if meta.kind() != SubKind::Async
+            || ctx
+                .ecl
+                .param_types(sub)
+                .is_none_or(|params| !params.is_empty())
+        {
+            return Err(FAULT_BAD_OP);
+        }
+        Some(sub)
+    } else {
+        None
+    };
 
     let angle = bam(angle_raw);
     let speed = Fx::from_raw(speed_raw);
@@ -381,14 +395,18 @@ fn sys_create_bullet(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     }
     push(task, handle.index as i32)?;
 
-    if task_script >= 0 {
+    if let Some(task_sub) = task_sub {
         // entry 已在上面校验过在册；池满 → 静默计数（P4-a），弹已建、句柄已押，不 Fault。
-        let pc0 = ctx.ecl.entry(task_script as u16).expect("已在上面校验过");
+        let pc0 = ctx
+            .ecl
+            .sub_meta(task_sub)
+            .expect("已在上面校验过")
+            .code_entry();
         let owner = (OWNER_BULLET, handle.index, handle.generation);
         let parent = ctx.self_index + 1;
         if ctx
             .tasks
-            .spawn(task_script as u16, pc0, owner, parent, ctx.frame)
+            .spawn(task_sub, pc0, owner, parent, ctx.frame)
             .is_none()
         {
             ctx.body.diag.pool_full[crate::world::POOL_TASK] =
@@ -578,7 +596,7 @@ fn sys_aim_player_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecl::image::EclImage;
+    use crate::ecl::image::{EclImage, EntryInit, SubInit, SubKind, test_image};
     use crate::ecl::task::{OWNER_ENEMY, OWNER_STAGE, Task};
     use crate::step::World;
     use crate::tables::{APPEARANCE_LARGE, APPEARANCE_MEDIUM, APPEARANCE_SMALL, TABLES_V0};
@@ -1008,19 +1026,23 @@ mod tests {
     /// 与 `OP_SPAWN` 同款；弹死后任务次帧被静默回收（owner 门禁，非 Fault）。
     #[test]
     fn sys_create_bullet_task_script_spawns_owner_bound_task_and_dies_with_bullet() {
-        let ecl = EclImage {
-            code: vec![
+        let ecl = test_image(
+            vec![
                 crate::ecl::ops::OP_PUSHI as u32,
                 999,
                 crate::ecl::ops::OP_WAIT as u32,
             ],
-            subs: vec![0],
-            content_hash: 0,
-        };
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(0, SubKind::Async, vec![]),
+            ],
+            vec![EntryInit::new("bullet_task", 1)],
+            Some(0),
+        );
         let mut w = World::new(1);
         w.body.frame = 5;
         let mut task = Task::default();
-        let args = [APPEARANCE_SMALL as i32, 0, 0, 0, 0, 0, 0, 0]; // task_script=0（在册）
+        let args = [APPEARANCE_SMALL as i32, 0, 0, 0, 0, 0, 0, 1]; // task_script=1（在册）
         assert!(call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args).is_ok());
         let bidx = task.stack[0] as u16;
         let bgen = w.body.bullets.generation[bidx as usize];

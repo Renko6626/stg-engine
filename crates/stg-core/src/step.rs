@@ -2,7 +2,7 @@
 
 use std::alloc::{Layout, alloc_zeroed, handle_alloc_error};
 
-use crate::ecl::image::EclImage;
+use crate::ecl::image::{EclImage, SubId, SubKind};
 use crate::rng::Pcg32;
 use crate::world::{
     PH_DIRECTOR, PH_ECL_HOOK, POOL_TASK, RNG_SEQ, STATUS_BAD_ARGS, STATUS_POOL_FULL, WorldBody,
@@ -91,20 +91,34 @@ impl World {
     ///
     /// 坏脚本号（`script` 不在 `ecl.subs` 范围）→ `None` + `contract_viol` 计数（P4-b：调用方
     /// 违约）；任务池满 → `None` + `pool_full[POOL_TASK]` 计数（P4-a：资源耗尽确定性降级）。
+    #[doc(hidden)]
     pub fn spawn_task(
         &mut self,
         ecl: &EclImage,
-        script: u16,
+        script: SubId,
+        args: &[i32],
         owner: (u8, u16, u16),
     ) -> Option<u16> {
-        let Some(pc) = ecl.entry(script) else {
+        let Some(meta) = ecl.sub_meta(script) else {
             self.body.diag.contract_viol = self.body.diag.contract_viol.wrapping_add(1);
             self.body.last_status = STATUS_BAD_ARGS;
             return None;
         };
+        if meta.kind() == SubKind::CallOnly
+            || ecl
+                .param_types(script)
+                .is_none_or(|params| params.len() != args.len())
+        {
+            self.body.diag.contract_viol = self.body.diag.contract_viol.wrapping_add(1);
+            self.body.last_status = STATUS_BAD_ARGS;
+            return None;
+        }
         let frame = self.body.frame;
-        match self.tasks.spawn(script, pc, owner, 0, frame) {
-            Some(idx) => Some(idx),
+        match self.tasks.spawn(script, meta.code_entry(), owner, 0, frame) {
+            Some(idx) => {
+                self.tasks.slots[idx as usize].locals[..args.len()].copy_from_slice(args);
+                Some(idx)
+            }
             None => {
                 self.body.diag.pool_full[POOL_TASK] =
                     self.body.diag.pool_full[POOL_TASK].wrapping_add(1);
@@ -158,11 +172,50 @@ pub fn step_with_director<F: FnMut(&mut WorldBody)>(
 mod tests {
     use super::*;
     use crate::bullets::{BulletHandle, BulletInit, BulletPool};
+    use crate::ecl::image::{EclValueType, EntryInit, SubInit, SubKind, test_image};
     use crate::ecl::ops::*;
     use crate::ecl::task::{OWNER_BULLET, OWNER_ENEMY, OWNER_STAGE, TASK_CAP};
     use crate::input::InputFrame;
     use crate::math::{Angle, Fx};
     use crate::world::{POOL_BULLET, STATUS_POOL_FULL};
+
+    fn root_image(code: Vec<u32>) -> EclImage {
+        test_image(
+            code,
+            vec![SubInit::new(0, SubKind::Root, vec![])],
+            vec![],
+            Some(0),
+        )
+    }
+
+    fn multi_image(code: Vec<u32>, specs: &[(u32, SubKind, usize)]) -> EclImage {
+        let subs = specs
+            .iter()
+            .map(|&(entry, kind, params)| {
+                SubInit::new(entry, kind, vec![EclValueType::Int; params])
+            })
+            .collect();
+        let entries = specs
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, kind, _))| *kind == SubKind::Async)
+            .map(|(index, _)| EntryInit::new(format!("async_{index:05}"), index as u16))
+            .collect();
+        let root = specs
+            .iter()
+            .position(|(_, kind, _)| *kind == SubKind::Root)
+            .map(|index| index as u16);
+        test_image(code, subs, entries, root)
+    }
+
+    fn spawn_test(
+        world: &mut World,
+        image: &EclImage,
+        raw: u16,
+        owner: (u8, u16, u16),
+    ) -> Option<u16> {
+        world.spawn_task(image, image.sub_id(raw)?, &[], owner)
+    }
 
     fn straight(x: i32, y: i32, vx: i32, vy: i32, life: u16) -> BulletInit {
         BulletInit {
@@ -842,21 +895,17 @@ mod tests {
     /// 出生当帧 locals 原封不动，次帧起首次执行才写入。
     #[test]
     fn spawn_task_next_frame_first_run() {
-        let ecl = EclImage {
-            code: vec![
-                OP_PUSHI as u32,
-                1,
-                OP_POPL as u32,
-                0,
-                OP_PUSHI as u32,
-                5,
-                OP_WAIT as u32,
-            ],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = root_image(vec![
+            OP_PUSHI as u32,
+            1,
+            OP_POPL as u32,
+            0,
+            OP_PUSHI as u32,
+            5,
+            OP_WAIT as u32,
+        ]);
         let mut w = World::new(1);
-        let idx = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+        let idx = spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
 
         step(
             &mut w,
@@ -921,14 +970,13 @@ mod tests {
         ];
         let mut code = root_code.clone();
         code.extend_from_slice(&child_code);
-        let ecl = EclImage {
+        let ecl = multi_image(
             code,
-            subs: vec![0, child_entry],
-            content_hash: 0,
-        };
+            &[(0, SubKind::Root, 0), (child_entry, SubKind::Async, 2)],
+        );
 
         let mut w = World::new(1);
-        let root = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+        let root = spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
 
         step(
             &mut w,
@@ -980,25 +1028,21 @@ mod tests {
         use crate::ecl::syscall::{SYS_SELF_AGE, SYS_SET_VAR};
         const SLOT: u16 = 20; // 自由段（≥ GLOBALS_SYS_SEGMENT）
 
-        let ecl = EclImage {
-            code: vec![
-                OP_PUSHI as u32,
-                SLOT as u32, // 0,1
-                OP_SYS as u32,
-                SYS_SELF_AGE as u32, // 2,3
-                OP_SYS as u32,
-                SYS_SET_VAR as u32, // 4,5
-                OP_PUSHI as u32,
-                0,              // 6,7：wait(0) 帧数
-                OP_WAIT as u32, // 8
-                OP_JMP as u32,
-                0, // 9,10：回环顶部
-            ],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = root_image(vec![
+            OP_PUSHI as u32,
+            SLOT as u32, // 0,1
+            OP_SYS as u32,
+            SYS_SELF_AGE as u32, // 2,3
+            OP_SYS as u32,
+            SYS_SET_VAR as u32, // 4,5
+            OP_PUSHI as u32,
+            0,              // 6,7：wait(0) 帧数
+            OP_WAIT as u32, // 8
+            OP_JMP as u32,
+            0, // 9,10：回环顶部
+        ]);
         let mut w = World::new(1);
-        w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+        spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
 
         const N: u32 = 5;
         for f in 0..N {
@@ -1026,27 +1070,21 @@ mod tests {
         use crate::ecl::syscall::{SYS_SELF_HP_MAX, SYS_SET_VAR};
         const SLOT: u16 = 21;
 
-        let ecl = EclImage {
-            code: vec![
-                OP_PUSHI as u32,
-                SLOT as u32, // 0,1
-                OP_SYS as u32,
-                SYS_SELF_HP_MAX as u32, // 2,3
-                OP_SYS as u32,
-                SYS_SET_VAR as u32, // 4,5
-                OP_END as u32,      // 6
-            ],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = root_image(vec![
+            OP_PUSHI as u32,
+            SLOT as u32, // 0,1
+            OP_SYS as u32,
+            SYS_SELF_HP_MAX as u32, // 2,3
+            OP_SYS as u32,
+            SYS_SET_VAR as u32, // 4,5
+            OP_END as u32,      // 6
+        ]);
 
         // owner=ENEMY：hp=5（存活门禁用）、hp_max 另设 9999——两字段判别式取值。
         let mut w_enemy = World::new(1);
         let h = crate::world::test_support::spawn_enemy(&mut w_enemy, 0, 80, 5);
         w_enemy.body.enemies.hp_max[h.index as usize] = 9999;
-        w_enemy
-            .spawn_task(&ecl, 0, (OWNER_ENEMY, h.index, h.generation))
-            .unwrap();
+        spawn_test(&mut w_enemy, &ecl, 0, (OWNER_ENEMY, h.index, h.generation)).unwrap();
         step(
             &mut w_enemy,
             &crate::tables::TABLES_V0,
@@ -1064,7 +1102,7 @@ mod tests {
 
         // owner=STAGE：恒 0。
         let mut w_stage = World::new(1);
-        w_stage.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+        spawn_test(&mut w_stage, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
         step(
             &mut w_stage,
             &crate::tables::TABLES_V0,
@@ -1091,28 +1129,24 @@ mod tests {
         use crate::world::GVAR_RANK;
         const FREE_SLOT: u16 = 20;
 
-        let ecl = EclImage {
-            code: vec![
-                OP_PUSHI as u32,
-                GVAR_RANK as u32, // 0,1：系统段槽
-                OP_PUSHI as u32,
-                999, // 2,3
-                OP_SYS as u32,
-                SYS_SET_VAR as u32, // 4,5：应 no-op，不 Fault
-                OP_PUSHI as u32,
-                FREE_SLOT as u32, // 6,7：自由段槽
-                OP_PUSHI as u32,
-                555, // 8,9
-                OP_SYS as u32,
-                SYS_SET_VAR as u32, // 10,11：应正常写入——证明任务未被腰斩
-                OP_END as u32,      // 12
-            ],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = root_image(vec![
+            OP_PUSHI as u32,
+            GVAR_RANK as u32, // 0,1：系统段槽
+            OP_PUSHI as u32,
+            999, // 2,3
+            OP_SYS as u32,
+            SYS_SET_VAR as u32, // 4,5：应 no-op，不 Fault
+            OP_PUSHI as u32,
+            FREE_SLOT as u32, // 6,7：自由段槽
+            OP_PUSHI as u32,
+            555, // 8,9
+            OP_SYS as u32,
+            SYS_SET_VAR as u32, // 10,11：应正常写入——证明任务未被腰斩
+            OP_END as u32,      // 12
+        ]);
         let mut w = World::new(1);
         w.body.set_var(GVAR_RANK, 111); // game 层建场惯例：世界 API 先写系统段已知基线值
-        w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+        spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
 
         step(
             &mut w,
@@ -1152,14 +1186,8 @@ mod tests {
     fn owner_enemy_death_kills_task_silently_next_frame() {
         let mut w = World::new(1);
         let h = crate::world::test_support::spawn_enemy(&mut w, 0, 80, 5);
-        let ecl = EclImage {
-            code: vec![OP_END as u32],
-            subs: vec![0],
-            content_hash: 0,
-        };
-        let idx = w
-            .spawn_task(&ecl, 0, (OWNER_ENEMY, h.index, h.generation))
-            .unwrap();
+        let ecl = root_image(vec![OP_END as u32]);
+        let idx = spawn_test(&mut w, &ecl, 0, (OWNER_ENEMY, h.index, h.generation)).unwrap();
 
         step(
             &mut w,
@@ -1186,14 +1214,8 @@ mod tests {
     fn owner_bullet_death_kills_task_silently_next_frame() {
         let mut w = World::new(1);
         let h = crate::world::test_support::bullet_at(&mut w, 0, 0);
-        let ecl = EclImage {
-            code: vec![OP_END as u32],
-            subs: vec![0],
-            content_hash: 0,
-        };
-        let idx = w
-            .spawn_task(&ecl, 0, (OWNER_BULLET, h.index, h.generation))
-            .unwrap();
+        let ecl = root_image(vec![OP_END as u32]);
+        let idx = spawn_test(&mut w, &ecl, 0, (OWNER_BULLET, h.index, h.generation)).unwrap();
 
         step(
             &mut w,
@@ -1220,22 +1242,18 @@ mod tests {
     #[test]
     fn wait_n_idles_exactly_n_frames_then_resumes() {
         const N: u16 = 3;
-        let ecl = EclImage {
-            code: vec![
-                OP_PUSHI as u32,
-                N as u32,
-                OP_WAIT as u32,
-                OP_PUSHI as u32,
-                7,
-                OP_POPL as u32,
-                0,
-                OP_END as u32,
-            ],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = root_image(vec![
+            OP_PUSHI as u32,
+            N as u32,
+            OP_WAIT as u32,
+            OP_PUSHI as u32,
+            7,
+            OP_POPL as u32,
+            0,
+            OP_END as u32,
+        ]);
         let mut w = World::new(1);
-        let idx = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+        let idx = spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
 
         step(
             &mut w,
@@ -1291,8 +1309,8 @@ mod tests {
         // （**故意不让父在本帧 END**——若父当帧死亡，它的槽会被同帧后续任务的 SPAWN 复用，
         // 破坏槽号与"谁先跑"的对应关系；WAIT 让父存活，子任务的槽号才干净地反映执行序）。
         // 子模板（script1，入口 idx7）：纯 END（次帧首跑门禁下本帧不会被调度到，无所谓）。
-        let ecl = EclImage {
-            code: vec![
+        let ecl = multi_image(
+            vec![
                 OP_SPAWN as u32,
                 1,               // 0,1: SPAWN script1
                 0,               // 2: argc=0（M1.9 T3 起 SPAWN 元数 2）
@@ -1302,12 +1320,11 @@ mod tests {
                 OP_WAIT as u32,  // 6
                 OP_END as u32,   // 7: script1 入口
             ],
-            subs: vec![0, 7],
-            content_hash: 0,
-        };
+            &[(0, SubKind::Root, 0), (7, SubKind::Async, 0)],
+        );
         let mut w = World::new(1);
-        let a = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap(); // 期望池索引 0
-        let b = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap(); // 期望池索引 1
+        let a = spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap(); // 期望池索引 0
+        let b = spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap(); // 期望池索引 1
         assert_eq!((a, b), (0, 1), "前置：两父任务确定性占据 0/1 号槽");
 
         step(
@@ -1353,8 +1370,8 @@ mod tests {
     /// **没轮到不是它的错**：不 Fault、状态原封不动，次帧满血重跑正常完成。
     #[test]
     fn global_budget_starves_across_tasks_same_frame_then_resumes_next() {
-        let ecl = EclImage {
-            code: vec![
+        let ecl = multi_image(
+            vec![
                 OP_JMP as u32,
                 0, // script 0：自跳转死循环（永不 END）
                 OP_PUSHI as u32,
@@ -1363,15 +1380,14 @@ mod tests {
                 0,
                 OP_END as u32, // script 1（入口字 2）：canary，写 locals[0]=9 后正常结束
             ],
-            subs: vec![0, 2],
-            content_hash: 0,
-        };
+            &[(0, SubKind::Root, 0), (2, SubKind::Async, 0)],
+        );
         let mut w = World::new(1);
         let mut looper_indices = Vec::new();
         for _ in 0..64 {
-            looper_indices.push(w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap());
+            looper_indices.push(spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap());
         }
-        let canary = w.spawn_task(&ecl, 1, (OWNER_STAGE, 0, 0)).unwrap();
+        let canary = spawn_test(&mut w, &ecl, 1, (OWNER_STAGE, 0, 0)).unwrap();
         assert_eq!(canary as usize, 64, "canary 应落在第 65 号槽（升序分配）");
 
         step(
@@ -1462,14 +1478,17 @@ mod tests {
         code.extend_from_slice(&mid_code);
         code.extend_from_slice(&grandchild_code);
 
-        let ecl = EclImage {
+        let ecl = multi_image(
             code,
-            subs: vec![0, mid_code_at, grandchild_code_at],
-            content_hash: 0,
-        };
+            &[
+                (0, SubKind::Root, 0),
+                (mid_code_at, SubKind::Async, 0),
+                (grandchild_code_at, SubKind::Async, 0),
+            ],
+        );
 
         let mut w = World::new(1);
-        let root = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+        let root = spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
 
         // 出生帧：跳过。
         step(
@@ -1535,19 +1554,15 @@ mod tests {
     /// M1 T2：`EVT_TASK_FAULT` 事件形状——`a_index` = 任务池索引，`data = [fault_code, script]`。
     #[test]
     fn task_fault_event_has_right_kind_index_and_data() {
-        let ecl = EclImage {
-            code: vec![
-                OP_PUSHI as u32,
-                5,
-                OP_PUSHI as u32,
-                0,
-                OP_DIV as u32, // 除零 → Fault(FAULT_DIV_ZERO=4)
-            ],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = root_image(vec![
+            OP_PUSHI as u32,
+            5,
+            OP_PUSHI as u32,
+            0,
+            OP_DIV as u32, // 除零 → Fault(FAULT_DIV_ZERO=4)
+        ]);
         let mut w = World::new(1);
-        let idx = w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+        let idx = spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
         step(
             &mut w,
             &crate::tables::TABLES_V0,
@@ -1570,30 +1585,22 @@ mod tests {
         assert_eq!(ev.data, [4, 0], "data = [fault_code, script]");
     }
 
-    /// M1 T2：`spawn_task` 坏脚本号 → `None` + `contract_viol` 计数（P4-b）。
+    /// 无效 raw id 无法越过 image 绑定门，因而不能传给 typed 过渡启动入口。
     #[test]
     fn spawn_task_bad_script_id_counts_contract_viol() {
-        let mut w = World::new(1);
         let ecl = EclImage::empty(); // subs 空
-        let cv0 = w.body.diag.contract_viol;
-        assert_eq!(w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)), None);
-        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
-        assert_eq!(w.body.last_status, STATUS_BAD_ARGS);
+        assert_eq!(ecl.sub_id(9), None);
     }
 
     /// M1 T2：`spawn_task` 任务池满 → `None` + `pool_full[POOL_TASK]` 计数（P4-a）。
     #[test]
     fn spawn_task_pool_full_counts_pool_full() {
         let mut w = World::new(1);
-        let ecl = EclImage {
-            code: vec![OP_END as u32],
-            subs: vec![0],
-            content_hash: 0,
-        };
+        let ecl = root_image(vec![OP_END as u32]);
         for _ in 0..TASK_CAP {
-            assert!(w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)).is_some());
+            assert!(spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).is_some());
         }
-        assert_eq!(w.spawn_task(&ecl, 0, (OWNER_STAGE, 0, 0)), None);
+        assert_eq!(spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)), None);
         assert_eq!(w.body.diag.pool_full[POOL_TASK], 1);
         assert_eq!(w.body.last_status, STATUS_POOL_FULL);
     }
