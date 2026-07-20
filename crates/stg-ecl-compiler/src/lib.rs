@@ -772,6 +772,35 @@ mod tests {
         assert_eq!(image.code[after + 1], 9);
     }
 
+    /// B15 覆盖缺口补齐：`repeat(n<=0, body)` 是 **build 期** no-op——`body` 闭包本身
+    /// 不被调用（不是"发出一个跑 0 次的运行期循环骨架"），且不发出任何 repeat 相关字节码
+    /// （计数器初始化/跳转骨架整段缺席），前后语句紧邻拼接。n=0 与负数同律（模块文档
+    /// "repeat" 既有拍板），此处 0/-1/-100 三档一并钉死。
+    #[test]
+    fn repeat_zero_or_negative_n_is_a_build_time_noop() {
+        for n in [0, -1, -100] {
+            let mut ib = ImageBuilder::new();
+            let mut s = SubBuilder::new();
+            let mut invoked = false;
+            s.repeat(n, |_| invoked = true);
+            s.push_i(9);
+            s.end();
+            assert!(
+                !invoked,
+                "n={n}：body 闭包不应被调用——build 期 no-op，不是运行期 0 次循环"
+            );
+            let id = ib.add_sub(s);
+            let image = ib.build();
+            let entry = image.subs[id.0 as usize] as usize;
+            assert_eq!(
+                image.code[entry], OP_PUSHI as u32,
+                "n={n}：不应发出任何 repeat 骨架，紧接着的语句直接落在入口"
+            );
+            assert_eq!(image.code[entry + 1], 9, "n={n}");
+            assert_eq!(image.code[entry + 2], OP_END as u32, "n={n}");
+        }
+    }
+
     /// `call`：跨 sub 回填——操作数最终等于目标 sub 的绝对入口（`base_offsets[target]`），
     /// 不论目标 sub 是在调用方之前还是之后 `add_sub`。
     #[test]

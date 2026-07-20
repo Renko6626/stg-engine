@@ -92,12 +92,6 @@ LOOP 跳回后 `[0, xform_next)` 收缩：活跃 STEP 冻结至重武装、武�
 的极端场景）会在 debug 触发溢出 panic、release 静默回绕——确定性不破（跨平台逐位一致仍成立）
 但入账值荒谬。修法：累加改 `saturating_add(1)`，蜡数比较从 `==` 改 `>=` 以抗直写越界。
 
-### B15. ECL 小测试缺口三件（M1 T3 复审分诊）
-
-`rand_range` 负 n 分支无独立测试（与 n=0 同分支，低危）；DSL `repeat(n≤0)` no-op 语义
-文档有测试无；弹 setter 族九连的坏 owner Fault 只有 1/9 有独立测试（余走共用助手）。
-三条都是覆盖缺口非缺陷，一刀补齐即可。
-
 ### B14. `WorldTables::validate()` 角色半径腿只有正向覆盖（M0-17 T1 复审分诊）
 
 `validate_rejects_bad` 的三条负向腿只压 shooter 的 interval/radius/option；角色

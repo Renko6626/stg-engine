@@ -833,6 +833,23 @@ mod tests {
         );
     }
 
+    /// B15 覆盖缺口补齐：负 `n` 与 `n==0` 走同一分支（`if n <= 0`），但从未有测试独立
+    /// 拿负数实测过——这里钉死同样的判别式（不消耗 RNG 流 + 押 0），防止未来有人把
+    /// 判别条件悄悄改成 `n == 0`（丢负数分支）而没有任何测试炸。
+    #[test]
+    fn sys_rand_range_negative_n_does_not_consume_rng() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_RAND_RANGE, &[-5]).is_ok());
+        assert_eq!(task.stack[0], 0, "负 n 押 0，同 n=0");
+        let after_negative_call = w.body.rng;
+        let w2 = World::new(1);
+        assert_eq!(
+            after_negative_call, w2.body.rng,
+            "负 n 不消耗 RNG 流——与全新同种子世界的 RNG 状态相同"
+        );
+    }
+
     /// 丙方案 create_bullet：dumb 路径（xform_cnt=0）——位置精确、appearance 半径/sprite
     /// 逐位查表命中。
     #[test]
@@ -1240,21 +1257,37 @@ mod tests {
     }
 
     /// 弹 setter 族误用策略：self owner != BULLET → Fault（响亮报错，非静默 no-op）。
+    /// **B15 覆盖缺口补齐**：九支 dispatch 分支各自手写内联 `self_bullet_handle(task)?`
+    /// （非共享 loop/宏），此前只有 `SYS_SET_BULLET_SPEED` 一支独立实测过——其余 8 支
+    /// 理论上"该有这一句"，但没有测试证明真的有；有人加新 setter 或手滑漏抄这一句都
+    /// 不会被任何测试发现。一刀补齐全九支：`self_bullet_handle` 在摸任何参数前就返回
+    /// Fault，故 `&[]` 空参足够触发，不依赖各 syscall 各自的真实 arity。
     #[test]
     fn sys_bullet_setter_wrong_owner_faults() {
-        let (mut w, ecl) = fresh();
-        let mut task = Task {
-            owner_kind: OWNER_ENEMY,
-            ..Task::default()
-        };
-        let r = call(
-            &mut w,
-            &ecl,
-            &mut task,
-            SYS_SET_BULLET_SPEED,
-            &[Fx::ONE.raw()],
-        );
-        assert_eq!(r, Err(FAULT_BAD_OP));
+        const ALL_NINE: [(u16, &str); 9] = [
+            (SYS_SET_BULLET_SPEED, "set_speed"),
+            (SYS_SET_BULLET_ANGLE, "set_angle"),
+            (SYS_TURN_BULLET, "turn"),
+            (SYS_SET_BULLET_VEL, "set_vel"),
+            (SYS_SET_BULLET_ANG_VEL, "set_ang_vel"),
+            (SYS_SET_BULLET_ACCEL, "set_accel"),
+            (SYS_SET_BULLET_GRAVITY, "set_gravity"),
+            (SYS_STOP_BULLET_FX, "stop_fx"),
+            (SYS_AIM_BULLET_AT_PLAYER, "aim_at_player"),
+        ];
+        for (sys, name) in ALL_NINE {
+            let (mut w, ecl) = fresh();
+            let mut task = Task {
+                owner_kind: OWNER_ENEMY,
+                ..Task::default()
+            };
+            let r = call(&mut w, &ecl, &mut task, sys, &[]);
+            assert_eq!(
+                r,
+                Err(FAULT_BAD_OP),
+                "'{name}'（sys={sys}）坏 owner 应 Fault"
+            );
+        }
     }
 
     /// self 位置朝向 P0 的角度 == 参考 `atan2` 计算（判别式：换公式即红）。
