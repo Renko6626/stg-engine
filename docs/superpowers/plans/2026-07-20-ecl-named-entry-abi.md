@@ -357,7 +357,11 @@ fn builder_assigns_ids_and_code_layout_by_name_not_declaration_order() {
         let order = if reverse { [worker, helper, main] } else { [main, helper, worker] };
         for id in order {
             let mut sub = SubBuilder::new();
-            sub.end();
+            if id == helper {
+                sub.raw_ret();
+            } else {
+                sub.end();
+            }
             ib.define_sub(id, sub).unwrap();
         }
         ib.build().unwrap()
@@ -380,7 +384,11 @@ fn call_and_spawn_operands_are_canonical_sub_ids() {
 
     for id in [worker, helper] {
         let mut body = SubBuilder::new();
-        body.end();
+        if id == helper {
+            body.raw_ret();
+        } else {
+            body.end();
+        }
         ib.define_sub(id, body).unwrap();
     }
 
