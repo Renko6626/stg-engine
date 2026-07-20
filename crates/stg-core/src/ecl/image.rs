@@ -208,7 +208,7 @@ pub enum ImageBuildError {
 /// 构造期将可读的初始化记录压紧成不可变运行表，运行期不再持有名字 `String` 或参数 `Vec`。
 #[derive(Debug, PartialEq, Eq)]
 pub struct EclImage {
-    pub(crate) code: Box<[u32]>,
+    code: Box<[u32]>,
     subs: Box<[RuntimeSubMeta]>,
     param_types: Box<[EclValueType]>,
     entries: Box<[RuntimeEntryMeta]>,

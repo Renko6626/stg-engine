@@ -284,8 +284,8 @@ impl SubBuilder {
         self.emit(OP_KILL_CHILDREN as u32);
     }
 
-    /// 子程序调用（`OP_CALL`）：目标是另一 sub 的绝对入口，`build()` 时回填
-    /// （`call_fixups`——此刻还不知道目标 sub 在最终拼接后的绝对偏移）。
+    /// 子程序调用（`OP_CALL`）：`build()` 校验目标为 `CallOnly`，并将操作数回填为
+    /// 按名字排序后分配的 canonical `SubId`；VM 再由镜像元数据解析绝对代码入口。
     pub fn call(&mut self, sub: BuilderSubRef) {
         self.emit(OP_CALL as u32);
         let p = self.emit(0);
@@ -296,9 +296,9 @@ impl SubBuilder {
         });
     }
 
-    /// 协程派生（`OP_SPAWN`）：操作数是**纯 script id 数值**（VM 运行期自己
-    /// `ecl.entry(script)` 查入口，见 `vm.rs::OP_SPAWN`）+ **argc**（M1.9 T3 起——表层语言
-    /// `spawn f(args)` 传参地基），均不需要回填——立即写定。owner 继承自当前任务
+    /// 协程派生（`OP_SPAWN`）：操作数是 canonical `SubId` + **argc**。`build()` 校验
+    /// 目标为 `Async` 且形参数量与 `argc` 完全相等，再回填 canonical `SubId`；VM 运行期
+    /// 通过镜像元数据重复校验 kind/arity 并解析绝对代码入口。owner 继承自当前任务
     /// （VM 既定语义）；子句柄（池索引，失败 -1）留在求值栈顶。
     ///
     /// **调用前置条件**：调用方须已把 `argc` 个实参**按声明顺序正序压栈**（`push_i`/
