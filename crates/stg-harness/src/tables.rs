@@ -7,9 +7,8 @@ use std::path::PathBuf;
 /// 表字节目录（cwd 无关：相对 harness crate 清单定位到 stg-core）。
 pub const TABLES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../stg-core/src/math/tables");
 
-fn table_path(name: &str) -> PathBuf {
-    PathBuf::from(TABLES_DIR).join(name)
-}
+/// 世界数据表目录（stg-core/src/tables）。
+pub const WORLD_TABLES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../stg-core/src/tables");
 
 /// sin 四分之一波：`[i32; 16385]`，`v[i] = round_ties_even(sin(i·(π/2)/16384)·65536)`，i ∈ 0..=16384。
 /// 含端点：`v[16384] = 65536`（= 1.0），供四象限重建在 π/2 边界精确。
@@ -72,44 +71,54 @@ pub fn gen_atan_cordic() -> Vec<u8> {
     out
 }
 
+/// 世界内容表 v0：owned 构造 → 规范字节（单一真相源 = `build_tables_v0`）。
+pub fn gen_world_tables_v0() -> Vec<u8> {
+    stg_core::tables::build_tables_v0().to_bytes()
+}
+
 /// 表生成器函数类型（消 clippy::type_complexity）。
 type TableGen = fn() -> Vec<u8>;
 
-/// 所有表的 (文件名, 生成器) 清单——bake 与 verify 共用单一真相源。
-fn registry() -> Vec<(&'static str, TableGen)> {
+/// 所有表的 (完整路径, 生成器) 清单——bake 与 verify 共用单一真相源。
+fn registry() -> Vec<(PathBuf, TableGen)> {
+    let math = PathBuf::from(TABLES_DIR);
+    let world = PathBuf::from(WORLD_TABLES_DIR);
     vec![
-        ("sin_quarter.bin", gen_sin_quarter as TableGen),
-        ("easing.bin", gen_easing as TableGen),
-        ("atan_cordic.bin", gen_atan_cordic as TableGen),
+        (math.join("sin_quarter.bin"), gen_sin_quarter as TableGen),
+        (math.join("easing.bin"), gen_easing as TableGen),
+        (math.join("atan_cordic.bin"), gen_atan_cordic as TableGen),
+        (world.join("tables_v0.bin"), gen_world_tables_v0 as TableGen),
     ]
 }
 
 /// 生成全部表并写入 stg-core 源目录（开发者刻意重烘时用）。
 pub fn bake_all() -> std::io::Result<()> {
-    std::fs::create_dir_all(TABLES_DIR)?;
-    for (name, generate) in registry() {
+    for (path, generate) in registry() {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
         let bytes = generate();
-        std::fs::write(table_path(name), &bytes)?;
-        eprintln!("baked {name} ({} bytes)", bytes.len());
+        std::fs::write(&path, &bytes)?;
+        eprintln!("baked {} ({} bytes)", path.display(), bytes.len());
     }
     Ok(())
 }
 
 /// 重新生成并与 commit 的字节逐位比对（CI 防漂移）。
 pub fn verify_all() -> Result<(), String> {
-    for (name, generate) in registry() {
+    for (path, generate) in registry() {
         let expected = generate();
-        let path = table_path(name);
         let actual =
             std::fs::read(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
         if actual != expected {
             return Err(format!(
-                "{name} 与 commit 字节不一致（生成 {} 字节 vs commit {} 字节）",
+                "{} 与 commit 字节不一致（生成 {} vs commit {} 字节）",
+                path.display(),
                 expected.len(),
                 actual.len()
             ));
         }
-        eprintln!("verified {name} ({} bytes)", expected.len());
+        eprintln!("verified {} ({} bytes)", path.display(), expected.len());
     }
     Ok(())
 }

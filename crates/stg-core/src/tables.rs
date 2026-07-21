@@ -236,8 +236,11 @@ pub fn build_tables_v0() -> WorldTables {
     }
 }
 
-/// 内建默认表。组 A：Rust 直构（owned）；组 B 换 `from_bytes(include_bytes!)` 走字节路径。
-pub static TABLES_V0: LazyLock<WorldTables> = LazyLock::new(build_tables_v0);
+/// 内建默认表：从提交的规范字节反序列化（**证明 core 跑在加载的字节上**；金向量走此路径）。
+pub static TABLES_V0: LazyLock<WorldTables> = LazyLock::new(|| {
+    WorldTables::from_bytes(include_bytes!("tables/tables_v0.bin"))
+        .expect("baked v0 table must satisfy the runtime contract")
+});
 
 impl WorldTables {
     /// 表校验（debug/测试用）：`interval > 0`、`radius` 双边入 `[0, MAX_ENTITY_RADIUS]`、
@@ -565,6 +568,18 @@ mod tests {
     #[test]
     fn tables_v0_validates() {
         assert!(TABLES_V0.validate());
+    }
+
+    /// 内建表经 `from_bytes` 载入，`content_hash` 必须 LIVE（非 0），且与直接烘焙同源自洽。
+    #[test]
+    fn builtin_tables_v0_has_live_content_hash() {
+        assert_ne!(
+            TABLES_V0.content_hash, 0,
+            "内建表经 from_bytes 载入，hash 应非 0"
+        );
+        // 与直接烘焙同源的自洽：include 的字节 == build_tables_v0().to_bytes()
+        let from_builder = WorldTables::from_bytes(&build_tables_v0().to_bytes()).unwrap();
+        assert_eq!(TABLES_V0.content_hash, from_builder.content_hash);
     }
 
     /// 形状 + v0 内容量拍板：5 档×2 态槽全非悬垂、同档两焦点槽内容相等
