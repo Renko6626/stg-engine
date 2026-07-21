@@ -25,6 +25,10 @@ pub struct World {
     /// 本 World 绑定的表 `content_hash`（`new_with_tables` 记录）。coherence 守卫读它对
     /// `EclImage.content_hash` 一次比对。常量存活期不变，跨机一致，正常入校验和。
     pub(crate) tables_hash: u64,
+    /// 构造用的 RNG 种子（provenance）。种子在构造期被揉进 `body.rng` 的初始 state 后不可反推，
+    /// 本字段是其唯一留存形态——供回放头/握手/调试读回（`seed()`）。属"初始状态"、存活期不变、
+    /// 跨机一致；同 `tables_hash` 正常入校验和（恒定不分叉，校验无害）。
+    pub(crate) seed: u64,
 }
 
 impl World {
@@ -55,6 +59,7 @@ impl World {
         // 自机 1 出场（角色 0，取 `tables.characters[0]`）；自机 2 保持全零=不在场。
         w.body.players[0] = crate::player::PlayerState::spawn(0, &tables.characters[0]);
         w.tables_hash = tables.content_hash;
+        w.seed = seed;
         w
     }
 
@@ -90,11 +95,18 @@ impl World {
         self.tasks.copy_into(&mut dst.tasks);
         dst.ecl_main_started = self.ecl_main_started;
         dst.tables_hash = self.tables_hash;
+        dst.seed = self.seed;
     }
 
     #[inline]
     pub fn checksum(&self) -> u64 {
         crate::checksum::Checksum::checksum(self)
+    }
+
+    /// 构造用的 RNG 种子（provenance）。见 `World.seed` 字段文档——回放头/握手/调试从这里读回。
+    #[inline]
+    pub fn seed(&self) -> u64 {
+        self.seed
     }
 
     /// Internal task spawn (pub(crate) for VM opcodes/syscalls; used by SPAWN op
@@ -259,6 +271,16 @@ mod tests {
         let w = World::new(0x1234);
         assert_ne!(w.tables_hash, 0);
         assert_eq!(w.tables_hash, crate::tables::TABLES_V0.content_hash);
+    }
+
+    #[test]
+    fn new_records_seed_and_snapshot_copies_it() {
+        let w = World::new(0xDEAD_BEEF);
+        assert_eq!(w.seed(), 0xDEAD_BEEF);
+        // 随快照复制——否则恢复出的 World 校验和会分叉。
+        let mut dst = World::new(0x0000_0001); // 不同种子
+        w.copy_into(&mut dst);
+        assert_eq!(dst.seed(), 0xDEAD_BEEF, "copy_into 必须复制 seed");
     }
 
     #[test]
