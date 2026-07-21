@@ -16,6 +16,7 @@ use crate::world::MAX_ENTITY_RADIUS;
 pub type DropTable = Box<[(u8, u8)]>;
 
 /// 全局静态数据层（A3；owned）。见模块文档「传递形态」。
+#[derive(Debug, PartialEq, Eq)]
 pub struct WorldTables {
     /// 内容哈希：组 B 起 LIVE（`from_bytes` 算 body 的 FNV-1a64 并自校）；组 A 恒 0。
     pub content_hash: u64,
@@ -28,13 +29,13 @@ pub struct WorldTables {
     pub appearances: Box<[AppearanceCfg]>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AppearanceCfg {
     pub radius: Fx,
     pub sprite: u16,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ItemTypeCfg {
     pub score: u32,
     pub eject_speed: Fx,
@@ -45,7 +46,7 @@ pub struct ItemTypeCfg {
 }
 
 /// 单角色配置。owned 化后含 `ShotTypeCfg`（有 `Box`）→ **去 `Copy`、留 `Clone`**。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CharacterCfg {
     pub high_speed: Fx,
     pub low_speed: Fx,
@@ -56,7 +57,7 @@ pub struct CharacterCfg {
 }
 
 /// shottype 表：5 档 × 2 焦点 = 10 槽。owned 化后每槽独立 `Box`（**去 `Copy`、留 `Clone`**）。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShotTypeCfg {
     /// `[tier 0..=4][focus 0/1]`；owned 后两焦点槽各持独立分配、内容相等（不再 `ptr::eq` 同一）。
     pub sets: [[Box<[Shooter]>; 2]; 5],
@@ -283,6 +284,279 @@ fn radius_in_range(r: Fx) -> bool {
     r.raw() >= 0 && r.raw() <= MAX_ENTITY_RADIUS.raw()
 }
 
+/// 表加载错误（构造前资产环节；返 Result 不 panic，不触模拟确定性）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TableLoadError {
+    Truncated,
+    BadMagic,
+    UnsupportedVersion(u16),
+    HashMismatch,
+    ArityMismatch {
+        field: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+    ValidateFailed,
+}
+
+/// 规范字节读取游标（小端；越界→Truncated）。
+struct Reader<'a> {
+    b: &'a [u8],
+    p: usize,
+}
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], TableLoadError> {
+        let end = self.p.checked_add(n).ok_or(TableLoadError::Truncated)?;
+        let s = self.b.get(self.p..end).ok_or(TableLoadError::Truncated)?;
+        self.p = end;
+        Ok(s)
+    }
+    fn u8(&mut self) -> Result<u8, TableLoadError> {
+        Ok(self.take(1)?[0])
+    }
+    fn u16(&mut self) -> Result<u16, TableLoadError> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+    }
+    fn u32(&mut self) -> Result<u32, TableLoadError> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn i32(&mut self) -> Result<i32, TableLoadError> {
+        Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn fx(&mut self) -> Result<Fx, TableLoadError> {
+        Ok(Fx::from_raw(self.i32()?))
+    }
+    fn angle(&mut self) -> Result<Angle, TableLoadError> {
+        Ok(Angle(self.u16()?))
+    }
+}
+
+fn write_shooter(out: &mut Vec<u8>, s: &Shooter) {
+    out.extend_from_slice(&s.interval.to_le_bytes());
+    out.extend_from_slice(&s.delay.to_le_bytes());
+    out.extend_from_slice(&s.dx.raw().to_le_bytes());
+    out.extend_from_slice(&s.dy.raw().to_le_bytes());
+    out.extend_from_slice(&s.angle.raw().to_le_bytes());
+    out.extend_from_slice(&s.speed.raw().to_le_bytes());
+    out.extend_from_slice(&s.damage.to_le_bytes());
+    out.extend_from_slice(&s.radius.raw().to_le_bytes());
+    out.extend_from_slice(&s.sprite.to_le_bytes());
+    out.push(s.option);
+    out.push(s.flags);
+}
+
+fn read_shooter(r: &mut Reader) -> Result<Shooter, TableLoadError> {
+    Ok(Shooter {
+        interval: r.u16()?,
+        delay: r.u16()?,
+        dx: r.fx()?,
+        dy: r.fx()?,
+        angle: r.angle()?,
+        speed: r.fx()?,
+        damage: r.u16()?,
+        radius: r.fx()?,
+        sprite: r.u16()?,
+        option: r.u8()?,
+        flags: r.u8()?,
+    })
+}
+
+/// 头 16B：magic(4) + version(2) + reserved(2) + content_hash(8)。body = 其后全部字节。
+const TABLE_MAGIC: &[u8; 4] = b"STGT";
+const TABLE_VERSION: u16 = 1;
+const TABLE_HEADER: usize = 16;
+
+impl WorldTables {
+    /// 序列化为规范字节（i32/u16 小端，无 float）。`content_hash` = FNV-1a64(body) 回填。
+    pub fn to_bytes(&self) -> Vec<u8> {
+        use crate::checksum::Fnv1a64;
+        let mut out = Vec::new();
+        out.extend_from_slice(TABLE_MAGIC);
+        out.extend_from_slice(&TABLE_VERSION.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes()); // reserved
+        out.extend_from_slice(&0u64.to_le_bytes()); // content_hash 占位（偏移 8..16）
+
+        out.extend_from_slice(&self.item_gravity.raw().to_le_bytes());
+        out.extend_from_slice(&(self.appearances.len() as u32).to_le_bytes());
+        for a in self.appearances.iter() {
+            out.extend_from_slice(&a.radius.raw().to_le_bytes());
+            out.extend_from_slice(&a.sprite.to_le_bytes());
+        }
+        out.extend_from_slice(&(self.item_cfg.len() as u32).to_le_bytes());
+        for it in self.item_cfg.iter() {
+            out.extend_from_slice(&it.score.to_le_bytes());
+            out.extend_from_slice(&it.eject_speed.raw().to_le_bytes());
+            out.extend_from_slice(&it.terminal_vy.raw().to_le_bytes());
+            out.extend_from_slice(&it.magnet_speed.raw().to_le_bytes());
+            out.extend_from_slice(&it.pickup_radius.raw().to_le_bytes());
+            out.extend_from_slice(&it.attract_radius.raw().to_le_bytes());
+        }
+        out.extend_from_slice(&(self.drop_tables.len() as u32).to_le_bytes());
+        for tbl in self.drop_tables.iter() {
+            out.extend_from_slice(&(tbl.len() as u32).to_le_bytes());
+            for &(ty, qty) in tbl.iter() {
+                out.push(ty);
+                out.push(qty);
+            }
+        }
+        out.extend_from_slice(&(self.characters.len() as u32).to_le_bytes());
+        for c in self.characters.iter() {
+            out.extend_from_slice(&c.high_speed.raw().to_le_bytes());
+            out.extend_from_slice(&c.low_speed.raw().to_le_bytes());
+            out.extend_from_slice(&c.inv_sqrt2.raw().to_le_bytes());
+            out.extend_from_slice(&c.hit_radius.raw().to_le_bytes());
+            out.extend_from_slice(&c.graze_radius.raw().to_le_bytes());
+            for tier in 0..5 {
+                for focus in 0..2 {
+                    let list = &c.shot.sets[tier][focus];
+                    out.extend_from_slice(&(list.len() as u32).to_le_bytes());
+                    for s in list.iter() {
+                        write_shooter(&mut out, s);
+                    }
+                }
+            }
+            for tier in 0..5 {
+                let op = &c.shot.option_pos[tier];
+                out.extend_from_slice(&(op.len() as u32).to_le_bytes());
+                for &(x, y) in op.iter() {
+                    out.extend_from_slice(&x.raw().to_le_bytes());
+                    out.extend_from_slice(&y.raw().to_le_bytes());
+                }
+            }
+        }
+
+        let mut h = Fnv1a64::new();
+        h.write_bytes(&out[TABLE_HEADER..]);
+        out[8..TABLE_HEADER].copy_from_slice(&h.finish().to_le_bytes());
+        out
+    }
+
+    /// 从规范字节反序列化（只读整数，守 I1）。校验 magic/version、自校 body FNV、arity、`validate`。
+    pub fn from_bytes(buf: &[u8]) -> Result<WorldTables, TableLoadError> {
+        use crate::checksum::Fnv1a64;
+        if buf.len() < TABLE_HEADER {
+            return Err(TableLoadError::Truncated);
+        }
+        if &buf[0..4] != TABLE_MAGIC {
+            return Err(TableLoadError::BadMagic);
+        }
+        let version = u16::from_le_bytes(buf[4..6].try_into().unwrap());
+        if version != TABLE_VERSION {
+            return Err(TableLoadError::UnsupportedVersion(version));
+        }
+        let stored = u64::from_le_bytes(buf[8..TABLE_HEADER].try_into().unwrap());
+        let mut h = Fnv1a64::new();
+        h.write_bytes(&buf[TABLE_HEADER..]);
+        if h.finish() != stored {
+            return Err(TableLoadError::HashMismatch);
+        }
+
+        let mut r = Reader {
+            b: buf,
+            p: TABLE_HEADER,
+        };
+        let item_gravity = r.fx()?;
+
+        let na = r.u32()? as usize;
+        let mut appearances = Vec::with_capacity(na);
+        for _ in 0..na {
+            appearances.push(AppearanceCfg {
+                radius: r.fx()?,
+                sprite: r.u16()?,
+            });
+        }
+
+        let ni = r.u32()? as usize;
+        if ni != ITEM_TYPE_COUNT {
+            return Err(TableLoadError::ArityMismatch {
+                field: "item_cfg",
+                expected: ITEM_TYPE_COUNT,
+                actual: ni,
+            });
+        }
+        let mut item_vec = Vec::with_capacity(ni);
+        for _ in 0..ni {
+            item_vec.push(ItemTypeCfg {
+                score: r.u32()?,
+                eject_speed: r.fx()?,
+                terminal_vy: r.fx()?,
+                magnet_speed: r.fx()?,
+                pickup_radius: r.fx()?,
+                attract_radius: r.fx()?,
+            });
+        }
+        let item_cfg: [ItemTypeCfg; ITEM_TYPE_COUNT] = item_vec
+            .try_into()
+            .expect("count checked == ITEM_TYPE_COUNT");
+
+        let nd = r.u32()? as usize;
+        let mut drops: Vec<Box<[(u8, u8)]>> = Vec::with_capacity(nd);
+        for _ in 0..nd {
+            let inner = r.u32()? as usize;
+            let mut row = Vec::with_capacity(inner);
+            for _ in 0..inner {
+                row.push((r.u8()?, r.u8()?));
+            }
+            drops.push(row.into_boxed_slice());
+        }
+
+        let nc = r.u32()? as usize;
+        if nc != 1 {
+            return Err(TableLoadError::ArityMismatch {
+                field: "characters",
+                expected: 1,
+                actual: nc,
+            });
+        }
+        let high_speed = r.fx()?;
+        let low_speed = r.fx()?;
+        let inv_sqrt2 = r.fx()?;
+        let hit_radius = r.fx()?;
+        let graze_radius = r.fx()?;
+        let mut sets: [[Box<[Shooter]>; 2]; 5] =
+            std::array::from_fn(|_| std::array::from_fn(|_| Box::default()));
+        for tier_sets in sets.iter_mut() {
+            for slot in tier_sets.iter_mut() {
+                let n = r.u32()? as usize;
+                let mut v = Vec::with_capacity(n);
+                for _ in 0..n {
+                    v.push(read_shooter(&mut r)?);
+                }
+                *slot = v.into_boxed_slice();
+            }
+        }
+        let mut option_pos: [Box<[(Fx, Fx)]>; 5] = std::array::from_fn(|_| Box::default());
+        for slot in option_pos.iter_mut() {
+            let m = r.u32()? as usize;
+            let mut v = Vec::with_capacity(m);
+            for _ in 0..m {
+                v.push((r.fx()?, r.fx()?));
+            }
+            *slot = v.into_boxed_slice();
+        }
+
+        let t = WorldTables {
+            content_hash: stored,
+            characters: [CharacterCfg {
+                high_speed,
+                low_speed,
+                inv_sqrt2,
+                hit_radius,
+                graze_radius,
+                shot: ShotTypeCfg { sets, option_pos },
+            }],
+            item_cfg,
+            drop_tables: drops.into_boxed_slice(),
+            item_gravity,
+            appearances: appearances.into_boxed_slice(),
+        };
+        if !t.validate() {
+            return Err(TableLoadError::ValidateFailed);
+        }
+        Ok(t)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,5 +732,93 @@ mod tests {
             sprite: 0,
         }]);
         assert!(!bad.validate(), "appearance 半径超上限必须被 validate 拒绝");
+    }
+
+    #[test]
+    fn to_from_bytes_round_trip_preserves_all_fields() {
+        let mut t = build_tables_v0();
+        let bytes = t.to_bytes();
+        let back = WorldTables::from_bytes(&bytes).expect("round-trip must load");
+        assert_ne!(back.content_hash, 0, "from_bytes 计算真 content_hash");
+        t.content_hash = back.content_hash; // 对齐 from_bytes 填的唯一字段
+        assert_eq!(t, back, "round-trip 逐字段一致");
+    }
+
+    #[test]
+    fn to_bytes_is_deterministic() {
+        assert_eq!(build_tables_v0().to_bytes(), build_tables_v0().to_bytes());
+    }
+
+    #[test]
+    fn content_hash_changes_when_a_value_changes() {
+        let h0 = {
+            let b = build_tables_v0().to_bytes();
+            WorldTables::from_bytes(&b).unwrap().content_hash
+        };
+        let mut t = build_tables_v0();
+        t.item_gravity = Fx::from_raw(9_831); // 改一个 body 值
+        let h1 = {
+            let b = t.to_bytes();
+            WorldTables::from_bytes(&b).unwrap().content_hash
+        };
+        assert_ne!(h0, h1, "改 body 任一值 → content_hash 变");
+    }
+
+    #[test]
+    fn from_bytes_rejects_bad_magic_version_truncation_and_tamper() {
+        let good = build_tables_v0().to_bytes();
+
+        let mut bad_magic = good.clone();
+        bad_magic[0] = b'X';
+        assert_eq!(
+            WorldTables::from_bytes(&bad_magic),
+            Err(TableLoadError::BadMagic)
+        );
+
+        let mut bad_ver = good.clone();
+        bad_ver[4..6].copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(
+            WorldTables::from_bytes(&bad_ver),
+            Err(TableLoadError::UnsupportedVersion(2))
+        );
+
+        assert_eq!(
+            WorldTables::from_bytes(&good[..8]),
+            Err(TableLoadError::Truncated)
+        );
+
+        let mut tampered = good.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0xFF; // 改 body 尾字节但不重算 hash
+        assert_eq!(
+            WorldTables::from_bytes(&tampered),
+            Err(TableLoadError::HashMismatch)
+        );
+    }
+
+    #[test]
+    fn from_bytes_rejects_arity_mismatch() {
+        // 手工造一份 hash 自洽、但 item_cfg 计数 != ITEM_TYPE_COUNT 的 buffer。
+        use crate::checksum::Fnv1a64;
+        let mut body = Vec::new();
+        body.extend_from_slice(&Fx::ZERO.raw().to_le_bytes()); // item_gravity
+        body.extend_from_slice(&0u32.to_le_bytes()); // appearances count 0
+        body.extend_from_slice(&3u32.to_le_bytes()); // item_cfg count 3 (!= 5)
+        let mut buf = Vec::new();
+        buf.extend_from_slice(TABLE_MAGIC);
+        buf.extend_from_slice(&TABLE_VERSION.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        let mut h = Fnv1a64::new();
+        h.write_bytes(&body);
+        buf.extend_from_slice(&h.finish().to_le_bytes());
+        buf.extend_from_slice(&body);
+        assert_eq!(
+            WorldTables::from_bytes(&buf),
+            Err(TableLoadError::ArityMismatch {
+                field: "item_cfg",
+                expected: 5,
+                actual: 3
+            })
+        );
     }
 }
