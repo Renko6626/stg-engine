@@ -1,8 +1,11 @@
 //! 脚本可见引擎常量的单一注册表（C14）。
 //!
-//! `engine_consts!` 宏对每行同时生成 ① `pub const NAME: <rust_ty>`（Rust 侧照常用，类型保真）
-//! ② 汇入 `ENGINE_CONSTS: &[EngineConst]`（编译器注入进 `.ecl` 命名空间，脚本侧 i32）。
-//! 值只写一次、两头自动出，杜绝漂移。加新配置 = 加一行。叶子模块（crate 根），无依赖环。
+//! `engine_consts!` 宏分两段登记：`structural`（① VM/ABI 事实，与表无关）与
+//! `table_symbols`（② 数据表某些行的名字，join 校验对象）。每行同时生成
+//! `pub const NAME: <rust_ty>`（Rust 侧照常用，类型保真）并汇入三份注入列表：
+//! `ENGINE_STRUCTURAL`（①）、`TABLE_SYMBOLS`（②）、`ENGINE_CONSTS`（①⧺②，编译器
+//! 注入用，callers 签名不变）。值只写一次、三头自动出，杜绝漂移。加新配置 = 加一行。
+//! 叶子模块（crate 根），无依赖环。
 
 use crate::ecl::image::EclValueType;
 
@@ -20,34 +23,45 @@ impl EngineConst {
 }
 
 macro_rules! engine_consts {
-    ( $( $name:ident : $rust_ty:ty as $script:ident = $val:expr ; )* ) => {
-        $( pub const $name: $rust_ty = $val; )*
-        /// 全部脚本可见引擎常量（编译器注入用）。定义见本文件 `engine_consts!` 块。
+    (
+        structural { $( $sname:ident : $sty:ty as $sk:ident = $sval:expr ; )* }
+        table_symbols { $( $tname:ident : $tty:ty as $tk:ident = $tval:expr ; )* }
+    ) => {
+        $( pub const $sname: $sty = $sval; )*
+        $( pub const $tname: $tty = $tval; )*
+        /// ① 引擎结构常量（VM/ABI，与表无关，版本漂移归 `engine_ver`）。
+        pub const ENGINE_STRUCTURAL: &[EngineConst] = &[
+            $( EngineConst::new(stringify!($sname), engine_consts!(@ty $sk), $sval as i32), )*
+        ];
+        /// ② 表符号词汇（数据表某些行的名字；join 校验对象；乙案将来搬进表符号段）。
+        pub const TABLE_SYMBOLS: &[EngineConst] = &[
+            $( EngineConst::new(stringify!($tname), engine_consts!(@ty $tk), $tval as i32), )*
+        ];
+        /// 全部脚本可见引擎常量（编译器注入 = ①⧺②）。callers 用此名，签名不变。
         pub const ENGINE_CONSTS: &[EngineConst] = &[
-            $( EngineConst::new(stringify!($name), engine_consts!(@ty $script), $val as i32), )*
+            $( EngineConst::new(stringify!($sname), engine_consts!(@ty $sk), $sval as i32), )*
+            $( EngineConst::new(stringify!($tname), engine_consts!(@ty $tk), $tval as i32), )*
         ];
     };
-    // v0 限制（留意，非静默坑）：`$val as i32` 这一步要求 `$rust_ty` 是原生整数类型
-    // （目前登记的都是 `u16`）。`fx`/`angle` 两个脚本类型分支只是把 `EclValueType` 标对，
-    // 并不改变 `$val as i32` 的求值方式——真要登记一条 `fx`/`angle` 类型的引擎常量，
-    // `$val` 必须已经是一个原始整数字面量/表达式（例如手算好的 `Fx`/`Angle` raw 值，
-    // 如 `Fx::from_raw(..).raw()` 算出来的那个数），**不能**直接写 `Fx`/`Angle` 这两个
-    // newtype 本身（它们不是原生整数类型，`as i32` 编不过 / 语义也不对——newtype 不定义
-    // `as i32` 转换）。这条宏目前没有为 newtype 求值单独开分支；真出现这种需求时要扩宏，
-    // 不要绕过它手写字面量镜像（违背本文件"值只写一次"的初衷）。
+    // v0 限制：`$val as i32` 要求 `$rust_ty` 为原生整数（现均 u16）。fx/angle 分支只标
+    // `EclValueType`，不改求值——真登记 fx/angle 常量须 `$val` 已是 raw 整数（见 C14）。
     (@ty int)   => { EclValueType::Int };
     (@ty fx)    => { EclValueType::Fx };
     (@ty angle) => { EclValueType::Angle };
 }
 
 engine_consts! {
-    //  名字                Rust 类型  脚本类型  值
-    APPEARANCE_SMALL:       u16 as int = 0;
-    APPEARANCE_MEDIUM:      u16 as int = 1;
-    APPEARANCE_LARGE:       u16 as int = 2;
-    APPEARANCE_STAR:        u16 as int = 3;
-    GVAR_RANK:              u16 as int = 0;
-    GLOBALS_SYS_SEGMENT:    u16 as int = 16;
+    structural {
+        GVAR_RANK:           u16 as int = 0;
+        GLOBALS_SYS_SEGMENT: u16 as int = 16;
+    }
+    table_symbols {
+        //  ② appearance 行名（值 = appearances 索引；join 校验 + FM2 防错序的锚）
+        APPEARANCE_SMALL:  u16 as int = 0;
+        APPEARANCE_MEDIUM: u16 as int = 1;
+        APPEARANCE_LARGE:  u16 as int = 2;
+        APPEARANCE_STAR:   u16 as int = 3;
+    }
 }
 
 #[cfg(test)]
@@ -74,5 +88,29 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), n, "引擎常量名必须唯一");
+    }
+
+    #[test]
+    fn consts_split_into_structural_and_table_symbols() {
+        let has = |list: &[EngineConst], name: &str| list.iter().any(|c| c.name == name);
+        assert!(
+            has(ENGINE_STRUCTURAL, "GVAR_RANK") && has(ENGINE_STRUCTURAL, "GLOBALS_SYS_SEGMENT")
+        );
+        assert!(has(TABLE_SYMBOLS, "APPEARANCE_SMALL") && has(TABLE_SYMBOLS, "APPEARANCE_STAR"));
+        assert!(!has(TABLE_SYMBOLS, "GVAR_RANK"), "结构常量不入 ②");
+        assert!(!has(ENGINE_STRUCTURAL, "APPEARANCE_STAR"), "表符号不入 ①");
+        // ENGINE_CONSTS = ①⧺② 且注入面不变
+        assert_eq!(
+            ENGINE_CONSTS.len(),
+            ENGINE_STRUCTURAL.len() + TABLE_SYMBOLS.len()
+        );
+        for c in ENGINE_STRUCTURAL.iter().chain(TABLE_SYMBOLS) {
+            assert!(
+                ENGINE_CONSTS
+                    .iter()
+                    .any(|e| e.name == c.name && e.value == c.value)
+            );
+        }
+        assert_eq!(APPEARANCE_STAR, 3u16); // pub const 原型不变
     }
 }
