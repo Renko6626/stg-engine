@@ -43,10 +43,13 @@
 //!
 //! ## xformdef 参数常量折叠：T2 留给本趟的范围
 //!
-//! `XfSlotLit.args` 允许字面量 + 已声明 `const` 引用 + 一元 `-`（[`eval_const_arg`]，
-//! 独立于 `lang::typeck` 的 `fold_const`——那个吃的是 `Checker` 内部状态，本趟只有
-//! `TypedInfo.consts`（已折叠完的名字→值表），够用）；其它任何形状（`$` 变量、调用、
-//! 二元运算……）一律编译错误，文案含"xformdef 参数必须是编译期常量"。
+//! `XfSlotLit.args` 求值走 `crate::lang::const_eval::evaluate`（C14 收编：与
+//! `lang::typeck::consts::fold_const` 共用同一份求值器唯一实现，之前各自维护一份的
+//! `eval_const_arg`/`fold_const` 已合一）——字面量 + 已声明 `const` 引用 + 一元 `-` + 二元
+//! 算术/比较/逻辑 + cast 皆合法（求值器的能力矩阵，非本趟单独收窄）；`$` 变量/调用等非
+//! 编译期可求值的形状仍一律编译错误，文案包一层前缀含"编译期常量"（`const_eval` 本身的
+//! 报错文案含"非编译期可求值"，见下方求值处）。`self.consts` 由 `generate` 从
+//! `TypedInfo.consts` 构造（保留 `Ty`，供 `evaluate` 的带型常量表签名使用）。
 //!
 //! ## 弹 setter 族 `handle:int` 首参：求值后丢弃（T3 落地拍板）
 //!
@@ -56,8 +59,9 @@
 //! 本趟落地策略：**求值后立即丢弃**（保留副作用——万一作者写了带副作用的表达式——但
 //! 不把它压进 syscall 实际吃的参数序列），不是"Fault if handle != self"（更严格但当前
 //! 无法在编译期证明等值，运行期也没有校验入口）——最小惊讶、不新增运行期检查。
-use crate::lang::ast::{BinOp, CompileError, Expr, Program, Span, UnOp};
+use crate::lang::ast::{BinOp, CompileError, Program, Span, Ty};
 use crate::lang::builtins::{self, ParamKind};
+use crate::lang::const_eval;
 use crate::lang::slots::{SlotMap, SubSlots};
 use crate::lang::typeck::{
     BinIntent, CallArg, CallTarget, CastIntent, TypedCall, TypedExpr, TypedExprKind, TypedInfo,
@@ -70,26 +74,6 @@ use stg_core::xform::XformSlot;
 
 // xformdef 操作名映射表已上移 `lang::xform_map`（slots 趟与本趟共用的单一权威，含物理
 // 槽数与 STEP 族 scratch 语义）；`loop`/`END` 不开放的已知限制也记录在该模块文档。
-
-/// `xformdef` 槽参数的编译期常量求值：字面量 + 已声明 `const` 引用 + 一元 `-`，
-/// 其它一律拒绝（模块文档"xformdef 参数常量折叠"）。
-fn eval_const_arg(e: &Expr, consts: &BTreeMap<String, i32>) -> Result<i32, String> {
-    match e {
-        Expr::IntLit(v) => Ok(*v),
-        Expr::FxLit(v) => Ok(*v),
-        Expr::AngleLit(v) => Ok(*v as i32),
-        Expr::Var(name, _) => consts
-            .get(name)
-            .copied()
-            .ok_or_else(|| format!("'{name}' 不是已声明的常量")),
-        Expr::Unary {
-            op: UnOp::Neg,
-            e: inner,
-            ..
-        } => eval_const_arg(inner, consts).map(i32::wrapping_neg),
-        _ => Err("只支持字面量 / const 引用 / 一元负号".to_string()),
-    }
-}
 
 /// locals/xform 槽号窄化为 `u8`（`PUSHL`/`POPL`/`write_xform_locals` 操作数宽度，C19
 /// 复审修复）。`lang::slots::allocate` 已经在编译期把 `base+width ≤ 64`
@@ -135,7 +119,7 @@ struct Gen<'p> {
     xformdefs: BTreeMap<String, &'p crate::lang::ast::XformDef>,
     name_to_ref: BTreeMap<String, BuilderSubRef>,
     sub_params: BTreeMap<String, Vec<String>>,
-    consts: BTreeMap<String, i32>,
+    consts: BTreeMap<String, (Ty, i32)>,
     errors: Vec<CompileError>,
 }
 
@@ -181,12 +165,12 @@ impl<'p> Gen<'p> {
                         let mut args = [0i32; 2];
                         let mut ok = true;
                         for (i, a) in s.args.iter().enumerate() {
-                            match eval_const_arg(a, &self.consts) {
-                                Ok(v) => args[i] = v,
-                                Err(msg) => {
+                            match const_eval::evaluate(a, &self.consts) {
+                                Ok((_ty, v)) => args[i] = v,
+                                Err(e) => {
                                     self.err(
                                         s.span,
-                                        format!("xformdef 参数必须是编译期常量：{msg}"),
+                                        format!("xformdef 槽参数必须是编译期常量：{}", e.msg),
                                     );
                                     ok = false;
                                 }
@@ -660,7 +644,11 @@ pub fn generate(
             )
         })
         .collect();
-    let consts: BTreeMap<String, i32> = ti.consts.iter().map(|(n, _, v)| (n.clone(), *v)).collect();
+    let consts: BTreeMap<String, (Ty, i32)> = ti
+        .consts
+        .iter()
+        .map(|(n, t, v)| (n.clone(), (*t, *v)))
+        .collect();
     let xformdefs: BTreeMap<String, &crate::lang::ast::XformDef> =
         prog.xformdefs.iter().map(|x| (x.name.clone(), x)).collect();
 
@@ -1033,6 +1021,21 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.msg.contains("编译期常量")),
             "{errors:?}"
+        );
+    }
+
+    /// C14 收编附带能力：xformdef 槽参数改走 `const_eval::evaluate` 后，不再局限于
+    /// 字面量/const 引用/一元负号（旧 `eval_const_arg` 的能力上限），支持完整的二元
+    /// const 算术表达式。
+    #[test]
+    fn xformdef_slot_arg_accepts_binary_const_expr() {
+        // 收编后 xformdef 槽参数走 const_eval，支持二元算术（原 eval_const_arg 只字面量/一元负）
+        let src = "const A: int = 2;\n\
+                   xformdef OK { turn(A + 1); }\n\
+                   sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, OK, none); loop { wait(1); } }";
+        assert!(
+            compile(src, "ok.ecl").is_ok(),
+            "二元 const 表达式应被 xformdef 槽参数接受"
         );
     }
 

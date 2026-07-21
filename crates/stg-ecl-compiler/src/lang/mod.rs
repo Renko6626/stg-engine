@@ -9,11 +9,13 @@
 pub mod ast;
 pub mod builtins;
 pub mod codegen;
+mod const_eval;
 pub mod debug;
 mod entryck;
 pub mod lex;
 pub mod parse;
 pub mod slots;
+mod type_rules;
 pub mod typeck;
 pub(crate) mod xform_map;
 

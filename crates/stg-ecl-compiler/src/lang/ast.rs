@@ -290,6 +290,20 @@ impl CompileError {
     }
 }
 
+/// 表达式的诊断锚点 span（字面量无 span → `None`，调用方 `.unwrap_or(fallback)`）。
+/// M0-9 前住 typeck::matrix，C14 收编时迁来 AST 层（它是 AST 遍历助手，非类型规则）。
+pub fn expr_span(e: &Expr) -> Option<Span> {
+    match e {
+        Expr::IntLit(_) | Expr::FxLit(_) | Expr::AngleLit(_) => None,
+        Expr::Var(_, s)
+        | Expr::EngineVar(_, s)
+        | Expr::Call { span: s, .. }
+        | Expr::Binary { span: s, .. }
+        | Expr::Unary { span: s, .. }
+        | Expr::Cast { span: s, .. } => Some(*s),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

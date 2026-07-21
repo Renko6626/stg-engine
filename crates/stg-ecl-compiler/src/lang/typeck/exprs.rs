@@ -3,12 +3,11 @@
 //! `nested` 区分"表达式内部"（拒绝 `ret=None`）与"独立语句"（`ret=None` 合法）两种语境）。
 
 use super::checker::Checker;
-use super::intents::{CastIntent, UnIntent};
-use super::matrix::{binary_result, expr_span, op_symbol};
 use super::scope::LocalScope;
 use super::typed_ast::{CallArg, CallTarget, TypedCall, TypedExpr, TypedExprKind};
-use crate::lang::ast::{Expr, Span, Ty, UnOp};
+use crate::lang::ast::{Expr, Span, Ty, UnOp, expr_span};
 use crate::lang::builtins::{self, Builtin, ParamKind};
+use crate::lang::type_rules::{CastIntent, UnIntent, binary_result, op_symbol};
 
 enum RefKind {
     Xform,

@@ -3,9 +3,9 @@
 //! 每个 [`TypedExpr`] 恒携带且仅携带一个确定的 `Ty`——"无返回值的调用"从不会出现在这层，
 //! 见 [`TypedStmt::ExprStmtVoid`]/[`TypedStmt::Spawn`] 里的 [`TypedCall`]。
 
-use super::intents::{BinIntent, CastIntent, UnIntent};
 use crate::lang::ast::{BinOp, EngVar, Ty, UnOp};
 use crate::lang::builtins::Builtin;
+use crate::lang::type_rules::{BinIntent, CastIntent, UnIntent};
 
 /// 一次调用的目标：`sub`（v1 恒无返回值）或内建函数表条目（返回型见 `Builtin.ret`）。
 #[derive(Debug, Clone, PartialEq)]

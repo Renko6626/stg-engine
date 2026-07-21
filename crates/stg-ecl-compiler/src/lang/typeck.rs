@@ -4,10 +4,12 @@
 //!
 //! ## 子模块划分（一类东西一个文件）
 //!
-//! - [`intents`] —— 指令意图标签（`BinIntent`/`UnIntent`/`CastIntent`）。
+//! - `crate::lang::type_rules`（跨趟共享）—— 指令意图标签（`BinIntent`/`UnIntent`/
+//!   `CastIntent`）+ 类型矩阵唯一权威：`binary_result`/`op_symbol`/`cast_intent`，判型与
+//!   `crate::lang::const_eval` 常量折叠共用同一张表（C14 收编，原 `matrix`/`intents` 两个
+//!   typeck 内部子模块已并入）。`expr_span` 同刀迁至 `crate::lang::ast`（AST 遍历助手，非
+//!   类型规则）。
 //! - [`typed_ast`] —— 带型影子 AST 数据结构（`TypedExpr`/`TypedStmt`/`TypedSub`/…）。
-//! - `matrix`（内部）—— 类型矩阵唯一权威：`binary_result`/`op_symbol`/`expr_span`/
-//!   `mulf_const`/`divf_const`，判型与常量折叠共用同一张表。
 //! - `scope`（内部）—— [`LocalScope`]：块作用域 / definite-assignment 状态机。
 //! - `checker`（内部）—— `Checker` 状态 + 错误上报辅助方法。
 //! - `consts`（内部）—— `const` 声明的编译期常量折叠。
@@ -27,8 +29,8 @@
 //! 用户的完整契约格式（文件:行:列 + 源行摘录 + `^`）由 `lang::mod::compile` 总入口负责——
 //! 它手上有 `src`，回填 `src_line` 后再 `render()`。`lang::slots` 同款处理（见该模块文档）。
 //!
-//! ## 类型规则表（plan 核心接口块钉死；`matrix::binary_result` 是唯一权威实现，判型与常量
-//! 折叠共用）
+//! ## 类型规则表（plan 核心接口块钉死；`crate::lang::type_rules::binary_result` 是唯一权威
+//! 实现，判型与常量折叠共用）
 //!
 //! | 运算 | 合法格 | 结果型 | 说明 |
 //! |---|---|---|---|
@@ -69,8 +71,8 @@
 //!   （T3 若无此检查会对着不存在的循环发悬空 continue/break 目标），加做，超出 checklist
 //!   字面范围但判定为有益增项，报告中记录。
 //! - **`const` 折叠范围**：只支持字面量 + 更早声明的 `const` 引用 + 一元 `-` + 二元算术/比较/
-//!   逻辑（复用 `matrix::binary_result` 同一张矩阵）；**不支持** `$` 引擎变量/`global()`/函数调用
-//!   （非编译期可求值）。
+//!   逻辑（求值委托 `crate::lang::const_eval::evaluate`，复用 `type_rules::binary_result`
+//!   同一张矩阵）；**不支持** `$` 引擎变量/`global()`/函数调用（非编译期可求值）。
 //! - **`xformdef` 序列体不在本趟校验范围**：`ast.rs` 模块文档写"slots 里的 Expr 必须是常量
 //!   表达式，T2 折叠校验"，但 Task 2 checklist 的实际测试点只考"被引用才占槽 / 3×cnt 对齐 /
 //!   off+cnt 上界"——这些是 `lang::slots` 的槽分配职责，不是判型职责。Global Constraints 原文
@@ -87,13 +89,11 @@ use std::collections::{BTreeMap, BTreeSet};
 mod checker;
 mod consts;
 mod exprs;
-mod intents;
-mod matrix;
 mod scope;
 mod stmts;
 mod typed_ast;
 
-pub use intents::{BinIntent, CastIntent, UnIntent};
+pub use crate::lang::type_rules::{BinIntent, CastIntent, UnIntent};
 pub use typed_ast::{
     CallArg, CallTarget, TypedCall, TypedExpr, TypedExprKind, TypedInfo, TypedStmt, TypedSub,
 };

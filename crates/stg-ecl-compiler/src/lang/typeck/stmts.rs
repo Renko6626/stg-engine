@@ -2,10 +2,9 @@
 //! 快照/还原（`super::scope::LocalScope`）、sub 体总入口。
 
 use super::checker::Checker;
-use super::matrix::expr_span;
 use super::scope::LocalScope;
 use super::typed_ast::{CallTarget, TypedCall, TypedExpr, TypedExprKind, TypedStmt, TypedSub};
-use crate::lang::ast::{Block, Expr, Span, Stmt, SubDef, Ty};
+use crate::lang::ast::{Block, Expr, Span, Stmt, SubDef, Ty, expr_span};
 
 impl<'p> Checker<'p> {
     fn check_expr_stmt(
