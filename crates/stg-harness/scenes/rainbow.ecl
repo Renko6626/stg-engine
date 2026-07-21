@@ -6,7 +6,7 @@
 // 位置索引。
 //
 // follow-ups C13 摩擦逐条还账（本刀兑现，builder 版占位符全部退役）：
-//   ① 环密度 `28 + global(RANK_SLOT) * 2`、环速度 `1.0fx + i as fx * 0.25fx`——两处都是
+//   ① 环密度 `28 + global(GVAR_RANK) * 2`、环速度 `1.0fx + i as fx * 0.25fx`——两处都是
 //      运行期表达式（`for` 循环变量 `i` 参与真实运算），不是 builder 期就地展开的字面量表。
 //   ② `boss_set` 的 ratio 参数走 `$self_hp as fx / $self_hp_max as fx` 真定点除法
 //      （DIVF），不是恒为 1.0fx 的占位符。
@@ -20,9 +20,8 @@
 // 金向量校验和不变。`APPEARANCE_SMALL/MEDIUM/LARGE/STAR`/`GVAR_RANK`/`GLOBALS_SYS_SEGMENT`
 // 现由 stg-core `engine_consts!` 注册表统一注入 `.ecl` 命名空间（见 docs/ecl-lang.md
 // "引擎常量"节）；`for i in 0..5` 里的 `i % 4` 是有意轮转全表，非单指某个 appearance，
-// 不换。下面 `RANK_SLOT` 仍手写镜像 `GVAR_RANK`（本刀未动，留 follow-ups 记账）。
-
-const RANK_SLOT: int = 0; // 系统段 GVAR_RANK（stg_core::world::GVAR_RANK 的单一权威值）
+// 不换。环密度算式直接引用注入常量 `global(GVAR_RANK)`，不再手写 `RANK_SLOT` 镜像
+// 同一个槽号——C14 闭环，无剩余手写镜像。
 
 xformdef WIND_CHIME {
     set_speed(2.0fx);
@@ -59,7 +58,7 @@ sub main() {
 
     loop {
         // C13①：环密度是真运行期表达式（rank 越高环越密），不是 builder 期字面量。
-        var ways: int = 28 + global(RANK_SLOT) * 2;
+        var ways: int = 28 + global(GVAR_RANK) * 2;
         var step_i: int = 65536 / ways;
         var astep: angle = step_i as angle;
 
