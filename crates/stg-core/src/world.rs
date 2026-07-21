@@ -608,6 +608,23 @@ impl WorldBody {
         }
     }
 
+    /// 拔火力档（导演/游戏层唯一的自机 power 外部写入口，收 D1）。P4-b：越界 player 索引
+    /// → no-op + contract_viol 计数 + last_status=BAD_ARGS（同 set_var/pulse_signal 口径）；
+    /// power 上钳 POWER_MAX（`power_tier` index OOB 的根，见本文件顶 MAX_ENTITY_RADIUS 注释）。
+    pub fn set_player_power(&mut self, player: usize, power: u16) {
+        if player >= crate::MAX_PLAYERS {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return;
+        }
+        self.players[player].power = power.min(crate::items::POWER_MAX);
+    }
+
+    /// 自机只读切片（表现层读自机态的入口；通道 A 最小种子，非完整 WorldView）。
+    pub fn players(&self) -> &[PlayerState] {
+        &self.players
+    }
+
     /// ECL 全局变量槽读（D12）。slot ≥ 1024 → 0 + 计数——取 &mut self 正是为了
     /// 坏槽计数入校验和（两机必须一样错）。
     pub fn get_var(&mut self, slot: u16) -> i32 {
@@ -832,6 +849,49 @@ mod tests {
         });
         assert_eq!(w.body.events_len, 1);
         assert_eq!(w.body.events[0].kind, EVT_PLAYER_DIED);
+    }
+
+    /// set_player_power 钳边界：恰 POWER_MAX 原样写入；超一格被钳（判别 min 是否真在——
+    /// 换成裸写 `self.players[player].power = power` 即红）。
+    #[test]
+    fn set_player_power_clamps_to_power_max() {
+        let mut w = crate::step::World::new(1);
+        w.body.set_player_power(0, crate::items::POWER_MAX);
+        assert_eq!(
+            w.body.players[0].power,
+            crate::items::POWER_MAX,
+            "恰满档原样写入"
+        );
+        w.body.set_player_power(0, crate::items::POWER_MAX + 1);
+        assert_eq!(
+            w.body.players[0].power,
+            crate::items::POWER_MAX,
+            "超 POWER_MAX 被钳（防 power_tier index OOB）"
+        );
+    }
+
+    /// set_player_power 越界 player 索引 → P4-b 确定性安全结果：no-op + contract_viol +1 +
+    /// last_status=BAD_ARGS（同 set_var/pulse_signal 守卫口径）。
+    #[test]
+    fn set_player_power_oob_player_is_guarded_no_op() {
+        let mut w = crate::step::World::new(1);
+        let last = crate::MAX_PLAYERS - 1;
+        let before = w.body.players[last].power;
+        let cv0 = w.body.diag.contract_viol;
+        w.body.set_player_power(crate::MAX_PLAYERS, 200); // 恰过界
+        assert_eq!(w.body.players[last].power, before, "越界不写任何真槽");
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, STATUS_BAD_ARGS);
+    }
+
+    /// players() 只读访问器：返回 MAX_PLAYERS 长切片，内容与内部一致。
+    #[test]
+    fn players_accessor_returns_full_slice() {
+        let mut w = crate::step::World::new(1);
+        w.body.set_player_power(0, 123);
+        let ps = w.body.players();
+        assert_eq!(ps.len(), crate::MAX_PLAYERS);
+        assert_eq!(ps[0].power, 123);
     }
 
     #[test]
