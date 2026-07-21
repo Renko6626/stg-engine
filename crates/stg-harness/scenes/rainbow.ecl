@@ -14,6 +14,13 @@
 //      不是 16 发各自写一份 builder 期展开的 xform 序列。
 // 附带修复一处 builder 版文档点名的摩擦：弹幕原点改用 `$self_x`/`$self_y`（boss 自身
 // 位置，运行期读取）——boss 被 `patrol()` 巡游左右移动时弹幕原点跟着走，不再钉死在出生点。
+//
+// follow-ups C14 去魔数（本刀兑现）：风铃摆 TURN 环固定发一种外观，`fire(1, ...)` 换成
+// 注入引擎常量 `fire(APPEARANCE_MEDIUM, ...)`——纯改书写不改值（折叠回同一字面量 1），
+// 金向量校验和不变。`APPEARANCE_SMALL/MEDIUM/LARGE/STAR`/`GVAR_RANK`/`GLOBALS_SYS_SEGMENT`
+// 现由 stg-core `engine_consts!` 注册表统一注入 `.ecl` 命名空间（见 docs/ecl-lang.md
+// "引擎常量"节）；`for i in 0..5` 里的 `i % 4` 是有意轮转全表，非单指某个 appearance，
+// 不换。下面 `RANK_SLOT` 仍手写镜像 `GVAR_RANK`（本刀未动，留 follow-ups 记账）。
 
 const RANK_SLOT: int = 0; // 系统段 GVAR_RANK（stg_core::world::GVAR_RANK 的单一权威值）
 
@@ -66,7 +73,7 @@ sub main() {
         if volley % 2 == 0 {
             for k in 0..16 {
                 var ka: angle = (k * 4096) as angle;
-                _ = fire(1, $self_x, $self_y, 0fx, ka, WIND_CHIME, none);
+                _ = fire(APPEARANCE_MEDIUM, $self_x, $self_y, 0fx, ka, WIND_CHIME, none);
             }
         }
 

@@ -129,6 +129,33 @@ sub main() {
 字节码层完整规则（segment 边界钉法、校验和归属等）见 [`ecl-ops.md`](ecl-ops.md)——本节只讲
 脚本作者需要知道的部分。
 
+## 引擎常量（编译器预置注入，C14）
+
+编译器在处理脚本自己的 `const`/`xformdef`/`sub` **之前**，先把一批 Rust 侧命名常量当作
+"第 1 行前已声明的 `const`" 预填进类型检查的常量表——脚本表达式、`const` 初始值、
+xformdef 槽参数（编译期常量位置）处都能直接引用，不用再手写字面量镜像：
+
+| 名字 | 值 | 含义 |
+|---|---:|---|
+| `APPEARANCE_SMALL` | `0` | 弹外观表——小 |
+| `APPEARANCE_MEDIUM` | `1` | 弹外观表——中 |
+| `APPEARANCE_LARGE` | `2` | 弹外观表——大 |
+| `APPEARANCE_STAR` | `3` | 弹外观表——星 |
+| `GVAR_RANK` | `0` | `globals` 系统段内 RANK（难度）槽号，见上节 |
+| `GLOBALS_SYS_SEGMENT` | `16` | `globals` 系统段/自由段分界槽号，见上节 |
+
+值即引擎侧同名 Rust 常量（脚本侧统一按 `int` 携带：`Fx`/`Angle` 类型的常量会带原始
+raw 值，不是十进制含义值——目前表里的名字都恰好是 `int` 类型，无此坑；新增 `fx`/`angle`
+类型的引擎常量时留意）。脚本**不得**重新声明同名 `const`——会在类型检查阶段报错
+`'NAME' 与引擎常量重名，不能重新声明`（`typeck/consts.rs`），无论脚本里写的值是否一致。
+
+权威定义是 `stg-core` 的 `crates/stg-core/src/consts.rs`，`engine_consts!` 宏对每行同时
+生成 Rust 侧 `pub const`（供世界层/harness 代码用，类型保真）与注入表
+`ENGINE_CONSTS: &[EngineConst]`（脚本侧统一 `i32`，供编译器 `lang::compile` 默认注入）——
+两头共享同一处字面量，杜绝手写复写漂移。**加一个新的引擎常量 = 在该宏调用里加一行**；
+C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的常量可能改由数据文件
+（连同其 `content_hash`）生成而非手写宏调用，命名注入的使用方式不受影响。
+
 ## 内建函数（签名以 `builtins.rs` 为准）
 
 `fire(appearance:int, x:fx, y:fx, speed:fx, angle:angle, xf:XFORMDEF名|none, task:ASYNC_SUB名|none) -> int` ·

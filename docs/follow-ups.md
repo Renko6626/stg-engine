@@ -213,11 +213,33 @@ named entry 表 + Root 单例保护。C11 的 `content_hash`/`EclImage.content_h
 
 ### C14. .ecl 跨语言常量引用缺失（M1.9 T4 复审分诊，三 Minor 共同根因）
 
-`.ecl` 源码无法引用 Rust 侧命名常量——appearance id（`fire(1,...)` 魔数）、globals 槽号
-（`const RANK_SLOT: int = 0` 手写镜像 `GVAR_RANK`）都靠数字复写，有漂移风险。修法候选：
-编译器注入预定义 const 表（从 stg-core 常量生成）或 `.ecl` 头部 include 机制——与 C11
-文件加载刀同期议（都属"资产管线"）。同族小件：T1 复审四 Minor（parser 无递归深度护栏/
-链式比较左结合未钉/`@70000` wait 越界测试缺/`i32::MIN` 字面量不可拼写）一并清。
+**已还**（常量注入半，2026-07-21）：`.ecl` 源码现可引用 Rust 侧命名常量——`stg-core`
+`engine_consts!` 注册表（`crates/stg-core/src/consts.rs`）对每行同时生成 Rust `pub const`
+与注入表 `ENGINE_CONSTS`，编译器 `lang::compile` 默认把它们当"第 1 行前预声明的 const"
+注入类型检查命名空间（脚本重声明同名报错"与引擎常量重名，不能重新声明"，见
+`typeck/consts.rs`）。原先三份并行的 const 求值/运算规则（typeck 内联折叠、codegen
+`eval_const_arg`、`typeck::matrix` 的 `mulf_const`/`divf_const` 等）收编成 `lang::const_eval`
+（求值）+ `lang::type_rules`（运算矩阵/cast 白名单），旧 `typeck/matrix.rs`、
+`typeck/intents.rs` 已删。金向量场景 `rainbow.ecl` 去魔数示范：风铃摆环固定外观
+`fire(1, ...)` → `fire(APPEARANCE_MEDIUM, ...)`（`var appearance = i % 4` 那类有意轮转
+全表的写法保留不换）；校验和不变（纯换书写不换值，两次 golden 对拍 + 编辑前后对拍均逐位
+相同）。详见 `docs/ecl-lang.md`"引擎常量"节、
+`docs/superpowers/specs/2026-07-21-ecl-const-injection-design.md`。
+
+**coherence 不变量**（本刀记档，留 C11 焊死）：注入的引擎常量在字节码里落为**字面量值**
+（非名字），故存在一条语义前提——**同一份常量来源必须同时喂"编译期注入"与"运行期查表"**。
+当前 v0：`ENGINE_CONSTS` 由 `consts.rs` 单一权威生成，`WorldTables`（v0 静态 `TABLES_V0`）
+与之同源（如 `APPEARANCE_STAR=3` 既是注入给编译器的值、也是 `TABLES_V0.appearances` 的
+索引），二者天然一致，靠的是"同一个宏调用/同一份源文件"这条结构性保证，不是机制性校验。
+**C11 表文件加载落地后风险浮现**：若注入常量取自表 A、却拿表 B 跑，appearance id 可能
+错位且**三平台一致地错**——金向量闸门只抓跨平台分歧、抓不了这种"一致地错"（见 CLAUDE.md
+"金向量闸门的能力边界"）。Spec 2 拍板令 `EclImage`/`WorldTables` 记录各自的 `content_hash`，
+运行期比对拦截；本刀不做，只记账，见 C11 条。
+
+**仍开放**：① T1 复审四 Minor（parser 无递归深度护栏/链式比较左结合未钉/`@70000` wait
+越界测试缺/`i32::MIN` 字面量不可拼写）——与常量注入无关，未在本刀清；② **C11 未动**——
+`WorldTables` owned 化、表文件加载、`EclImage.content_hash`/`WorldTables.content_hash`
+真哈希仍是占位 0，不要把本刀的"结构性天然一致"误读成"已解决"。
 
 ---
 
