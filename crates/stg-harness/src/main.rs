@@ -1034,8 +1034,10 @@ mod ecl_rainbow_tests {
     fn compile_twice_declaration_order_permutation_yields_equal_image() {
         let src1 = "sub a() { wait(1); } sub b() { wait(2); } sub main() { a(); b(); }";
         let src2 = "sub b() { wait(2); } sub a() { wait(1); } sub main() { a(); b(); }";
-        let img1 = stg_ecl_compiler::lang::compile(src1, "test.ecl").expect("order 1 should compile");
-        let img2 = stg_ecl_compiler::lang::compile(src2, "test.ecl").expect("order 2 should compile");
+        let img1 =
+            stg_ecl_compiler::lang::compile(src1, "test.ecl").expect("order 1 should compile");
+        let img2 =
+            stg_ecl_compiler::lang::compile(src2, "test.ecl").expect("order 2 should compile");
         assert_eq!(
             img1, img2,
             "canonical sort by name = declaration-order independent"

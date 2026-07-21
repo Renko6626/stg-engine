@@ -6,12 +6,12 @@
 //! `#[doc(hidden)] pub fn spawn_task`.
 
 use crate::bullets::BulletHandle;
-use crate::ecl::image::{EclImage, EclValueType, ResolvedEntry, ResolveError, SubId};
+use crate::ecl::image::{EclImage, EclValueType, ResolveError, ResolvedEntry, SubId};
 use crate::ecl::task::{OWNER_BULLET, OWNER_ENEMY, OWNER_STAGE};
 use crate::enemy::EnemyHandle;
 use crate::math::{Angle, Fx};
-use crate::world::{WorldBody, POOL_TASK, STATUS_BAD_ARGS, STATUS_POOL_FULL};
 use crate::step::World;
+use crate::world::{POOL_TASK, STATUS_BAD_ARGS, STATUS_POOL_FULL, WorldBody};
 
 // ── Public types ────────────────────────────────────────────────────────────
 
@@ -79,10 +79,7 @@ pub enum TaskStartError {
     /// The resolved entry's `SubId` is invalid (test-only path).
     InvalidEntryId,
     /// The number of raw arguments does not match the sub's parameter count.
-    WrongArgCount {
-        expected: u8,
-        actual: usize,
-    },
+    WrongArgCount { expected: u8, actual: usize },
     /// The type of a typed argument does not match the sub's parameter declaration.
     WrongArgType {
         index: u8,
@@ -144,7 +141,10 @@ impl World {
         };
 
         let frame = self.body.frame;
-        match self.tasks.spawn(root, meta.code_entry(), owner_tuple, 0, frame) {
+        match self
+            .tasks
+            .spawn(root, meta.code_entry(), owner_tuple, 0, frame)
+        {
             Some(idx) => {
                 self.ecl_main_started = 1;
                 Ok(idx)
@@ -298,14 +298,14 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecl::image::{EntryInit, SubInit, SubKind, test_image, ResolveError, EclValueType};
+    use crate::ecl::image::{EclValueType, EntryInit, ResolveError, SubInit, SubKind, test_image};
     use crate::ecl::ops::*;
     use crate::ecl::task::OWNER_STAGE;
     use crate::input::InputFrame;
+    use crate::math::Fx;
     use crate::step::{World, step};
     use crate::tables::TABLES_V0;
     use crate::world::{POOL_TASK, STATUS_BAD_ARGS, STATUS_POOL_FULL};
-    use crate::math::Fx;
 
     /// Build an image with a root (sub 0) and one async entry (sub 1) named "worker".
     fn root_and_async_image() -> EclImage {
@@ -313,7 +313,11 @@ mod tests {
             vec![OP_END as u32],
             vec![
                 SubInit::new(0, SubKind::Root, vec![]),
-                SubInit::new(0, SubKind::Async, vec![EclValueType::Fx, EclValueType::Angle]),
+                SubInit::new(
+                    0,
+                    SubKind::Async,
+                    vec![EclValueType::Fx, EclValueType::Angle],
+                ),
             ],
             vec![EntryInit::new("worker", 1)],
             Some(0),
@@ -415,9 +419,15 @@ mod tests {
         ));
 
         // spawn_entry with raw i32 args uses only arity check.
-        assert!(world
-            .spawn_entry(entry, &[Fx::ONE.raw(), Angle::ZERO.raw() as i32], EclOwner::Stage)
-            .is_ok());
+        assert!(
+            world
+                .spawn_entry(
+                    entry,
+                    &[Fx::ONE.raw(), Angle::ZERO.raw() as i32],
+                    EclOwner::Stage
+                )
+                .is_ok()
+        );
     }
 
     #[test]
@@ -608,7 +618,10 @@ mod tests {
             "after freeing one, start_main should succeed: {:?}",
             result
         );
-        assert_eq!(world.ecl_main_started, 1, "flag should be set after successful retry");
+        assert_eq!(
+            world.ecl_main_started, 1,
+            "flag should be set after successful retry"
+        );
     }
 
     #[test]
@@ -638,5 +651,4 @@ mod tests {
         assert_eq!(t.locals[0], Fx::ONE.raw());
         assert_eq!(t.locals[1], Angle::ZERO.raw() as i32);
     }
-
 }

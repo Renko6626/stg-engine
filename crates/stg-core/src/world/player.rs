@@ -165,11 +165,11 @@ impl WorldBody {
         } else {
             0
         };
-        let shooters = cfg.shot.sets[tier][focus];
-        let option_pos = cfg.shot.option_pos[tier];
+        let shooters = &cfg.shot.sets[tier][focus];
+        let option_pos = &cfg.shot.option_pos[tier];
         let (px, py) = (self.players[i].x, self.players[i].y);
 
-        for shooter in shooters {
+        for shooter in shooters.iter() {
             if timer % shooter.interval == shooter.delay % shooter.interval {
                 let (ox, oy) = if shooter.option == 0 {
                     (shooter.dx, shooter.dy)
@@ -398,13 +398,13 @@ mod tests {
         static FOCUSED_2WAY: [Shooter; 2] = [S, S];
         let mut t = WorldTables {
             content_hash: 0,
-            characters: TABLES_V0.characters,
+            characters: TABLES_V0.characters.clone(),
             item_cfg: TABLES_V0.item_cfg,
-            drop_tables: TABLES_V0.drop_tables,
+            drop_tables: TABLES_V0.drop_tables.clone(),
             item_gravity: TABLES_V0.item_gravity,
-            appearances: TABLES_V0.appearances,
+            appearances: TABLES_V0.appearances.clone(),
         };
-        t.characters[0].shot.sets[0] = [&UNFOCUSED_1WAY, &FOCUSED_2WAY];
+        t.characters[0].shot.sets[0] = [Box::new(UNFOCUSED_1WAY), Box::new(FOCUSED_2WAY)];
 
         let run = |slow: bool| -> usize {
             let mut w = crate::step::World::new(1);

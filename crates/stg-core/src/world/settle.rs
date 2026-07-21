@@ -36,7 +36,7 @@ impl WorldBody {
                 self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             } else {
                 let (ex, ey) = (self.enemies.x[e], self.enemies.y[e]);
-                for &(ty, n) in tables.drop_tables[table] {
+                for &(ty, n) in tables.drop_tables[table].iter() {
                     for _ in 0..n {
                         self.spawn_drop(ex, ey, ty, tables);
                     }

@@ -10,10 +10,10 @@
 //! 依赖方向（P1）：`ECL → world`；world 不 import 本模块的任何类型知识——`World.tasks`
 //! 字段物理住组装层 `stg_core::step`，但 world 侧代码从不引用 `ecl::*`。
 
-pub mod image;
-pub mod ops;
 /// safe named-entry binding API (Task 3)
 pub mod binding;
+pub mod image;
+pub mod ops;
 /// syscall 号表 v1（`SYS_*` 常量，`pub`）——`stg-ecl-compiler` 的 builder DSL 靠它拼
 /// `OP_SYS` 指令（依赖方向 compiler→core 单向，只取常量，不碰 `dispatch`）。`dispatch` 本身
 /// 仍 `pub(crate)`：只有 `vm::exec` 能调用，编译器够不到派发逻辑，只够到号表。
