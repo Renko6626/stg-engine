@@ -39,7 +39,7 @@
 
 ## 组 A — owned 化（金向量逐位不变的纯重构）
 
-### Task A1: `WorldTables` owned 化 + `build_tables_v0()` + `LazyLock`
+### Task 1: [A1] `WorldTables` owned 化 + `build_tables_v0()` + `LazyLock`
 
 **Files:**
 - Modify: `crates/stg-core/src/tables.rs`（结构 + 内容 + 测试）
@@ -348,7 +348,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## 组 B — 规范字节 + 真 content_hash
 
-### Task B1: `to_bytes` / `from_bytes` / `TableLoadError`
+### Task 2: [B1] `to_bytes` / `from_bytes` / `TableLoadError`
 
 **Files:**
 - Modify: `crates/stg-core/src/tables.rs`（加 `TableLoadError`、私有 `Reader`、`to_bytes`/`from_bytes`/`write_shooter`/`read_shooter`；给 `WorldTables` 及子结构加 `PartialEq, Eq`）
@@ -721,7 +721,7 @@ on load; arity + validate gates. Round-trip identity + format-robustness tests.
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
-### Task B2: harness 烘 `tables_v0.bin` + `TABLES_V0` 走字节路径
+### Task 3: [B2] harness 烘 `tables_v0.bin` + `TABLES_V0` 走字节路径
 
 **Files:**
 - Create: `crates/stg-core/src/tables/tables_v0.bin`（烘焙产出，提交）
@@ -853,7 +853,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## 组 C — compile 绑定表 + coherence 守卫
 
-### Task C1: `content_hash` 透传 codegen + `compile_for_table`
+### Task 4: [C1] `content_hash` 透传 codegen + `compile_for_table`
 
 **Files:**
 - Modify: `crates/stg-ecl-compiler/src/lib.rs:708`（`ImageBuilder::build` 加 `content_hash` 参）+ `:843`（`content_hash: 0`→变量）
@@ -952,7 +952,7 @@ compile() now binds to TABLES_V0; compile_for_table(&table) for explicit binding
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
-### Task C2: `World.tables_hash` + `new_with_tables`
+### Task 5: [C2] `World.tables_hash` + `new_with_tables`
 
 **Files:**
 - Modify: `crates/stg-core/src/step.rs`（World 加 `tables_hash` 字段；`new_with_tables`；`new` 委托；`copy_into` 复制该字段）
@@ -1038,7 +1038,7 @@ World field (checksummed, copied in snapshot); coherence guard reads it.
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
-### Task C3: 启动期 coherence 守卫 + `TableImageMismatch`
+### Task 6: [C3] 启动期 coherence 守卫 + `TableImageMismatch`
 
 **Files:**
 - Modify: `crates/stg-core/src/ecl/binding.rs`（`TaskStartError::TableImageMismatch`；`start_main_with_owner` 加守卫）
@@ -1150,7 +1150,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## 组 D — join 防迷路 + consts 分组 + 端到端自证 + 销债
 
-### Task D1: `consts.rs` 分组 `ENGINE_STRUCTURAL` / `TABLE_SYMBOLS`
+### Task 7: [D1] `consts.rs` 分组 `ENGINE_STRUCTURAL` / `TABLE_SYMBOLS`
 
 **Files:**
 - Modify: `crates/stg-core/src/consts.rs`（`engine_consts!` 宏改双 section；三个 const 列表）
@@ -1241,7 +1241,7 @@ ENGINE_CONSTS (①⧺②, injection surface unchanged). Enables data-driven join
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
-### Task D2: `validate()` join 腿 + coverage 断言 + 角色半径负向腿（B14）
+### Task 8: [D2] `validate()` join 腿 + coverage 断言 + 角色半径负向腿（B14）
 
 **Files:**
 - Modify: `crates/stg-core/src/tables.rs`（`validate()` 加 join 腿）
@@ -1315,7 +1315,7 @@ radius negative legs.
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
-### Task D3: 端到端文件加载自证 + interval 热路径 debug 兜底（C11③）
+### Task 9: [D3] 端到端文件加载自证 + interval 热路径 debug 兜底（C11③）
 
 **Files:**
 - Modify: `crates/stg-harness/src/main.rs`（tests：磁盘 `from_bytes` 端到端）
@@ -1380,7 +1380,7 @@ Loads tables_v0.bin from disk via from_bytes, runs 120 frames, asserts checksum
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
-### Task D4: 收口文档（PROGRESS / follow-ups / ecl-lang）
+### Task 10: [D4] 收口文档（PROGRESS / follow-ups / ecl-lang）
 
 **Files:**
 - Modify: `PROGRESS.md`（史加一行 + 重写「现在」段）
