@@ -16,6 +16,8 @@ headless 高速模拟。核心性质是**跨平台 bit 级确定性**。
 step: world[n+1] = step(world[n], static_ecl, input_frame[n])
 ```
 
+**完整子系统地图 / 断层线 / 相位流水线 / 未来接缝见 [`docs/architecture.md`](./docs/architecture.md)。**
+
 ## 当前状态
 
 Phase 1 = `stg-core` + `stg-ecl-compiler` + `stg-harness`。DoD = 金向量在 x86_64 与 aarch64 上
@@ -27,7 +29,7 @@ Phase 1 = `stg-core` + `stg-ecl-compiler` + `stg-harness`。DoD = 金向量在 x
 crates/
   stg-core/          确定性内核（断层线以下）
   stg-derive/        proc-macro：#[derive(Checksum)] + define_pool!
-  stg-ecl-compiler/  离线 ECL 字节码编译器（M1，未开工）
+  stg-ecl-compiler/  离线 ECL 字节码编译器与表层语言（M1/M1.9）
   stg-harness/       CLI：金向量对拍 + 烘焙表 bake/verify
 ```
 
@@ -35,6 +37,8 @@ crates/
 
 | 文档 | 内容 |
 |---|---|
+| [`docs/architecture.md`](./docs/architecture.md) | **子系统地图**：五层断层线 / 七不变量 / crate 依赖图 / step 相位 0-10 / 未来接缝（M2-M5） |
+| [`docs/ecl-lang.md`](./docs/ecl-lang.md) · [`docs/ecl-ops.md`](./docs/ecl-ops.md) | `.ecl` 表层语言手册 / 字节码层速查（op/syscall/fault 码） |
 | [`docs/fixed-point-corners.md`](./docs/fixed-point-corners.md) | `Fx`/`Angle` 的坑与规范速查（`Q(m).f × Q(m).f = Q(2m).(2f)`、累加器模式、Angle 回绕） |
 | [`docs/checksum-mechanism.md`](./docs/checksum-mechanism.md) | 校验和机制 + "新字段默认入校验"的保证是怎么来的 |
 | [`docs/pool-memory-layout.md`](./docs/pool-memory-layout.md) | 池 SoA 布局与缓存精算（热路径驻 L2） |
