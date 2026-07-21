@@ -150,13 +150,30 @@ Shooter: interval:u16, delay:u16, dx:i32, dy:i32, angle:u16, speed:i32, damage:u
   守卫住在**启动期一次**，不进 `step` 热路径。golden 场景二 `compile` 默认绑 `TABLES_V0`、世界也用
   `TABLES_V0` → hash 相等放行，无需改动。
 
-### 4. join 校验（`②` 骑 `③` 变机制）+ `consts.rs` 分组
+### 4. join 校验 + 防作者迷路（`②` 骑 `③` 变机制）+ `consts.rs` 分组
 
-- `WorldTables::validate()` 扩一条：**每个 `②` appearance ID 必须是 `appearances` 的合法行**
-  （`APPEARANCE_STAR=3` ⟹ `appearances.len() > 3`）。数据驱动地遍历 `②` 子集校验（见下分组）。
-- `consts.rs` `engine_consts!` **显式分两组**：`ENGINE_STRUCTURAL`(①) 与 `TABLE_SYMBOLS`(②)；
-  `ENGINE_CONSTS = ①⧺②`（注入不变，仍全量注入）。分组让 `validate` 知道哪些常量是 appearance 行名
-  需 join 校验，也标出乙案将来要搬进表符号段的正是 `②`。**v1 `②` 值仍固定在 `consts.rs`**。
+**分处不可合**：③ 数据必须可加载/可变/可 mod（C11 全部意义），② 名字是编译器稳定词汇——塞一个宏
+生成 = 数据硬编回二进制、反噬 C11。故 `name→id`(②) 与 `id→data`(③) **分处是对的**，但要让分处
+**不能悄悄漂**。两种漂移 + 三条机制：
+
+- **FM1 名字指向不存在的行**（`STAR=3` 但 `appearances` 无 index 3）→ **join 校验挡**：
+  `WorldTables::validate()` 扩一条：**每个 `②` appearance ID 必须是 `appearances` 的合法行**
+  （`APPEARANCE_STAR=3` ⟹ `appearances.len() > 3`）。烘焙期 + 加载期（`from_bytes` 调 `validate`）两道都拒。
+- **FM2 名字指向错误的行**（index 3 放的不是星）→ **builder 按 const 下标赋值挡**（对内建表）：
+  harness builder 写 `appearances[stg_core::consts::APPEARANCE_STAR as usize] = star_cfg;`，**不是**
+  位置列表 `[row0, row1, row2, star_cfg]`。**const 即下标**，星数据 definitionally 落 STAR 槽，结构上
+  无法错序。加一个外观 = 一行 const + 一行按该 const 下标赋值，两处互引、顺序不能漂。
+- **忘配对**（加 const 忘加行 / 反之）→ **coverage 断言挡**：一条测试断言内建表每个 `②` appearance
+  符号都有对应行、builder 按 const 下标覆盖整个命名集（无空洞）。CI 兜底。
+- **加载的 mod 表**：② 词汇引擎固定，mod `.bin` 必须覆盖它（join 校验在加载期挡 FM1）；mod 在 STAR 槽
+  放什么数据 = 这份 mod 对 STAR 的定义，`content_hash` 保证"对此表编的 .ecl 跑此表"，确定性不破。
+  故 mod 作者相对**确定性**不会迷路；内容是否符直觉是其自身表语义,引擎不越俎。
+
+`consts.rs` `engine_consts!` **显式分两组**：`ENGINE_STRUCTURAL`(①) 与 `TABLE_SYMBOLS`(②)；
+`ENGINE_CONSTS = ①⧺②`（注入不变，仍全量注入）。分组让 `validate` 知道哪些常量是 appearance 行名
+需 join 校验，也标出乙案将来要搬进表符号段的正是 `②`。**v1 `②` 值仍固定在 `consts.rs`**。
+将来 `②` 长出 item 符号时，`TABLE_SYMBOLS` 每条带一个"索引哪张表"的 tag，join 校验数据驱动扩展；
+v1 只有 appearances，不实装 tag。
 
 ## 数据流
 
@@ -191,7 +208,8 @@ Shooter: interval:u16, delay:u16, dx:i32, dy:i32, angle:u16, speed:i32, damage:u
 4. **coherence 守卫判别腿**：`compile_for_table(src, &A)` 得的 image 拿去
    `new_with_tables(_, &B)`(A≠B) → `start_main` 返 `TableImageMismatch`；A==B → 放行；空 image（hash 0）
    → 任意表放行。
-5. **join 校验判别腿**：`appearances` 长度不覆盖某 `②` ID 的坏表 → `validate()`/`from_bytes` 拒。
+5. **join 校验 + 防迷路**：`appearances` 长度不覆盖某 `②` ID 的坏表 → `validate()`/`from_bytes` 拒（FM1）；
+   coverage 断言：内建表每个 `②` appearance 符号有对应行、builder 按 const 下标覆盖命名集无空洞（FM2/忘配对）。
 6. **格式健壮**：坏 magic / 未知 version / 截断 / hash 篡改 / arity 不符 各返对应 `TableLoadError`。
 7. **CI 字节闸门**：`verify-tables` 纳入 `tables_v0.bin`（重烘逐位比对，同数学表）。
 8. **文件加载端到端**：harness 用 `from_bytes` 载一份 `.bin` 跑 golden，校验和 == 内建表跑的 golden
@@ -216,7 +234,8 @@ Shooter: interval:u16, delay:u16, dx:i32, dy:i32, angle:u16, speed:i32, damage:u
 - **组 A — owned 化**：结构切片 `&'static`→`Box`，去 `Copy`、`ptr::eq`→值相等，`TABLES_V0`→`LazyLock`
   经 `from_bytes(include_bytes!)`，~150 站点 `&*` sed。**门槛：金向量逐位不变。**
 - **组 B — 规范字节 + hash**：`to_bytes`/`from_bytes`/`TableLoadError`；harness `build_worldtables_v0`
-  + bake/verify 注册 `tables_v0.bin`；`content_hash` 变 LIVE；round-trip/格式健壮测试。
+  （**appearances 按 `②` const 下标赋值**，防 FM2 错序）+ bake/verify 注册 `tables_v0.bin`；
+  `content_hash` 变 LIVE；round-trip/格式健壮测试。
 - **组 C — compile 绑定 + 守卫**：`compile_for_table` 盖 hash；`new_with_tables` 记 `tables_hash`；
   `start_main` 守卫 + `TableImageMismatch`；`0` 逃逸；守卫判别腿测试。
 - **组 D — join 校验 + consts 分组 + 端到端**：`consts.rs` 分 `ENGINE_STRUCTURAL`/`TABLE_SYMBOLS`；
