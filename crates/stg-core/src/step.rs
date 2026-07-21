@@ -22,6 +22,9 @@ pub struct World {
     /// the main task ends or faults.  Prevents re-starting the root script.
     /// Copied in `copy_into` and automatically included in checksum via derive.
     pub(crate) ecl_main_started: u8,
+    /// 本 World 绑定的表 `content_hash`（`new_with_tables` 记录）。coherence 守卫读它对
+    /// `EclImage.content_hash` 一次比对。常量存活期不变，跨机一致，正常入校验和。
+    pub(crate) tables_hash: u64,
 }
 
 impl World {
@@ -32,6 +35,12 @@ impl World {
     /// 的 World 会在栈上放巨型临时量（debug 未优化时栈溢出）；`alloc_zeroed` 直接在堆上零构造，
     /// 避开栈。这是 stg-core 唯一一处 unsafe，也是设计既定的 World 堆分配落点。
     pub fn new(seed: u64) -> Box<World> {
+        Self::new_with_tables(seed, &crate::tables::TABLES_V0)
+    }
+
+    /// 用指定表构造：自机取 `tables.characters[0]`，并记录 `tables_hash = tables.content_hash`
+    /// 供启动期 coherence 守卫。`new(seed)` 委托此函数绑内建 `TABLES_V0`。
+    pub fn new_with_tables(seed: u64, tables: &crate::tables::WorldTables) -> Box<World> {
         let layout = Layout::new::<World>();
         // SAFETY: World 全零合法（见上）；layout 由类型给出；分配失败走 handle_alloc_error；
         // Box::from_raw 接管同一全局分配器的这块内存，Drop 时正确释放。
@@ -43,11 +52,9 @@ impl World {
             Box::from_raw(ptr)
         };
         w.body.rng = Pcg32::new(seed, RNG_SEQ);
-        // 自机 1 出场（角色 0，取 `TABLES_V0.characters[0]`——v0 妥协：`World::new(seed)` 不带
-        // `&WorldTables` 参，避免百处调用点改签名；多表时代加 `new_with_tables`，见
-        // `docs/follow-ups.md`）；自机 2 保持全零=不在场。
-        w.body.players[0] =
-            crate::player::PlayerState::spawn(0, &crate::tables::TABLES_V0.characters[0]);
+        // 自机 1 出场（角色 0，取 `tables.characters[0]`）；自机 2 保持全零=不在场。
+        w.body.players[0] = crate::player::PlayerState::spawn(0, &tables.characters[0]);
+        w.tables_hash = tables.content_hash;
         w
     }
 
@@ -82,6 +89,7 @@ impl World {
         }
         self.tasks.copy_into(&mut dst.tasks);
         dst.ecl_main_started = self.ecl_main_started;
+        dst.tables_hash = self.tables_hash;
     }
 
     #[inline]
@@ -244,6 +252,13 @@ mod tests {
             xform_wait: 0,
             xform_next: 0,
         }
+    }
+
+    #[test]
+    fn new_records_default_table_hash() {
+        let w = World::new(0x1234);
+        assert_ne!(w.tables_hash, 0);
+        assert_eq!(w.tables_hash, crate::tables::TABLES_V0.content_hash);
     }
 
     #[test]
