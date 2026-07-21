@@ -277,22 +277,6 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 会把新敌人叠在幸存者身上、同时留一个永久空位。**确定且更病态**（两敌重叠更能压碰撞路径），
 诊断场景可接受 —— 但若这个场景被复用到位置敏感的用途，先修这里。
 
-### D4. `define_pool!` 生成的 `alloc`/`free` 是 pub —— 与 `players` 同族问题（D1 姊妹条）
-
-`define_pool!` 生成的 `alloc`/`free` 是 `pub`，和 D1 点名的 `players` 字段 pub 是同一类
-"绕写 API"缺口：持 `&mut World` 的外部消费者可以直接 `bullets.alloc()`/`bullets.free()`，
-跳过 `create_bullet_with_xform` 等写 API 的契约检查。
-
-**已挡住的一半**：伪造 `transform_head`（例如 `alloc` 后手工填一个越界或指向别处的段号）
-本刀已加 P4-b 护栏（`world/transform.rs` 的 `advance_cursor`）——计数 + 序列终止，不 panic。
-
-**未挡住的一半**：直接 `bullets.free(handle)` 释放一颗挂着变换的弹，跳过了
-`create_bullet_with_xform` 死亡路径里"弹死还段"那一步——没人再 `xforms.free` 那个段，段
-永久泄漏（不是内存不安全，是段池慢性耗尽）。
-
-**修法**：收紧 `alloc`/`free` 可见性，与 D1（`players` 可见性收紧）同期议。
-**触发点**：M2（表现层第一次真正持有 `&mut World`）。
-
 ---
 
 ## E. bomb 那一刀开工前

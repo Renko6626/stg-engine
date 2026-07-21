@@ -214,7 +214,7 @@ pub fn define_pool(input: TokenStream) -> TokenStream {
             }
 
             /// 分配：写满全字段 + gen+1；池满返回 None。
-            pub fn alloc(&mut self, init: #init) -> ::core::option::Option<#handle> {
+            pub(crate) fn alloc(&mut self, init: #init) -> ::core::option::Option<#handle> {
                 let idx = self.first_free()?;
                 self.alive[idx / 64] |= 1u64 << (idx % 64);
                 self.generation[idx] = self.generation[idx].wrapping_add(1);
@@ -239,7 +239,7 @@ pub fn define_pool(input: TokenStream) -> TokenStream {
             }
 
             /// 释放（清 alive 位）；句柄无效则 no-op 返回 false。
-            pub fn free(&mut self, h: #handle) -> bool {
+            pub(crate) fn free(&mut self, h: #handle) -> bool {
                 match self.get(h) {
                     ::core::option::Option::Some(idx) => {
                         self.alive[idx / 64] &= !(1u64 << (idx % 64));
