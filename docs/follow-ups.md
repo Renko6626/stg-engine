@@ -255,24 +255,6 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 
 ## D. 设计层面的已知裂缝
 
-### D1. 自机半径不经写 API —— **M2 表现层接入前应解决**
-
-M0-8 引入 `MAX_ENTITY_RADIUS = 1024px`，在四个 `create_*` 写 API 上双边钳制，使
-「六行碰撞的 `(r_active + r_passive)` 裸 i32 Fx 加法不溢出」可证。**但自机侧不走写 API**：
-`hit_radius`/`graze_radius` 由 `PlayerState::spawn` 从 `WorldTables::CharacterCfg` 赋值
-（M0-17 迁表），上限靠 `WorldTables::validate()` 角色半径腿 + spawn 位等测试钉死
-（原 player.rs 编译期断言已随常量迁表退役）。
-
-问题在于 **`WorldBody.players` 与 `PlayerState` 的字段都是 `pub`** —— 任何持 `&mut World`
-的上层（今天的 harness、将来的 godot/py）都能直接写 `players[i].hit_radius = 30000` 绕过一切。
-池的 SoA 数组是 `pub(crate)`，所以"只能走写 API"对**池**是类型系统强制的；对**自机**只是前提。
-
-**这不是理论**：M0-9 复审用一个仓库外的探针实测过 —— 它碰池字段编译失败于
-`E0616: field 'invuln' of struct 'EnemyPool' is private`，而自机字段畅通无阻。
-
-**修法**：收紧 `players` 可见性 + 提供只读访问器（表现层要读自机状态），或给自机半径也配写 API。
-**触发点**：M2 表现层是第一个真正持有 `&mut World` 的外部消费者。
-
 ### D2. 设计与代码的名字漂移：`frame_events` vs `events`
 
 `stg-world-design.md` 通篇（16 处）+ `design_doc.md`（2 处）+ CLAUDE.md 的 P6 都叫 **`frame_events`**；

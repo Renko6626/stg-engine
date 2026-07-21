@@ -65,11 +65,11 @@ pub const STATUS_BAD_ARGS: u16 = 3;
 /// - **自机侧**（行 1/2/3 的被动操作数，`PlayerState::hit_radius`/`graze_radius`）：**不经任何
 ///   写 API**——由 `PlayerState::spawn` 从 `WorldTables::CharacterCfg` 赋值（M0-17 迁表），
 ///   上限由 `WorldTables::validate()` 的角色半径腿 + `spawn_radii_match_tables_v0_bitwise`
-///   位等测试钉死（原 player.rs 编译期断言已随常量迁表退役）。但
-///   `WorldBody.players` 与 `PlayerState` 的字段目前都是 `pub`，任何持 `&mut World` 的上层
-///   （今天是 stg-harness，将来是 stg-godot/stg-py）都能绕过 `spawn` 直接写这两个字段——这是
-///   **前提**，不是强制。安全性目前只因"除 spawn 外无人写它"成立；收紧可见性（或改走访问器）
-///   留待后续。
+///   位等测试钉死（原 player.rs 编译期断言已随常量迁表退役）。**自机写口已收紧**（刀 A，
+///   2026-07-21）：`WorldBody.players` 字段为 `pub(crate)`，断层线以上只能经 `set_player_power`
+///   写 API（钳 POWER_MAX）改 power、经 `players()` 只读访问器读态——与四池"只能走写 API"同为
+///   类型系统强制。`PlayerState` 内部字段仍 `pub`，但数组已封 → 外部无 `&mut` 路径可达，
+///   `players()` 交出的 `&PlayerState` 只读不可写。
 pub const MAX_ENTITY_RADIUS: Fx = Fx::from_int(1024);
 
 /// 信号黑板通道数（D4 11b）。
@@ -138,7 +138,7 @@ pub struct WorldBody {
     /// `set_var`/`get_var`。零初始化合法。
     pub globals: [i32; GLOBALS_CAP],
     pub bullets: BulletPool,
-    pub players: [PlayerState; crate::MAX_PLAYERS],
+    pub(crate) players: [PlayerState; crate::MAX_PLAYERS],
     /// boss 公告板（A2）——脚本写（`boss_set`）、UI 读、世界自身不读。零初始化合法。
     pub boss_ui: [crate::boss::BossUiSlot; crate::boss::MAX_BOSSES],
     pub shots: ShotPool,

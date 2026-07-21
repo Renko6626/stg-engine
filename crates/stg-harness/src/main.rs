@@ -134,7 +134,7 @@ fn bench_ladder(name: &str, target: usize, with_xform: bool, frames: u32, print:
         args: [96, 0], // 慢旋：POLAR_FX 逐帧 sincos 回填路径
     }];
     let mut w = World::new(0xBE9C);
-    w.body.players[0].power = 400; // 满火力：四路+子机的自机弹稳态负载
+    w.body.set_player_power(0, 400); // 满火力：四路+子机的自机弹稳态负载
     run_measured(
         name,
         print,
@@ -236,7 +236,7 @@ fn bench_mix(frames: u32) {
         args: [128, 0],
     }];
     let mut w = World::new(0xBE9C);
-    w.body.players[0].power = 400;
+    w.body.set_player_power(0, 400);
     run_measured(
         "全混合",
         true,
@@ -810,10 +810,10 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                 // shottype 两路入流）、帧 400 拔到 400（tier 4，三路本体 + 1 路子机入流，
                 // 子机弹随即参与相位 6/7 碰撞/擦弹结算链）。换档瞬时生效，无过渡状态。
                 if frame == 200 {
-                    b.players[0].power = 250;
+                    b.set_player_power(0, 250);
                 }
                 if frame == 400 {
-                    b.players[0].power = 400;
+                    b.set_player_power(0, 400);
                 }
             },
         );
