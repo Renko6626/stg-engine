@@ -8,6 +8,7 @@ pub(super) struct Checker<'p> {
     pub(super) subs: BTreeMap<String, &'p SubDef>,
     pub(super) xformdefs: BTreeSet<String>,
     pub(super) consts: BTreeMap<String, (Ty, i32)>,
+    pub(super) engine_const_names: BTreeSet<String>,
     pub(super) errors: Vec<CompileError>,
     pub(super) cur_sync_calls: Vec<String>,
     pub(super) cur_xform_refs: Vec<String>,

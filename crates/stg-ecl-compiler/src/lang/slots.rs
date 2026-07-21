@@ -524,7 +524,7 @@ mod tests {
 
     fn build(src: &str) -> (Program, TypedInfo) {
         let prog = parse_program(src, "t.ecl").unwrap_or_else(|e| panic!("解析失败：{e:?}\n{src}"));
-        let ti = typeck::check(&prog).unwrap_or_else(|e| panic!("判型失败：{e:?}\n{src}"));
+        let ti = typeck::check(&prog, &[]).unwrap_or_else(|e| panic!("判型失败：{e:?}\n{src}"));
         (prog, ti)
     }
 

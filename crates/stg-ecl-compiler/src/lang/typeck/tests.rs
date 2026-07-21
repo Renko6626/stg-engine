@@ -1,6 +1,8 @@
 use super::*;
 use crate::lang::ast::Ty;
 use crate::lang::parse as parse_program;
+use stg_core::consts::EngineConst;
+use stg_core::ecl::image::EclValueType;
 
 /// 便于按源码片段快速构造 `Program`（复用 T1 前端；本趟测试不手搭 AST，除非要覆盖
 /// AST 层面到不了的边界）。
@@ -9,11 +11,57 @@ fn prog(src: &str) -> Program {
 }
 
 fn ok(src: &str) -> TypedInfo {
-    check(&prog(src)).unwrap_or_else(|e| panic!("判型失败：{e:?}\n源码：\n{src}"))
+    check(&prog(src), &[]).unwrap_or_else(|e| panic!("判型失败：{e:?}\n源码：\n{src}"))
 }
 
 fn err(src: &str) -> Vec<CompileError> {
-    check(&prog(src)).expect_err(&format!("期望判型失败，源码：\n{src}"))
+    check(&prog(src), &[]).expect_err(&format!("期望判型失败，源码：\n{src}"))
+}
+
+fn check_with(src: &str, engine: &[EngineConst]) -> Result<TypedInfo, Vec<CompileError>> {
+    check(&prog(src), engine)
+}
+
+// ── C14 Task 3：引擎常量预填注入 ─────────────────────────────────────────────
+
+#[test]
+fn engine_consts_are_injected_as_predeclared_constants() {
+    let ti = check_with(
+        "sub main() { var a: int = FOO; loop { wait(1); } }",
+        &[EngineConst::new("FOO", EclValueType::Int, 7)],
+    )
+    .expect("注入的 FOO 应可用");
+    assert!(
+        ti.consts
+            .iter()
+            .any(|(n, t, v)| n == "FOO" && *t == Ty::Int && *v == 7),
+        "注入常量应出现在折叠后的 const 表：{:?}",
+        ti.consts
+    );
+}
+
+#[test]
+fn script_cannot_shadow_engine_const() {
+    let errs = check_with(
+        "const FOO: int = 5; sub main() { loop { wait(1); } }",
+        &[EngineConst::new("FOO", EclValueType::Int, 1)],
+    )
+    .expect_err("脚本重声明引擎常量应失败");
+    assert!(
+        errs.iter().any(|e| e.msg.contains("与引擎常量重名")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn engine_const_type_participates_in_checking() {
+    // FOO 是 int，用在需 fx 的位置应判型失败（证明注入常量带类型进了判型）
+    let errs = check_with(
+        "sub main() { var a: fx = FOO; loop { wait(1); } }",
+        &[EngineConst::new("FOO", EclValueType::Int, 7)],
+    )
+    .expect_err("int 注入常量赋给 fx 应失败");
+    assert!(!errs.is_empty(), "应有判型错误");
 }
 
 fn check_err(src: &str) -> Vec<CompileError> {

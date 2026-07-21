@@ -82,9 +82,11 @@
 //!   `xformdef` 名或 `none`），见 `exprs::check_builtin_call_args`。此为有意收窄范围的选择，
 //!   非疏漏，报告中列为 T3 交接注意事项。
 
-use crate::lang::ast::{CompileError, Program};
+use crate::lang::ast::{CompileError, Program, Ty};
 use checker::Checker;
 use std::collections::{BTreeMap, BTreeSet};
+use stg_core::consts::EngineConst;
+use stg_core::ecl::image::EclValueType;
 
 mod checker;
 mod consts;
@@ -99,15 +101,30 @@ pub use typed_ast::{
 };
 
 /// 类型趟入口：自底向上判型 + 值消费检查，产出 [`TypedInfo`]（见模块文档）。
-pub fn check(prog: &Program) -> Result<TypedInfo, Vec<CompileError>> {
+///
+/// `engine_consts`（C14 Task 3）——引擎常量注册表（见 `stg_core::consts::ENGINE_CONSTS`），
+/// 在处理脚本 `const` **之前**预填进 `c.consts`/`c.engine_const_names`，等效于"第 1 行前
+/// 声明的 const"：脚本 const 重名会撞进 `check_const_def` 的引擎重名分支。末尾 `TypedInfo.consts`
+/// 会把它们一并收进去——供 codegen 的 xformdef 槽参数求值器引用。
+pub fn check(
+    prog: &Program,
+    engine_consts: &[EngineConst],
+) -> Result<TypedInfo, Vec<CompileError>> {
     let mut c = Checker {
         subs: BTreeMap::new(),
         xformdefs: BTreeSet::new(),
         consts: BTreeMap::new(),
+        engine_const_names: BTreeSet::new(),
         errors: Vec::new(),
         cur_sync_calls: Vec::new(),
         cur_xform_refs: Vec::new(),
     };
+
+    for ec in engine_consts {
+        c.consts
+            .insert(ec.name.to_string(), (eclty_to_ty(ec.ty), ec.value));
+        c.engine_const_names.insert(ec.name.to_string());
+    }
 
     for xf in &prog.xformdefs {
         c.xformdefs.insert(xf.name.clone());
@@ -142,6 +159,17 @@ pub fn check(prog: &Program) -> Result<TypedInfo, Vec<CompileError>> {
         })
     } else {
         Err(c.errors)
+    }
+}
+
+/// `EclValueType`（`stg_core::ecl::image`，引擎常量注册表的脚本侧类型标签）→ 本趟的 [`Ty`]。
+/// 两者定义独立（`stg-core` 不依赖本 crate 的 `Ty`），字段一一对应，逐条穷尽匹配（新增变体
+/// 编译期报错，防漏）。
+fn eclty_to_ty(t: EclValueType) -> Ty {
+    match t {
+        EclValueType::Int => Ty::Int,
+        EclValueType::Fx => Ty::Fx,
+        EclValueType::Angle => Ty::Angle,
     }
 }
 

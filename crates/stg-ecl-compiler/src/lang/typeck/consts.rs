@@ -34,6 +34,13 @@ impl<'p> Checker<'p> {
 
 impl<'p> Checker<'p> {
     pub(super) fn check_const_def(&mut self, cdef: &ConstDef) {
+        if self.engine_const_names.contains(&cdef.name) {
+            self.err(
+                cdef.span,
+                format!("'{}' 与引擎常量重名，不能重新声明", cdef.name),
+            );
+            return;
+        }
         if self.consts.contains_key(&cdef.name) {
             self.err(cdef.span, format!("常量 '{}' 重复定义", cdef.name));
             return;

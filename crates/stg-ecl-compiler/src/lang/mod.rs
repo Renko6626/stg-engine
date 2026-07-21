@@ -71,17 +71,22 @@ pub fn parse(src: &str, _file: &str) -> Result<Program, Vec<CompileError>> {
 ///
 /// **`CompileError.src_line` 在这里被回填**：各下游模块的 `CompileError` 没有原始源码
 /// 文本（签名只收 `&Program`/`&TypedInfo`/`&SlotMap`），本函数用 `src.lines()` 补全。
+///
+/// `engine_consts`（C14 Task 3）透传给 `typeck::check`，作为"第 1 行前预声明"的常量注入
+/// 判型命名空间；脚本不得重声明同名 const。[`compile`] 默认注入 `stg_core::consts::ENGINE_CONSTS`，
+/// 调用方也可传 `&[]` 隔离（如本模块的调试侧载测试，测的是调试信息而非常量注入）。
 pub fn compile_with_options(
     src: &str,
     file: &str,
     options: CompileOptions,
+    engine_consts: &[stg_core::consts::EngineConst],
 ) -> Result<CompiledEcl, Vec<CompileError>> {
     let program = parse(src, file)?;
     if let Err(mut errors) = entryck::check(&program) {
         attach_src_lines(&mut errors, src);
         return Err(errors);
     }
-    let typed = match typeck::check(&program) {
+    let typed = match typeck::check(&program, engine_consts) {
         Ok(t) => t,
         Err(mut errors) => {
             attach_src_lines(&mut errors, src);
@@ -112,12 +117,21 @@ pub fn compile_with_options(
     Ok(CompiledEcl { image, debug })
 }
 
-/// 便利包装等价于 `compile_with_options(src, file, CompileOptions { debug_info: DebugInfo::None }).map(|ce| ce.image)`。
+/// 便利包装等价于 `compile_with_options(src, file, CompileOptions { debug_info: DebugInfo::None }, stg_core::consts::ENGINE_CONSTS).map(|ce| ce.image)`——
+/// 签名本身不变（不影响既有调用方），内部默认注入引擎常量注册表（C14 Task 3），脚本自动获得
+/// 引擎命名常量（如 `APPEARANCE_STAR`）而无需任何调用方改动。
 ///
 /// 见 [`compile_with_options`] 的完整文档。
 pub fn compile(src: &str, file: &str) -> Result<EclImage, Vec<CompileError>> {
-    compile_with_options(src, file, CompileOptions { debug_info: DebugInfo::None })
-        .map(|ce| ce.image)
+    compile_with_options(
+        src,
+        file,
+        CompileOptions {
+            debug_info: DebugInfo::None,
+        },
+        stg_core::consts::ENGINE_CONSTS,
+    )
+    .map(|ce| ce.image)
 }
 
 /// 回填 `typeck`/`slots` 产出的 [`CompileError`] 的 `src_line`（它们构造时没有源码文本，
@@ -273,6 +287,7 @@ mod tests {
             CompileOptions {
                 debug_info: DebugInfo::None,
             },
+            &[],
         )
         .unwrap();
         let full = compile_with_options(
@@ -281,6 +296,7 @@ mod tests {
             CompileOptions {
                 debug_info: DebugInfo::Full,
             },
+            &[],
         )
         .unwrap();
         assert_eq!(none.image, full.image);
@@ -298,12 +314,16 @@ mod tests {
             CompileOptions {
                 debug_info: DebugInfo::Full,
             },
+            &[],
         )
         .unwrap();
         let debug = out.debug.unwrap();
         let helper = debug.symbol("helper").unwrap();
         assert_eq!(helper.kind(), SubKind::CallOnly);
         assert_eq!(debug.param_name(helper, 0), Some("value"));
-        assert_eq!(debug.source_at(helper.pc_start()).unwrap().file(), "stage.ecl");
+        assert_eq!(
+            debug.source_at(helper.pc_start()).unwrap().file(),
+            "stage.ecl"
+        );
     }
 }

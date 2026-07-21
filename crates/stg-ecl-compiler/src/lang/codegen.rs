@@ -1052,7 +1052,7 @@ mod tests {
     fn narrow_slot_debug_asserts_when_slots_allocator_corrupted() {
         let prog = crate::lang::parse("sub main() { var x: int = 1; var y: int = x; }", "t.ecl")
             .expect("解析失败");
-        let ti = crate::lang::typeck::check(&prog).expect("判型失败");
+        let ti = crate::lang::typeck::check(&prog, &[]).expect("判型失败");
         let mut sm = crate::lang::slots::allocate(&prog, &ti).expect("槽分配失败");
         *sm.subs
             .get_mut("main")

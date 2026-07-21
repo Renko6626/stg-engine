@@ -261,14 +261,22 @@ pub(crate) fn build_debug_symbols(
 
 #[cfg(test)]
 mod tests {
-    use crate::lang::{compile_with_options, CompileOptions, DebugInfo};
+    use crate::lang::{CompileOptions, DebugInfo, compile_with_options};
     use stg_core::ecl::image::SubKind;
 
     /// 查询不存在的 sub 应返回 `None`。
     #[test]
     fn symbol_lookup_unknown_returns_none() {
         let src = "sub main() {}";
-        let out = compile_with_options(src, "empty.ecl", CompileOptions { debug_info: DebugInfo::Full }).unwrap();
+        let out = compile_with_options(
+            src,
+            "empty.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::Full,
+            },
+            &[],
+        )
+        .unwrap();
         assert!(out.debug.is_some());
         let dbg = out.debug.unwrap();
         assert!(dbg.symbol("nonexistent").is_none());
@@ -278,7 +286,15 @@ mod tests {
     #[test]
     fn call_only_sub_has_call_only_kind() {
         let src = "sub helper(x: int) {} sub main() { helper(1); }";
-        let out = compile_with_options(src, "t.ecl", CompileOptions { debug_info: DebugInfo::Full }).unwrap();
+        let out = compile_with_options(
+            src,
+            "t.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::Full,
+            },
+            &[],
+        )
+        .unwrap();
         let dbg = out.debug.unwrap();
         let helper = dbg.symbol("helper").expect("helper 应存在");
         assert_eq!(helper.kind(), SubKind::CallOnly);
@@ -288,7 +304,15 @@ mod tests {
     #[test]
     fn root_sub_has_root_kind() {
         let src = "sub main() {}";
-        let out = compile_with_options(src, "t.ecl", CompileOptions { debug_info: DebugInfo::Full }).unwrap();
+        let out = compile_with_options(
+            src,
+            "t.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::Full,
+            },
+            &[],
+        )
+        .unwrap();
         let dbg = out.debug.unwrap();
         let main = dbg.symbol("main").expect("main 应存在");
         assert_eq!(main.kind(), SubKind::Root);
@@ -298,7 +322,15 @@ mod tests {
     #[test]
     fn async_sub_has_async_kind() {
         let src = "async sub task() {} sub main() { spawn task(); }";
-        let out = compile_with_options(src, "t.ecl", CompileOptions { debug_info: DebugInfo::Full }).unwrap();
+        let out = compile_with_options(
+            src,
+            "t.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::Full,
+            },
+            &[],
+        )
+        .unwrap();
         let dbg = out.debug.unwrap();
         let task = dbg.symbol("task").expect("task 应存在");
         assert_eq!(task.kind(), SubKind::Async);
@@ -308,7 +340,15 @@ mod tests {
     #[test]
     fn param_name_out_of_range_returns_none() {
         let src = "sub helper(x: int) {} sub main() { helper(1); }";
-        let out = compile_with_options(src, "t.ecl", CompileOptions { debug_info: DebugInfo::Full }).unwrap();
+        let out = compile_with_options(
+            src,
+            "t.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::Full,
+            },
+            &[],
+        )
+        .unwrap();
         let dbg = out.debug.unwrap();
         let helper = dbg.symbol("helper").expect("helper 应存在");
         assert_eq!(dbg.param_name(helper, 0), Some("x"));
@@ -319,7 +359,15 @@ mod tests {
     #[test]
     fn source_at_out_of_range_returns_none() {
         let src = "sub main() {}";
-        let out = compile_with_options(src, "t.ecl", CompileOptions { debug_info: DebugInfo::Full }).unwrap();
+        let out = compile_with_options(
+            src,
+            "t.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::Full,
+            },
+            &[],
+        )
+        .unwrap();
         let dbg = out.debug.unwrap();
         assert!(dbg.source_at(u32::MAX).is_none());
     }
@@ -328,7 +376,15 @@ mod tests {
     #[test]
     fn pc_ranges_are_non_empty_and_contiguous() {
         let src = "sub a() { wait(1); } sub b() { wait(2); } sub main() { a(); b(); }";
-        let out = compile_with_options(src, "t.ecl", CompileOptions { debug_info: DebugInfo::Full }).unwrap();
+        let out = compile_with_options(
+            src,
+            "t.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::Full,
+            },
+            &[],
+        )
+        .unwrap();
         let dbg = out.debug.unwrap();
         for sub in dbg.subs.iter() {
             assert!(
@@ -341,7 +397,8 @@ mod tests {
         // 相邻 sub 的区间应无缝衔接。
         for pair in dbg.subs.windows(2) {
             assert_eq!(
-                pair[0].pc_end, pair[1].pc_start,
+                pair[0].pc_end,
+                pair[1].pc_start,
                 "sub '{}' 的 pc_end 应等于下一个 sub 的 pc_start",
                 dbg.str_at(pair[0].name_offset, pair[0].name_len)
             );
@@ -352,7 +409,15 @@ mod tests {
     #[test]
     fn debug_symbols_is_debug_and_clone() {
         let src = "sub main() {}";
-        let out = compile_with_options(src, "t.ecl", CompileOptions { debug_info: DebugInfo::Full }).unwrap();
+        let out = compile_with_options(
+            src,
+            "t.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::Full,
+            },
+            &[],
+        )
+        .unwrap();
         let dbg = out.debug.unwrap();
         let _formatted = format!("{dbg:?}");
         let _cloned = dbg.clone();
