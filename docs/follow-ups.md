@@ -180,8 +180,13 @@ shottype 表 `Shooter.flags` bit0 已预留 homing。开刀时要拍的唯一悬
 拒绝，`TaskStartError::TableImageMismatch`，任一侧为 0 视为未绑定放行，只在启动时查一次）；
 harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移动），校验和与内建路径一致。
 
-**未挡住的口子**：`spawn_entry`/`spawn_entry_named` 不带 coherence 守卫（今天没有生产调用者，
-留给 M2 godot 桥接时补）。
+**未挡住的口子**：
+- `spawn_entry`/`spawn_entry_named` 不带 coherence 守卫（今天没有生产调用者，留给 M2 godot 桥接时补）。
+- `WorldTables::from_bytes` 按**文件里的计数**直接 `Vec::with_capacity(count)`——对**可信**表安全（body
+  哈希先验，损坏 → `HashMismatch`；唯二调用者是 committed `tables_v0.bin` 与 harness 对它的测试）。但
+  **蓄意构造**的文件（自洽 hash + `count = u32::MAX`）会在读循环撞 `Truncated` 之前触发数 GB 预分配 →
+  OOM abort，一条非确定性 panic 路径（与 P4-a 张力）。**加载不可信 mod `.bin` 之前必补**：分配前用
+  剩余缓冲长度给每个 count 封顶（终审 2026-07-21 分诊）。
 
 **仍留给未来（modding，非本刀范围）**：
 - **乙案**——表自带 `[(name,id)]` 符号段，让非 Rust/mod 作者自定义外观词表，v1 仍用
