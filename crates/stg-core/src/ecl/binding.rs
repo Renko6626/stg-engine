@@ -90,6 +90,8 @@ pub enum TaskStartError {
     InvalidOwner,
     /// The task pool is full.
     PoolFull,
+    /// The compiled image's content_hash does not match the World's bound table hash.
+    TableImageMismatch { image: u64, tables: u64 },
 }
 
 // ── World extension methods ────────────────────────────────────────────────
@@ -123,6 +125,21 @@ impl World {
             self.body.last_status = STATUS_BAD_ARGS;
             return Err(TaskStartError::MainAlreadyStarted);
         }
+
+        // Coherence guard: image compiled for a table whose content_hash must match
+        // the table this World was built with. `0` on either side = unbound (empty
+        // script / no real table) → skip.  P4-b: caller mismatch → deterministic Err,
+        // no panic. Once, at startup — not in the per-frame step path.
+        let image_hash = image.content_hash();
+        if image_hash != 0 && self.tables_hash != 0 && image_hash != self.tables_hash {
+            self.body.diag.contract_viol = self.body.diag.contract_viol.wrapping_add(1);
+            self.body.last_status = STATUS_BAD_ARGS;
+            return Err(TaskStartError::TableImageMismatch {
+                image: image_hash,
+                tables: self.tables_hash,
+            });
+        }
+
         let root = image.root().ok_or(TaskStartError::NoRoot)?;
         let meta = image
             .sub_meta(root)
@@ -650,5 +667,56 @@ mod tests {
         assert_eq!(t.owner_kind, OWNER_STAGE);
         assert_eq!(t.locals[0], Fx::ONE.raw());
         assert_eq!(t.locals[1], Angle::ZERO.raw() as i32);
+    }
+
+    // ── Coherence guard (Task 6 / C3) ────────────────────────────────────
+
+    #[test]
+    fn start_main_rejects_image_table_hash_mismatch() {
+        use crate::ecl::image::{EclImage, ImageParts, SubInit, SubKind};
+        let image = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: vec![SubInit::new(0, SubKind::Root, vec![])],
+            entries: vec![],
+            root: Some(0),
+            content_hash: 0xAAAA_AAAA,
+        })
+        .unwrap();
+        let mut w = World::new(0);
+        w.tables_hash = 0xBBBB_BBBB;
+        assert_eq!(
+            w.start_main(&image),
+            Err(TaskStartError::TableImageMismatch {
+                image: 0xAAAA_AAAA,
+                tables: 0xBBBB_BBBB
+            })
+        );
+    }
+
+    #[test]
+    fn start_main_allows_matching_hash() {
+        use crate::ecl::image::{EclImage, ImageParts, SubInit, SubKind};
+        let image = EclImage::try_from_parts(ImageParts {
+            code: vec![0],
+            subs: vec![SubInit::new(0, SubKind::Root, vec![])],
+            entries: vec![],
+            root: Some(0),
+            content_hash: 0x1234,
+        })
+        .unwrap();
+        let mut w = World::new(0);
+        w.tables_hash = 0x1234;
+        assert!(w.start_main(&image).is_ok());
+    }
+
+    #[test]
+    fn start_main_zero_hash_escapes_guard() {
+        // 空镜像 hash 0 → 守卫跳过；落到既有 NoRoot（证明未误报 mismatch）。
+        let mut w = World::new(0);
+        w.tables_hash = 0x9999;
+        assert_eq!(
+            w.start_main(&crate::ecl::image::EclImage::empty()),
+            Err(TaskStartError::NoRoot)
+        );
     }
 }
