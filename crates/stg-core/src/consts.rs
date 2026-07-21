@@ -27,6 +27,14 @@ macro_rules! engine_consts {
             $( EngineConst::new(stringify!($name), engine_consts!(@ty $script), $val as i32), )*
         ];
     };
+    // v0 限制（留意，非静默坑）：`$val as i32` 这一步要求 `$rust_ty` 是原生整数类型
+    // （目前登记的都是 `u16`）。`fx`/`angle` 两个脚本类型分支只是把 `EclValueType` 标对，
+    // 并不改变 `$val as i32` 的求值方式——真要登记一条 `fx`/`angle` 类型的引擎常量，
+    // `$val` 必须已经是一个原始整数字面量/表达式（例如手算好的 `Fx`/`Angle` raw 值，
+    // 如 `Fx::from_raw(..).raw()` 算出来的那个数），**不能**直接写 `Fx`/`Angle` 这两个
+    // newtype 本身（它们不是原生整数类型，`as i32` 编不过 / 语义也不对——newtype 不定义
+    // `as i32` 转换）。这条宏目前没有为 newtype 求值单独开分支；真出现这种需求时要扩宏，
+    // 不要绕过它手写字面量镜像（违背本文件"值只写一次"的初衷）。
     (@ty int)   => { EclValueType::Int };
     (@ty fx)    => { EclValueType::Fx };
     (@ty angle) => { EclValueType::Angle };

@@ -9,8 +9,6 @@
 ## 一分钟样例
 
 ```ecl
-const RANK_SLOT: int = 0;
-
 xformdef WIND_CHIME { set_speed(2.0fx); @30 turn(90deg); }
 
 async sub patrol() {
@@ -34,7 +32,7 @@ sub main() {
     spawn timer_ui(1);
     var base: angle = 0deg;
     loop {
-        var ways: int = 28 + global(RANK_SLOT) * 2;
+        var ways: int = 28 + global(GVAR_RANK) * 2;
         for i in 0..5 {
             _ = batch(i % 4, $self_x, $self_y, ways, base, 0deg, 1,
                       1.0fx + i as fx * 0.25fx, 0fx);
@@ -121,10 +119,12 @@ sub main() {
 | `boss_ui[]` | 每 boss 一份 | ✗（无读 syscall） | ✓（`boss_set`） | 血条/spell/计时状态，写给表现层 UI 消费，脚本读不回自己刚写的值 |
 | `signals[8]` | 8 通道 | — | — | 不是存值用的：`pulse_signal(ch)` 发边沿脉冲，`wait_signal` xform op 在变换序列里等；只唤醒当帧已在等待的弹，不锁存 |
 
-`globals`/`set_global` 读写走 `global(n)`/`set_global(n,v)`。同一 `.ecl` 文件内建议配 `const`
-给自由段槽号起名（如样例里的 `const RANK_SLOT: int = 0;`）避免魔数；**跨 `.ecl` 文件没有
-共享机制**（见"已知限制"）——多个脚本文件各自手选槽号，选中同一个存不同东西不会有任何
-编译或运行期报错，纯靠作者自律对齐。
+`globals`/`set_global` 读写走 `global(n)`/`set_global(n,v)`。**系统段**槽位已有引擎注入的具名
+常量可直接用——如 RANK 槽写 `global(GVAR_RANK)`，见下节"引擎常量"，不需要也不应该自己再起
+名字镜像槽号。**自由段**（`[16, 1024)`，即 `[GLOBALS_SYS_SEGMENT, GLOBALS_CAP)`）没有引擎预置
+名字，同一 `.ecl` 文件内建议配 `const` 给自己用到的自由段槽号起名（如 `const MY_SLOT: int = 16;`）
+避免魔数；**跨 `.ecl` 文件没有共享机制**（见"已知限制"）——多个脚本文件各自手选槽号，选中
+同一个存不同东西不会有任何编译或运行期报错，纯靠作者自律对齐。
 
 字节码层完整规则（segment 边界钉法、校验和归属等）见 [`ecl-ops.md`](ecl-ops.md)——本节只讲
 脚本作者需要知道的部分。
@@ -181,5 +181,6 @@ xformdef NAME { op(args); @wait op(args); ... }
 
 - 错误：`文件:行:列: 说明` + 源行摘录 + `^` 定位；一个错误不吞后续（恢复到语句边界）。
 - 已知限制（v1）：禁递归 · locals 静态分配（同 sub 内变量名不可重名）· sub 无返回值 ·
-  **无跨语言常量引用**（appearance id/globals 槽号需手写数字镜像，见 follow-ups）·
-  时间标签 `+N:` 未进 v1（显式 `wait`）。
+  **跨 `.ecl` 文件无共享的自定义常量机制**（脚本各自的 `const`/自由段槽号约定不互通，纯靠
+  作者自律对齐；引擎侧命名常量——appearance id/`GVAR_RANK` 等——已由预置注入解决，见上文
+  "引擎常量"节与 `follow-ups.md` C14）· 时间标签 `+N:` 未进 v1（显式 `wait`）。

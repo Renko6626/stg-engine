@@ -152,6 +152,7 @@ fn attach_src_lines(errors: &mut [CompileError], src: &str) {
 mod tests {
     use super::*;
     use stg_core::ecl::image::SubKind;
+    use stg_core::ecl::ops::OP_PUSHI;
 
     /// `compile()` 失败路径断言助手——`EclImage`（`compile` 的 `Ok` 类型）不 derive
     /// `Debug`（**有意**：stg-core 唯一触碰面钉死在 T3 Commit A，见 plan Self-Review
@@ -186,6 +187,27 @@ mod tests {
         let image = compile("sub main() { }", "smoke.ecl").expect("应编译成功");
         assert_eq!(image.sub_count(), 1, "一个 sub = 一个入口");
         assert!(!image.code().is_empty(), "至少要有一条终结 op");
+    }
+
+    /// C14（引擎常量注入）端到端覆盖，编译器 crate 自己的一份：脚本引用注入的引擎常量
+    /// （`APPEARANCE_STAR`）经 `TypedExprKind::ConstRef` 求值路径（见 `codegen.rs`）折叠为
+    /// 字面量 `PUSHI <value>`——`EclImage` 运行时不认识"常量名"，只认识落地的字面值。
+    /// 走真实 `compile()` 入口（默认注入 `stg_core::consts::ENGINE_CONSTS`，不是像调试侧载
+    /// 测试那样传 `&[]` 隔离），押运"注入表确实喂到 codegen"这条完整链路（此前只有
+    /// `stg-harness` 的 rainbow 金向量间接覆盖，本测试补上编译器 crate 内的直接断言）。
+    #[test]
+    fn injected_engine_const_folds_to_bytecode_literal() {
+        let src = "sub main() { var a: int = APPEARANCE_STAR; loop { wait(1); } }";
+        let image = compile(src, "smoke.ecl").expect("应编译成功");
+        let expected = stg_core::consts::APPEARANCE_STAR as u32;
+        assert!(
+            image
+                .code()
+                .windows(2)
+                .any(|pair| pair == [OP_PUSHI as u32, expected]),
+            "APPEARANCE_STAR(={expected}) 应折叠为 PUSHI 字面量，code={:?}",
+            image.code()
+        );
     }
 
     /// 编译器确定性（全管线级别，plan 明文钉死）：同源码两次 `compile` 必须产出逐字节相同
