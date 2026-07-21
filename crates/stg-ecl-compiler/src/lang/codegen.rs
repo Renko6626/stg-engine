@@ -604,6 +604,7 @@ pub fn generate(
     prog: &Program,
     ti: &TypedInfo,
     sm: &SlotMap,
+    content_hash: u64,
 ) -> Result<EclImage, Vec<CompileError>> {
     let mut ib = ImageBuilder::new();
     let mut name_to_ref = BTreeMap::new();
@@ -677,7 +678,7 @@ pub fn generate(
     }
 
     if g.errors.is_empty() {
-        ib.build()
+        ib.build(content_hash)
             .map_err(|error| image_error_at(Span { line: 1, col: 1 }, error))
     } else {
         Err(g.errors)
@@ -1060,6 +1061,6 @@ mod tests {
             .locals
             .get_mut("x")
             .unwrap() = 999;
-        let _ = generate(&prog, &ti, &sm);
+        let _ = generate(&prog, &ti, &sm, 0);
     }
 }

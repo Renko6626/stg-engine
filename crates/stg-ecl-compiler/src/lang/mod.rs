@@ -75,11 +75,16 @@ pub fn parse(src: &str, _file: &str) -> Result<Program, Vec<CompileError>> {
 /// `engine_consts`（C14 Task 3）透传给 `typeck::check`，作为"第 1 行前预声明"的常量注入
 /// 判型命名空间；脚本不得重声明同名 const。[`compile`] 默认注入 `stg_core::consts::ENGINE_CONSTS`，
 /// 调用方也可传 `&[]` 隔离（如本模块的调试侧载测试，测的是调试信息而非常量注入）。
+///
+/// `content_hash`（C1 Task 4）原样盖入产出 `EclImage.content_hash`——本函数不解释它、不校验
+/// 它来自哪张表，只透传给 `codegen::generate`；语义焊点在 [`compile_for_table`]（外部裸调用
+/// 本函数的测试各自决定传什么，通常调试侧载测试传 `0` 表示"未绑定任何表"）。
 pub fn compile_with_options(
     src: &str,
     file: &str,
     options: CompileOptions,
     engine_consts: &[stg_core::consts::EngineConst],
+    content_hash: u64,
 ) -> Result<CompiledEcl, Vec<CompileError>> {
     let program = parse(src, file)?;
     if let Err(mut errors) = entryck::check(&program) {
@@ -100,7 +105,7 @@ pub fn compile_with_options(
             return Err(errors);
         }
     };
-    let image = match codegen::generate(&program, &typed, &slot_map) {
+    let image = match codegen::generate(&program, &typed, &slot_map, content_hash) {
         Ok(image) => image,
         Err(mut errors) => {
             attach_src_lines(&mut errors, src);
@@ -117,12 +122,13 @@ pub fn compile_with_options(
     Ok(CompiledEcl { image, debug })
 }
 
-/// 便利包装等价于 `compile_with_options(src, file, CompileOptions { debug_info: DebugInfo::None }, stg_core::consts::ENGINE_CONSTS).map(|ce| ce.image)`——
-/// 签名本身不变（不影响既有调用方），内部默认注入引擎常量注册表（C14 Task 3），脚本自动获得
-/// 引擎命名常量（如 `APPEARANCE_STAR`）而无需任何调用方改动。
-///
-/// 见 [`compile_with_options`] 的完整文档。
-pub fn compile(src: &str, file: &str) -> Result<EclImage, Vec<CompileError>> {
+/// 为指定表编译：注入引擎常量（①②）+ 盖 `table.content_hash` 进 `EclImage`（coherence 焊点）。
+/// v1 只取 `table.content_hash`（①② 常量仍来自 `consts::ENGINE_CONSTS`）；乙案将来从表读符号。
+pub fn compile_for_table(
+    src: &str,
+    file: &str,
+    table: &stg_core::tables::WorldTables,
+) -> Result<EclImage, Vec<CompileError>> {
     compile_with_options(
         src,
         file,
@@ -130,8 +136,20 @@ pub fn compile(src: &str, file: &str) -> Result<EclImage, Vec<CompileError>> {
             debug_info: DebugInfo::None,
         },
         stg_core::consts::ENGINE_CONSTS,
+        table.content_hash,
     )
     .map(|ce| ce.image)
+}
+
+/// 便利包装：绑定内建默认表 `TABLES_V0`。签名不变（既有调用方零改）。
+///
+/// 等价于 `compile_for_table(src, file, &stg_core::tables::TABLES_V0)`——内部默认注入引擎
+/// 常量注册表（C14 Task 3），脚本自动获得引擎命名常量（如 `APPEARANCE_STAR`）而无需任何调用方
+/// 改动，并把 `TABLES_V0.content_hash`（LIVE）盖入产出的 `EclImage`（C1 coherence 焊点）。
+///
+/// 见 [`compile_with_options`] / [`compile_for_table`] 的完整文档。
+pub fn compile(src: &str, file: &str) -> Result<EclImage, Vec<CompileError>> {
+    compile_for_table(src, file, &stg_core::tables::TABLES_V0)
 }
 
 /// 回填 `typeck`/`slots` 产出的 [`CompileError`] 的 `src_line`（它们构造时没有源码文本，
@@ -310,6 +328,7 @@ mod tests {
                 debug_info: DebugInfo::None,
             },
             &[],
+            0,
         )
         .unwrap();
         let full = compile_with_options(
@@ -319,6 +338,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
+            0,
         )
         .unwrap();
         assert_eq!(none.image, full.image);
@@ -337,6 +357,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
+            0,
         )
         .unwrap();
         let debug = out.debug.unwrap();
@@ -347,5 +368,17 @@ mod tests {
             debug.source_at(helper.pc_start()).unwrap().file(),
             "stage.ecl"
         );
+    }
+
+    // ── C1（Task 4）：content_hash 透传 + compile_for_table ─────────────────
+
+    /// `compile()` 绑定内建默认表 `TABLES_V0`（LIVE hash）——编译产出的 `EclImage.content_hash`
+    /// 必须等于 `TABLES_V0.content_hash`，而不是历史上恒为 0 的桩值。这是 C11（运行时表校验）
+    /// 依赖的 coherence 焊点：镜像自己记着"我是为哪张表编的"。
+    #[test]
+    fn compiled_image_carries_target_table_content_hash() {
+        let img = compile("sub main() { }", "t.ecl").expect("minimal main compiles");
+        assert_ne!(img.content_hash(), 0, "绑定 TABLES_V0（LIVE hash）");
+        assert_eq!(img.content_hash(), stg_core::tables::TABLES_V0.content_hash);
     }
 }

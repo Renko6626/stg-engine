@@ -43,7 +43,7 @@
 //! main.end();
 //! let main_id = ib.declare_sub("main", SubKind::Root, &[])?;
 //! ib.define_sub(main_id, main)?;
-//! let image = ib.build()?;
+//! let image = ib.build(0)?;
 //! assert_eq!(image.root().unwrap().get(), 0);
 //! # Ok::<(), stg_core::ecl::image::ImageBuildError>(())
 //! ```
@@ -705,7 +705,7 @@ impl ImageBuilder {
         Ok(())
     }
 
-    pub fn build(mut self) -> Result<EclImage, ImageBuildError> {
+    pub fn build(mut self, content_hash: u64) -> Result<EclImage, ImageBuildError> {
         if self.subs.is_empty() {
             return Ok(EclImage::empty());
         }
@@ -840,7 +840,7 @@ impl ImageBuilder {
             subs,
             entries,
             root,
-            content_hash: 0,
+            content_hash,
         })
     }
 }
@@ -879,7 +879,7 @@ mod tests {
                 }
                 ib.define_sub(id, sub).unwrap();
             }
-            ib.build().unwrap()
+            ib.build(0).unwrap()
         }
         assert_eq!(build(false), build(true));
     }
@@ -907,7 +907,7 @@ mod tests {
             ib.define_sub(id, body).unwrap();
         }
 
-        let image = ib.build().unwrap();
+        let image = ib.build(0).unwrap();
         let pc = image.sub_meta(image.root().unwrap()).unwrap().code_entry() as usize;
         assert_eq!(
             &image.code()[pc..pc + 5],
@@ -946,7 +946,7 @@ mod tests {
         let mut undefined = ImageBuilder::new();
         undefined.declare_sub("main", SubKind::Root, &[]).unwrap();
         assert_eq!(
-            undefined.build(),
+            undefined.build(0),
             Err(ImageBuildError::UndefinedSub {
                 name: "main".to_owned()
             })
@@ -981,7 +981,7 @@ mod tests {
     fn builder_rejects_call_to_root_or_async() {
         let async_call = wrong_target_image(|body, target| body.call(target));
         assert_eq!(
-            async_call.build(),
+            async_call.build(0),
             Err(ImageBuildError::WrongTargetKind {
                 target: "target".to_owned(),
                 expected: SubKind::CallOnly,
@@ -1002,7 +1002,7 @@ mod tests {
             .unwrap();
         root_call.define_sub(helper, helper_body).unwrap();
         assert_eq!(
-            root_call.build(),
+            root_call.build(0),
             Err(ImageBuildError::WrongTargetKind {
                 target: "main".to_owned(),
                 expected: SubKind::CallOnly,
@@ -1029,7 +1029,7 @@ mod tests {
                 ib.define_sub(target, defined_body(kind)).unwrap();
             }
             assert_eq!(
-                ib.build(),
+                ib.build(0),
                 Err(ImageBuildError::WrongTargetKind {
                     target: name.to_owned(),
                     expected: SubKind::Async,
@@ -1051,7 +1051,7 @@ mod tests {
             .define_sub(worker, defined_body(SubKind::Async))
             .unwrap();
         assert_eq!(
-            arity.build(),
+            arity.build(0),
             Err(ImageBuildError::WrongTargetArity {
                 target: "worker".to_owned(),
                 expected: 1,
@@ -1067,7 +1067,7 @@ mod tests {
         missing
             .define_sub(worker, defined_body(SubKind::Async))
             .unwrap();
-        assert_eq!(missing.build(), Err(ImageBuildError::MissingRoot));
+        assert_eq!(missing.build(0), Err(ImageBuildError::MissingRoot));
 
         let mut params = ImageBuilder::new();
         assert_eq!(
@@ -1091,7 +1091,7 @@ mod tests {
             ended: true,
         };
         ib.define_sub(main, body).unwrap();
-        assert_eq!(ib.build(), Err(ImageBuildError::OperandOverflow));
+        assert_eq!(ib.build(0), Err(ImageBuildError::OperandOverflow));
     }
 
     #[test]
@@ -1113,7 +1113,7 @@ mod tests {
         body.end();
         ib.define_sub(main, body).unwrap();
         ib.define_sub(worker, defined_body(SubKind::Async)).unwrap();
-        let image = ib.build().unwrap();
+        let image = ib.build(0).unwrap();
         assert!(
             image
                 .code()
@@ -1185,7 +1185,7 @@ mod tests {
         s.end();
         let main_id = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
         ib.define_sub(main_id, s).unwrap();
-        let image = ib.build().unwrap();
+        let image = ib.build(0).unwrap();
 
         let mut w = World::new(1);
         let _ = w.start_main(&image).expect("start_main 应成功");
@@ -1220,7 +1220,7 @@ mod tests {
         s.end();
         let main_id = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
         ib.define_sub(main_id, s).unwrap();
-        let image = ib.build().unwrap();
+        let image = ib.build(0).unwrap();
 
         let mut w = World::new(1);
         w.start_main(&image).expect("start_main 应成功");
@@ -1265,7 +1265,7 @@ mod tests {
         main.end();
         let main_id = ib.declare_sub("main", SubKind::Root, &[]).unwrap();
         ib.define_sub(main_id, main).unwrap();
-        let image = ib.build().unwrap();
+        let image = ib.build(0).unwrap();
 
         let mut w = World::new(1);
         w.start_main(&image).expect("start_main 应成功");
