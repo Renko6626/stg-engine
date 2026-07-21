@@ -1091,3 +1091,44 @@ mod ecl_rainbow_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod table_disk_load_tests {
+    /// D3 端到端自证（C11 收尾）：从磁盘 `std::fs::read` + `from_bytes` 载入已 commit 的
+    /// `tables_v0.bin`，与 `include_bytes!` 内建 `TABLES_V0`（同一份字节）各自建 World 跑
+    /// 120 帧，逐帧校验和须一致。二者字节相同不是巧合——本测试证的是**加载路径**：
+    /// disk → `from_bytes` → `new_with_tables` → `step` 这条环真的产出可运行、位级一致的
+    /// World，而不仅是"字节比对"。
+    #[test]
+    fn table_loaded_from_disk_runs_identically_to_builtin() {
+        // 注：`World::checksum()` 是 `step.rs` 上的一个便利**固有方法**（内部转发到
+        // `checksum::Checksum` trait），固有方法在方法解析中优先于同名 trait 方法命中——
+        // 故此处不需要（也不能，否则 `-D warnings` 治下 unused_imports 报错）
+        // `use stg_core::checksum::Checksum;` 把 trait 带入作用域。
+        use stg_core::ecl::image::EclImage;
+        use stg_core::input::InputFrame;
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../stg-core/src/tables/tables_v0.bin"
+        );
+        let bytes = std::fs::read(path).expect("committed tables_v0.bin exists");
+        let loaded = stg_core::tables::WorldTables::from_bytes(&bytes).expect("disk table loads");
+
+        let mut w_disk = stg_core::World::new_with_tables(0xC11, &loaded);
+        let mut w_builtin = stg_core::World::new(0xC11);
+        let ecl = EclImage::empty();
+        for frame in 0..120u32 {
+            // 中性 idle 输入（同金向量场景一的构造方式：`InputFrame::empty` + 不置按键位）——
+            // `InputFrame` 无 `Default` impl，`empty(frame)` 是既有的全零构造。
+            let input = InputFrame::empty(frame);
+            stg_core::step(&mut w_disk, &loaded, &ecl, &input);
+            stg_core::step(&mut w_builtin, &stg_core::tables::TABLES_V0, &ecl, &input);
+        }
+        assert_eq!(
+            w_disk.checksum(),
+            w_builtin.checksum(),
+            "磁盘加载表与内建表逐帧一致——文件加载闭环自证"
+        );
+    }
+}

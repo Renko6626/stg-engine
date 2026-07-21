@@ -170,6 +170,10 @@ impl WorldBody {
         let (px, py) = (self.players[i].x, self.players[i].y);
 
         for shooter in shooters.iter() {
+            debug_assert!(
+                shooter.interval != 0,
+                "interval==0 应被加载期 validate() 挡下（外部表兜底）"
+            );
             if timer % shooter.interval == shooter.delay % shooter.interval {
                 let (ox, oy) = if shooter.option == 0 {
                     (shooter.dx, shooter.dy)
