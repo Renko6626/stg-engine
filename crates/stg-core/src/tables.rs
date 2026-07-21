@@ -279,6 +279,13 @@ impl WorldTables {
         {
             return false;
         }
+        // join 校验（防 FM1）：每个 ② 表符号 id 必须是 appearances 的合法行。v1 全部 ②
+        // 都是 appearance 索引；将来 ② 长出 item 符号时按 tag 分流（见 spec/follow-ups）。
+        for c in crate::consts::TABLE_SYMBOLS {
+            if (c.value as usize) >= self.appearances.len() {
+                return false;
+            }
+        }
         true
     }
 }
@@ -747,6 +754,45 @@ mod tests {
             sprite: 0,
         }]);
         assert!(!bad.validate(), "appearance 半径超上限必须被 validate 拒绝");
+    }
+
+    /// join 校验判别腿（FM1）：appearances 长度不覆盖 APPEARANCE_STAR(3) → 拒。
+    #[test]
+    fn validate_rejects_table_symbol_without_appearance_row() {
+        let mut t = build_tables_v0();
+        t.appearances = Box::new([AppearanceCfg {
+            radius: Fx::from_int(3),
+            sprite: 0,
+        }]); // len 1
+        assert!(!t.validate(), "② 符号 id 越出 appearances → join 拒（FM1）");
+    }
+
+    /// coverage 断言：内建 appearances 恰覆盖 ② 命名集（无空洞/无缺失）。
+    #[test]
+    fn builtin_appearances_exactly_cover_table_symbols() {
+        use crate::consts::TABLE_SYMBOLS;
+        assert_eq!(
+            TABLES_V0.appearances.len(),
+            TABLE_SYMBOLS.len(),
+            "内建 appearances 恰覆盖 ② 命名集（无空洞/无缺失）"
+        );
+        for c in TABLE_SYMBOLS {
+            assert!((c.value as usize) < TABLES_V0.appearances.len());
+        }
+    }
+
+    /// B14 债：角色 hit/graze 半径越界的负向腿（此前只有正向覆盖）。
+    #[test]
+    fn validate_rejects_bad_character_radius() {
+        let mut t = build_tables_v0();
+        t.characters[0].hit_radius = Fx::from_int(2000); // 超 MAX_ENTITY_RADIUS(1024)
+        assert!(!t.validate(), "角色 hit_radius 超上限必须被 validate 拒绝");
+        let mut t2 = build_tables_v0();
+        t2.characters[0].graze_radius = Fx::from_int(2000);
+        assert!(
+            !t2.validate(),
+            "角色 graze_radius 超上限必须被 validate 拒绝"
+        );
     }
 
     #[test]
