@@ -1106,7 +1106,7 @@ mod table_disk_load_tests {
         // 故此处不需要（也不能，否则 `-D warnings` 治下 unused_imports 报错）
         // `use stg_core::checksum::Checksum;` 把 trait 带入作用域。
         use stg_core::ecl::image::EclImage;
-        use stg_core::input::InputFrame;
+        use stg_core::input::{BTN_LEFT, BTN_SHOT, BTN_UP, InputFrame};
 
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1119,9 +1119,14 @@ mod table_disk_load_tests {
         let mut w_builtin = stg_core::World::new(0xC11);
         let ecl = EclImage::empty();
         for frame in 0..120u32 {
-            // 中性 idle 输入（同金向量场景一的构造方式：`InputFrame::empty` + 不置按键位）——
-            // `InputFrame` 无 `Default` impl，`empty(frame)` 是既有的全零构造。
-            let input = InputFrame::empty(frame);
+            // 复审强化（非 idle 输入）：全程持 SHOT + 左上对角移动——让
+            // `char0_update_shot` 真正读 `tables.characters[..].shot`（发弹，命中
+            // `debug_assert!(shooter.interval != 0)`）、`move_player` 真正读移动
+            // `CharacterCfg` 参数（高/低速、对角归一），二者都把加载表的数值喂进
+            // 校验和覆盖的世界状态——而不只是出生期的 `hit_radius`/`graze_radius`。
+            // 两侧逐帧同一个 `input` 值，磁盘/内建两条腿除表来源外别无二致。
+            let mut input = InputFrame::empty(frame);
+            input.actions[0].buttons = BTN_SHOT | BTN_LEFT | BTN_UP;
             stg_core::step(&mut w_disk, &loaded, &ecl, &input);
             stg_core::step(&mut w_builtin, &stg_core::tables::TABLES_V0, &ecl, &input);
         }
@@ -1129,6 +1134,16 @@ mod table_disk_load_tests {
             w_disk.checksum(),
             w_builtin.checksum(),
             "磁盘加载表与内建表逐帧一致——文件加载闭环自证"
+        );
+        // 非退化守卫：证明上面不是一次「全程 idle」的空转——校验和非零、且真的发出了
+        // 子弹（`char0_update_shot` 读到的 `interval=4` 的 shooter 在 120 帧内必命中
+        // 多次），两侧防止本测试悄悄退化回「只比对出生期字段」。
+        assert_ne!(w_disk.checksum(), 0, "非退化守卫：校验和不应为零");
+        // 自机弹住 `shots` 池（`bullets` 是敌方弹池，D7/D8 分池）。
+        let shot_count = w_disk.body.shots.iter_alive().count();
+        assert!(
+            shot_count > 0,
+            "非退化守卫：120 帧全程持 SHOT 应产出自机弹（实测 {shot_count}）"
         );
     }
 }
