@@ -156,10 +156,8 @@ const STD_ITEM: ItemTypeCfg = ItemTypeCfg {
 };
 
 // ── 弹外观表 v0（M1 T3；≥4 行：小/中/大/星形，半径 3/4/6/8px）─────────────────
-pub const APPEARANCE_SMALL: u16 = 0;
-pub const APPEARANCE_MEDIUM: u16 = 1;
-pub const APPEARANCE_LARGE: u16 = 2;
-pub const APPEARANCE_STAR: u16 = 3;
+// 定义迁至 `crate::consts`（C14 单一注册表，脚本可见常量同时注入 .ecl 编译器命名空间）。
+pub use crate::consts::{APPEARANCE_LARGE, APPEARANCE_MEDIUM, APPEARANCE_SMALL, APPEARANCE_STAR};
 
 const APPEARANCES_V0: &[AppearanceCfg] = &[
     AppearanceCfg {

@@ -29,6 +29,7 @@ pub const MAX_PLAYERS: usize = 2;
 pub mod boss;
 pub mod bullets;
 pub mod checksum;
+pub mod consts;
 pub mod ecl;
 pub mod enemy;
 pub mod events;
