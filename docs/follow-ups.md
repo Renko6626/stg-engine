@@ -92,12 +92,6 @@ LOOP 跳回后 `[0, xform_next)` 收缩：活跃 STEP 冻结至重武装、武�
 的极端场景）会在 debug 触发溢出 panic、release 静默回绕——确定性不破（跨平台逐位一致仍成立）
 但入账值荒谬。修法：累加改 `saturating_add(1)`，蜡数比较从 `==` 改 `>=` 以抗直写越界。
 
-### B14. `WorldTables::validate()` 角色半径腿只有正向覆盖（M0-17 T1 复审分诊）
-
-`validate_rejects_bad` 的三条负向腿只压 shooter 的 interval/radius/option；角色
-`hit_radius`/`graze_radius` 越界的拒绝分支无负向测试（正向由 `tables_v0_validates` 覆盖）。
-补一条坏角色半径的拒绝腿即可，与文件加载刀的加载期校验一并做也行。
-
 ### B13. 道具近距磁吸 v0 的自机选择与优先裁决序偏离 spec —— 与 B3/B8 co-op 族同批（M0-12 终审分诊）
 
 道具近距磁吸 v0 实现取"升序首个圈内自机"，而非 spec 写的"最近的 ALIVE 自机"——`players[1]`
@@ -173,18 +167,27 @@ shottype 表 `Shooter.flags` bit0 已预留 homing。开刀时要拍的唯一悬
 甲案全局常量（所有追踪弹同转向率，零池改动）；乙案 `ShotPool` 加 `turn_rate` 字段
 （池布局变更，校验和自动跟上，表达力全）。integrate 加分支走 `nearest_enemy`（现成）。
 
-### C11. WorldTables 文件加载刀的前置三件套（M0-17 遗留占位）
+### C11. WorldTables 资产管线（已还，2026-07-21）
 
-① `content_hash` 字段现恒 0——文件加载落地时做真哈希（A3：与 EclImage 合并进回放头/握手，
-**EclImage.content_hash 同为占位**，M1 补记）；② `World::new` 内引 `TABLES_V0` 喂 spawn
-（v0 妥协避免百处调用点改签名）——多表时代补 `new_with_tables`；③ 解释器热路径
-`timer % interval` 无 interval=0 的 debug 断言（现靠 `validate()` 单测钉 const 表）——
-外部表可加载后必须加载期强制校验 + 热路径 debug 兜底。
+**已还**：`WorldTables` owned 化（内部 `&'static` 切片 → `Box`，`TABLES_V0` 为
+`LazyLock`）；规范字节格式 `to_bytes`/`from_bytes`（i32/u16 小端，无 float，`TableLoadError`）
++ 真 `content_hash`（vendored FNV-1a64，加载时自校验）；`tables_v0.bin`（840B）由 harness
+从 `build_tables_v0().to_bytes()` 烘焙、committed，`verify-tables` 逐位对拍，`stg-core` 经
+`include_bytes!` + `from_bytes` 加载，`content_hash` 现为 LIVE 值（`0x3ac258d4031d2ced`）；
+`compile_for_table(src, file, &WorldTables)` 把表 `content_hash` 焊进 `EclImage`
+（`compile` 委派绑定 `TABLES_V0`，签名不变）；`World.tables_hash`（`new_with_tables` 记录，
+入校验和，随快照复制）+ `start_main` coherence 守卫（`image.content_hash != tables_hash` 时
+拒绝，`TaskStartError::TableImageMismatch`，任一侧为 0 视为未绑定放行，只在启动时查一次）；
+harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移动），校验和与内建路径一致。
 
-注：Named entry ABI（2026-07-20）已完成——`EclImage` 现包含规范排序的 `(SubId, code_entry)` 元数据 +
-named entry 表 + Root 单例保护。C11 的 `content_hash`/`EclImage.content_hash` 串行化/文件加载
-仍保持开放（与 named entry 正交）：运行期 `EclImage` 的确定性比较走 `PartialEq`，持久化/跨进程
-校验仍需真实的 `content_hash`，该字段仍为占位 0。
+**未挡住的口子**：`spawn_entry`/`spawn_entry_named` 不带 coherence 守卫（今天没有生产调用者，
+留给 M2 godot 桥接时补）。
+
+**仍留给未来（modding，非本刀范围）**：
+- **乙案**——表自带 `[(name,id)]` 符号段，让非 Rust/mod 作者自定义外观词表，v1 仍用
+  `consts.rs` 里手写的 ② 符号名字。
+- **文本 DSL** 给表本身当作者格式——v1 仍是 Rust 里建 + 烘焙字节，无文本源。
+- 多角色 / 多道具类型表（v1 固定 `characters` 长度 1、`item_cfg` 长度 `ITEM_TYPE_COUNT`）。
 
 ### C12. ECL 后续小件四包（M1 T5 分诊）
 
@@ -234,12 +237,14 @@ named entry 表 + Root 单例保护。C11 的 `content_hash`/`EclImage.content_h
 **C11 表文件加载落地后风险浮现**：若注入常量取自表 A、却拿表 B 跑，appearance id 可能
 错位且**三平台一致地错**——金向量闸门只抓跨平台分歧、抓不了这种"一致地错"（见 CLAUDE.md
 "金向量闸门的能力边界"）。Spec 2 拍板令 `EclImage`/`WorldTables` 记录各自的 `content_hash`，
-运行期比对拦截；本刀不做，只记账，见 C11 条。
+运行期比对拦截。
 
-**仍开放**：① T1 复审四 Minor（parser 无递归深度护栏/链式比较左结合未钉/`@70000` wait
-越界测试缺/`i32::MIN` 字面量不可拼写）——与常量注入无关，未在本刀清；② **C11 未动**——
-`WorldTables` owned 化、表文件加载、`EclImage.content_hash`/`WorldTables.content_hash`
-真哈希仍是占位 0，不要把本刀的"结构性天然一致"误读成"已解决"。
+**C11 已焊死**（2026-07-21）：`compile_for_table` 把绑定的 `WorldTables.content_hash` 盖进
+编译产物 `EclImage.content_hash`；`start_main` 拿它与 `World.tables_hash` 比对，不符即拒绝
+（`TaskStartError::TableImageMismatch`）。见 follow-ups C11 条。
+
+**仍开放**：T1 复审四 Minor（parser 无递归深度护栏/链式比较左结合未钉/`@70000` wait
+越界测试缺/`i32::MIN` 字面量不可拼写）——与常量注入无关，未在本刀清。
 
 ---
 

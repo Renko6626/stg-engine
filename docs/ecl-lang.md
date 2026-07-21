@@ -156,6 +156,11 @@ raw 值，不是十进制含义值——目前表里的名字都恰好是 `int` 
 C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的常量可能改由数据文件
 （连同其 `content_hash`）生成而非手写宏调用，命名注入的使用方式不受影响。
 
+`.ecl` 编译现绑定一张表（`compile`/`compile_for_table`）：编译产物 `EclImage` 记录该表的
+`content_hash`，运行时若加载的表与之不符，`start_main` 拒绝启动（`TableImageMismatch`）——
+这是 C14 记档的"注入常量与运行期表必须同源"这条 coherence 不变量的机制化，见
+`docs/follow-ups.md` C11/C14。
+
 ## 内建函数（签名以 `builtins.rs` 为准）
 
 `fire(appearance:int, x:fx, y:fx, speed:fx, angle:angle, xf:XFORMDEF名|none, task:ASYNC_SUB名|none) -> int` ·
