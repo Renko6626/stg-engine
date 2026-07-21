@@ -6,21 +6,22 @@
 
 ## 现在（2026-07-21）
 
-- **位置**：**C11 资产管线落地**——`WorldTables` owned 化 + 规范字节 `to_bytes`/`from_bytes`
-  （`TableLoadError`）+ 真 `content_hash`（`tables_v0.bin` 840B 烘焙/committed，`verify-tables`
-  逐位对拍）；`compile_for_table` 把表 hash 焊进 `EclImage`，`World.tables_hash`
-  （`new_with_tables`）+ `start_main` coherence 守卫（`TableImageMismatch`）+ join 防迷路
-  全部打通；harness 端到端自证已跑通"磁盘加载表→建 World→驱动脚本→校验和与内建路径一致"。
+- **位置**：**可见性收口刀 A 落地**（M2 前置）——`WorldBody.players` 字段 + `define_pool!` 的
+  `alloc`/`free` 收 `pub(crate)`；新增 `set_player_power` 写 API（钳 `POWER_MAX` + 越界 P4-b）与
+  `players()` 只读访问器（通道 A 最小种子）；follow-ups **D1/D4 销账**。纯重构，两段金向量逐位
+  不变（whole-branch 终审在基线/HEAD 各跑 golden 独立实证 diff 全等）。
 - **在飞**：无。
-- **下一阶段候选**（开工前先 grill 定序）：**M2 前置刀**（可见性收口 D 组 + WorldView 通道 A）
-  · M3 回滚 harness（快照账已实测）· bomb/homing 玩法小刀 · F2 校验和轻量化（M3 前免费窗口）。
-- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读）。乙案（表自带符号段）
-  与文本 DSL 仍是 C11 之后的 modding 扩展点，未做。
+- **下一阶段候选**（开工前先 grill 定序）：**M2 前置续**（通道 A 完整 WorldView + 通道 B/anm call
+  `emit_req`/`reqs`）· M3 回滚 harness（快照账已实测）· bomb/homing 玩法小刀 · F2 校验和轻量化
+  （M3 前免费窗口）。
+- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；新增 **D5** 池字段整赋值残留）。
+  乙案（表自带符号段）与文本 DSL 仍是 C11 之后的 modding 扩展点，未做。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-21 | **刀 A 可见性收口** | players 字段 + define_pool! alloc/free 收 pub(crate) + set_player_power 写 API + players() 只读种子；销 D1/D4；金向量逐位不变 |
 | 2026-07-21 | **C11 资产管线** | owned WorldTables + 规范字节 from_bytes/to_bytes + 真 content_hash + compile 绑定表 + start_main coherence 守卫 + join 防迷路 |
 | 2026-07-20 | **Named Entry ABI** | 规范排序 SubId/EntryId、singleton main 保护、安全绑定层、可选调试符号侧载 |
 | 2026-07-19 | **M1.9** | ECL 表层语言+编译器——三型/具名函数/$变量/值消费检查；风铃卡 .ecl 化狗粮验收 |

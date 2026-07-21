@@ -277,6 +277,20 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 会把新敌人叠在幸存者身上、同时留一个永久空位。**确定且更病态**（两敌重叠更能压碰撞路径），
 诊断场景可接受 —— 但若这个场景被复用到位置敏感的用途，先修这里。
 
+### D5. 池结构体字段仍 `pub` —— 整池重赋值可孤儿化 xform 段（可见性收口刀 A 的残留）
+
+可见性收口（刀 A，2026-07-21）把 `players` 字段、`define_pool!` 的 `alloc`/`free` 全收 `pub(crate)`，
+断层线以上不再能注入越界值、也不能绕写 API 释放实体。**残留一条粗暴路径**：`WorldBody` 的五个池
+*字段本身*（`bullets`/`shots`/`enemies`/`fields`/`items`）仍 `pub`（**有意**——表现层要读），故持
+`&mut WorldBody` 的外部消费者仍能整池**重赋值** `w.body.bullets = BulletPool::new()`。
+
+- **注不进坏值**：SoA 数组 / `alive` / `generation` / `alloc` 全 `pub(crate)`，无公开 populate 路径。
+- **能孤儿化 xform 段**：整池重置抹掉挂变换的弹却不还段 —— 原 D4 漏段的粗暴变体（非内存不安全，
+  是段池慢性耗尽）。需**蓄意粗暴**操作，非"手滑写错字段"，且无确定性/内存安全影响。
+
+**修法**：M2 WorldView 收口时把池字段一并收 `pub(crate)` + 走只读访问器（spec 已把完整 WorldView 押后）。
+**触发点**：M2 表现层（whole-branch 终审 2026-07-21 浮出）。
+
 ---
 
 ## E. bomb 那一刀开工前
