@@ -253,6 +253,9 @@ mod tests {
         assert_eq!(x.checksum(), y.checksum()); // _scratch 不参与
     }
 
+    // checksum_fields() 由 derive 仅在 debug 生成——release 编译本测试会缺方法(先于
+    // 外接前收口刀的存量破损,2026-07-23 终审顺手修;CI 只跑 debug 故此前未暴露)。
+    #[cfg(debug_assertions)]
     #[test]
     fn checksum_fields_lists_nonskipped() {
         #[derive(Checksum)]

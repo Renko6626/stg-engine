@@ -16,6 +16,18 @@
 > **判据**：某条债一旦满足"下一刀正好要改这块代码，而这块代码没有网"，就升到 A 组、开工前先还。
 > bomb 那刀要改 `world/player.rs` 的生死状态机 —— 这正是当初把 GAMEOVER 缺口升到 A 组的理由。
 
+### A1. ItemPool 无 sprite 数据源——M2 建桥第一周先补（2026-07-23 系统审阅）
+
+`ItemTypeCfg` 无 sprite 列、`ItemPool` 无外观字段——道具的 `item_type→贴图` 映射在 core 侧
+缺位（弹有 `AppearanceCfg.sprite`、敌有 `EnemyPool.sprite`，唯道具会逼表现层自编硬表，破单一
+真相源）。修法：表加一列 + 烘焙表 bump + join 校验。触发点 = M2 建桥（就是下一刀，故直入 A 组）。
+
+### A2. bench 基线过期——M2 帧预算决策前重跑（2026-07-23 系统审阅）
+
+`docs/bench-baseline.md` 数字过期：World 实测 1.03MB（M1 任务池 ~108KB 从未入账，通道 B
++7KB 只是零头），校验和/step 比值实测远超文档口径。M2 做帧预算/每帧校验和策略决策前重跑
+bench 续表（F2 的窗口判断也依赖这份数字）。
+
 ---
 
 ## B. 测试覆盖缺口
@@ -145,6 +157,10 @@ STEP `args[1]` 位 24-31 未强制为零（reserved-must-be-zero 前向兼容纪
 no-op/计数兜底），与 easing id 的 create 期拒收不对称——两条都安全无洞，只是作者体验不一致
 （有的坏参 create 时就打回，有的要等 fire 才看见）。
 
+同族补两对（2026-07-23 系统审阅）：`SYS_CREATE_BULLET*` 的 `appearance` 越界 → Fault，而
+`SYS_DROP_ITEM` 的 `item_type` 越界 → 静默 NULL+计数；`batch` 负计数 `max(0)` 钳零不计数，
+而 `xform_cnt` 负数 → Fault。同为"坏枚举/负参"，脚本作者遇到的响度不可预测——归并本条一起裁。
+
 ### C8. `slot`/`xf_bullet` 测试助手三处复制（11b 终审分诊）
 
 `step.rs`/`world/transform.rs`/`world/integrate.rs` 各自维护一份结构相同的 `fn slot`
@@ -181,7 +197,6 @@ shottype 表 `Shooter.flags` bit0 已预留 homing。开刀时要拍的唯一悬
 harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移动），校验和与内建路径一致。
 
 **未挡住的口子**：
-- `spawn_entry`/`spawn_entry_named` 不带 coherence 守卫（今天没有生产调用者，留给 M2 godot 桥接时补）。
 - `WorldTables::from_bytes` 按**文件里的计数**直接 `Vec::with_capacity(count)`——对**可信**表安全（body
   哈希先验，损坏 → `HashMismatch`；唯二调用者是 committed `tables_v0.bin` 与 harness 对它的测试）。但
   **蓄意构造**的文件（自洽 hash + `count = u32::MAX`）会在读循环撞 `Truncated` 之前触发数 GB 预分配 →
@@ -189,6 +204,9 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
   剩余缓冲长度给每个 count 封顶（终审 2026-07-21 分诊）。
 
 **仍留给未来（modding，非本刀范围）**：
+- **`EclImage` 离线序列化格式**（2026-07-23 审阅拍板记档）：M2 走"启动时编译 `.ecl` 源码"
+  （harness 同款，`compile_for_table`）；镜像字节格式**不冻结**，离线分发/加载等 modding
+  需求真出现再定——过早冻结 = 白背一份格式兼容债。
 - **乙案**——表自带 `[(name,id)]` 符号段，让非 Rust/mod 作者自定义外观词表，v1 仍用
   `consts.rs` 里手写的 ② 符号名字。
 - **文本 DSL** 给表本身当作者格式——v1 仍是 Rust 里建 + 烘焙字节，无文本源。
@@ -251,6 +269,20 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 **仍开放**：T1 复审四 Minor（parser 无递归深度护栏/链式比较左结合未钉/`@70000` wait
 越界测试缺/`i32::MIN` 字面量不可拼写）——与常量注入无关，未在本刀清。
 
+### C20. 数学核小件三包（2026-07-23 系统审阅分诊）
+
+① `Angle` 缺 `FULL_TURN`/全圆 raw 具名常量——外接层做 BAM→弧度换算得硬编 65536（`Fx::ONE`
+有对称物，`Angle` 没有）；② `Angle` 派生的 `Ord`/`PartialOrd` 是线性序非环形序，现无用点，
+但谁用 `a < b` 表达"更接近"就踩坑（65535 与 0 线性远环上近）；③ `world/motion.rs` 的
+`isqrt(len_sq) as i32 → Fx` 窄化缺 debug 护栏（`Fx::mul`/`div` 同款坑都有 debug_assert，
+唯此处裸奔;正常速度不可达,速度分量 ≥~23000px/帧才触发）。三件都一行级，路过 math/motion 顺手。
+
+### C21. 池布局文档账目过期（2026-07-23 系统审阅分诊）
+
+`docs/pool-memory-layout.md` 弹池汇总行按 19 字段全 4B 估（~625KB），实际近半字段 u8/u16，
+精确 ≈433KB（虚高 ~30%；四热字段各 32KB 的 L1 论证不受影响）；`stg-world-design.md` D5
+"~64B/敌 16KB" 实为 ~74B/敌 ≈18.5KB（`enemy.rs` 模块注释已自行改口 ~70B）。重算续表即可。
+
 ---
 
 ## D. 设计层面的已知裂缝
@@ -298,6 +330,24 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 `diag` 要先补 `diag()` 读口并迁 harness:1073 直读（当前合法读，只是路径未收）；`last_status`
 纯诊断，暂无外部读者。
 **触发点**：M2 建桥第一版 PR 顺手。
+（知会：`TaskPool` 的 `impl Default` 仍可外部构造空池——但 `tasks` 字段已封,无注入路径,
+终审 2026-07-23 判无动作必要,记此防将来误判为漏网。）
+
+### D7. 池 generation u16 回绕的理论 ABA（2026-07-23 系统审阅新记）
+
+`define_pool!` 的 `generation` 是 u16、`first_free()` 恒取最低空位——池内最热槽必是低索引，
+65536 次复用后回绕，**跨帧长期持有句柄**的外部消费者理论上可撞句柄别名（旧句柄"复活"指向
+新实体）。全仓现无触发路径（模拟内句柄短命,`Handle::NULL` 哨兵不依赖全零),但 M5 headless
+高频 churn 长跑（RL 训练百万帧级）量级上够得到。**触发点**：M5 开工前过一遍 churn 估算，
+必要时 gen 扩 u32（池账 +2B/槽）或文档写死"外部句柄不得跨 >N 帧持有"。
+
+### D8. hits 溢出的蓝图承诺与实现不符（2026-07-23 系统审阅新记）
+
+`stg-world-design.md` 三处明写"debug 构建 `hits` 溢出直接 panic"（丢一条自机中弹 = 游戏性
+错误,故意比其余溢出严）；实现 `push_hit` debug/release 一致只计数不 panic,且既有测试显式
+断言"不 panic"。另 `HITS_CAP=8192` 按"全弹入擦圈"单自机估,行 1/2 同弹双计 + 双自机可超。
+**触发点**：M2 顺手二选一——补 debug panic 落实蓝图,或改蓝图口径认可计数式降级（过评审）。
+
 
 ---
 

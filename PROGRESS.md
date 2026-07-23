@@ -6,23 +6,24 @@
 
 ## 现在（2026-07-23）
 
-- **位置**：**通道 B / anm call 落地**（M2 前置最后一块）——`RenderReq{id,seq,args[6]}` +
-  `reqs` 缓冲（256，checksum-skip）+ `emit_req` 三层（世界 API / `SYS_EMIT_REQ=27` /
-  `.ecl` 内建，六载荷位 `RawVal` 三型 raw 直通）+ `take_requests()` 幂等出口 + settle
-  敌死特效请求（`REQ_ENEMY_DEATH`，args=[x,y,sprite,score]）。**断层线两条向上出口齐备，
-  M2 前置全清**。注意：`DiagCounters.reqs_dropped` 增列使金向量校验和**取值平移**（预期
-  效应，跨平台对拍照绿）——今后基线对拍以本刀后的流为准。
+- **位置**：**外接前收口刀落地**（六路系统审阅 2026-07-23 裁决的必修项全清）——快照防漏
+  （尺寸哨兵 + 七字段判别式拷贝测试，审阅唯一 Critical）+ D6 硬面封口（`tasks`/`rng`/`frame`/
+  `events` 收 `pub(crate)`，配 `frame()`/`frame_events()`/`tasks()` 读口 + `rand_range` 转发口）
+  + 场界四常量 pub + `spawn_entry*` coherence 守卫三站共用 + `ENGINE_VER=1` 铸造 + 弹 setter
+  陷阱文档。纯收口刀，金向量逐位不变（终审独立实证）。审阅其余发现已批量记档 follow-ups
+  （A1/A2/C20/C21/D7/D8 等）。**M2 一切前置就绪。**
 - **在飞**：无。
 - **下一阶段候选**（开工前先 grill 定序）：**M2 建 `stg-godot` crate**（WorldBridge +
-  MultiMesh + 请求分发器——前置已全清）· M3 回滚 harness（快照账已实测）· bomb/homing
-  玩法小刀 · F2 校验和轻量化（M3 前免费窗口）。
-- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；**D6** WorldBody
-  剩余外部写口，M2 刀顺手）。乙案（表自带符号段）与文本 DSL 仍是 C11 之后的 modding 扩展点，未做。
+  MultiMesh + 请求分发器；开工先还 **A1** 道具 sprite 列 + **A2** bench 重跑）· M3 回滚
+  harness（快照账已实测）· bomb/homing 玩法小刀 · F2 校验和轻量化（M3 前免费窗口）。
+- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；D6 剩
+  `globals`/`boss_ui`/`diag`/`last_status` 四软项，M2 顺手）。乙案与文本 DSL 仍是 modding 扩展点。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-23 | **外接前收口刀** | 六路系统审阅 → 快照哨兵+七字段拷贝测试 + tasks/rng/frame/events 封口配读口 + spawn_entry* 表守卫 + ENGINE_VER + 场界 pub；审阅发现批量记档；金向量逐位不变 |
 | 2026-07-23 | **通道 B anm call** | RenderReq + reqs 缓冲 + emit_req 三层（API/syscall 27/.ecl RawVal 内建）+ take_requests + settle 敌死请求；断层线双出口齐备，M2 前置全清 |
 | 2026-07-23 | **通道 A WorldView** | define_pool! 每字段裸切片 + alive_words + WorldView/view() 单入口 + 五池字段收 pub(crate)；销 D5；金向量逐位不变 |
 | 2026-07-21 | **刀 A 可见性收口** | players 字段 + define_pool! alloc/free 收 pub(crate) + set_player_power 写 API + players() 只读种子；销 D1/D4；金向量逐位不变 |
