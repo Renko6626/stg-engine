@@ -82,7 +82,8 @@ headless 高速模拟。核心性质是**确定性**——同一份 `(初始状�
   **保留双宽 = 累加器模式**。两个大坐标相乘却 `>>16 as i32` 塞回 `Fx` = 必溢出的经典翻车。
   **完整坑表（加减语义 / Angle 回绕 / ECL 脚本 / 大数参数方程策略）见 [`docs/fixed-point-corners.md`](docs/fixed-point-corners.md)。**
 - **烘焙表纪律**：**绝不在各平台构建期用浮点现生成表**。生成一次 → commit 原始字节 →
-  `include_bytes!` 嵌入 → CI 再生成断言**逐位相同**；取整 round-half-to-even；表哈希进握手/回放头。
+  `include_bytes!` 嵌入 → CI 再生成断言**逐位相同**；取整 round-half-to-even；表哈希进握手/回放头
+  （身份三元组 = `ENGINE_VER`〔lib.rs，bump 须过评审〕+ 表 `content_hash` + 镜像 `content_hash`）。
 - **校验和**：**vendored FNV-1a 64**（`stg_core::checksum`，算法字节冻结，绝不走外部依赖）。
   **字段级、哈希全槽（不用 alive 掩码）、小端字节序**；`#[derive(Checksum)]`（stg-derive）从字段
   自动生成防漏。节奏：CI/金向量**逐帧**，联机随包每 **K=20** 帧采样。
@@ -126,9 +127,12 @@ crates/
                      &'static 参数穿线不进 World，M0-15/17）
     src/xform.rs      变换段池（D4；手写特例，段即分配单位）
     src/{input,events,reqs}.rs                 输入抽象 / hits+events 缓冲 / 通道 B 请求（RenderReq）
-    src/world.rs     WorldBody 字段所有权 + 写 API + push_* + PhaseGuard + 场界常量
+    src/consts.rs    脚本可见引擎常量注册表（C14：①结构常量/②表符号；lib.rs 另有 ENGINE_VER）
+    src/world.rs     WorldBody 字段所有权 + 写 API + 读口(frame/frame_events/take_requests/rand_range)
+                     + push_* + PhaseGuard + 场界常量(pub)
     src/world/       【模块结构镜像相位骨架】player(相1+3，shottype 表驱动发弹) / transform(相4)
                      / integrate(相5) / collide(相6) / settle(相7) / cleanup(相9) / motion(D3 运动写 API)
+                     / view(通道 A `WorldView` 零拷贝只读视图)
     src/ecl/         【M1】栈机 VM：task(协程池 256) / ops(op 表+ARITY) / vm(解释核+相2调度租户)
                      / image(EclImage) / syscall(号表+白名单沙箱绑定)
     src/step.rs      P2 组装层：§3.5 宪法顺序的唯一持有者 + World{body,tasks} + 快照
@@ -158,8 +162,9 @@ cargo run -p stg-harness -- verify-tables        # 断言烘焙表字节 == comm
   + 世界层全机制（碰撞/结算/道具/变换/批量/shottype 表/WorldTables）+ 金向量对拍 + bench 基线。
 - **M1 ✅**（2026-07-18）ECL 栈机 VM + 协程池 + syscall 白名单沙箱；**M1.9 ✅**（2026-07-19）
   `.ecl` 表层语言 + 编译器（三型/具名函数/静态槽分配），风铃卡狗粮进金向量二号。
-- **M2** `stg-godot`（gdext）WorldBridge + MultiMesh + 请求分发器 —— **phase 后续，暂不建 crate**；
-  前置：可见性收口刀（follow-ups D 组）+ 通道 A WorldView。
+- **M2** `stg-godot`（gdext）WorldBridge + MultiMesh + 请求分发器 —— **前置已全清**
+  （可见性收口 + 通道 A `WorldView` + 通道 B `reqs` + 外接前收口刀，2026-07-23）；
+  开工先还 follow-ups **A1**（道具 sprite 列）/**A2**（bench 重跑）。
 - **M3** 环形快照 + 本地回滚 harness（延迟/输入扰动/校验和风暴）。
 - **M4** `stg-net`（UDP + 会话/重同步）—— **phase 2 起点**。
 - **M5** `stg-py`（PyO3 headless 并行 env）。

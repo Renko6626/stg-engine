@@ -54,7 +54,7 @@
 | `stg-core/math` | 定点核 Fx/Angle + 查表三角/CORDIC/isqrt/easing + 烘焙表 | ✅ M0 | [fixed-point-corners](fixed-point-corners.md) |
 | `stg-core/{bullets,shots,enemy,field,items,player}` | 五实体池（`define_pool!` 实例，池即层）+ 自机 | ✅ M0 | [pool-memory-layout](pool-memory-layout.md) |
 | `stg-core/xform` | 弹变换段池（D4，会照剧本演的弹） | ✅ M0 | [xform-ops](xform-ops.md) |
-| `stg-core/world` | WorldBody 字段所有权 + 各相位函数 + 写 API + 场界 | ✅ M0 | [stg-world-design](../stg-world-design.md) Part III |
+| `stg-core/world` | WorldBody 字段所有权 + 各相位函数 + 写 API + 场界 + 双通道读出口（`view()` 通道 A / `take_requests()` 通道 B / `frame_events()`） | ✅ M0-M2前置 | [stg-world-design](../stg-world-design.md) Part III |
 | `stg-core/tables` | `WorldTables` 数据层（shottype/道具/外观/角色）+ 规范字节 serde + content_hash | ✅ M0-17/**C11** | [本文子系统](#资产管线-c11) |
 | `stg-core/consts` | 脚本可见引擎常量注册表（① 结构常量 / ② 表符号） | ✅ C14 | [ecl-lang](ecl-lang.md) |
 | `stg-core/ecl` | 栈机 VM（协程池 256）+ op 表 + syscall 白名单沙箱 + EclImage + 安全绑定层 | ✅ M1 | [ecl-ops](ecl-ops.md) |
