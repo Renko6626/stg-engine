@@ -54,6 +54,18 @@ impl WorldBody {
                 ],
             };
             self.push_event(ev);
+            // 死亡特效请求（蓝图 §207 机械产出者；args 约定见 `crate::reqs` 模块文档）。
+            self.emit_req(
+                crate::consts::REQ_ENEMY_DEATH,
+                [
+                    self.enemies.x[e].raw(),
+                    self.enemies.y[e].raw(),
+                    self.enemies.sprite[e] as i32,
+                    self.enemies.score[e] as i32,
+                    0,
+                    0,
+                ],
+            );
         }
     }
 
@@ -739,5 +751,47 @@ mod tests {
         assert_eq!(ev.a_index, i as u16);
         assert_eq!(ev.a_gen, item_gen);
         assert_eq!(ev.data, [ITEM_BOMB_PIECE as i32, 0]);
+    }
+
+    #[test]
+    fn settle_enemy_death_emits_render_req_with_pos_sprite_score() {
+        use crate::consts::REQ_ENEMY_DEATH;
+        let mut w = crate::step::World::new(1);
+        let e = spawn_enemy(&mut w, 0, 80, 1); // hp 1
+        let ei = w.body.enemies.get(e).unwrap();
+        w.body.enemies.sprite[ei] = 7;
+        w.body.enemies.score[ei] = 450;
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: w.body.enemies.x[ei],
+            y: w.body.enemies.y[ei],
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 1,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        let reqs = w.body.take_requests();
+        assert_eq!(reqs.len(), 1, "一敌一死一请求");
+        assert_eq!(reqs[0].id, REQ_ENEMY_DEATH);
+        assert_eq!(
+            reqs[0].args,
+            [
+                w.body.enemies.x[ei].raw(),
+                w.body.enemies.y[ei].raw(),
+                7,
+                450,
+                0,
+                0
+            ],
+            "位序 x/y/sprite/score——判别值防对调假绿"
+        );
     }
 }

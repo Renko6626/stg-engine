@@ -54,6 +54,9 @@ engine_consts! {
     structural {
         GVAR_RANK:           u16 as int = 0;
         GLOBALS_SYS_SEGMENT: u16 as int = 16;
+        //  通道 B 引擎保留请求 id（分区与 args 约定见 `crate::reqs` 模块文档）
+        REQ_ENEMY_DEATH:     u16 as int = 1;
+        REQ_SCRIPT_BASE:     u16 as int = 64;
     }
     table_symbols {
         //  ② appearance 行名（值 = appearances 索引；join 校验 + FM2 防错序的锚）

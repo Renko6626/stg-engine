@@ -25,6 +25,7 @@ use crate::events::{EVENTS_CAP, Event, HITS_CAP, Hit};
 use crate::field::{FieldHandle, FieldInit, FieldPool};
 use crate::math::{Angle, Fx};
 use crate::player::PlayerState;
+use crate::reqs::{REQS_CAP, RenderReq};
 use crate::rng::Pcg32;
 use crate::shots::{ShotHandle, ShotInit, ShotPool};
 
@@ -52,6 +53,8 @@ pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
 pub const STATUS_STALE_HANDLE: u16 = 2;
 pub const STATUS_BAD_ARGS: u16 = 3;
+/// 缓冲满截断（D12：`emit_req` 满 → 丢弃 + 本状态 + `diag.reqs_dropped`）。
+pub const STATUS_TRUNCATED: u16 = 4;
 
 /// 所有实体判定半径的写 API 上限（P4-b）。
 ///
@@ -129,6 +132,9 @@ pub struct DiagCounters {
     /// ECL 任务确定性报错被杀的累计计数（M1 T2；`derive(Checksum)` 自动入校验和，
     /// 与 owner 死亡的静默回收物理区分——owner 死不计这里）。
     pub task_faults: u32,
+    /// reqs 满丢弃计数（P4-a/D12 名 `reqs_dropped`——表现可以掉，确定性不能破，
+    /// 两机必须丢得一样多，故**必须入校验和**、不得 skip）。
+    pub reqs_dropped: u32,
 }
 
 /// 世界本体（最小切片）。构造走 `step::World::new`（堆零初始化 + 播种 rng）。
@@ -162,6 +168,10 @@ pub struct WorldBody {
     pub events: [Event; EVENTS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 events 一并 skip（A5）")]
     pub events_len: u16,
+    #[checksum(skip = "纯输出缓冲，回滚重演确定性再生（P6/§6.2 通道 B）")]
+    pub(crate) reqs: [RenderReq; REQS_CAP],
+    #[checksum(skip = "纯输出缓冲，len 随 reqs 一并 skip（通道 B）")]
+    pub(crate) reqs_len: u16,
     pub diag: DiagCounters,
     pub last_status: u16,
     #[cfg(debug_assertions)]
@@ -709,11 +719,34 @@ impl WorldBody {
         }
     }
 
+    /// 通道 B 推送（§6.2）。id 语义世界不解释（含 0——保留无效值，分发器忽略）；
+    /// 满 → 确定性丢弃 + `TRUNCATED` + 计数（P4-a/D12），不 panic。成功不动 `last_status`。
+    pub fn emit_req(&mut self, id: u16, args: [i32; 6]) {
+        if (self.reqs_len as usize) < REQS_CAP {
+            self.reqs[self.reqs_len as usize] = RenderReq {
+                id,
+                seq: self.reqs_len,
+                args,
+            };
+            self.reqs_len += 1;
+        } else {
+            self.diag.reqs_dropped = self.diag.reqs_dropped.wrapping_add(1);
+            self.last_status = STATUS_TRUNCATED;
+        }
+    }
+
+    /// 通道 B 出口（蓝图 §256）：本帧请求切片。**幂等非消费**——名字沿契约叫 take，
+    /// 帧内多次调用返回同一切片；缓冲下帧 `begin` 清空，headless 无人消费 = 零成本。
+    pub fn take_requests(&self) -> &[RenderReq] {
+        &self.reqs[..self.reqs_len as usize]
+    }
+
     // ── 相位函数（pub(crate)，每个先 phase_enter 保序）────────────────────
     pub(crate) fn begin(&mut self) {
         self.phase_enter(PH_BEGIN);
         self.hits_len = 0;
         self.events_len = 0;
+        self.reqs_len = 0;
     }
     pub(crate) fn advance(&mut self) {
         self.phase_enter(PH_ADVANCE);
@@ -1126,5 +1159,85 @@ mod tests {
         assert_eq!(vb.players().len(), crate::MAX_PLAYERS);
         // World::view 委派 == WorldBody::view
         assert_eq!(w.view().bullets().iter_alive().count(), 1);
+    }
+
+    #[test]
+    fn emit_req_records_id_seq_args_in_push_order() {
+        let mut w = crate::step::World::new(1);
+        w.body.emit_req(7, [1, 2, 3, 4, 5, 6]);
+        w.body.emit_req(8, [-1, -2, -3, -4, -5, -6]);
+        let reqs = w.body.take_requests();
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(
+            (reqs[0].id, reqs[0].seq, reqs[0].args),
+            (7, 0, [1, 2, 3, 4, 5, 6])
+        );
+        assert_eq!(
+            (reqs[1].id, reqs[1].seq, reqs[1].args),
+            (8, 1, [-1, -2, -3, -4, -5, -6])
+        );
+    }
+
+    #[test]
+    fn emit_req_overflow_drops_counts_and_sets_truncated() {
+        use crate::reqs::REQS_CAP;
+        let mut w = crate::step::World::new(1);
+        for i in 0..REQS_CAP {
+            w.body.emit_req(1, [i as i32, 0, 0, 0, 0, 0]);
+        }
+        assert_eq!(w.body.diag.reqs_dropped, 0);
+        w.body.emit_req(2, [999, 0, 0, 0, 0, 0]);
+        let reqs = w.body.take_requests();
+        assert_eq!(reqs.len(), REQS_CAP, "溢出后 len 停在 cap");
+        assert_eq!(w.body.diag.reqs_dropped, 1);
+        assert_eq!(w.body.last_status, STATUS_TRUNCATED);
+        assert_eq!(
+            reqs[REQS_CAP - 1].args[0],
+            (REQS_CAP - 1) as i32,
+            "已有内容不受扰"
+        );
+        assert_eq!(reqs[REQS_CAP - 1].seq, (REQS_CAP - 1) as u16);
+    }
+
+    #[test]
+    fn begin_clears_reqs_and_take_requests_is_idempotent() {
+        let mut w = crate::step::World::new(1);
+        w.body.emit_req(7, [0; 6]);
+        let (p1, l1) = {
+            let r = w.body.take_requests();
+            (r.as_ptr(), r.len())
+        };
+        let r2 = w.body.take_requests();
+        assert_eq!(
+            (p1, l1),
+            (r2.as_ptr(), r2.len()),
+            "帧内幂等：同一切片（蓝图 §256）"
+        );
+        w.body.begin();
+        assert!(w.body.take_requests().is_empty(), "begin 清空通道 B");
+    }
+
+    #[test]
+    fn emit_req_is_invisible_to_checksum() {
+        let mut w = crate::step::World::new(1);
+        let c0 = w.checksum();
+        w.body.emit_req(9, [1, 2, 3, 4, 5, 6]);
+        assert_eq!(
+            w.checksum(),
+            c0,
+            "reqs/reqs_len 是 checksum-skip 纯输出（P6）"
+        );
+    }
+
+    #[test]
+    fn copy_into_restores_world_with_no_stale_reqs() {
+        let mut w = crate::step::World::new(1);
+        let mut dst = crate::step::World::new(1);
+        w.body.emit_req(7, [0; 6]);
+        w.copy_into(&mut dst);
+        assert!(
+            dst.body.take_requests().is_empty(),
+            "恢复出的 World 必须无陈旧通道 B 输出（同 hits/events 契约，见 step.rs copy_into 注释）"
+        );
     }
 }

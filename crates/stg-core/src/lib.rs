@@ -38,6 +38,7 @@ pub mod input;
 pub mod items;
 pub mod math;
 pub mod player;
+pub mod reqs;
 pub mod rng;
 pub mod shots;
 pub mod step;

@@ -81,13 +81,14 @@ impl World {
         d.signals = s.signals;
         d.diag = s.diag;
         d.last_status = s.last_status;
-        // 帧内私有输出缓冲（hits/events）checksum-skip、不随快照复制数组本体——安全性今天靠
+        // 帧内私有输出缓冲（hits/events/reqs）checksum-skip、不随快照复制数组本体——安全性今天靠
         // "begin 在任何生产者跑之前清 len" 这条相位顺序撑着。但 events 是 pub，规格给了两个未来
         // 消费者（phase-8 ECL 钩子、M2 表现层）；若表现层在 rollback 恢复后读到清旧数组前的
         // events，会重放刚回滚掉的帧里的"幽灵死亡"。显式清 len，把这条从相位顺序的巧合变成
         // 明写的契约：恢复出的 World 必须无陈旧输出。
         d.hits_len = 0;
         d.events_len = 0;
+        d.reqs_len = 0;
         #[cfg(debug_assertions)]
         {
             d.phase_guard = s.phase_guard;
@@ -112,6 +113,11 @@ impl World {
     /// 通道 A 只读视图（委派 `WorldBody::view`）——godot/表现层持 `World`，经它读世界状态。
     pub fn view(&self) -> crate::world::WorldView<'_> {
         self.body.view()
+    }
+
+    /// 通道 B 出口委派（镜像 `view()`；幂等语义见 `WorldBody::take_requests`）。
+    pub fn take_requests(&self) -> &[crate::reqs::RenderReq] {
+        self.body.take_requests()
     }
 
     /// Internal task spawn (pub(crate) for VM opcodes/syscalls; used by SPAWN op
