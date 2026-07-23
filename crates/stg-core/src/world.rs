@@ -1234,6 +1234,7 @@ mod tests {
         let mut w = crate::step::World::new(1);
         let mut dst = crate::step::World::new(1);
         w.body.emit_req(7, [0; 6]);
+        dst.body.emit_req(3, [9; 6]); // 预污染:恢复目标自带陈旧输出,清零必须由 copy_into 完成
         w.copy_into(&mut dst);
         assert!(
             dst.body.take_requests().is_empty(),

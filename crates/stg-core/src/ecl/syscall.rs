@@ -1415,6 +1415,10 @@ mod tests {
         assert_eq!(w.body.take_requests().len(), 0, "坏 id no-op 不入缓冲");
         assert_eq!(w.body.diag.contract_viol, cv0 + 1);
         assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(
+            task.sp, 0,
+            "坏 id 路径同样七值全弹栈（先弹后验，栈效应与成功路径一致）"
+        );
         assert!(
             call(
                 &mut w,
@@ -1427,6 +1431,10 @@ mod tests {
         );
         assert_eq!(w.body.take_requests().len(), 0, "越上界同款");
         assert_eq!(w.body.diag.contract_viol, cv0 + 2);
+        assert_eq!(
+            task.sp, 0,
+            "坏 id 路径同样七值全弹栈（先弹后验，栈效应与成功路径一致）"
+        );
     }
 
     #[test]
