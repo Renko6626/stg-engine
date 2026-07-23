@@ -141,7 +141,7 @@ fn bench_ladder(name: &str, target: usize, with_xform: bool, frames: u32, print:
         &mut w,
         frames,
         |b, frame| {
-            let alive = b.bullets.iter_alive().count();
+            let alive = b.view().bullets().iter_alive().count();
             if alive < target {
                 let deficit = (target - alive).min(512) as u16;
                 let astep = ((65536u32 / deficit.max(2) as u32) as u16) as i16;
@@ -244,7 +244,7 @@ fn bench_mix(frames: u32) {
         frames,
         move |b, frame| {
             if frame % 60 == 0 {
-                let alive = b.enemies.iter_alive().count();
+                let alive = b.view().enemies().iter_alive().count();
                 for &ex in [-80i32, 0, 80].iter().skip(alive) {
                     b.create_enemy(enemy(ex));
                 }
@@ -338,7 +338,7 @@ fn run_measured(
     println!(
         "{:<16} {:>6} {:>9.1} {:>9.1} {:>9.1} {:>9.1} {:>9.1}",
         name,
-        w.body.bullets.iter_alive().count(),
+        w.body.view().bullets().iter_alive().count(),
         us(step_ns.iter().sum::<u64>() / n),
         us(step_ns[step_ns.len() / 2]),
         us(step_ns[(step_ns.len() * 99 / 100).min(step_ns.len() - 1)]),
@@ -507,7 +507,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                 // QuadOut 飘到原位 (ex, 80)。到位时序因此推迟：补位帧起飞入途中一切照旧参与
                 // 演化（可被自机弹打中/体碰/擦弹），只是 40 帧后才真正落在旧的静止靶位。
                 if frame % 60 == 0 {
-                    let alive = b.enemies.iter_alive().count();
+                    let alive = b.view().enemies().iter_alive().count();
                     let slots = [(-80, 80), (0, 80), (80, 80)];
                     for &(ex, ey) in slots.iter().skip(alive) {
                         let h = b.create_enemy(enemy_at(ex, -100));
@@ -1071,10 +1071,10 @@ mod ecl_rainbow_tests {
             step_with_director(&mut w, &stg_core::tables::TABLES_V0, &image, &input, |_| {});
         }
         assert_eq!(w.body.diag.task_faults, 0, "全程不应产生 Fault");
-        let bullet_count = w.body.bullets.iter_alive().count();
+        let bullet_count = w.body.view().bullets().iter_alive().count();
         assert!(bullet_count > 100, "稳态弹数应 >100（实测 {bullet_count}）");
         assert!(
-            w.body.enemies.get(boss).is_some(),
+            w.body.view().enemies().get(boss).is_some(),
             "boss 应存活满 600 帧（hp_max 9999 扛住火力）"
         );
         assert_eq!(w.body.boss_ui[0].active, 1, "符卡计时器应保持 active=1");
@@ -1140,7 +1140,7 @@ mod table_disk_load_tests {
         // 多次），两侧防止本测试悄悄退化回「只比对出生期字段」。
         assert_ne!(w_disk.checksum(), 0, "非退化守卫：校验和不应为零");
         // 自机弹住 `shots` 池（`bullets` 是敌方弹池，D7/D8 分池）。
-        let shot_count = w_disk.body.shots.iter_alive().count();
+        let shot_count = w_disk.body.view().shots().iter_alive().count();
         assert!(
             shot_count > 0,
             "非退化守卫：120 帧全程持 SHOT 应产出自机弹（实测 {shot_count}）"

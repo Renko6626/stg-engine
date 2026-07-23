@@ -910,7 +910,7 @@ mod tests {
                        }";
         let w1 = run(no_turn, 20);
         assert_eq!(
-            w1.body.bullets.iter_alive().count(),
+            w1.body.view().bullets().iter_alive().count(),
             0,
             "未转向应沿 x 轴飞出边界被回收"
         );
@@ -924,7 +924,7 @@ mod tests {
                           }";
         let w2 = run(with_turn, 20);
         assert_eq!(
-            w2.body.bullets.iter_alive().count(),
+            w2.body.view().bullets().iter_alive().count(),
             1,
             "转向后应改沿 y 轴飞，同一时窗内不出界，应存活——\
              反证 xformdef staging → fire xf 解析 → OP_TURN 派发链路生效"
@@ -945,7 +945,7 @@ mod tests {
                     }";
         let w = run(src, 20);
         assert_eq!(
-            w.body.bullets.iter_alive().count(),
+            w.body.view().bullets().iter_alive().count(),
             0,
             "set_life(1) 必须在 STEP 的 scratch 槽之后照常执行——弹应已回收；\
              若此断言红 = scratch 未自动补，set_life 被引擎 scratch 覆写"

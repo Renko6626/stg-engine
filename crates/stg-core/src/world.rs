@@ -140,15 +140,15 @@ pub struct WorldBody {
     /// 全局变量竞技场（A2）——纯 i32 槽，语义归脚本，世界自身不读不写；脚本写读走
     /// `set_var`/`get_var`。零初始化合法。
     pub globals: [i32; GLOBALS_CAP],
-    pub bullets: BulletPool,
+    pub(crate) bullets: BulletPool,
     pub(crate) players: [PlayerState; crate::MAX_PLAYERS],
     /// boss 公告板（A2）——脚本写（`boss_set`）、UI 读、世界自身不读。零初始化合法。
     pub boss_ui: [crate::boss::BossUiSlot; crate::boss::MAX_BOSSES],
-    pub shots: ShotPool,
-    pub enemies: EnemyPool,
-    pub fields: FieldPool,
-    /// 道具池（D7）。与四实体池同级 `pub`——表现层将来要读。
-    pub items: crate::items::ItemPool,
+    pub(crate) shots: ShotPool,
+    pub(crate) enemies: EnemyPool,
+    pub(crate) fields: FieldPool,
+    /// 道具池（D7）。与四实体池同级 `pub(crate)`——表现层经 `view()` 只读访问器读。
+    pub(crate) items: crate::items::ItemPool,
     /// 变换段池（D4）。手写 Checksum 全量入校验和（P6）；I7 inline 数组。
     pub(crate) xforms: crate::xform::XformSegPool,
     /// 信号黑板（D4 11b）：每通道存"最后脉冲帧号 + 1"，0 = 从未脉冲（零初始化合法）。

@@ -1275,7 +1275,7 @@ mod tests {
         }
 
         assert_eq!(
-            w.body.bullets.iter_alive().count(),
+            w.body.view().bullets().iter_alive().count(),
             8,
             "repeat(2) × 4-way batch = 8 弹"
         );
