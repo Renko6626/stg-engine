@@ -34,7 +34,9 @@
 - **不用记（结构即真相）**：字段即哈希项。没有一份独立、需要你手动对照的"哈希器清单"，所以没有"忘了同步"的可能。
 - **debug 逐字段清单**：`x.checksum_fields()`（`#[cfg(debug_assertions)]`，derive 生成）返回
   `[(字段名, 该字段指纹)]`。可在测试里断言字段数 / 名字，或 desync 时逐字段比对、直接定位"哪个字段分歧"。
-- **（M0-4 起）CI 守卫**：World 存在后加"**结构体尺寸 / 字段数变更即红**"守卫作二线防护（防"加了 skip 却漏了理由""字段悄悄变纯表现后漏网"之类）。
+- **（2026-07-23 落地）哨兵守卫**：`step.rs` 的 `world_size_sentinel_guards_copy_into_field_list`
+  测试钉死 `WorldBody`/`World` 尺寸（debug/release 双值）——**字段集变更即红**，红了先核对
+  `copy_into` 清单/checksum skip 理由/D10 预算再更新数字（防"加字段漏拷快照""加了 skip 却漏理由"）。
 
 ## 2. 编译期 vs 运行时（两件事，各在一头）
 

@@ -1791,4 +1791,75 @@ mod tests {
         snap.copy_into(&mut w);
         assert_eq!(w.body.boss_ui[0], ui, "restore 必须还原 boss_ui");
     }
+
+    // ── 快照防漏(2026-07-23 审阅 §1):此前无判别式拷贝覆盖的字段,逐一 mutate 非默认值
+    //    → copy_into → 命中;从 copy_into 删对应行即红。 ────────────────────────────
+
+    #[test]
+    fn snapshot_covers_frame() {
+        let mut w = World::new(3);
+        w.body.frame = 777;
+        let mut snap = World::new(3);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.body.frame, 777, "copy_into 漏拷 frame 即红");
+    }
+
+    #[test]
+    fn snapshot_covers_rng_state() {
+        let mut w = World::new(3);
+        let _ = w.body.rng.next_u32(); // 状态偏离种子初值
+        let ck = w.checksum();
+        let mut snap = World::new(3);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.checksum(), ck, "rng 状态必须随快照(I3;漏拷即红)");
+    }
+
+    #[test]
+    fn snapshot_covers_players() {
+        let mut w = World::new(3);
+        w.body.set_player_power(0, 123);
+        let mut snap = World::new(3);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.body.players()[0].power, 123, "players 数组漏拷即红");
+    }
+
+    #[test]
+    fn snapshot_covers_diag_and_last_status() {
+        let mut w = World::new(3);
+        w.body.set_player_power(9, 0); // OOB → contract_viol+1 + BAD_ARGS
+        assert!(w.body.diag.contract_viol > 0, "前置:计数已非零");
+        let mut snap = World::new(3);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.body.diag.contract_viol, w.body.diag.contract_viol);
+        assert_eq!(snap.body.last_status, w.body.last_status);
+    }
+
+    #[test]
+    fn snapshot_covers_ecl_main_started_and_tables_hash() {
+        let mut w = World::new(3);
+        w.ecl_main_started = 1;
+        w.tables_hash = 0xDEAD_BEEF;
+        let mut snap = World::new(3);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.ecl_main_started, 1, "ecl_main_started 漏拷即红");
+        assert_eq!(snap.tables_hash, 0xDEAD_BEEF, "tables_hash 漏拷即红");
+    }
+
+    /// 快照防漏哨兵(checksum-mechanism.md 承诺的二线防护,实现形态=本测试):
+    /// **本断言红了 ⇒ 你增/删/改了 World 字段** ⇒ 依次核对
+    /// ① `copy_into` 逐字段清单(手写,漏拷编译不报错——这正是本哨兵存在的原因)
+    /// ② checksum(新字段默认入;skip 须理由) ③ D10 容量预算,然后才允许更新下方数字。
+    /// `phase_guard` 仅 debug 存在 ⇒ 双值。
+    #[test]
+    fn world_size_sentinel_guards_copy_into_field_list() {
+        let sizes = (
+            core::mem::size_of::<crate::world::WorldBody>(),
+            core::mem::size_of::<World>(),
+        );
+        #[cfg(debug_assertions)]
+        const EXPECTED: (usize, usize) = (969288, 1083008);
+        #[cfg(not(debug_assertions))]
+        const EXPECTED: (usize, usize) = (969288, 1083008);
+        assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
+    }
 }
