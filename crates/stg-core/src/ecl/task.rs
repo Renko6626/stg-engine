@@ -23,7 +23,7 @@ use crate::ecl::image::SubId;
 
 /// 一个 ECL 任务（协程）的完整可 memcpy 状态（I5：模拟协程完整状态位于可 memcpy 的扁平内存）。
 #[repr(C)]
-#[derive(Clone, Copy, crate::checksum::Checksum)]
+#[derive(Clone, Copy, crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct Task {
     /// `EclImage.subs` 入口索引（T2 起穿线：`pc` 由 spawn 调用方解析 `ecl.entry(script)`
     /// 一次性戳入，运行期不重解——脚本号只用于 owner 门禁之外的一处校验：调度层每帧确认
@@ -74,7 +74,7 @@ impl Default for Task {
 
 /// 任务池本体（AoS；I7 无堆容器，inline 数组住 `World`，全零 = 合法空池）。
 #[repr(C)]
-#[derive(crate::checksum::Checksum)]
+#[derive(crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct TaskPool {
     pub(crate) slots: [Task; TASK_CAP],
     pub(crate) alive: [u64; TASK_CAP / 64],

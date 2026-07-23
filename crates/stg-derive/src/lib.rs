@@ -242,16 +242,21 @@ pub fn define_pool(input: TokenStream) -> TokenStream {
 
     quote! {
         #[repr(C)]
-        #[derive(Clone, ::stg_core::checksum::Checksum)]
+        #[derive(Clone, ::stg_core::checksum::Checksum, ::stg_core::save::SaveBytes)]
         pub struct #pool {
             #( pub(crate) #fnames: [#ftypes; #cap], )*
             pub(crate) generation: [u16; #cap],
             pub(crate) alive: [u64; #nw],
         }
 
-        /// 打包句柄（`index == 0xFFFF` 为 NULL）。
+        /// 打包句柄（`index == 0xFFFF` 为 NULL）。句柄本身不住池（池的存活位图已含等价信息），
+        /// 但作为**非池字段**类型出现时（如 `BossUiSlot.enemy`）也需 `SaveBytes`——与 `Checksum`
+        /// 同款并排派生。
         #[repr(C)]
-        #[derive(Clone, Copy, PartialEq, Eq, Debug, ::stg_core::checksum::Checksum)]
+        #[derive(
+            Clone, Copy, PartialEq, Eq, Debug, ::stg_core::checksum::Checksum,
+            ::stg_core::save::SaveBytes,
+        )]
         pub struct #handle {
             pub index: u16,
             pub generation: u16,

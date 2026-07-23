@@ -4,6 +4,7 @@
 //! op 编号已冻结（spec 2026-07-16；改动 = 过评审 + bump engine_ver）。
 
 use crate::checksum::{Checksum, Fnv1a64};
+use crate::save::{LoadError, SaveBytes, SaveReader};
 
 pub(crate) const SEG_CAP: usize = 2048;
 pub(crate) const SLOTS_PER_SEG: usize = 16;
@@ -151,6 +152,36 @@ impl Checksum for XformSegPool {
             s.args[0].hash_into(h);
             s.args[1].hash_into(h);
         }
+    }
+}
+
+/// 手写 SaveBytes（镜像上面手写 Checksum 的字段序，同一份"占用位图 + 全部槽、无 skip"
+/// 纪律——`define_pool!` 池的 SaveBytes 是宏生成，本池手写特例故手写这半边）。
+impl SaveBytes for XformSegPool {
+    fn write_bytes(&self, out: &mut Vec<u8>) {
+        for w in &self.occupied {
+            w.write_bytes(out);
+        }
+        for s in &self.slots {
+            s.wait.write_bytes(out);
+            s.op.write_bytes(out);
+            s._pad.write_bytes(out);
+            s.args[0].write_bytes(out);
+            s.args[1].write_bytes(out);
+        }
+    }
+    fn read_bytes(&mut self, r: &mut SaveReader<'_>) -> Result<(), LoadError> {
+        for w in &mut self.occupied {
+            w.read_bytes(r)?;
+        }
+        for s in &mut self.slots {
+            s.wait.read_bytes(r)?;
+            s.op.read_bytes(r)?;
+            s._pad.read_bytes(r)?;
+            s.args[0].read_bytes(r)?;
+            s.args[1].read_bytes(r)?;
+        }
+        Ok(())
     }
 }
 

@@ -14,7 +14,7 @@ pub const MAX_BOSSES: usize = 2;
 
 /// 单 boss 公告板槽。字段语义归脚本/UI 约定，世界只存不读。
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug, crate::checksum::Checksum)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct BossUiSlot {
     /// 哪个敌人是 boss（悬垂由读方处置）。
     pub enemy: EnemyHandle,

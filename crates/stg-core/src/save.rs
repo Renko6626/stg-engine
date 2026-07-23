@@ -61,6 +61,13 @@ impl<'a> SaveReader<'a> {
     }
 }
 
+/// 身份头魔数（"STGW" ascii）。
+pub(crate) const SAVE_MAGIC: [u8; 4] = *b"STGW";
+/// 存档文件格式版本（与 `ENGINE_VER` 独立演化——格式不变而引擎内部改版时后者才动）。
+pub(crate) const SAVE_FILE_VER: u8 = 1;
+/// 头总长(魔数4+版1+ENGINE_VER4+表8+镜像8+seed8+frame4+len4+fnv8)。
+pub(crate) const SAVE_HEADER_LEN: usize = 45;
+
 /// derive 宏再导出（镜像 checksum.rs 的 `pub use stg_derive::Checksum;` 模式——trait 与
 /// derive 宏异命名空间同名共存，attr 写 `crate::save::SaveBytes` 即可）。
 pub use stg_derive::SaveBytes;

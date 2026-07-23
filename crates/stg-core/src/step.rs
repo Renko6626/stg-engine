@@ -14,7 +14,7 @@ use crate::world::{
 /// `WorldBody` 内不 import `ecl::*`）。T2 起相位 2（`PH_DIRECTOR`）导演槽跑
 /// `ecl::vm::run_tasks` 驱动它（`step_with_director` 内，注入的导演闭包之前）。
 #[repr(C)]
-#[derive(crate::checksum::Checksum)]
+#[derive(crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct World {
     pub body: WorldBody,
     /// 读走 `tasks()`。
@@ -30,6 +30,17 @@ pub struct World {
     /// 本字段是其唯一留存形态——供回放头/握手/调试读回（`seed()`）。属"初始状态"、存活期不变、
     /// 跨机一致；同 `tables_hash` 正常入校验和（恒定不分叉，校验无害）。
     pub(crate) seed: u64,
+}
+
+/// 手写占位 Debug——只为满足 `Result::unwrap_err`/`expect_err` 的 `T: Debug` 约束（存档
+/// 判别测试用它断言 `LoadError` 分支，`Ok` 分支不该真的走到）。不逐字段展开：`World`
+/// 挂着 ~1MB 的池 SoA 数组，`#[derive(Debug)]` 会把整条依赖链（各池/`Event`/`RenderReq`
+/// 等纯输出类型）拖进 Debug 义务，得不偿失——`checksum()`/`save_bytes()` 才是真正的状态
+/// 摘要通道，这里给个占位输出即可。
+impl std::fmt::Debug for World {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("World").finish_non_exhaustive()
+    }
 }
 
 impl World {
@@ -103,6 +114,93 @@ impl World {
     #[inline]
     pub fn checksum(&self) -> u64 {
         crate::checksum::Checksum::checksum(self)
+    }
+
+    /// 存档(spec L1):身份头 v1 + 字段级规范字节载荷。~2-3ms(大头是载荷 FNV),随地存档
+    /// 零感知。`image` 只取 content_hash 入头(载荷不含镜像——静态数据不进 World,I7)。
+    pub fn save_bytes(&self, image: &crate::ecl::image::EclImage) -> Vec<u8> {
+        use crate::save::SaveBytes;
+        let mut payload = Vec::with_capacity(1 << 20);
+        SaveBytes::write_bytes(self, &mut payload);
+        let fnv = crate::checksum::fnv1a64(&payload);
+        let mut out = Vec::with_capacity(crate::save::SAVE_HEADER_LEN + payload.len());
+        out.extend_from_slice(&crate::save::SAVE_MAGIC);
+        out.push(crate::save::SAVE_FILE_VER);
+        out.extend_from_slice(&crate::ENGINE_VER.to_le_bytes());
+        out.extend_from_slice(&self.tables_hash.to_le_bytes());
+        out.extend_from_slice(&image.content_hash().to_le_bytes());
+        out.extend_from_slice(&self.seed.to_le_bytes());
+        out.extend_from_slice(&self.body.frame().to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(&fnv.to_le_bytes());
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    /// 读档:头校验 + coherence(任一侧 0 = 未绑定跳过,同 `start_main` 守卫口径)→
+    /// 堆零构造 + 逐字段读回。P4 式 Err 不 panic;skip 字段因零构造契约保持空。
+    pub fn load_bytes(
+        bytes: &[u8],
+        tables: &crate::tables::WorldTables,
+        image: &crate::ecl::image::EclImage,
+    ) -> Result<Box<World>, crate::save::LoadError> {
+        use crate::save::{LoadError, SaveBytes, SaveReader};
+        let mut r = SaveReader::new(bytes);
+        if r.take(4)? != crate::save::SAVE_MAGIC {
+            return Err(LoadError::BadMagic);
+        }
+        let ver = r.take(1)?[0];
+        if ver != crate::save::SAVE_FILE_VER {
+            return Err(LoadError::BadFileVer { got: ver });
+        }
+        let eng = u32::from_le_bytes(r.take(4)?.try_into().unwrap());
+        if eng != crate::ENGINE_VER {
+            return Err(LoadError::EngineVerMismatch {
+                file: eng,
+                engine: crate::ENGINE_VER,
+            });
+        }
+        let f_tables = u64::from_le_bytes(r.take(8)?.try_into().unwrap());
+        let f_image = u64::from_le_bytes(r.take(8)?.try_into().unwrap());
+        let _seed = u64::from_le_bytes(r.take(8)?.try_into().unwrap());
+        let _frame = u32::from_le_bytes(r.take(4)?.try_into().unwrap());
+        let plen = u32::from_le_bytes(r.take(4)?.try_into().unwrap()) as usize;
+        let f_fnv = u64::from_le_bytes(r.take(8)?.try_into().unwrap());
+        if f_tables != 0 && tables.content_hash != 0 && f_tables != tables.content_hash {
+            return Err(LoadError::TablesMismatch {
+                file: f_tables,
+                given: tables.content_hash,
+            });
+        }
+        let i_hash = image.content_hash();
+        if f_image != 0 && i_hash != 0 && f_image != i_hash {
+            return Err(LoadError::ImageMismatch {
+                file: f_image,
+                given: i_hash,
+            });
+        }
+        let payload = r.take(plen)?;
+        if r.remaining() != 0 {
+            return Err(LoadError::TrailingBytes {
+                left: r.remaining(),
+            });
+        }
+        let fnv = crate::checksum::fnv1a64(payload);
+        if fnv != f_fnv {
+            return Err(LoadError::HashMismatch {
+                file: f_fnv,
+                computed: fnv,
+            });
+        }
+        let mut w = World::new(0); // 堆零构造 + 播种——随后整个被字段读回覆盖(含 rng/seed)
+        let mut pr = SaveReader::new(payload);
+        SaveBytes::read_bytes(&mut *w, &mut pr)?;
+        if pr.remaining() != 0 {
+            return Err(LoadError::TrailingBytes {
+                left: pr.remaining(),
+            });
+        }
+        Ok(w)
     }
 
     /// 构造用的 RNG 种子（provenance）。见 `World.seed` 字段文档——回放头/握手/调试从这里读回。
@@ -1908,5 +2006,170 @@ mod tests {
             1,
             "bump 必须是有意识决定(评审 + 改本测试)"
         );
+    }
+
+    // ── 刀 2/3：save_bytes/load_bytes 判别测试 ─────────────────────────────
+
+    /// 判别测试脚手架("表绑定 + 有任务"的最小世界)：`stg_ecl_compiler` 依赖方向不可达
+    /// （P1：core 不能依赖上层编译器），故用 `EclImage::try_from_parts` 手拼一枚
+    /// root-only 小镜像，`content_hash` 对齐 `TABLES_V0.content_hash` 使 `start_main`
+    /// 的 coherence 守卫放行（真实非零哈希，不是"任一侧 0"逃逸路径）。根任务
+    /// `push 5 → wait 5 → jmp 0` 死循环，240 帧后仍存活、`pc`/`wait` 非零；外加一颗
+    /// "boss"敌人 + 一颗弹，令弹/敌/任务/rng 全非默认值——深等价测试
+    /// （save→load→checksum 相等）的判别力全靠这个"非平凡"世界撑着（全零世界的往返
+    /// 测试对漏撒 derive 是瞎的）。
+    fn rainbow_for_test() -> (Box<World>, EclImage, crate::enemy::EnemyHandle) {
+        use crate::ecl::image::ImageParts;
+
+        let image = EclImage::try_from_parts(ImageParts {
+            code: vec![OP_PUSHI as u32, 5, OP_WAIT as u32, OP_JMP as u32, 0],
+            subs: vec![SubInit::new(0, SubKind::Root, vec![])],
+            entries: vec![],
+            root: Some(0),
+            content_hash: crate::tables::TABLES_V0.content_hash,
+        })
+        .expect("root-only 镜像必须满足运行期镜像契约");
+
+        let mut w = World::new(0xC0FF_EE42_1357_9BDF);
+        w.start_main(&image).expect("coherence 应放行(哈希对齐)");
+
+        let boss = w.body.create_enemy(crate::enemy::EnemyInit {
+            x: Fx::from_int(30),
+            y: Fx::from_int(60),
+            vx: Fx::from_int(1),
+            vy: Fx::from_int(-1),
+            mv_from_x: Fx::ZERO,
+            mv_from_y: Fx::ZERO,
+            mv_to_x: Fx::ZERO,
+            mv_to_y: Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp: 500,
+            hp_max: 500,
+            radius: Fx::from_int(12),
+            hurtbox: Fx::from_int(16),
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 3,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_table: 0,
+            score: 500,
+        });
+        assert_ne!(boss, crate::enemy::EnemyHandle::NULL, "boss 敌人必须建成");
+
+        w.body.create_bullet(straight(10, 100, 1, 2, 600));
+        // 带 xform 段的第二颗弹——让 `XformSegPool`(手写 SaveBytes 镜像)也捎带非零内容,
+        // 深等价测试才对"手写字段序错位"这一类 bug 有判别力(全零段的往返对此维度是瞎的)。
+        w.body.create_bullet_with_xform(
+            straight(-10, 120, 0, 1, 600),
+            &[slot(
+                3,
+                crate::xform::OP_SET_SPEED,
+                Fx::from_int(2).raw(),
+                0,
+            )],
+        );
+
+        (w, image, boss)
+    }
+
+    /// 深等价:跑一段有弹/敌/任务/道具的世界 → save → load → checksum 相等
+    /// (校验和即全字段深比较,P6 白拿);外加二次 save 字节全等(规范自洽)。
+    #[test]
+    fn save_load_roundtrip_deep_equal_by_checksum() {
+        let (mut w, image, _boss) = rainbow_for_test();
+        for f in 0..240u32 {
+            crate::step(
+                &mut w,
+                &crate::tables::TABLES_V0,
+                &image,
+                &InputFrame::empty(f),
+            );
+        }
+        let bytes = w.save_bytes(&image);
+        let w2 = World::load_bytes(&bytes, &crate::tables::TABLES_V0, &image).unwrap();
+        assert_eq!(w2.checksum(), w.checksum(), "载入 == 从未离开");
+        assert_eq!(w2.save_bytes(&image), bytes, "save→load→save 字节全等");
+    }
+
+    /// skip 字段不入档:save 前预污染源世界的三条输出缓冲 → load 后全空。
+    #[test]
+    fn save_omits_pure_output_buffers() {
+        let (mut w, image, _boss) = rainbow_for_test();
+        w.body.emit_req(7, [1; 6]);
+        w.body.push_event(crate::events::Event {
+            kind: 1,
+            ..Default::default()
+        });
+        let bytes = w.save_bytes(&image);
+        let w2 = World::load_bytes(&bytes, &crate::tables::TABLES_V0, &image).unwrap();
+        assert!(w2.take_requests().is_empty(), "reqs 不入档");
+        assert!(w2.frame_events().is_empty(), "events 不入档");
+    }
+
+    /// 头/载荷错误路径逐一判别(八条各得其 LoadError 变体)。
+    #[test]
+    fn load_rejects_each_corruption_distinctly() {
+        use crate::save::LoadError;
+        let (w, image, _boss) = rainbow_for_test();
+        let good = w.save_bytes(&image);
+        let t = &crate::tables::TABLES_V0;
+        let mut b;
+        b = good.clone();
+        b[0] ^= 0xFF;
+        assert_eq!(
+            World::load_bytes(&b, t, &image).unwrap_err(),
+            LoadError::BadMagic
+        );
+        b = good.clone();
+        b[4] = 99;
+        assert_eq!(
+            World::load_bytes(&b, t, &image).unwrap_err(),
+            LoadError::BadFileVer { got: 99 }
+        );
+        b = good.clone();
+        b[5] ^= 0xFF; // ENGINE_VER 首字节
+        assert!(matches!(
+            World::load_bytes(&b, t, &image).unwrap_err(),
+            LoadError::EngineVerMismatch { .. }
+        ));
+        b = good.clone();
+        let last = b.len() - 1;
+        b[last] ^= 0x01; // 载荷尾翻一位
+        assert!(matches!(
+            World::load_bytes(&b, t, &image).unwrap_err(),
+            LoadError::HashMismatch { .. }
+        ));
+        b = good.clone();
+        b.truncate(good.len() - 8);
+        assert_eq!(
+            World::load_bytes(&b, t, &image).unwrap_err(),
+            LoadError::Truncated
+        );
+        b = good.clone();
+        b.push(0);
+        assert!(matches!(
+            World::load_bytes(&b, t, &image).unwrap_err(),
+            LoadError::TrailingBytes { .. }
+        ));
+        b = good.clone();
+        b[9] ^= 0xFF; // tables_hash 首字节
+        b[10] ^= 0xFF; // 多翻一字节，防"首字节巧合同值"假绿(brief 注记)
+        assert!(matches!(
+            World::load_bytes(&b, t, &image).unwrap_err(),
+            LoadError::TablesMismatch { .. }
+        ));
+        b = good.clone();
+        b[17] ^= 0xFF; // image_hash 首字节
+        b[18] ^= 0xFF; // 多翻一字节，同上理由
+        assert!(matches!(
+            World::load_bytes(&b, t, &image).unwrap_err(),
+            LoadError::ImageMismatch { .. }
+        ));
     }
 }

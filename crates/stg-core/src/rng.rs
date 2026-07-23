@@ -3,7 +3,7 @@
 
 /// PCG32 随机数发生器。
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug, crate::checksum::Checksum)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct Pcg32 {
     state: u64,
     inc: u64,

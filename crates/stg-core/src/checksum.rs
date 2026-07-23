@@ -75,6 +75,15 @@ impl Default for Fnv1a64 {
     }
 }
 
+/// 便捷一把喂（存档 L1 用它算头里的载荷完整性摘要——`save.rs`/`step.rs::save_bytes`/
+/// `load_bytes` 消费；本模块只留 hasher 原语，这层薄封装免得调用方逐处手搭 `Fnv1a64`）。
+#[inline]
+pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h = Fnv1a64::new();
+    h.write_bytes(bytes);
+    h.finish()
+}
+
 /// `#[derive(Checksum)]` 过程宏（stg-derive）—— 与下方 `Checksum` trait 同名（宏 vs 类型命名空间，不冲突）。
 pub use stg_derive::Checksum;
 

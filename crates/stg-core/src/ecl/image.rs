@@ -9,7 +9,16 @@ use crate::ecl::task::LOCALS;
 
 #[repr(transparent)]
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, crate::checksum::Checksum,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    crate::checksum::Checksum,
+    crate::save::SaveBytes,
 )]
 pub struct SubId(u16);
 

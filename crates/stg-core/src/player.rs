@@ -20,7 +20,7 @@ pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
 
 /// 自机状态（D6 全字段；本块仅移动 + 发弹活跃，余字段随快照/入校验和）。
 #[repr(C)]
-#[derive(Clone, Copy, Default, crate::checksum::Checksum)]
+#[derive(Clone, Copy, Default, crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct PlayerState {
     pub x: Fx,
     pub y: Fx,

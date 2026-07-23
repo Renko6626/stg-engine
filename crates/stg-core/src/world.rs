@@ -127,7 +127,7 @@ pub(crate) const RNG_SEQ: u64 = 0xda3e_39cb_94b9_5bdb;
 
 /// 诊断计数器（P4；**参与校验和**——两机必须丢得一样多）。
 #[repr(C)]
-#[derive(Clone, Copy, Default, crate::checksum::Checksum)]
+#[derive(Clone, Copy, Default, crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct DiagCounters {
     pub pool_full: [u32; 8], // 按池 id
     pub contract_viol: u32,
@@ -143,7 +143,7 @@ pub struct DiagCounters {
 
 /// 世界本体（最小切片）。构造走 `step::World::new`（堆零初始化 + 播种 rng）。
 #[repr(C)]
-#[derive(crate::checksum::Checksum)]
+#[derive(crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct WorldBody {
     /// 写口唯相位/API;读走 `frame()`。
     pub(crate) frame: u32,
