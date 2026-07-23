@@ -11,6 +11,8 @@
 //! | id | args[0] | args[1] | args[2] | args[3] | args[4..] |
 //! |---|---|---|---|---|---|
 //! | `REQ_ENEMY_DEATH` | x (fx raw) | y (fx raw) | sprite (int) | score (int) | 0 |
+//! | `REQ_SPELL_DECLARE` | spell_id (int) | bonus0 (int) | time_limit (int) | survival_flag (int) | 0 |
+//! | `REQ_SPELL_RESULT` | spell_id (int) | captured (int) | 实付 bonus (int) | reason (int) | 0 |
 
 /// 一条渲染请求（§6.2，28 B）。id 语义世界不解释；`(frame, seq)` 全局唯一。
 #[repr(C)]

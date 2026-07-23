@@ -35,4 +35,8 @@ impl<'w> WorldView<'w> {
     pub fn players(self) -> &'w [PlayerState] {
         self.body.players()
     }
+    /// 符卡计器槽只读切片（spec 2026-07-24；每 boss 一个，参考 `crate::boss::MAX_BOSSES`）。
+    pub fn spells(self) -> &'w [crate::spell::SpellSlot] {
+        &self.body.spells
+    }
 }

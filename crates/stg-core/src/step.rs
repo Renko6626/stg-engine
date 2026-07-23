@@ -85,6 +85,7 @@ impl World {
         s.bullets.copy_into(&mut d.bullets);
         d.players = s.players; // [PlayerState; N] 是 Copy
         d.boss_ui = s.boss_ui;
+        d.spells = s.spells; // [SpellSlot; MAX_BOSSES] 是 Copy
         s.shots.copy_into(&mut d.shots);
         s.enemies.copy_into(&mut d.enemies);
         s.fields.copy_into(&mut d.fields);
@@ -1975,9 +1976,9 @@ mod tests {
             core::mem::size_of::<World>(),
         );
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (969288, 1083008);
+        const EXPECTED: (usize, usize) = (969352, 1083072);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (969288, 1083008);
+        const EXPECTED: (usize, usize) = (969352, 1083072);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 

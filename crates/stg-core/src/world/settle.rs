@@ -27,6 +27,16 @@ impl WorldBody {
     /// **只标记不回收**——槽要活到相位 8 供死亡脚本/表现层读；相位 9 cleanup 收尸。
     fn damage_enemy(&mut self, e: usize, dmg: u16, tables: &WorldTables) {
         self.enemies.hp[e] -= dmg as i32;
+        // 伤害下钳（spec 2026-07-24 §3.1）：绑着某 active 符卡槽且 threshold>0 的敌，一发大
+        // 伤害只把血打到血线为止，不许打穿（非最终卡的 boss 不该死在中途）。**必须**在这里
+        // （扣血后、判 hp<=0 标 ENEMY_DYING 前）钳——天然不误标 dying，不需要另开一趟事后
+        // 撤销 pass（threshold==0 的最终卡不钳，与 boss 死重合，dying 检测照常兜住）。
+        if let Some(slot) = self.spell_slot_bound_to(e as u16, self.enemies.generation[e]) {
+            let threshold = self.spells[slot].hp_threshold;
+            if threshold > 0 {
+                self.enemies.hp[e] = self.enemies.hp[e].max(threshold);
+            }
+        }
         self.enemies.hit_flash[e] = 4;
         if self.enemies.hp[e] <= 0 {
             self.enemies.flags[e] |= ENEMY_DYING;
@@ -190,6 +200,8 @@ impl WorldBody {
                 _ => {}
             }
         }
+        // ── 符卡趟（spec 2026-07-24 §3）：三趟之后、按槽升序推进 ─────────────
+        self.settle_spells(tables);
     }
 
     /// 拾取入账（D9 趟三）——**唯一** per-type 逻辑居所（扩展四步第 ③ 步：新增类型在此加臂）。

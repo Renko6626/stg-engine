@@ -174,6 +174,8 @@ pub struct WorldBody {
     pub(crate) events: [Event; EVENTS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 events 一并 skip（A5）")]
     pub(crate) events_len: u16,
+    /// 符卡计器槽（每 boss 一个；spec 2026-07-24）。生而封口，读经 `view().spells()`。
+    pub(crate) spells: [crate::spell::SpellSlot; crate::boss::MAX_BOSSES],
     #[checksum(skip = "纯输出缓冲，回滚重演确定性再生（P6/§6.2 通道 B）")]
     pub(crate) reqs: [RenderReq; REQS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 reqs 一并 skip（通道 B）")]
@@ -671,6 +673,173 @@ impl WorldBody {
         } else {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             self.last_status = STATUS_BAD_ARGS;
+        }
+    }
+
+    /// 找到绑定某敌（索引 + 代）的 active 符卡槽（逃生舱口/读时器/伤害下钳共用，spec
+    /// 2026-07-24 §3.1/§4）。按槽升序（I4）；无绑定 None。
+    fn spell_slot_bound_to(&self, index: u16, generation: u16) -> Option<usize> {
+        (0..crate::boss::MAX_BOSSES).find(|&slot| {
+            self.spells[slot].active != 0
+                && self.spells[slot].boss_index == index
+                && self.spells[slot].boss_gen == generation
+        })
+    }
+
+    /// 符卡宣言世界侧核（`SYS_SPELL_BEGIN` 直通；本刀只经此 API 直测，syscall 绑定见 Task 2）。
+    /// P4-b：`slot` 越界 / `time_limit==0` / 该槽已 `active` / `boss` 悬垂（含已死）/
+    /// `hp_threshold` 大于当前 hp → no-op + `contract_viol` + `STATUS_BAD_ARGS` + 返回
+    /// `false`（宁缺勿哑，零副作用）。成功：写满全字段（复用槽写满纪律）——衰减参数一次
+    /// 整除定格 + 记 `hp_start`；`push_event(EVT_SPELL_DECLARED)` + `emit_req(REQ_SPELL_DECLARE)`；
+    /// 返回 `true`（syscall 层据此决定是否 spawn 模式子任务）。
+    #[allow(clippy::too_many_arguments)] // 符卡宣言的天然参数面（同 create_bullets_batch 先例）
+    pub fn spell_begin_internal(
+        &mut self,
+        slot: usize,
+        boss: EnemyHandle,
+        spell_id: u16,
+        time_limit: u16,
+        bonus0: u32,
+        flags: u8,
+        hp_threshold: i32,
+    ) -> bool {
+        if slot >= crate::boss::MAX_BOSSES || time_limit == 0 || self.spells[slot].active != 0 {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return false;
+        }
+        let Some(bi) = self.enemies.get(boss) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return false;
+        };
+        if hp_threshold > self.enemies.hp[bi] {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return false;
+        }
+        let hp_start = self.enemies.hp[bi];
+        let bonus_floor = bonus0 / 10;
+        let dec_per_frame = (bonus0 - bonus_floor) / time_limit as u32;
+        self.spells[slot] = crate::spell::SpellSlot {
+            active: 1,
+            flags,
+            capture_ok: 1,
+            _pad: 0,
+            spell_id,
+            boss_index: boss.index,
+            boss_gen: boss.generation,
+            frames_left: time_limit,
+            hp_threshold,
+            hp_start,
+            bonus_now: bonus0,
+            bonus_floor,
+            dec_per_frame,
+        };
+        self.push_event(Event {
+            kind: crate::events::EVT_SPELL_DECLARED,
+            a_index: boss.index,
+            a_gen: boss.generation,
+            x: self.enemies.x[bi],
+            y: self.enemies.y[bi],
+            data: [spell_id as i32, bonus0 as i32],
+        });
+        let survival_bit = (flags & crate::spell::SPELL_SURVIVAL != 0) as i32;
+        self.emit_req(
+            crate::consts::REQ_SPELL_DECLARE,
+            [
+                spell_id as i32,
+                bonus0 as i32,
+                time_limit as i32,
+                survival_bit,
+                0,
+                0,
+            ],
+        );
+        true
+    }
+
+    /// 符卡结算原子包（HP 路径/超时路径/逃生舱口共用，spec §4 结束矩阵）：付分（`captured`
+    /// 时 `players[0].score += bonus_now`）+ `push_event`（CAPTURED 或 FAILED+`reason`）+
+    /// `emit_req(REQ_SPELL_RESULT)` + 除非 `SPELL_NO_CLEAR` 铺一个全屏消弹 field（`bomb`/
+    /// 敌死同租户，复用 `create_field`）+ 槽全字段清零（复用槽写满纪律的另一半：清空亦是
+    /// 全字段覆写）。`reason` 仅在 `captured==false` 时写入事件/req（1=资格失 2=超时）。
+    pub(crate) fn settle_one_spell(&mut self, slot: usize, captured: bool, reason: i32) {
+        let s = self.spells[slot];
+        let boss = EnemyHandle {
+            index: s.boss_index,
+            generation: s.boss_gen,
+        };
+        let (x, y) = match self.enemies.get(boss) {
+            Some(i) => (self.enemies.x[i], self.enemies.y[i]),
+            None => (Fx::ZERO, Fx::ZERO),
+        };
+        let paid = if captured { s.bonus_now } else { 0 };
+        if captured {
+            self.players[0].score += paid as u64;
+        }
+        let kind = if captured {
+            crate::events::EVT_SPELL_CAPTURED
+        } else {
+            crate::events::EVT_SPELL_FAILED
+        };
+        self.push_event(Event {
+            kind,
+            a_index: s.boss_index,
+            a_gen: s.boss_gen,
+            x,
+            y,
+            data: [
+                s.spell_id as i32,
+                if captured { paid as i32 } else { reason },
+            ],
+        });
+        self.emit_req(
+            crate::consts::REQ_SPELL_RESULT,
+            [
+                s.spell_id as i32,
+                captured as i32,
+                paid as i32,
+                reason,
+                0,
+                0,
+            ],
+        );
+        if s.flags & crate::spell::SPELL_NO_CLEAR == 0 {
+            self.create_field(FieldInit {
+                x: Fx::ZERO,
+                y: Fx::from_int(224),
+                radius: crate::field::FIELD_RADIUS_FULLSCREEN,
+                dmg_per_frame: 0,
+                life: 1,
+                owner: 0,
+                flags: crate::field::FIELD_CLEAR_BULLETS,
+            });
+        }
+        self.spells[slot] = crate::spell::SpellSlot::default();
+    }
+
+    /// 逃生舱口（`SYS_SPELL_END` 世界侧核，自定义结束条件用）：owner 绑定的 active 槽走
+    /// HP 路径结算；无绑定 → no-op（**不计** contract——重复调用安全，同 `spell_end` 语义）。
+    pub fn spell_end_by_owner(&mut self, boss: EnemyHandle) {
+        let Some(slot) = self.spell_slot_bound_to(boss.index, boss.generation) else {
+            return;
+        };
+        let captured = self.spells[slot].capture_ok != 0;
+        let reason = if captured {
+            0
+        } else {
+            crate::spell::SPELL_FAIL_CAPTURE_LOST
+        };
+        self.settle_one_spell(slot, captured, reason);
+    }
+
+    /// 读族（`SYS_SPELL_TIMER` 世界侧核）：owner 绑定的 active 槽返回 `frames_left`；
+    /// 无绑定 → `-1`（`wait_spell()` 语法糖的判据）。
+    pub fn spell_frames_left_of(&self, boss: EnemyHandle) -> i32 {
+        match self.spell_slot_bound_to(boss.index, boss.generation) {
+            Some(slot) => self.spells[slot].frames_left as i32,
+            None => -1,
         }
     }
 

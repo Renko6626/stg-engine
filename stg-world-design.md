@@ -604,7 +604,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | hits | 8192 × 6 B | | 48 KB |
 | frame_events | 512 × 24 B | | 12 KB |
 | reqs | 256 × 28 B | | 7 KB |
-| 自机×2 / boss_ui×2 / signals×8 / RNG / 帧计数 / 诊断计数器 | | | <1 KB |
+| 自机×2 / boss_ui×2 / spells×2（符卡计器槽，32 B/槽，2026-07-24 刀 1）/ signals×8 / RNG / 帧计数 / 诊断计数器 | | | <1 KB |
 | **World 总计** | | | **≈ 1.3 MB** |
 
 16 帧快照环 ≈ 21 MB（环归回滚调度器所有，非 stg-world 财产）。

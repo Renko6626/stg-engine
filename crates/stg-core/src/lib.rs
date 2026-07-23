@@ -49,6 +49,7 @@ pub mod reqs;
 pub mod rng;
 pub mod save;
 pub mod shots;
+pub mod spell;
 pub mod step;
 pub mod tables;
 pub mod world;

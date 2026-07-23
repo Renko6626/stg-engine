@@ -30,6 +30,14 @@ pub const EVT_ITEM_PICKED: u8 = 4;
 /// `data = [fault_code, script]`（fault 码见 `ecl::vm::FAULT_*`）。owner 死亡导致的静默回收
 /// **不**发本事件（owner 死是常态非错误，见 `ecl::vm::run_tasks` 文档）。
 pub const EVT_TASK_FAULT: u8 = 5;
+/// 符卡宣言（`spell::spell_begin_internal` 成功产出，spec 2026-07-24 §4）：`a_index/a_gen`
+/// = boss 句柄，`data = [spell_id, bonus0]`。RL episode 边界正典信号之一。
+pub const EVT_SPELL_DECLARED: u8 = 6;
+/// 符卡收卡（HP 路径资格在 / 耐久卡活到超时）：`data = [spell_id, 实付 bonus]`。
+pub const EVT_SPELL_CAPTURED: u8 = 7;
+/// 符卡失败（HP 路径资格失 / 普通卡超时 / 耐久卡超时且资格失）：`data = [spell_id, reason]`
+/// （reason：1=资格失 2=超时）。
+pub const EVT_SPELL_FAILED: u8 = 8;
 
 /// 一条碰撞命中（6 B）：矩阵行 + 主动/被动池索引。收集序天然按收集循环嵌套，无需排序。
 #[repr(C)]

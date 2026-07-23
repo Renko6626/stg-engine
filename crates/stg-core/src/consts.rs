@@ -56,6 +56,8 @@ engine_consts! {
         GLOBALS_SYS_SEGMENT: u16 as int = 16;
         //  通道 B 引擎保留请求 id（分区与 args 约定见 `crate::reqs` 模块文档）
         REQ_ENEMY_DEATH:     u16 as int = 1;
+        REQ_SPELL_DECLARE:   u16 as int = 2;
+        REQ_SPELL_RESULT:    u16 as int = 3;
         REQ_SCRIPT_BASE:     u16 as int = 64;
     }
     table_symbols {
