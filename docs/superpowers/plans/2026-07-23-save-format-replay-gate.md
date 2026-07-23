@@ -20,7 +20,7 @@
   基线 Task 1 抓取,每任务 diff 全等。
 - **skip 单一口径**:`#[checksum(skip)]` 字段写读两侧都省略;清零由 `load_bytes` 零构造
   契约承担(`read_bytes` trait 文档写明"目标须零初始化")。
-- 头 v1 字节序钉死(小端,45 B):`b"STGW"(4) + file_ver u8=1 + ENGINE_VER u32 +
+- 头 v1 字节序钉死(小端,49 B):`b"STGW"(4) + file_ver u8=1 + ENGINE_VER u32 +
   tables_hash u64 + image_hash u64 + seed u64 + frame u32 + payload_len u32 + payload_fnv u64`。
 - 错误全走 `LoadError`(P4 式 Err,不 panic);coherence"任一侧 0 = 未绑定跳过"同
   `start_main` 守卫口径。
@@ -307,8 +307,9 @@ save.rs 追加:
 ```rust
 pub(crate) const SAVE_MAGIC: [u8; 4] = *b"STGW";
 pub(crate) const SAVE_FILE_VER: u8 = 1;
-/// 头总长(魔数4+版1+ENGINE_VER4+表8+镜像8+seed8+frame4+len4+fnv8)。
-pub(crate) const SAVE_HEADER_LEN: usize = 45;
+/// 头总长 = 魔数4 + file_ver1 + ENGINE_VER4 + 表哈希8 + 镜像哈希8 + seed8 + frame4
+///          + payload_len4 + payload_fnv8(与 `save_bytes` 写出序逐项对应,=49)。
+pub(crate) const SAVE_HEADER_LEN: usize = 4 + 1 + 4 + 8 + 8 + 8 + 4 + 4 + 8;
 ```
 
 step.rs `impl World` 追加(邻 `copy_into`):

@@ -35,7 +35,7 @@ save = 字段写 ~0.1ms + 载荷 FNV ~1.6ms + 落盘 ⇒ **~2-3ms/次**,随地�
 
 ## 2. L1:头格式 v1 与 World API(step.rs)
 
-头(小端,45 B):`magic "STGW"(4) + file_ver u8 = 1 + ENGINE_VER u32 + 表 content_hash
+头(小端,49 B):`magic "STGW"(4) + file_ver u8 = 1 + ENGINE_VER u32 + 表 content_hash
 u64 + 镜像 content_hash u64 + seed u64 + frame u32(速览用,载荷为准) + payload_len u32 +
 payload_fnv u64`(vendored FNV-1a64 over 载荷,C11 完整性校验同款)。
 

@@ -2112,6 +2112,23 @@ mod tests {
         assert!(w2.frame_events().is_empty(), "events 不入档");
     }
 
+    /// 头长钉死(复审 Task 2 修):`SAVE_HEADER_LEN` 必须等于 `save_bytes` 实际写出的
+    /// 头字节数,不能是分解和算错的常量(曾误为 45,真实/求和皆 49)——总字节数减去
+    /// 载荷长(从头里 len 字段读回,而非从常量反推)必须精确等于它,漂移不可能蒙混过关。
+    #[test]
+    fn header_len_matches_actual_wire() {
+        let (w, image, _boss) = rainbow_for_test();
+        let bytes = w.save_bytes(&image);
+        // len 字段紧随 magic4+ver1+engine_ver4+tables_hash8+image_hash8+seed8+frame4,
+        // 即偏移 37..41(与上面 corruption 测试里 b[9]/b[17] 等硬编码偏移同一套写出序)。
+        let plen = u32::from_le_bytes(bytes[37..41].try_into().unwrap()) as usize;
+        assert_eq!(
+            bytes.len() - plen,
+            crate::save::SAVE_HEADER_LEN,
+            "头长必须等于 save_bytes 实际写出的头字节数"
+        );
+    }
+
     /// 头/载荷错误路径逐一判别(八条各得其 LoadError 变体)。
     #[test]
     fn load_rejects_each_corruption_distinctly() {
