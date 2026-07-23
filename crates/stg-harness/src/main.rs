@@ -10,6 +10,7 @@
 use std::process::ExitCode;
 
 mod tables;
+mod viewer;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -828,47 +829,12 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
     // 输入拍板（brief 二选一）：全程持 BTN_SHOT + 左右缓移（非全程 idle）——让弹幕的
     // 碰撞/擦弹路径真的被自机踩到，符卡本体仍是主角，移动只是"不空闲"。
     {
-        use stg_core::ecl::binding::EclOwner;
-
         const FRAMES2: u32 = 600;
         const SEED2: u64 = 0x524E_424F_5701; // "RNBW"
 
         lines.push_str("# scene: ecl-rainbow\n");
 
-        let image = compile_rainbow_image();
-        let mut world2 = World::new(SEED2);
-        world2.body.set_var(RANK_SLOT, 2); // 环密度算式：28+rank×2 → rank=2 时 32-way
-
-        let boss = world2.body.create_enemy(EnemyInit {
-            x: Fx::from_int(BOSS_X),
-            y: Fx::from_int(BOSS_Y),
-            vx: Fx::ZERO,
-            vy: Fx::ZERO,
-            mv_from_x: Fx::ZERO,
-            mv_from_y: Fx::ZERO,
-            mv_to_x: Fx::ZERO,
-            mv_to_y: Fx::ZERO,
-            mv_t: 0,
-            mv_dur: 0,
-            mv_easing: 0,
-            mv_active: 0,
-            hp: 9999,
-            hp_max: 9999,
-            radius: Fx::from_int(20),
-            hurtbox: Fx::from_int(24),
-            invuln: 0,
-            hit_flash: 0,
-            flags: 0,
-            sprite: 0,
-            anm_state: 0,
-            main_task: 0,
-            death_script: 0,
-            drop_table: 0,
-            score: 10000,
-        });
-        world2
-            .start_main_with_owner(&image, EclOwner::Enemy(boss))
-            .expect("main 任务应能派生（新镜像/新池，容量均未耗尽）");
+        let (mut world2, image, _boss) = build_rainbow_world(SEED2);
 
         for frame in 0..FRAMES2 {
             let mut input = InputFrame::empty(frame);
@@ -938,6 +904,57 @@ fn compile_rainbow_image() -> stg_core::ecl::image::EclImage {
             panic!("rainbow.ecl 编译失败：\n{rendered}");
         }
     }
+}
+
+/// 彩虹风铃卡开局搭建（golden 场景 2 与 viewer serve 共用；提取自 `cmd_golden`，纯搬家）。
+/// 返回 boss 句柄供 golden 后续断言；serve 忽略之。
+fn build_rainbow_world(
+    seed: u64,
+) -> (
+    Box<stg_core::step::World>,
+    stg_core::ecl::image::EclImage,
+    stg_core::enemy::EnemyHandle,
+) {
+    use stg_core::ecl::binding::EclOwner;
+    use stg_core::enemy::EnemyInit;
+    use stg_core::math::Fx;
+    use stg_core::step::World;
+
+    let image = compile_rainbow_image();
+    let mut world2 = World::new(seed);
+    world2.body.set_var(RANK_SLOT, 2); // 环密度算式：28+rank×2 → rank=2 时 32-way
+
+    let boss = world2.body.create_enemy(EnemyInit {
+        x: Fx::from_int(BOSS_X),
+        y: Fx::from_int(BOSS_Y),
+        vx: Fx::ZERO,
+        vy: Fx::ZERO,
+        mv_from_x: Fx::ZERO,
+        mv_from_y: Fx::ZERO,
+        mv_to_x: Fx::ZERO,
+        mv_to_y: Fx::ZERO,
+        mv_t: 0,
+        mv_dur: 0,
+        mv_easing: 0,
+        mv_active: 0,
+        hp: 9999,
+        hp_max: 9999,
+        radius: Fx::from_int(20),
+        hurtbox: Fx::from_int(24),
+        invuln: 0,
+        hit_flash: 0,
+        flags: 0,
+        sprite: 0,
+        anm_state: 0,
+        main_task: 0,
+        death_script: 0,
+        drop_table: 0,
+        score: 10000,
+    });
+    world2
+        .start_main_with_owner(&image, EclOwner::Enemy(boss))
+        .expect("main 任务应能派生（新镜像/新池，容量均未耗尽）");
+    (world2, image, boss)
 }
 
 /// 烘焙 sin/cos/easing 表 —— 用 f64 生成原始字节并写入 stg-core 源目录（§2.1）。
