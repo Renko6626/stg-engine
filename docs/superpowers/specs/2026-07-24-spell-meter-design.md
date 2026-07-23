@@ -36,22 +36,40 @@
 #[derive(Clone, Copy, Default, crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct SpellSlot {
     pub active: u8,        // 0=空闲
-    pub flags: u8,         // bit0 = SPELL_SURVIVAL(耐久卡:超时即收卡判定点)
+    pub flags: u8,         // bit0 SPELL_SURVIVAL(耐久卡) / bit1 SPELL_NO_CLEAR(退订结束清弹)
     pub capture_ok: u8,    // 资格:1=仍可收卡;miss/bomb 即时清 0
     pub _pad: u8,          // 显式占位(P6 全量校验,零初始化合法)
     pub spell_id: u16,
     pub boss_index: u16,   // 绑定 boss 敌句柄(宣言者 owner)
     pub boss_gen: u16,
     pub frames_left: u16,  // 时限余帧;0 即超时判定点
+    pub hp_threshold: i32, // 破卡血线:绑定敌 hp≤此值 → 自动收卡;伤害对本敌下钳至此(非死)
+    pub hp_start: i32,     // begin 当刻绑定敌 hp(逐卡血条分母:(hp−thr)/(start−thr))
     pub bonus_now: u32,    // 当前 bonus(分)
     pub bonus_floor: u32,  // 衰减地板 = bonus0 / 10(整数除,begin 时定格)
     pub dec_per_frame: u32, // = (bonus0 - floor) / time_limit(整数除,begin 时定格)
 }
 pub const SPELL_SURVIVAL: u8 = 1 << 0;
+pub const SPELL_NO_CLEAR: u8 = 1 << 1;
 ```
 
 `WorldBody` 新增 `pub(crate) spells: [SpellSlot; crate::boss::MAX_BOSSES]`(生而封口;
 读经通道 A:`WorldView::spells(self) -> &'w [SpellSlot]` 新访问器)。
+
+**Task 新增字段** `pub spell_bound: u8`(0=不绑;`槽号+1`=绑该槽——模式任务随卡生随卡死,
+§2.1)。POD,校验和/存档 derive 自动盖(尺寸哨兵逼清单)。
+
+## 2.1 模式任务随卡生死(`spell_bound`)
+
+`spell_begin` 的第三参是**模式 sub**(编译期 `ParamKind::SubRef`,`fire` 的 task 参数
+同款;`none` = 不 spawn,自定义卡留口)。**生**:syscall 在相位 2 的 VM 内直接 spawn 该
+sub(owner=boss 敌,`spell_bound=槽号+1`)——"引擎不碰任务"只约束**世界层**(settle 趟四
+是 WorldBody 作用域);ECL 层本就拥有任务池(spawn 弹/spawn 任务是本职),故模式生死收进
+机构不违 P1,世界层依旧不知任务存在。**死**:相位 2 调度门禁**镜像现有 owner 存活校验**——
+任务 `spell_bound != 0` 且绑定槽已非 active ⇒ 就地杀该任务(池序确定,同 owner 失效处置)。
+**继承**:`spawn` 派生的子任务**继承** `spell_bound`(整棵模式树随卡死绝——pattern 尽可
+写无限 loop);`fire` 挂弹上的任务**不继承**(弹命归弹,残留弹演完自己剧本——ZUN 语义)。
+⇒ 脚本不再写 `kill_children`,不再写等待循环(见 §5 `wait_spell`)。
 
 ## 3. 逐帧推进规则(settle 符卡趟,机械、按槽升序)
 
@@ -62,22 +80,35 @@ pub const SPELL_SURVIVAL: u8 = 1 << 0;
    (轮询式:对帧内事件序零依赖,确定性平凡。co-op 语义随 B3 族后议,v1 只看玩家 0。)
 2. **bonus 衰减**:`bonus_now = max(bonus_floor, bonus_now.saturating_sub(dec_per_frame))`
    (线性,无宽限段——v1 简形;ZUN 分段衰减记 follow-up 候选)。
-3. **boss 死亡自动收口**:绑定句柄失效 **或绑定敌带 `ENEMY_DYING` 旗**(致死在本帧
-   settle 趟二、回收在相位 9——查 dying 旗才能**当帧**结算,不落后一帧)⇒ 按"HP 路径
-   结束"结算(§4)。
+3. **破卡自动检测**(HP 路径,§4):绑定句柄失效 **或带 `ENEMY_DYING` 旗**(致死在本帧
+   趟二、回收在相位 9——查 dying 才能**当帧**结算)**或 `hp ≤ hp_threshold`** ⇒ 收卡结算。
+   最终卡 `threshold=0`,与 boss 死重合,dying 检测兜住。
 4. **超时判定**:`frames_left == 0` ⇒ 耐久卡按"收卡判定点"结算;普通卡按"超时失败"结算。
    否则 `frames_left -= 1`。
 5. **`boss_ui` 自动喂**(active 期间,机械覆写绑定槽):`enemy`/`spell_id`/`timer_frames =
-   frames_left`/`active = 1`,`hp_ratio` = 绑定敌 `hp/hp_max` 真除(定点);**`phase_left`
-   不动**(阶段规划归脚本,仍走 `boss_set`——机构只覆写其余字段,boss_set 在非符卡段照旧全权)。
+   frames_left`/`active = 1`,**逐卡血条** `hp_ratio = (hp − thr) / (hp_start − thr)`
+   钳 `[0,1]`(真定点除;每卡满条起步);**`phase_left` 不动**(阶段规划归脚本,仍走
+   `boss_set`——机构只覆写其余字段,boss_set 在非符卡段照旧全权)。
+
+## 3.1 伤害下钳(settle 趟二补丁——防非最终卡打穿)
+
+趟二伤害结算后,对**绑着某 active 槽且 `hp_threshold > 0`** 的敌:`hp = hp.max(threshold)`
+——一发大伤害只把血打到血线为止,不会穿透血线把非最终卡的 boss 直接打死(ZUN 实机语义:
+boss 不死在非最终卡中途)。血线检测(§3.3)随后在符卡趟收卡。多卡血量 = **一池总血 + 递降
+血线**(EoSD life-marker 式:第 k 卡 threshold = 后续段血量之和,最终卡=0)——无需 set_hp
+syscall,脚本 begin 时给血线即可。
 
 ## 4. 结束路径矩阵(全部由机构结算,原子完成:付分+事件+req+清槽)
 
 | 路径 | 触发 | 资格在 | 资格失 |
 |---|---|---|---|
-| **HP 路径** | 脚本 `spell_end()`(打过血线由脚本判,A2 维持项)或 boss 死亡(§3.3) | **CAPTURED**:玩家 0 `score += bonus_now` | FAILED(reason=资格失) |
+| **HP 路径** | **引擎自动**:绑定敌 `hp≤threshold` / boss 死亡(dying) / 脚本 `spell_end()` 逃生舱口 | **CAPTURED**:玩家 0 `score += bonus_now` | FAILED(reason=资格失) |
 | **超时·普通卡** | `frames_left` 归零 | FAILED(reason=超时) | FAILED(reason=超时) |
 | **超时·耐久卡** | `frames_left` 归零 | **CAPTURED**(耐久卡的收卡点就是活到超时) | FAILED(reason=资格失) |
+
+结算原子包(付分/事件/req/清槽)外**再加一步**:除非 `SPELL_NO_CLEAR`,机构在结算帧铺一个
+`FIELD_RADIUS_FULLSCREEN`/`life=1` 的消弹 field(复用 `create_field` 写 API,bomb/敌死同
+租户)——卡结束自动清弹转星,脚本不必每卡手铺(ZUN 样板收编)。
 
 - 事件(A5 世界事实,入大事记):`EVT_SPELL_DECLARED = 6`(begin 时,`data=[spell_id,
   bonus0]`)、`EVT_SPELL_CAPTURED = 7`(`data=[spell_id, 实付 bonus]`)、
@@ -92,19 +123,29 @@ pub const SPELL_SURVIVAL: u8 = 1 << 0;
 
 | 号 | 名 | 参(声明序) | 语义 |
 |---|---|---|---|
-| `SYS_SPELL_BEGIN = 28` | `spell_begin` | `slot, spell_id, time_limit, bonus0, flags` | owner 必须 ENEMY(misuse → Fault,`self_enemy_handle` 先例);槽越界/时限 ≤0/bonus0 <0/槽已 active → P4-b no-op+计数;成功即定格衰减参数 + 发 DECLARED 事件/req |
-| `SYS_SPELL_END = 29` | `spell_end` | (无参) | 按 owner 句柄找绑定槽走 HP 路径结算;无绑定槽 → P4-b no-op+计数(重复调用安全) |
-| `SYS_SPELL_TIMER = 11` | `spell_timer` | (无参)→ int | 读族:owner 绑定槽的 `frames_left`;无绑定槽返回 **-1**(脚本等待惯用:`while spell_timer() >= 0 { wait(1); }`) |
+| `SYS_SPELL_BEGIN = 28` | `spell_begin` | `slot, spell_id, pattern:SubRef, time_limit, bonus0, flags, hp_threshold` | owner 必须 ENEMY(misuse → Fault);槽越界/时限 ≤0/bonus0 <0/threshold > 当前 hp/槽已 active → P4-b no-op+计数;成功:定格衰减参数 + 记 hp_start + spawn 模式 sub(owner=boss,`spell_bound`;`none` 不 spawn)+ 发 DECLARED 事件/req |
+| `SYS_SPELL_END = 29` | `spell_end` | (无参) | **逃生舱口**(自定义结束条件用):owner 绑定槽走 HP 路径结算;无绑定槽 → P4-b no-op(重复安全) |
+| `SYS_SPELL_TIMER = 11` | `spell_timer` | (无参)→ int | 读族:owner 绑定槽 `frames_left`;无绑定槽 → **-1**(`wait_spell` 糖的判据) |
 
-builtins 三条(`spell_begin` 5×Val(Int)、`spell_end` 0 参 ret None、`spell_timer` ret Int);
-ecl-lang.md 新节「符卡」给创作范式(含"每张卡=具名 async sub"约定——RL 单卡训练/F3 单卡
-预览的地基);ecl-ops.md 号表三行。
+- builtins:`spell_begin` = `[Val(Int), Val(Int), SubRef, Val(Int), Val(Int), Val(Int),
+  Val(Int)]`(第三位 SubRef——codegen 走 `fire` task 参同款 `push_task_ref`;`ret None`);
+  `spell_end` 0 参 `ret None`;`spell_timer` 0 参 `ret Int`。
+- **`wait_spell()` 语法糖**(纯编译器,零 VM 改动):codegen 展开为 `while spell_timer()
+  >= 0 { wait(1); }`——重复的等待循环消失,原语 `spell_timer` 保留给自定义等待。实现处
+  照 `.ecl` 既有语句糖机制(if/while 已在),lang 层加一条内建语句形态。
+- ecl-lang.md 新节「符卡」:两行范式 `spell_begin(...); wait_spell();`(卡序=顺序执行);
+  卡 id 词汇 `const`(归脚本/关卡资产,引擎不注册);ecl-ops.md 号表三行 + wait_spell 糖注。
 
 ## 6. rainbow.ecl 狗粮化(刀 3)
 
-`timer_ui` 轮询循环删除,风铃卡改 `spell_begin(0, SPELL_WINDCHIME, 3600, 100000, 0)` +
-主控 `while spell_timer() >= 0` 等待——**金向量流预期变化**(见 §7),脚本行数净减。
-`SPELL_WINDCHIME` 用脚本侧 `const`(卡 id 词汇归脚本/关卡资产,引擎不注册)。
+`timer_ui` 轮询循环 + `kill_children` 全删,风铃卡主控收成两行:
+```ecl
+spell_begin(0, SPELL_WINDCHIME, windchime_pattern, 3600, 100000, 0, 0);
+wait_spell();
+```
+(单卡,`threshold=0` 即血尽/超时收口;`windchime_pattern` 是原弹幕 sub,随卡生死)。
+**金向量流预期变化**(§7,取值平移+行为变更双至);脚本行数净减。`SPELL_WINDCHIME` 用
+脚本侧 `const`。
 
 ## 7. 确定性与金向量论证
 
@@ -123,6 +164,10 @@ ecl-lang.md 新节「符卡」给创作范式(含"每张卡=具名 async sub"约
 - **co-op 资格语义**(谁 miss 作废/分给谁):v1 玩家 0;记 B3 族。
 - **脚本读自机资源 syscall**(原 G1):被本机构溶解后降为独立小件,不随本刀。
 - **phase_left 自动化/多段血条机构**:阶段规划归脚本(A2 维持项)。
+- **引擎侧卡序表/自动 spawn 下一张卡**:否决——卡切换 = boss 主控 sub 里顺序执行下一行
+  `spell_begin`,两行/卡已够简;引擎替脚本管卡序要么侵入任务池(违 P1)要么走相位 8 挂钩
+  (为省一行买一套架构),不值。`spell_bound` 只管**单卡模式树**的生死,不管卡**之间**的编排。
+- **`set_hp` syscall**:多卡血量用"一池总血 + 递降血线"表达(§3.1),无需运行期改血。
 
 ## 9. 测试策略(判别式)
 
@@ -130,13 +175,21 @@ ecl-lang.md 新节「符卡」给创作范式(含"每张卡=具名 async sub"约
    定格系数可手算);地板钳制(推超限后 == floor 不再降)。
 2. **资格作废三触发**:中弹入决死窗/bomb 起爆/两者都无——三世界分别推进,断言 capture_ok
    0/0/1(判别:轮询字段取值可区分)。
-3. **结束矩阵六格**:HP 路径×资格在/失、超时普通卡、超时耐久卡×资格在/失、boss 死亡路径
-   ——逐格断言 score 增量(实付 bonus 精确值 vs 0)+ 事件 kind/data + req id/args。
-4. **boss_ui 自动喂**:active 期间 timer/spell_id/hp_ratio 逐帧命中(hp 打掉一截后 ratio
-   变化可判);`phase_left` 经 boss_set 写后不被覆写。
-5. **syscall 边界**:STAGE owner 调 spell_begin → Fault;槽越界/重复 begin → P4-b 计数;
-   spell_end 无绑定 → no-op;spell_timer 无绑定 → -1。
-6. **表层端到端**(ecl-compiler):内联脚本 begin→等待→end,断言事件序与分数。
+3. **结束矩阵六格**:HP 血线自动收/资格在·失、超时普通卡、超时耐久卡×资格在·失、boss
+   dying 路径——逐格断言 score 增量(实付 bonus 精确值 vs 0)+ 事件 kind/data + req id/args。
+4. **伤害下钳**(招牌不变量,判别式):敌 hp=1000、卡 threshold=300,打一发 5000 伤害 →
+   `hp == 300`(非死、非 −4000);同世界无符卡时同一发 → hp≤0 dying(对照证下钳真在符卡
+   条件下才生效,不是无条件 max)。**这条是防"血线穿透"的几何判别,圆心重合式测试瞎**。
+5. **模式任务随卡死**:begin spawn 无限 loop 模式 → 收卡后断言该任务(及其 `spawn` 子树)
+   下帧不再活;`fire` 挂弹任务在收卡后仍活(继承规则判别:子树死、弹任务不死)。
+6. **逐卡血条**:两卡序(线 600 → 线 0),第一卡满血起 ratio=1、打到 600 时 ratio=0 收卡、
+   第二卡从 600 血起又 ratio=1(证分母是 hp_start−thr 不是 hp_max)。
+7. **boss_ui 自动喂**:active 期间 timer/spell_id 逐帧命中;`phase_left` 经 boss_set 写后
+   不被覆写。
+8. **syscall 边界**:STAGE owner 调 spell_begin → Fault;槽越界/threshold>hp/重复 begin →
+   P4-b 计数;spell_end 无绑定 → no-op;spell_timer 无绑定 → -1;pattern=none → 不 spawn。
+9. **表层端到端**(ecl-compiler):内联脚本 `spell_begin(...,pattern,...); wait_spell();`
+   → 编译 → step → 断言模式起弹 + 到线收卡 + score 增 + `wait_spell` 糖展开正确。
 7. **storm/save 兼容**:spells 字段随快照/存档往返(深等价 checksum 测试自动覆盖——
    新基建白拿,storm 短版照跑)。
 8. 尺寸哨兵按四件套清单更新;金向量跨平台 CI 照绿(取值平移+行为变更皆预期,见 §7)。
