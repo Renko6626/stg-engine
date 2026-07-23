@@ -212,11 +212,17 @@ pub fn take_requests(&self) -> &[RenderReq] {
 ## 4. 确定性与金向量论证
 
 - `reqs`/`reqs_len` checksum-skip（P6 预授权），`take_requests` 纯读——**任何 req 推送对校验
-  和流不可见**。settle 死亡请求照发，金向量场景敌人照死，**校验和流逐位不变**。
+  和不可见**（判别式单测 4 实证）。settle 死亡请求照发，金向量场景敌人照死，演化分毫不变。
 - 例外路径入账即入校验：溢出 → `diag.reqs_dropped`（金向量场景远低于 256/帧，不触发）；
   syscall 坏 id → `contract_viol`（金向量脚本不含 emit_req，不触发）。
-- 金向量脚本**一字不动**（评审议决）：字节码不变 → 任务演化不变；"通道 B 落地而金向量分毫
-  不动"即"纯输出"性质的实证，兼作本刀全部改动的逐位回归闸。
+- **校验和取值整体平移（预期效应，非回归信号）**：`DiagCounters` 新增 `reqs_dropped` 列是
+  P4-a 强制入校验和的（两机必须丢得一样多，不可 skip）——字段级 FNV 流多进 4 个零字节，
+  **每帧校验和的取值都会变**，即便世界演化逐字节相同。因此本刀**不能**以"金向量与基线
+  byte-diff 全等"为回归闸（上两刀纯重构的手法到此失效）。跨平台闸门照绿：三平台同步平移，
+  `determinism-gate` 互拍仍逐位一致。行为回归由 §5 判别式单测 + 金向量行数/退出码不变 +
+  三平台 CI 对拍共同看守。
+- 金向量脚本与场景**一字不动**（评审议决）：字节码不变 → 任务演化不变；表层链路由
+  编译器端到端测试覆盖，不借金向量。
 - 零新依赖（`cargo tree -p stg-core` 防火墙不动）；`RawVal` 是编译器编译期机制，不进内核。
 
 ---
@@ -241,7 +247,9 @@ pub fn take_requests(&self) -> &[RenderReq] {
    args 命中 `[98304, -3, 16384, 5, 0, 0]`（字面量折叠 + RawVal 三型 raw 直通 + RawVal 位
    表达式求值，一次验尽；各位取判别值防错位假绿）；typeck 负例：`emit_req` 第 1 位（id）
    传 fx → 编译错误（id 位仍是 `Val(Int)`）。
-8. **金向量逐位不变**：`golden` 前后 `diff` 全等（§4 论证的实证闸）。
+8. **金向量照跑不炸**：`golden` 前后行数一致、退出码 0（两段场景 600 帧无中途 fault/panic）；
+   与基线 byte-diff **预期不同**（§4 DiagCounters 增列的取值平移），不作回归信号；
+   跨平台一致性归三平台 CI `determinism-gate` 终闸。
 9. **全绿 + 防火墙**：`cargo build/test --workspace`、`fmt --check`、`clippy -D warnings`、
    `cargo tree -p stg-core` 无新增。
 
