@@ -161,15 +161,31 @@ pub(crate) fn cmd_serve(rest: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// peek 请求头判断是否 WS 升级（不消费字节；tungstenite 随后自读完整握手）。
+/// peek 至请求头读齐（`\r\n\r\n`）或 1KB/超时（~250ms）为止再判——分包到达的握手不误判
+/// 成 HTTP（不消费字节；tungstenite 随后自读完整握手）。
 fn is_ws_upgrade(stream: &TcpStream) -> bool {
+    let old = stream.read_timeout().ok().flatten();
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
+    let deadline = Instant::now() + Duration::from_millis(250);
     let mut buf = [0u8; 1024];
-    match stream.peek(&mut buf) {
-        Ok(n) => String::from_utf8_lossy(&buf[..n])
-            .to_ascii_lowercase()
-            .contains("upgrade: websocket"),
-        Err(_) => false,
+    let mut seen = 0usize;
+    loop {
+        if let Ok(n) = stream.peek(&mut buf) {
+            seen = n;
+            let head = &buf[..n];
+            if n >= 1024 || head.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
+    let _ = stream.set_read_timeout(old);
+    String::from_utf8_lossy(&buf[..seen])
+        .to_ascii_lowercase()
+        .contains("upgrade: websocket")
 }
 
 fn handle_conn(mut stream: TcpStream, seed: u64) -> Result<(), Box<dyn std::error::Error>> {
@@ -216,6 +232,8 @@ fn handle_conn(mut stream: TcpStream, seed: u64) -> Result<(), Box<dyn std::erro
         loop {
             let input = mask_to_input(w.frame(), mask);
             stg_core::step(&mut w, &stg_core::tables::TABLES_V0, &image, &input);
+            // 限（Minor，M3 前不修）：ws.send 无写超时——单客户端本地查看器工具，对端
+            // 卡死会阻塞本线程；当前应对是杀进程重启，M3 泛化成多客户端/联机时需重议。
             ws.send(tungstenite::Message::Binary(encode_frame(&w).into()))?;
             stepped += 1;
             next += tick;
@@ -262,9 +280,22 @@ mod tests {
     }
 
     /// 开局静态帧逐字段手工解码（判别：错位/漏段/字节序错任一即红）。
+    ///
+    /// boss 段两槽在开局天然全零（frame 0 无 boss 公告板写入）——若逐字段断言仍去比对
+    /// 「实况值」，`encode_frame` 内 `spell_id`/`timer_frames` 的写序被交换也会全绿
+    /// （零 == 零，判别式盲区）。这里编码**前**给两槽灌互异非零值，断言比对这些字面量，
+    /// 才真正判别 boss 段内部字段顺序/宽度/字节序。
     #[test]
     fn encode_frame_layout_v1_static_open() {
-        let (w, _image, _boss) = crate::build_rainbow_world(42);
+        let (mut w, _image, _boss) = crate::build_rainbow_world(42);
+        w.body.boss_ui[0].active = 1;
+        w.body.boss_ui[0].hp_ratio = stg_core::math::Fx::from_raw(49_152); // 0.75
+        w.body.boss_ui[0].spell_id = 7;
+        w.body.boss_ui[0].timer_frames = 900;
+        w.body.boss_ui[1].active = 2;
+        w.body.boss_ui[1].hp_ratio = stg_core::math::Fx::from_raw(12_345);
+        w.body.boss_ui[1].spell_id = 42;
+        w.body.boss_ui[1].timer_frames = 1234;
         let buf = encode_frame(&w);
         let mut o = 0;
         assert_eq!(read_u8(&buf, &mut o), WIRE_VERSION);
@@ -275,23 +306,12 @@ mod tests {
         let _life = read_u8(&buf, &mut o);
         let _invuln = read_u16(&buf, &mut o);
         assert_eq!(read_u8(&buf, &mut o), 2, "boss_slots");
-        for (slot, ui) in w.body.boss_ui.iter().enumerate() {
-            assert_eq!(read_u8(&buf, &mut o), ui.active, "boss_ui[{slot}].active");
-            assert_eq!(
-                read_i32(&buf, &mut o),
-                ui.hp_ratio.raw(),
-                "boss_ui[{slot}].hp_ratio"
-            );
-            assert_eq!(
-                read_u16(&buf, &mut o),
-                ui.spell_id,
-                "boss_ui[{slot}].spell_id"
-            );
-            assert_eq!(
-                read_u16(&buf, &mut o),
-                ui.timer_frames,
-                "boss_ui[{slot}].timer_frames"
-            );
+        let expect: [(u8, i32, u16, u16); 2] = [(1, 49_152, 7, 900), (2, 12_345, 42, 1234)];
+        for (slot, ui) in expect.iter().enumerate() {
+            assert_eq!(read_u8(&buf, &mut o), ui.0, "boss_ui[{slot}].active");
+            assert_eq!(read_i32(&buf, &mut o), ui.1, "boss_ui[{slot}].hp_ratio");
+            assert_eq!(read_u16(&buf, &mut o), ui.2, "boss_ui[{slot}].spell_id");
+            assert_eq!(read_u16(&buf, &mut o), ui.3, "boss_ui[{slot}].timer_frames");
         }
         assert_eq!(read_u16(&buf, &mut o), 0, "开局零弹");
         assert_eq!(read_u16(&buf, &mut o), 0, "零自机弹");
@@ -355,7 +375,9 @@ mod tests {
             let r1 = super::is_ws_upgrade(&s1);
             let (s2, _) = l.accept().unwrap();
             let r2 = super::is_ws_upgrade(&s2);
-            (r1, r2)
+            let (s3, _) = l.accept().unwrap();
+            let r3 = super::is_ws_upgrade(&s3);
+            (r1, r2, r3)
         });
         let mut c1 = TcpStream::connect(addr).unwrap();
         c1.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
@@ -364,9 +386,17 @@ mod tests {
         c2.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n\r\n")
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(50));
-        let (r1, r2) = t.join().unwrap();
+        // 分包握手：前半不含 Upgrade 行先到，~80ms 后剩余（含 Upgrade 行 + 终止符）才到——
+        // 单发 peek 会在前半到达时就误判成 HTTP；有界重试要等到终止符或超时才下判断。
+        let mut c3 = TcpStream::connect(addr).unwrap();
+        c3.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        c3.write_all(b"Upgrade: websocket\r\n\r\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let (r1, r2, r3) = t.join().unwrap();
         assert!(!r1, "普通 GET 不是升级");
         assert!(r2, "Upgrade 头应判 WS");
+        assert!(r3, "分包到达的 Upgrade 头仍应判 WS（不误判成 HTTP）");
     }
 
     #[test]

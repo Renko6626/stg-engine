@@ -28,7 +28,7 @@
 "use strict";
 const cv = document.getElementById("cv"), cx = cv.getContext("2d");
 const $ = id => document.getElementById(id);
-const FX = 65536, W = 384, HALF = 192;
+const FX = 65536, HALF = 192;
 let latest = null, effects = [], mask = 0, maskSentAt = 0, lat = null;
 
 // ── 线格式 v1 解码(与 viewer.rs encode_frame 同步维护,version 把关) ──
