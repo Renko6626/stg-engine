@@ -171,6 +171,10 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 `rand(n:int) -> int` · `global(n) -> int` · `set_global(n,v)`
 （槽 0-15 系统段脚本只读）· `aim_player() -> angle` · `sin/cos(a:angle) -> fx` · 弹 setter 族。
 
+> **弹 setter 的 handle 参数是陷阱位**:首参 `handle:int` **求值后即丢弃**,setter 恒作用于
+> **当前任务的 owner 弹**(`self` 语义)——不能借句柄定向操纵别的弹;owner 不是弹的任务调它
+> → 任务 Fault。想操纵 `fire(...)` 出来的那颗弹,用 xformdef 或 `fire` 的 `task` 参数挂子任务。
+
 ## 渲染请求（通道 B）
 
 `emit_req(id:int, a0,a1,a2,a3,a4,a5: raw)` —— 向表现层推送一次性演出请求（爆炸/音效/宣言/

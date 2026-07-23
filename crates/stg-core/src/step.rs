@@ -1900,4 +1900,13 @@ mod tests {
             "切片界 = events_len(不吐陈旧尾槽)"
         );
     }
+
+    #[test]
+    fn engine_ver_anchored() {
+        assert_eq!(
+            crate::ENGINE_VER,
+            1,
+            "bump 必须是有意识决定(评审 + 改本测试)"
+        );
+    }
 }

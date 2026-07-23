@@ -29,7 +29,8 @@ pub const FIELD_RADIUS_FULLSCREEN: Fx = Fx::from_int(400);
 /// `create_player_shot` 与本 API 共用同一常量，把池侧半径各自钳入 `[0, 1024]`——这一侧因池的
 /// SoA 数组 `pub(crate)` 而是写 API **可强制**的；行 1/2/3 的被动操作数（自机半径）不经写 API，
 /// 只由 `player.rs` 的编译期断言钉住上限，前提是没人绕过 `PlayerState::spawn` 直接写字段
-/// （`WorldBody.players`/`PlayerState` 目前是 `pub`，故这是**前提**而非强制）。两侧都 ≤1024 时
+/// （`WorldBody.players` 已收 `pub(crate)`——刀 A 2026-07-21，crate 外无绕行路径；
+/// crate 内绕过 `spawn` 直写仍属纪律约束）。两侧都 ≤1024 时
 /// 任意两半径之和 ≤ 2048 ≪ 32767，六行碰撞的 Fx 加法才不溢出。完整推导见 `world::MAX_ENTITY_RADIUS`。
 pub const FIELD_MAX_RADIUS: Fx = crate::world::MAX_ENTITY_RADIUS;
 

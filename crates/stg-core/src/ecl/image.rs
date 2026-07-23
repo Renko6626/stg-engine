@@ -496,6 +496,11 @@ impl<'a> ResolvedEntry<'a> {
     pub(crate) fn is_valid_entry_id(self) -> bool {
         (self.id.0 as usize) < self.image.entries.len()
     }
+
+    /// 背书镜像(binding 层 coherence 守卫用;字段模块私有,crate 内经此读)。
+    pub(crate) fn image(&self) -> &'a EclImage {
+        self.image
+    }
 }
 
 // Test-only: construct a ResolvedEntry from a raw entry index.

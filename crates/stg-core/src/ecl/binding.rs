@@ -126,19 +126,8 @@ impl World {
             return Err(TaskStartError::MainAlreadyStarted);
         }
 
-        // Coherence guard: image compiled for a table whose content_hash must match
-        // the table this World was built with. `0` on either side = unbound (empty
-        // script / no real table) → skip.  P4-b: caller mismatch → deterministic Err,
-        // no panic. Once, at startup — not in the per-frame step path.
-        let image_hash = image.content_hash();
-        if image_hash != 0 && self.tables_hash != 0 && image_hash != self.tables_hash {
-            self.body.diag.contract_viol = self.body.diag.contract_viol.wrapping_add(1);
-            self.body.last_status = STATUS_BAD_ARGS;
-            return Err(TaskStartError::TableImageMismatch {
-                image: image_hash,
-                tables: self.tables_hash,
-            });
-        }
+        // Once, at startup — not in the per-frame step path.
+        self.check_table_coherence(image)?;
 
         let root = image.root().ok_or(TaskStartError::NoRoot)?;
         let meta = image
@@ -194,6 +183,7 @@ impl World {
             self.body.last_status = STATUS_BAD_ARGS;
             return Err(TaskStartError::InvalidEntryId);
         }
+        self.check_table_coherence(entry.image())?;
         let sub = entry.sub();
         self.spawn_resolved_sub(sub, entry.meta(), args, owner)
     }
@@ -210,6 +200,7 @@ impl World {
         args: &[EclArg],
         owner: EclOwner,
     ) -> Result<u16, TaskStartError> {
+        self.check_table_coherence(image)?;
         let entry = match image.resolve_entry(name) {
             Ok(e) => e,
             Err(ResolveError::RootRequiresStartMain) => {
@@ -253,6 +244,22 @@ impl World {
 
         let raw_args: Vec<i32> = args.iter().map(|a| a.raw()).collect();
         self.spawn_resolved_sub(sub, meta, &raw_args, owner)
+    }
+
+    /// C11 一致性守卫,三站共用(start_main / spawn_entry / spawn_entry_named):
+    /// image 所绑表哈希与本 World 建世表不配 → P4-b(计数 + BAD_ARGS + Err),不 panic。
+    /// 任一侧 0(空脚本/无真表)= 未绑定,跳过。
+    fn check_table_coherence(&mut self, image: &EclImage) -> Result<(), TaskStartError> {
+        let image_hash = image.content_hash();
+        if image_hash != 0 && self.tables_hash != 0 && image_hash != self.tables_hash {
+            self.body.diag.contract_viol = self.body.diag.contract_viol.wrapping_add(1);
+            self.body.last_status = STATUS_BAD_ARGS;
+            return Err(TaskStartError::TableImageMismatch {
+                image: image_hash,
+                tables: self.tables_hash,
+            });
+        }
+        Ok(())
     }
 
     /// Shared validation + spawn for a resolved sub.
@@ -718,5 +725,81 @@ mod tests {
             w.start_main(&crate::ecl::image::EclImage::empty()),
             Err(TaskStartError::NoRoot)
         );
+    }
+
+    // ── Coherence guard on spawn_entry / spawn_entry_named（刀 3/3）────────
+
+    /// `root_and_async_image` 同款构造，仅 `content_hash` 可指定——供三站共用守卫测试
+    /// 复用同一个"root + worker(Fx, Angle) 异步入口"骨架。
+    fn root_and_async_image_with_hash(content_hash: u64) -> EclImage {
+        use crate::ecl::image::ImageParts;
+        EclImage::try_from_parts(ImageParts {
+            code: vec![OP_END as u32],
+            subs: vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(
+                    0,
+                    SubKind::Async,
+                    vec![EclValueType::Fx, EclValueType::Angle],
+                ),
+            ],
+            entries: vec![EntryInit::new("worker", 1)],
+            root: Some(0),
+            content_hash,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn spawn_entry_rejects_mismatched_table_hash() {
+        let image = root_and_async_image_with_hash(0xAAAA_AAAA);
+        let mut w = World::new(0);
+        w.tables_hash = 0xBBBB_BBBB;
+        let cv0 = w.body.diag.contract_viol;
+        let entry = image.resolve_entry("worker").unwrap();
+        assert_eq!(
+            w.spawn_entry(entry, &[], EclOwner::Stage),
+            Err(TaskStartError::TableImageMismatch {
+                image: 0xAAAA_AAAA,
+                tables: 0xBBBB_BBBB
+            })
+        );
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "P4-b 计数");
+        assert_eq!(w.tasks().iter_alive().count(), 0, "拒配即不派生");
+    }
+
+    #[test]
+    fn spawn_entry_named_rejects_mismatched_table_hash() {
+        let image = root_and_async_image_with_hash(0xAAAA_AAAA);
+        let mut w = World::new(0);
+        w.tables_hash = 0xBBBB_BBBB;
+        let cv0 = w.body.diag.contract_viol;
+        assert_eq!(
+            w.spawn_entry_named(&image, "worker", &[], EclOwner::Stage),
+            Err(TaskStartError::TableImageMismatch {
+                image: 0xAAAA_AAAA,
+                tables: 0xBBBB_BBBB
+            })
+        );
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "P4-b 计数");
+        assert_eq!(w.tasks().iter_alive().count(), 0, "拒配即不派生");
+    }
+
+    #[test]
+    fn spawn_entry_allows_matching_or_unbound_hash() {
+        let args = [Fx::ONE.raw(), Angle::ZERO.raw() as i32];
+
+        // 双侧哈希相等 → 放行。
+        let image = root_and_async_image_with_hash(0xAAAA_AAAA);
+        let mut w = World::new(0);
+        w.tables_hash = 0xAAAA_AAAA;
+        let entry = image.resolve_entry("worker").unwrap();
+        assert!(w.spawn_entry(entry, &args, EclOwner::Stage).is_ok());
+
+        // World 侧未绑定（tables_hash == 0）→ 放行。
+        let mut w2 = World::new(0);
+        w2.tables_hash = 0;
+        let entry2 = image.resolve_entry("worker").unwrap();
+        assert!(w2.spawn_entry(entry2, &args, EclOwner::Stage).is_ok());
     }
 }

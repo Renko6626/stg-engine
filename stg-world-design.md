@@ -636,7 +636,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | `spawn_enemy` | 池满 | `NULL` | `POOL_FULL(ENEMY)` | `diag.pool_full[ENEMY]` |
 | `drop_item` | 池满 | `NULL` | `POOL_FULL(ITEM)` | `diag.pool_full[ITEM]` |
 | `set_vel / set_speed / …`（收句柄类） | 句柄悬垂/NULL | no-op | `BAD_HANDLE` | `diag.contract_viol` |
-| `move_to` | 句柄悬垂 / dur=0 | no-op | `BAD_HANDLE / BAD_ARGS` | `diag.contract_viol` |
+| `move_to` | 句柄悬垂（dur=0 = 瞬移，合法退化——D5 拍板，此行原文陈旧已勘误 2026-07-23） | no-op | `BAD_HANDLE` | `diag.contract_viol` |
 | `set_var / get_var` | 槽号 ≥ 1024 | no-op / 返回 0 | `BAD_ARGS` | `diag.contract_viol` |
 | `boss_set` | 槽号 ≥ MAX_BOSSES | no-op | `BAD_ARGS` | `diag.contract_viol` |
 | `pulse_signal` | ch ≥ 8 | no-op | `BAD_ARGS` | `diag.contract_viol` |
