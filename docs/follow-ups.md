@@ -277,6 +277,21 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 会把新敌人叠在幸存者身上、同时留一个永久空位。**确定且更病态**（两敌重叠更能压碰撞路径），
 诊断场景可接受 —— 但若这个场景被复用到位置敏感的用途，先修这里。
 
+### D6. WorldBody/World 剩余外部写口 —— 任务池整赋值 + 非池 pub 字段（通道 A 终审记档）
+
+通道 A 刀把五池读写全封后，断层线以上还剩两类写口（2026-07-23 whole-branch 终审浮出，均既存、非本刀引入）：
+
+- **`World.tasks` 整池重赋值**：`tasks` 字段 `pub` 且 `TaskPool::new()` 是 pub——外部可
+  `w.tasks = TaskPool::new()` 一举杀光全部协程（原 D5 同类的粗暴路径）。TaskPool 内部字段与
+  `spawn`/`kill` 已 `pub(crate)`，注不进坏值、无确定性/内存安全风险，操作本身确定性粗暴（P4-b 类）。
+- **`WorldBody` 非池 pub 可写字段**：`frame`/`rng`/`globals`/`boss_ui`/`events`/`events_len`/
+  `diag`/`last_status` 仍 pub 可写——外部能直写 `rng`（I3 状态）/`frame`。harness 合法**读**
+  `diag`/`boss_ui`；写口今天无生产调用者。
+
+**修法**：下一次可见性刀（或 M2 godot 桥定形时）统一收 `pub(crate)` + 按需读访问器/写 API
+（`globals`/`boss_ui` 已有 `set_var`/`boss_set` 写 API，字段本身可封）。
+**触发点**：M2 表现层 / 通道 B 刀顺手。
+
 ---
 
 ## E. bomb 那一刀开工前

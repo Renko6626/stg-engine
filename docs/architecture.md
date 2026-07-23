@@ -115,7 +115,7 @@ InputFrame ──► step ──► [相位 0-10 演化 World] ──► 通道A
 
 | 里程碑 | 接缝（已就位的焊点） | 还缺 |
 |---|---|---|
-| **M2 表现层**（gdext） | 通道 A/B 契约、请求队列语义已在设计定；`events` 缓冲有两个预留消费者 | 可见性收口（`players`/池 `alloc/free` 收 `pub(crate)`，follow-ups D 组）+ WorldView 通道 A + 新建 crate |
+| **M2 表现层**（gdext） | 可见性收口 ✅（写走 API）+ **通道 A `WorldView` ✅**（五池每字段裸切片 + `alive_words()` + `view()` 单入口，读走 view——读写纪律双封）；`events` 缓冲有两个预留消费者 | 通道 B/anm call（`emit_req`/`reqs`）+ 新建 crate（WorldBridge + MultiMesh + 请求分发器） |
 | **M3 回滚 harness** | 快照 = memcpy（账已实测）；RNG 随快照回滚；回放头素材就位：`seed`（World provenance 字段，`seed()` 读回）+ `content_hash` + `engine_ver` | 环形快照缓冲 + 延迟/输入扰动/校验和风暴 harness |
 | **M4 网络** | lockstep+rollback 模型；K=20 采样对拍；`engine_ver`/内容哈希握手 | `stg-net`（UDP + 会话/重同步）起 phase 2 |
 | **M5 headless 并行** | 单 world 单线程、并行只在 world 之间（P3）；无外部依赖 | `stg-py`（PyO3 env） |

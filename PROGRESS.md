@@ -4,23 +4,24 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-07-21）
+## 现在（2026-07-23）
 
-- **位置**：**可见性收口刀 A 落地**（M2 前置）——`WorldBody.players` 字段 + `define_pool!` 的
-  `alloc`/`free` 收 `pub(crate)`；新增 `set_player_power` 写 API（钳 `POWER_MAX` + 越界 P4-b）与
-  `players()` 只读访问器（通道 A 最小种子）；follow-ups **D1/D4 销账**。纯重构，两段金向量逐位
-  不变（whole-branch 终审在基线/HEAD 各跑 golden 独立实证 diff 全等）。
+- **位置**：**通道 A / WorldView 落地**（M2 前置读侧）——`define_pool!` 每字段裸切片访问器 +
+  `alive_words()`；`WorldView<'w>`（五池 + players 只读），`WorldBody::view()`/`World::view()`
+  单入口；五池结构体字段收 `pub(crate)`（销 **D5**）。至此**读写纪律双封**：写走 API（刀 A）、
+  读走 view（A9 零拷贝契约落地）。纯重构，金向量逐位不变（终审在 merge-base 重建重跑独立实证）。
 - **在飞**：无。
-- **下一阶段候选**（开工前先 grill 定序）：**M2 前置续**（通道 A 完整 WorldView + 通道 B/anm call
-  `emit_req`/`reqs`）· M3 回滚 harness（快照账已实测）· bomb/homing 玩法小刀 · F2 校验和轻量化
-  （M3 前免费窗口）。
-- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；新增 **D5** 池字段整赋值残留）。
-  乙案（表自带符号段）与文本 DSL 仍是 C11 之后的 modding 扩展点，未做。
+- **下一阶段候选**（开工前先 grill 定序）：**通道 B / anm call**（`emit_req`/`reqs`，M2 前置最后
+  一块）· M2 建 `stg-godot` crate（WorldBridge + MultiMesh）· M3 回滚 harness（快照账已实测）
+  · bomb/homing 玩法小刀 · F2 校验和轻量化（M3 前免费窗口）。
+- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；新增 **D6** WorldBody
+  剩余外部写口）。乙案（表自带符号段）与文本 DSL 仍是 C11 之后的 modding 扩展点，未做。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-23 | **通道 A WorldView** | define_pool! 每字段裸切片 + alive_words + WorldView/view() 单入口 + 五池字段收 pub(crate)；销 D5；金向量逐位不变 |
 | 2026-07-21 | **刀 A 可见性收口** | players 字段 + define_pool! alloc/free 收 pub(crate) + set_player_power 写 API + players() 只读种子；销 D1/D4；金向量逐位不变 |
 | 2026-07-21 | **C11 资产管线** | owned WorldTables + 规范字节 from_bytes/to_bytes + 真 content_hash + compile 绑定表 + start_main coherence 守卫 + join 防迷路 |
 | 2026-07-20 | **Named Entry ABI** | 规范排序 SubId/EntryId、singleton main 保护、安全绑定层、可选调试符号侧载 |
