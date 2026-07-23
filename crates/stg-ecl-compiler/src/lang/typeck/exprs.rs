@@ -293,6 +293,11 @@ impl<'p> Checker<'p> {
                     }
                     None => ok = false,
                 },
+                ParamKind::RawVal => match self.type_expr(a, locals) {
+                    // 三型任意，良型即过；raw 直通（无转换、无收窄）
+                    Some(t) => out.push(CallArg::Val(t)),
+                    None => ok = false,
+                },
                 ParamKind::XformRef => match self.resolve_ident_ref(a, span, RefKind::Xform) {
                     Some(r) => {
                         if let Some(n) = &r {

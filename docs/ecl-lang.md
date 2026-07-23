@@ -167,8 +167,21 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 `batch(appearance, x, y, n_angle:int, angle0:angle, angle_step:angle, n_speed:int, speed0:fx, speed_step:fx) -> int` ·
 `spawn_enemy(x,y,hp,drop_table,score) -> int` · `drop_item(x,y,ty) -> int` ·
 `move_to(dur:int,x:fx,y:fx,easing:int)` · `boss_set(slot,ratio:fx,spell,timer,phase,active)` ·
-`pulse_signal(ch)` · `rand(n:int) -> int` · `global(n) -> int` · `set_global(n,v)`
+`pulse_signal(ch)` · `emit_req(id:int, a0..a5:raw)`（通道 B 渲染请求，见下节）·
+`rand(n:int) -> int` · `global(n) -> int` · `set_global(n,v)`
 （槽 0-15 系统段脚本只读）· `aim_player() -> angle` · `sin/cos(a:angle) -> fx` · 弹 setter 族。
+
+## 渲染请求（通道 B）
+
+`emit_req(id:int, a0,a1,a2,a3,a4,a5: raw)` —— 向表现层推送一次性演出请求（爆炸/音效/宣言/
+震屏）。固定 7 参，不足位补 `0`；六个载荷位是 **raw 参数**：接受 `int`/`fx`/`angle` 任意型
+表达式**按位原样**传出（`1.5fx` → Q16.16 raw = 98304、`90deg` → BAM raw = 16384、int 原样），
+表现层按 id 约定解码。无返回值（只能做语句）；缓冲满确定性丢弃（不 Fault）；无 owner 类别
+限制——关卡任务也能发。
+
+id 命名空间：`0` 保留无效 · `1..=63` 引擎保留（如 `REQ_ENEMY_DEATH`）· `64+` 脚本自由——
+建议 `const MY_REQ: int = REQ_SCRIPT_BASE + n;` 起名。引擎 id 的逐位 args 约定表见
+`stg-core/src/reqs.rs` 模块文档（编码律：连续量 Q16.16 raw / 离散量裸 int / 角度 BAM raw）。
 
 ## xformdef（弹变换序列声明）
 

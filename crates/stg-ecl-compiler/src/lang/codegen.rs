@@ -555,7 +555,7 @@ impl<'p> Gen<'p> {
         let discard_first_handle = is_self_bullet_setter(bi.name);
         for (i, (a, pk)) in args.iter().zip(bi.params.iter()).enumerate() {
             match (a, pk) {
-                (CallArg::Val(e), ParamKind::Val(_)) => {
+                (CallArg::Val(e), ParamKind::Val(_) | ParamKind::RawVal) => {
                     self.gen_expr(b, slots, e);
                     if i == 0 && discard_first_handle {
                         b.pop();
@@ -1062,5 +1062,24 @@ mod tests {
             .get_mut("x")
             .unwrap() = 999;
         let _ = generate(&prog, &ti, &sm, 0);
+    }
+
+    // ── 通道 B `emit_req` 表层端到端 ─────────────────────────────────────
+
+    /// 通道 B 表层端到端：字面量折叠（1.5fx→98304、90deg→16384）叠加 RawVal 三型 raw 直通、
+    /// RawVal 位表达式求值（2+3→5），各位判别值防错位假绿。帧序：第 0 帧是 main 出生帧
+    /// （跳过），emit 落在第 1 帧（main 首跑）内——begin 每帧清缓冲，故恰步 2 帧后读。
+    #[test]
+    fn emit_req_rawval_literal_folding_reaches_channel_b() {
+        let src = "sub main() {\n\
+                     emit_req(64, 1.5fx, -3, 90deg, 2 + 3, 0, 0);\n\
+                     wait(10);\n\
+                   }";
+        let w = run(src, 2);
+        let reqs = w.body.take_requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!((reqs[0].id, reqs[0].seq), (64, 0));
+        assert_eq!(reqs[0].args, [98304, -3, 16384, 5, 0, 0]);
+        assert_eq!(w.body.diag.task_faults, 0);
     }
 }

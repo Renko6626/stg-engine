@@ -906,3 +906,18 @@ fn duplicate_sub_name_is_an_error() {
 fn duplicate_const_name_is_an_error() {
     err("const N: int = 1; const N: int = 2;");
 }
+
+// ── 通道 B `emit_req`：RawVal 六位三型任意、id 位仍钉 Int ───────────────────
+
+#[test]
+fn emit_req_rawval_accepts_all_three_types_id_stays_int() {
+    // RawVal 六位三型任意（fx/int/angle/表达式混填皆良型）
+    ok("sub main() { emit_req(64, 1.5fx, -3, 90deg, 2 + 3, 0fx, 0); loop { wait(1); } }");
+    // id 位仍是 Val(Int)：传 fx 必须报参数类型错（本断言在 emit_req 未注册前会因
+    // "未定义函数"类错误而**不含此文案**——红），实现后转为精确命中
+    let errs = err("sub main() { emit_req(1.0fx, 0, 0, 0, 0, 0, 0); loop { wait(1); } }");
+    assert!(
+        errs.iter().any(|e| e.msg.contains("第 1 个参数期待")),
+        "id 位传 fx 应报参数类型错：{errs:?}"
+    );
+}

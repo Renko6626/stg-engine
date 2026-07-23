@@ -39,6 +39,10 @@ pub enum ParamKind {
     XformRef,
     /// `sub` 名或 `none`（丙方案 `fire` 的任务脚本引用参数）。
     SubRef,
+    /// 裸载荷参数（通道 B `emit_req` 六个 args 位）：接受 int/fx/angle 任意**良型**表达式，
+    /// codegen 与 `Val` 同路径求值入栈、原样发射（VM 栈本就是裸 i32，零转换指令）——语义
+    /// 镜像 `RenderReq.args` 的不透明本质：fx 过 Q16.16 raw、angle 过 BAM raw、int 原样。
+    RawVal,
 }
 
 /// 内建函数的底层派发方式：绝大多数走 syscall 号表（`OP_SYS <no>`），`sin`/`cos` 是仅有的
@@ -55,7 +59,7 @@ pub struct Builtin {
     pub ret: Option<Ty>,
 }
 
-use ParamKind::{SubRef as Sub, Val, XformRef as Xf};
+use ParamKind::{RawVal, SubRef as Sub, Val, XformRef as Xf};
 use Ty::{Angle, Fx, Int};
 
 /// v1.1 内建函数全集（源码序即本表序——`lookup` 线性扫描，条目 <30、无序容器无必要）。
@@ -120,6 +124,14 @@ const BUILTINS: &[Builtin] = &[
         syscall: syscall::SYS_PULSE_SIGNAL,
         is_op: false,
         params: &[Val(Int)],
+        ret: None,
+    },
+    Builtin {
+        name: "emit_req",
+        syscall: syscall::SYS_EMIT_REQ,
+        is_op: false,
+        // 固定 7 参（不足位作者手补 0）；id 位钉 Int，六载荷位 RawVal（spec §2.6）
+        params: &[Val(Int), RawVal, RawVal, RawVal, RawVal, RawVal, RawVal],
         ret: None,
     },
     // ── 读/杂项 ─────────────────────────────────────────────────────────
@@ -274,6 +286,7 @@ mod tests {
             "move_to",
             "boss_set",
             "pulse_signal",
+            "emit_req",
             "rand",
             "global",
             "set_global",
@@ -338,6 +351,7 @@ mod tests {
             "move_to",
             "boss_set",
             "pulse_signal",
+            "emit_req",
             "set_global",
             "set_speed",
             "set_angle",
