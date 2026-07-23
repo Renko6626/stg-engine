@@ -268,6 +268,18 @@ pub fn define_pool(input: TokenStream) -> TokenStream {
                 })
             }
 
+            /// 只读裸切片访问器（通道 A，A9）——批量消费者拿它 + `alive_words()` 自扫存活。
+            #(
+                pub fn #fnames(&self) -> &[#ftypes] {
+                    &self.#fnames
+                }
+            )*
+
+            /// 存活位字切片（通道 A）——批量消费者按位扫活跃 index（`iter_alive` 的裸形态）。
+            pub fn alive_words(&self) -> &[u64] {
+                &self.alive
+            }
+
             /// 安全逐字段快照拷贝（每条 SoA 数组 copy_from_slice = memcpy，原地无临时量）。
             pub fn copy_into(&self, dst: &mut Self) {
                 #( dst.#fnames.copy_from_slice(&self.#fnames); )*

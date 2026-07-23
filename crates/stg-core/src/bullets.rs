@@ -41,6 +41,36 @@ mod tests {
     // 小测试池：cap=130 故意非 64 倍数，验末字掩码（NW=3，末字有效位=2）。
     define_pool! { Tp, cap = 130, fields { a: u32, b: u16 } }
 
+    /// 裸切片访问器（通道 A）判别式：切片指向真 SoA + alive_words 反映位掩码 + 位扫 ≡ iter_alive。
+    #[test]
+    fn view_slices_point_to_soa_and_alive_words_reflect_bitmap() {
+        let mut p = TpPool::new();
+        let h0 = p.alloc(TpInit { a: 10, b: 1 }).unwrap();
+        let h1 = p.alloc(TpInit { a: 20, b: 2 }).unwrap();
+        let h2 = p.alloc(TpInit { a: 30, b: 3 }).unwrap();
+        p.free(h1); // 中间释放：位掩码留洞
+
+        // 裸切片指向真 SoA（判别："a() 错返 b() 切片" 即红）
+        let a = p.a();
+        assert_eq!(a.len(), TpPool::CAP);
+        assert_eq!(a[h0.index as usize], 10);
+        assert_eq!(a[h2.index as usize], 30);
+
+        // alive_words 反映位掩码：popcount == 活跃数(2)，h0/h2 位 1、h1 位 0
+        let aw = p.alive_words();
+        let popcount: u32 = aw.iter().map(|w| w.count_ones()).sum();
+        assert_eq!(popcount, 2);
+        let bit = |i: usize| (aw[i / 64] >> (i % 64)) & 1;
+        assert_eq!(bit(h0.index as usize), 1);
+        assert_eq!(bit(h1.index as usize), 0, "已 free 位为 0");
+        assert_eq!(bit(h2.index as usize), 1);
+
+        // 位扫 ≡ iter_alive（钉死批量路径与便利迭代一致——A9 "过滤是消费者义务"）
+        let scanned: Vec<usize> = (0..TpPool::CAP).filter(|&i| bit(i) == 1).collect();
+        let iterated: Vec<usize> = p.iter_alive().collect();
+        assert_eq!(scanned, iterated);
+    }
+
     #[test]
     fn alloc_get_free_roundtrip() {
         let mut p = TpPool::new();
