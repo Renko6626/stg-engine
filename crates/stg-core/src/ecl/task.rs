@@ -82,7 +82,7 @@ pub struct TaskPool {
 
 impl TaskPool {
     /// 全零构造（供独立于 `World` 的单测使用；`World::new` 走 `alloc_zeroed`，不经此路）。
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         TaskPool {
             slots: [Task::default(); TASK_CAP],
             alive: [0; TASK_CAP / 64],

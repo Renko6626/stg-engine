@@ -280,18 +280,24 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 
 ### D6. WorldBody/World 剩余外部写口 —— 任务池整赋值 + 非池 pub 字段（通道 A 终审记档）
 
-通道 A 刀把五池读写全封后，断层线以上还剩两类写口（2026-07-23 whole-branch 终审浮出，均既存、非本刀引入）：
+通道 A 刀把五池读写全封后，断层线以上还剩两类写口（2026-07-23 whole-branch 终审浮出，均既存、非本刀引入）。
+**外接前收口刀 2/3（2026-07-23）已收 `tasks`（+`TaskPool::new`）/`rng`/`frame`/`events`/`events_len`
+五口** `pub(crate)`，配齐读口 `World::tasks()`/`frame()`/`frame_events()`（`WorldBody` 同名三口，
+`World` 委派）；场界四常量 `FIELD_HALF_W`/`FIELD_HEIGHT`/`OOB_MARGIN`/`ENEMY_OOB_MARGIN` 同刀放行
+`pub`（消费者视角文档，M2/py 观测器用）。
 
-- **`World.tasks` 整池重赋值**：`tasks` 字段 `pub` 且 `TaskPool::new()` 是 pub——外部可
-  `w.tasks = TaskPool::new()` 一举杀光全部协程（原 D5 同类的粗暴路径）。TaskPool 内部字段与
-  `spawn`/`kill` 已 `pub(crate)`，注不进坏值、无确定性/内存安全风险，操作本身确定性粗暴（P4-b 类）。
-- **`WorldBody` 非池 pub 可写字段**：`frame`/`rng`/`globals`/`boss_ui`/`events`/`events_len`/
-  `diag`/`last_status` 仍 pub 可写——外部能直写 `rng`（I3 状态）/`frame`。harness 合法**读**
-  `diag`/`boss_ui`；写口今天无生产调用者。
+- 实现期发现迁移面探测有漏：`stg-harness` 场景搭建代码（`main.rs`，符卡弹幕扩散角撒随机）
+  存在一处经 `WorldBody.rng` 直读的外部调用点，brief 拟定时漏收（原判"crate 外零读者"）。
+  按同款读口纪律补了 `WorldBody::rand_range(&mut self, n) -> u32`（转发 `Pcg32::rand_range`，
+  只交出一次性抽签结果、不交出 `&Pcg32` 本身，I3"外部不可触"仍成立）——这是 `rng` 唯一的外部
+  转发口，harness 调用点已迁 `b.rand_range(384)`。金向量逐位复核 `BYTE-IDENTICAL`（纯路由改道，
+  行为不变）。
 
-**修法**：下一次可见性刀（或 M2 godot 桥定形时）统一收 `pub(crate)` + 按需读访问器/写 API
-（`globals`/`boss_ui` 已有 `set_var`/`boss_set` 写 API，字段本身可封）。
-**触发点**：M2 表现层 / 通道 B 刀顺手。
+**剩** `globals`/`boss_ui`/`diag`/`last_status` 四字段：`globals`/`boss_ui` 已有 `set_var`/
+`boss_set` 写 API 全覆盖，越权直写只破 P1 纪律（"调用方只走安全 API"），不破确定性/内存安全；
+`diag` 要先补 `diag()` 读口并迁 harness:1073 直读（当前合法读，只是路径未收）；`last_status`
+纯诊断，暂无外部读者。
+**触发点**：M2 建桥第一版 PR 顺手。
 
 ---
 

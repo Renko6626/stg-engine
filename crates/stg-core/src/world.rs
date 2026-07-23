@@ -96,12 +96,16 @@ pub const GLOBALS_CAP: usize = 1024;
 /// （spec 拍板 5）。定义均迁至 `crate::consts`（C14 单一注册表）。
 pub use crate::consts::{GLOBALS_SYS_SEGMENT, GVAR_RANK};
 
-pub(crate) const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
-pub(crate) const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
-pub(crate) const OOB_MARGIN: i32 = 64; // 越界回收边距
-/// 敌人专用越界边距（回收兜底）。系统性宽于飞行物的 64px：入场/绕场编排要在场外起舞，
-/// 回收主导靠纪律（M1 起敌人主协程返回即自燃——ZUN ECL 语义；本常量只是防泄漏安全网）。
-pub(crate) const ENEMY_OOB_MARGIN: i32 = 256;
+/// 场界半宽（D7 中轴坐标系，单位 px，x ∈ [-192, 192]）。
+pub const FIELD_HALF_W: i32 = 192; // x ∈ [-192, 192]
+/// 场界高（D7 中轴坐标系，单位 px，y ∈ [0, 448]）。
+pub const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
+/// 飞行物越界回收边距（单位 px）。表现层通常不需要，py 观测器可用来解释实体消失。
+pub const OOB_MARGIN: i32 = 64; // 越界回收边距
+/// 敌人专用越界边距（回收兜底，单位 px）。系统性宽于飞行物的 64px：入场/绕场编排要在场外
+/// 起舞，回收主导靠纪律（M1 起敌人主协程返回即自燃——ZUN ECL 语义；本常量只是防泄漏安全网）。
+/// 表现层通常不需要，py 观测器可用来解释实体消失。
+pub const ENEMY_OOB_MARGIN: i32 = 256;
 pub(crate) const POC_LINE_Y: i32 = 128; // 回收线（PoC）：ALIVE 自机 y 低于此线 → 全场道具磁吸
 
 // ── 相位索引（A4 v2，0-based；PhaseGuard 押运）───────────────────────────
@@ -141,8 +145,10 @@ pub struct DiagCounters {
 #[repr(C)]
 #[derive(crate::checksum::Checksum)]
 pub struct WorldBody {
-    pub frame: u32,
-    pub rng: Pcg32,
+    /// 写口唯相位/API;读走 `frame()`。
+    pub(crate) frame: u32,
+    /// I3:状态随快照;外部不可触(唯一转发出口见 `rand_range`,不交出 `&Pcg32` 本身)。
+    pub(crate) rng: Pcg32,
     /// 全局变量竞技场（A2）——纯 i32 槽，语义归脚本，世界自身不读不写；脚本写读走
     /// `set_var`/`get_var`。零初始化合法。
     pub globals: [i32; GLOBALS_CAP],
@@ -165,9 +171,9 @@ pub struct WorldBody {
     #[checksum(skip = "纯输出缓冲，len 随 hits 一并 skip（A5）")]
     pub(crate) hits_len: u16,
     #[checksum(skip = "纯输出缓冲，相位 8/表现层只读，重演确定性再生（A5）")]
-    pub events: [Event; EVENTS_CAP],
+    pub(crate) events: [Event; EVENTS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 events 一并 skip（A5）")]
-    pub events_len: u16,
+    pub(crate) events_len: u16,
     #[checksum(skip = "纯输出缓冲，回滚重演确定性再生（P6/§6.2 通道 B）")]
     pub(crate) reqs: [RenderReq; REQS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 reqs 一并 skip（通道 B）")]
@@ -735,10 +741,31 @@ impl WorldBody {
         }
     }
 
+    /// 世界 RNG 唯一外部触点（本刀迁移面探测漏收：`rng` 封 `pub(crate)` 前，
+    /// `stg-harness` 场景搭建代码经 `WorldBody.rng` 直取随机弹幕扩散角——发现于 Task 2
+    /// 实现期编译红，非 brief 原定产物，机械补齐见 task-2-report.md）。转发
+    /// `Pcg32::rand_range`，只交出一次性抽签结果，不交出 `&Pcg32` 本身——I3"状态随快照，
+    /// 外部不可触"仍成立（调用方摸不到 rng 内部状态，只能借这一个确定性出口消耗它）。
+    pub fn rand_range(&mut self, n: u32) -> u32 {
+        self.rng.rand_range(n)
+    }
+
     /// 通道 B 出口（蓝图 §256）：本帧请求切片。**幂等非消费**——名字沿契约叫 take，
     /// 帧内多次调用返回同一切片；缓冲下帧 `begin` 清空，headless 无人消费 = 零成本。
     pub fn take_requests(&self) -> &[RenderReq] {
         &self.reqs[..self.reqs_len as usize]
+    }
+
+    /// 当前帧号只读口(I6;M2 表现层水位协议消费)。写帧号唯 `advance`(相位 10)。
+    pub fn frame(&self) -> u32 {
+        self.frame
+    }
+
+    /// 世界大事记出口(A9 契约名 `frame_events`;代码字段名 `events` 的漂移见 follow-ups D2)。
+    /// 幂等只读,按 `events_len` 切片——数组本体从不清零,切片界即真相,消费者永不见陈旧尾槽。
+    /// 缓冲下帧 `begin` 清 len,与 `take_requests`/`hits` 同生命周期(A5)。
+    pub fn frame_events(&self) -> &[Event] {
+        &self.events[..self.events_len as usize]
     }
 
     // ── 相位函数（pub(crate)，每个先 phase_enter 保序）────────────────────

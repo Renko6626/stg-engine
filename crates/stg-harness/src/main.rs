@@ -520,7 +520,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                     let n: u16 = 10;
                     let astep = (65536u32 / n as u32) as u16;
                     for k in 0..n {
-                        let spread = b.rng.rand_range(384) as u16;
+                        let spread = b.rand_range(384) as u16;
                         let a = Angle(
                             base.wrapping_add(k.wrapping_mul(astep))
                                 .wrapping_add(spread),
@@ -1084,7 +1084,7 @@ mod ecl_rainbow_tests {
             "hp_ratio 应是非零、≤1.0fx 的真值（实测 raw={}）——C13②证据",
             ratio.raw()
         );
-        let task_count = w.tasks.iter_alive().count();
+        let task_count = w.tasks().iter_alive().count();
         assert!(
             task_count >= 3,
             "main+patrol+timer_ui 三任务应全存活（实测 {task_count}）"

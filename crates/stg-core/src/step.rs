@@ -17,7 +17,8 @@ use crate::world::{
 #[derive(crate::checksum::Checksum)]
 pub struct World {
     pub body: WorldBody,
-    pub tasks: crate::ecl::task::TaskPool,
+    /// 读走 `tasks()`。
+    pub(crate) tasks: crate::ecl::task::TaskPool,
     /// One-shot flag: 1 after a successful `start_main`, stays 1 even after
     /// the main task ends or faults.  Prevents re-starting the root script.
     /// Copied in `copy_into` and automatically included in checksum via derive.
@@ -118,6 +119,22 @@ impl World {
     /// 通道 B 出口委派（镜像 `view()`；幂等语义见 `WorldBody::take_requests`）。
     pub fn take_requests(&self) -> &[crate::reqs::RenderReq] {
         self.body.take_requests()
+    }
+
+    /// 帧号读口委派(见 `WorldBody::frame`)。
+    pub fn frame(&self) -> u32 {
+        self.body.frame()
+    }
+
+    /// 世界大事记读口委派(见 `WorldBody::frame_events`)。
+    pub fn frame_events(&self) -> &[crate::events::Event] {
+        self.body.frame_events()
+    }
+
+    /// 任务池只读口:mutator 全 `pub(crate)`,`&TaskPool` 交出去只能读——同 `&Pool`
+    /// 之于通道 A 的论证(刀 A/通道 A);整池重赋值(D6 事故面)从此路封死。
+    pub fn tasks(&self) -> &crate::ecl::task::TaskPool {
+        &self.tasks
     }
 
     /// Internal task spawn (pub(crate) for VM opcodes/syscalls; used by SPAWN op
@@ -1861,5 +1878,26 @@ mod tests {
         #[cfg(not(debug_assertions))]
         const EXPECTED: (usize, usize) = (969288, 1083008);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
+    }
+
+    /// D6 封口后的三只读口(2026-07-23 审阅 §2):帧号推进可见 / events 切片界=len /
+    /// tasks 只读借用。
+    #[test]
+    fn frame_and_frame_events_and_tasks_read_accessors() {
+        let mut w = World::new(1);
+        assert_eq!(w.frame(), 0);
+        crate::world::test_support::step_t(&mut w, &crate::input::InputFrame::empty(0));
+        assert_eq!(w.frame(), 1, "advance 后帧号经读口可见");
+        assert_eq!(w.tasks().iter_alive().count(), 0, "&TaskPool 只读口");
+        assert!(w.frame_events().is_empty());
+        w.body.push_event(crate::events::Event {
+            kind: crate::events::EVT_PLAYER_DIED,
+            ..Default::default()
+        });
+        assert_eq!(
+            w.frame_events().len(),
+            1,
+            "切片界 = events_len(不吐陈旧尾槽)"
+        );
     }
 }
