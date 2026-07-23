@@ -66,6 +66,9 @@ pub const SYS_MOVE_ENEMY_TO: u16 = 24;
 pub const SYS_BOSS_SET: u16 = 25;
 /// 1 参：`ch`。
 pub const SYS_PULSE_SIGNAL: u16 = 26;
+/// 通道 B 渲染请求推送（M2 前置刀；D12/spec §2.5）。无 owner 类别限制——宣言/音效/震屏
+/// 常由 STAGE 任务发。
+pub const SYS_EMIT_REQ: u16 = 27;
 
 // 3x：写——弹 setter 族（self owner 必须是 BULLET；按 motion.rs 九连顺序编号）
 pub const SYS_SET_BULLET_SPEED: u16 = 30;
@@ -211,6 +214,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             ctx.body.pulse_signal(ch as usize);
             Ok(())
         }
+        SYS_EMIT_REQ => sys_emit_req(task, ctx),
         SYS_SET_BULLET_SPEED => {
             let h = self_bullet_handle(task)?;
             let speed = pop(task)?;
@@ -580,6 +584,26 @@ fn sys_boss_set(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
             active: active as u8,
         },
     );
+    Ok(())
+}
+
+/// `SYS_EMIT_REQ`（27）：通道 B 推送。id 收窄 P4-b——栈值超出 `0..=65535` →
+/// no-op + `contract_viol` + `BAD_ARGS`，**不 Fault**（作者违约 → 确定性安全结果）；
+/// 值域内转交 `WorldBody::emit_req`（满缓冲处置 TRUNCATED + 计数在那边）。
+fn sys_emit_req(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let a5 = pop(task)?;
+    let a4 = pop(task)?;
+    let a3 = pop(task)?;
+    let a2 = pop(task)?;
+    let a1 = pop(task)?;
+    let a0 = pop(task)?;
+    let id = pop(task)?;
+    if !(0..=u16::MAX as i32).contains(&id) {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+        ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+        return Ok(());
+    }
+    ctx.body.emit_req(id as u16, [a0, a1, a2, a3, a4, a5]);
     Ok(())
 }
 
@@ -1345,6 +1369,74 @@ mod tests {
         assert_eq!(
             call(&mut w, &ecl, &mut task, SYS_SET_VAR, &[]),
             Err(FAULT_STACK)
+        );
+    }
+
+    #[test]
+    fn sys_emit_req_pushes_request_and_drains_stack() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_EMIT_REQ,
+                &[64, 1, 2, 3, 4, 5, 6]
+            )
+            .is_ok()
+        );
+        let reqs = w.body.take_requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!((reqs[0].id, reqs[0].seq), (64, 0));
+        assert_eq!(
+            reqs[0].args,
+            [1, 2, 3, 4, 5, 6],
+            "声明序 id,a0..a5 ↔ 弹栈逆序还原"
+        );
+        assert_eq!(task.sp, 0, "七值全弹栈");
+    }
+
+    #[test]
+    fn sys_emit_req_bad_id_is_p4b_noop() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let cv0 = w.body.diag.contract_viol;
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_EMIT_REQ,
+                &[-1, 0, 0, 0, 0, 0, 0]
+            )
+            .is_ok()
+        );
+        assert_eq!(w.body.take_requests().len(), 0, "坏 id no-op 不入缓冲");
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_EMIT_REQ,
+                &[65536, 0, 0, 0, 0, 0, 0]
+            )
+            .is_ok()
+        );
+        assert_eq!(w.body.take_requests().len(), 0, "越上界同款");
+        assert_eq!(w.body.diag.contract_viol, cv0 + 2);
+    }
+
+    #[test]
+    fn sys_emit_req_stack_underflow_faults() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        assert_eq!(
+            call(&mut w, &ecl, &mut task, SYS_EMIT_REQ, &[1, 2]),
+            Err(FAULT_STACK),
+            "参数不足 → 栈下溢 Fault（同全族处置）"
         );
     }
 }

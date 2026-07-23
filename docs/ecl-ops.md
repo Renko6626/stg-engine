@@ -90,6 +90,7 @@
 | 24 | `move_enemy_to` | **dur,x,y,easing** | —（owner 须为敌，否则 Fault；参数序以 syscall.rs 为准，勿凭直觉写 x,y 在前） |
 | 25 | `boss_set` | slot,hp_ratio,spell_id,timer,phase_left,active | —（enemy 字段写 NULL，见 boss_ui 契约） |
 | 26 | `pulse_signal` | ch | — |
+| 27 | `emit_req` | id a0 a1 a2 a3 a4 a5 | — |
 | 30-38 | 弹 setter 族 | 按 motion.rs 九连 | —（owner 须为弹，否则 Fault） |
 | 40 | `aim_player_angle` | — | 自 owner 位置瞄 P0 的 BAM 角 |
 
@@ -98,6 +99,10 @@
 `task_sub >= 0` 时其值是 canonical `SubId`，且必须指向零参数 `Async` sub；绑定层再派子任务
 （owner=新弹）；appearance 查 `WorldTables.appearances`
 定默认 radius/sprite。
+
+- **`emit_req`（27）**：通道 B 渲染请求（`docs/ecl-lang.md`"渲染请求"节）。id 收窄 P4-b：
+  栈值超出 `0..=65535` → no-op + `contract_viol` + `BAD_ARGS`，不 Fault；缓冲满走 D12
+  （丢弃 + `TRUNCATED` + `diag.reqs_dropped`）。无 owner 类别限制（STAGE 任务可发）。
 
 ## globals 段纪律（甲案，M1.5）
 
