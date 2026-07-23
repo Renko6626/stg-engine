@@ -725,6 +725,19 @@ impl WorldBody {
         }
     }
 
+    /// 世界 RNG 唯一外部触点（本刀迁移面探测漏收：`rng` 封 `pub(crate)` 前，
+    /// `stg-harness` 场景搭建代码经 `WorldBody.rng` 直取随机弹幕扩散角——发现于 Task 2
+    /// 实现期编译红，非 brief 原定产物，机械补齐见 task-2-report.md）。转发
+    /// `Pcg32::rand_range`，只交出一次性抽签结果，不交出 `&Pcg32` 本身——I3"状态随快照，
+    /// 外部不可触"仍成立（调用方摸不到 rng 内部状态，只能借这一个确定性出口消耗它）。
+    ///
+    /// **调用即推进世界正典 RNG 流（写操作，I3）**：只应在确定性帧序内调用——同输入回放必须
+    /// 同频次、同顺序，否则跨机/回放静默分叉。合法调用方 = 导演闭包/相位内逻辑；外接层（M2/py）
+    /// 拿到 `&mut World` 后在帧外随手调它 = 破坏回放，切勿。表现层抖动请用自己的 RNG（I3 双颗）。
+    pub fn rand_range(&mut self, n: u32) -> u32 {
+        self.rng.rand_range(n)
+    }
+
     /// 通道 B 推送（§6.2）。id 语义世界不解释（含 0——保留无效值，分发器忽略）；
     /// 满 → 确定性丢弃 + `TRUNCATED` + 计数（P4-a/D12），不 panic。成功不动 `last_status`。
     pub fn emit_req(&mut self, id: u16, args: [i32; 6]) {
@@ -739,15 +752,6 @@ impl WorldBody {
             self.diag.reqs_dropped = self.diag.reqs_dropped.wrapping_add(1);
             self.last_status = STATUS_TRUNCATED;
         }
-    }
-
-    /// 世界 RNG 唯一外部触点（本刀迁移面探测漏收：`rng` 封 `pub(crate)` 前，
-    /// `stg-harness` 场景搭建代码经 `WorldBody.rng` 直取随机弹幕扩散角——发现于 Task 2
-    /// 实现期编译红，非 brief 原定产物，机械补齐见 task-2-report.md）。转发
-    /// `Pcg32::rand_range`，只交出一次性抽签结果，不交出 `&Pcg32` 本身——I3"状态随快照，
-    /// 外部不可触"仍成立（调用方摸不到 rng 内部状态，只能借这一个确定性出口消耗它）。
-    pub fn rand_range(&mut self, n: u32) -> u32 {
-        self.rng.rand_range(n)
     }
 
     /// 通道 B 出口（蓝图 §256）：本帧请求切片。**幂等非消费**——名字沿契约叫 take，
@@ -1266,6 +1270,18 @@ mod tests {
         assert!(
             dst.body.take_requests().is_empty(),
             "恢复出的 World 必须无陈旧通道 B 输出（同 hits/events 契约，见 step.rs copy_into 注释）"
+        );
+    }
+
+    #[test]
+    fn rand_range_forwards_world_rng_stream() {
+        let mut w = crate::step::World::new(7);
+        let mut reference = crate::rng::Pcg32::new(7, crate::world::RNG_SEQ);
+        assert_eq!(w.body.rand_range(384), reference.rand_range(384));
+        assert_eq!(
+            w.body.rand_range(1000),
+            reference.rand_range(1000),
+            "同流续抽"
         );
     }
 }
