@@ -62,7 +62,7 @@
 | `stg-core/step` | **组装层**：§3.5 宪法顺序唯一持有者 + World{body,tasks} + 快照 | ✅ M0 | design_doc §3.5 |
 | `stg-derive` | `#[derive(Checksum)]` + `define_pool!` proc-macro | ✅ M0 | — |
 | `stg-ecl-compiler` | `.ecl` 表层语言（lex/parse/typeck/slots/codegen）→ EclImage；离线编译 | ✅ M1.9 | [ecl-lang](ecl-lang.md) |
-| `stg-harness` | CLI：金向量对拍 + bench 基线 + 烘焙表 bake/verify | ✅ M0 | [bench-baseline](bench-baseline.md) |
+| `stg-harness` | CLI：金向量对拍 + bench 基线 + 烘焙表 bake/verify + serve WebSocket 查看器(通道 A/B 首个交互消费者) | ✅ M0 | [bench-baseline](bench-baseline.md) |
 | `stg-godot` | gdext WorldBridge + MultiMesh + 请求分发器 | ⏳ M2 未建 | design_doc §6 |
 | `stg-net` / `stg-py` | UDP 会话/重同步 / PyO3 headless 并行 env | ⏳ M4/M5 未建 | design_doc §7 |
 

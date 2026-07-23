@@ -4,6 +4,7 @@
 //!   golden [--out FILE]   跑金向量，逐帧输出校验和（CI 跨平台对拍的数据源）
 //!   bake-tables           用 f64 生成 sin/cos/easing 烘焙表原始字节（M0 落地）
 //!   verify-tables         断言现生成的表字节 == 已 commit 的字节（CI 防漂移）
+//!   serve [--port 8611] [--seed 1]  起 WebSocket 查看器
 //!
 //! 本 crate 在断层线【以上】，可用浮点；stg-core 只消费 commit 的表字节。
 
@@ -19,9 +20,10 @@ fn main() -> ExitCode {
         Some("bench") => cmd_bench(&args[2..]),
         Some("bake-tables") => cmd_bake_tables(),
         Some("verify-tables") => cmd_verify_tables(),
+        Some("serve") => viewer::cmd_serve(&args[2..]),
         _ => {
             eprintln!(
-                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables>"
+                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1]>"
             );
             ExitCode::FAILURE
         }

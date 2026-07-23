@@ -19,3 +19,6 @@ stg-ecl-compiler.workspace = true
 # 注意：harness 在断层线【以上】，允许用 f64 —— 烘焙表生成器（bake-tables）正是在
 # 这里用 f64 算 sin/cos/easing，再把【原始字节】commit 进 stg-core。stg-core 自身
 # 只 include_bytes! 消费这些字节，永不现算（§2.1 烘焙表纪律）。
+# serve 子命令（WebSocket 查看器，断层线以上）—— stg-core 决不可依赖它（防火墙见
+# `cargo tree -p stg-core`）。
+tungstenite = "0.30.0"

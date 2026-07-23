@@ -151,6 +151,7 @@ cargo fmt --all                               # 格式化（CI 用 -- --check）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p stg-harness -- golden --out c.txt   # 跑金向量输出逐帧校验和
 cargo run -p stg-harness -- verify-tables        # 断言烘焙表字节 == commit
+cargo run -p stg-harness -- serve            # WebSocket 查看器(浏览器玩风铃卡,ssh -L 转发)
 ```
 
 ## Milestone 地图（design_doc.md §11 / §1.3）

@@ -1,18 +1,18 @@
-//! viewer —— WebSocket 实时查看器（spec 2026-07-23）：线格式 v1 编码 + 输入映射（本文件）
-//! + serve 服务（T2）。断层线以上；数据只经 stg-core 既有读出口，core 零改动。
+//! viewer —— WebSocket 实时查看器（spec 2026-07-23）：线格式 v1 编码 + 输入映射（刀 1）
+//! 与 serve 服务/内嵌 canvas 页（本刀，刀 2）。断层线以上；数据只经 stg-core 既有读出口，
+//! core 零改动——新依赖 `tungstenite` 只进本 crate（`cargo tree -p stg-core` 防火墙断言）。
+
+use std::io::{ErrorKind, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use stg_core::World;
 use stg_core::input::InputFrame;
 
-// 本刀（刀 1/2）只落编码器/输入映射，尚无 serve 调用点——production 构建下暂时只被
-// `#[cfg(test)] mod tests` 用到。`cfg_attr(not(test), allow(dead_code))` 是仓库既有先例
-// （`stg_core::step::spawn_sub_internal`，同款"待下一刀接线"处境），刀 2（serve）接线后
-// 这几个 allow 即可摘掉。
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const WIRE_VERSION: u8 = 1;
 
 /// 扫存活位字逐 index 回调（A9 批量消费姿势；尾位超 cap 部分核侧保证为零）。
-#[cfg_attr(not(test), allow(dead_code))]
 fn for_each_alive(words: &[u64], mut f: impl FnMut(usize)) {
     for (wi, &w) in words.iter().enumerate() {
         let mut bits = w;
@@ -23,7 +23,6 @@ fn for_each_alive(words: &[u64], mut f: impl FnMut(usize)) {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn alive_count(words: &[u64]) -> u32 {
     words.iter().map(|w| w.count_ones()).sum()
 }
@@ -33,7 +32,6 @@ fn alive_count(words: &[u64]) -> u32 {
 /// 玩家段的生死/无敌两字段实名为 `PlayerState::life_state`/`invuln`（brief 草稿写
 /// `life`/`invuln`，`life` 按实况对齐为 `life_state`，`invuln` 本就同名——机械对齐，不算
 /// 偏离；`life_state` 语义见 `stg_core::player` 的 `LIFE_*` 常量）。
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn encode_frame(w: &World) -> Vec<u8> {
     let v = w.view();
     let mut out = Vec::with_capacity(16 * 1024);
@@ -110,11 +108,129 @@ pub(crate) fn encode_frame(w: &World) -> Vec<u8> {
 
 /// 浏览器 u32 掩码 → 玩家 0 InputFrame（位布局即 `BTN_*`，spec §2.4；
 /// BOMB 的 Edge 语义由引擎 `decode_input` 自理，这里只送电平）。
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn mask_to_input(frame: u32, mask: u32) -> InputFrame {
     let mut input = InputFrame::empty(frame);
     input.actions[0].buttons = mask;
     input
+}
+
+const INDEX_HTML: &str = include_str!("../viewer/index.html");
+
+/// `serve [--port 8611] [--seed 1]`——单端口：HTTP GET 回内嵌页，WS 升级进 60Hz 游戏循环。
+/// 单客户端串行伺候；断开/刷新 = 下一局新 World（天然 restart）。
+pub(crate) fn cmd_serve(rest: &[String]) -> ExitCode {
+    let mut port: u16 = 8611;
+    let mut seed: u64 = 1;
+    let mut i = 0;
+    while i < rest.len() {
+        match (rest[i].as_str(), rest.get(i + 1)) {
+            ("--port", Some(v)) => {
+                port = v.parse().expect("--port 要 u16");
+                i += 2;
+            }
+            ("--seed", Some(v)) => {
+                seed = v.parse().expect("--seed 要 u64");
+                i += 2;
+            }
+            (a, _) => {
+                eprintln!("serve: 未知参数 {a}（支持 --port/--seed）");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("serve: 绑定 127.0.0.1:{port} 失败：{e}");
+            return ExitCode::from(1);
+        }
+    };
+    eprintln!(
+        "viewer 就绪：http://localhost:{port}   （远程盒子上用 `ssh -L {port}:localhost:{port} <box>` 转发）"
+    );
+    for stream in listener.incoming() {
+        match stream {
+            Ok(s) => {
+                if let Err(e) = handle_conn(s, seed) {
+                    eprintln!("serve: 连接结束（{e}），等待下一个……");
+                }
+            }
+            Err(e) => eprintln!("serve: accept 失败：{e}"),
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// peek 请求头判断是否 WS 升级（不消费字节；tungstenite 随后自读完整握手）。
+fn is_ws_upgrade(stream: &TcpStream) -> bool {
+    let mut buf = [0u8; 1024];
+    match stream.peek(&mut buf) {
+        Ok(n) => String::from_utf8_lossy(&buf[..n])
+            .to_ascii_lowercase()
+            .contains("upgrade: websocket"),
+        Err(_) => false,
+    }
+}
+
+fn handle_conn(mut stream: TcpStream, seed: u64) -> Result<(), Box<dyn std::error::Error>> {
+    if !is_ws_upgrade(&stream) {
+        // 读走请求（尽力而为）再回页，部分浏览器不读完请求就写会 RST
+        let mut sink = [0u8; 2048];
+        let _ = stream.read(&mut sink);
+        let body = INDEX_HTML.as_bytes();
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(head.as_bytes())?;
+        stream.write_all(body)?;
+        return Ok(());
+    }
+    let mut ws = tungstenite::accept(stream)?;
+    ws.get_ref()
+        .set_read_timeout(Some(Duration::from_millis(1)))?;
+
+    let (mut w, image, _boss) = crate::build_rainbow_world(seed);
+    let mut mask = 0u32;
+    let tick = Duration::from_nanos(16_666_667); // 60 Hz（I6 固定步；节拍器住表现侧）
+    let mut next = Instant::now(); // 首步即刻，此后每步 += tick（起步无双拍空隙）
+    loop {
+        // 排空待读消息，取最新掩码
+        loop {
+            match ws.read() {
+                Ok(tungstenite::Message::Binary(b)) if b.len() == 4 => {
+                    mask = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                }
+                Ok(tungstenite::Message::Close(_)) => return Ok(()),
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e))
+                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
+                {
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        // 连补上限 3 步防死亡螺旋；每步都推流（浏览器 rAF 自会合帧）
+        let mut stepped = 0;
+        loop {
+            let input = mask_to_input(w.frame(), mask);
+            stg_core::step(&mut w, &stg_core::tables::TABLES_V0, &image, &input);
+            ws.send(tungstenite::Message::Binary(encode_frame(&w).into()))?;
+            stepped += 1;
+            next += tick;
+            if next > Instant::now() || stepped >= 3 {
+                break;
+            }
+        }
+        if stepped >= 3 {
+            next = Instant::now() + tick; // 落后过多：重锚，弃补
+        }
+        let now = Instant::now();
+        if next > now {
+            std::thread::sleep(next - now);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -159,7 +275,24 @@ mod tests {
         let _life = read_u8(&buf, &mut o);
         let _invuln = read_u16(&buf, &mut o);
         assert_eq!(read_u8(&buf, &mut o), 2, "boss_slots");
-        o += 2 * 9; // 两槽逐字段由下一测的宽度对账兜底
+        for (slot, ui) in w.body.boss_ui.iter().enumerate() {
+            assert_eq!(read_u8(&buf, &mut o), ui.active, "boss_ui[{slot}].active");
+            assert_eq!(
+                read_i32(&buf, &mut o),
+                ui.hp_ratio.raw(),
+                "boss_ui[{slot}].hp_ratio"
+            );
+            assert_eq!(
+                read_u16(&buf, &mut o),
+                ui.spell_id,
+                "boss_ui[{slot}].spell_id"
+            );
+            assert_eq!(
+                read_u16(&buf, &mut o),
+                ui.timer_frames,
+                "boss_ui[{slot}].timer_frames"
+            );
+        }
         assert_eq!(read_u16(&buf, &mut o), 0, "开局零弹");
         assert_eq!(read_u16(&buf, &mut o), 0, "零自机弹");
         assert_eq!(read_u16(&buf, &mut o), 1, "唯 boss 一敌");
@@ -208,5 +341,52 @@ mod tests {
         let input = mask_to_input(7, BTN_SHOT | BTN_SLOW);
         assert_eq!(input.actions[0].buttons, BTN_SHOT | BTN_SLOW);
         assert_eq!(input.actions[1].buttons, 0, "玩家 1 不受掩码影响");
+    }
+
+    #[test]
+    fn is_ws_upgrade_discriminates_http_vs_ws() {
+        // 用本机回环真连一把：起监听线程，分别发 HTTP GET 与含 Upgrade 头的请求
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (s1, _) = l.accept().unwrap();
+            let r1 = super::is_ws_upgrade(&s1);
+            let (s2, _) = l.accept().unwrap();
+            let r2 = super::is_ws_upgrade(&s2);
+            (r1, r2)
+        });
+        let mut c1 = TcpStream::connect(addr).unwrap();
+        c1.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let mut c2 = TcpStream::connect(addr).unwrap();
+        c2.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n\r\n")
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let (r1, r2) = t.join().unwrap();
+        assert!(!r1, "普通 GET 不是升级");
+        assert!(r2, "Upgrade 头应判 WS");
+    }
+
+    #[test]
+    fn http_path_serves_embedded_page() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (s, _) = l.accept().unwrap();
+            super::handle_conn(s, 1).unwrap();
+        });
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut resp = String::new();
+        c.read_to_string(&mut resp).unwrap();
+        t.join().unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"));
+        assert!(resp.contains("<canvas"), "应回内嵌页面");
+        assert!(resp.contains("stg-engine viewer"));
     }
 }

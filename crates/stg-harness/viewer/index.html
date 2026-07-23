@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>stg-engine viewer</title>
+<style>
+  body { background:#111; color:#ccc; font:12px monospace; display:flex; gap:16px;
+         align-items:flex-start; margin:16px; }
+  canvas { background:#000; border:1px solid #444; image-rendering:pixelated;
+           width:576px; height:672px; }
+  #hud div { margin:2px 0; } .bar { background:#333; width:200px; height:10px; }
+  .bar i { display:block; height:100%; background:#d33; }
+</style>
+</head>
+<body>
+<canvas id="cv" width="384" height="448"></canvas>
+<div id="hud">
+  <div>状态: <span id="st">连接中…</span></div>
+  <div>帧: <span id="fr">-</span></div>
+  <div>弹/自弹/敌/道具: <span id="cnt">-</span></div>
+  <div>boss: <div class="bar"><i id="bosshp" style="width:0"></i></div>
+       spell <span id="spell">-</span> · timer <span id="timer">-</span></div>
+  <div>输入→帧延迟: <span id="lat">-</span> ms</div>
+  <div style="margin-top:8px;color:#888">方向键移动 · Z 射击 · X bomb · Shift 低速<br>
+       刷新页面 = 重开一局</div>
+</div>
+<script>
+"use strict";
+const cv = document.getElementById("cv"), cx = cv.getContext("2d");
+const $ = id => document.getElementById(id);
+const FX = 65536, W = 384, HALF = 192;
+let latest = null, effects = [], mask = 0, maskSentAt = 0, lat = null;
+
+// ── 线格式 v1 解码(与 viewer.rs encode_frame 同步维护,version 把关) ──
+function parse(buf) {
+  const d = new DataView(buf); let o = 0;
+  const u8 = () => d.getUint8(o++), u16 = () => { const v = d.getUint16(o, true); o += 2; return v; };
+  const u32 = () => { const v = d.getUint32(o, true); o += 4; return v; };
+  const i32 = () => { const v = d.getInt32(o, true); o += 4; return v; };
+  if (u8() !== 1) { $("st").textContent = "协议版本不符,刷新试试"; return null; }
+  const f = { frame: u32(), players: [], boss: [], bullets: [], shots: [], enemies: [], items: [], reqs: [] };
+  for (let n = u8(); n--;) f.players.push({ x: i32(), y: i32(), life: u8(), invuln: u16() });
+  for (let n = u8(); n--;) f.boss.push({ active: u8(), hp: i32(), spell: u16(), timer: u16() });
+  for (let n = u16(); n--;) f.bullets.push({ x: i32(), y: i32(), s: u16() });
+  for (let n = u16(); n--;) f.shots.push({ x: i32(), y: i32(), s: u16() });
+  for (let n = u16(); n--;) f.enemies.push({ x: i32(), y: i32(), s: u16(), hp: u8() });
+  for (let n = u16(); n--;) f.items.push({ x: i32(), y: i32(), t: u8() });
+  for (let n = u16(); n--;) {
+    const r = { id: u16(), seq: u16(), a: [] };
+    for (let k = 0; k < 6; k++) r.a.push(i32());
+    f.reqs.push(r);
+  }
+  return f;
+}
+const px = x => x / FX + HALF, py = y => y / FX;
+
+// ── WebSocket ──
+const ws = new WebSocket(`ws://${location.host}/`);
+ws.binaryType = "arraybuffer";
+ws.onopen = () => { $("st").textContent = "已连接"; sendMask(); };
+ws.onclose = () => { $("st").textContent = "已断开——刷新重开一局"; };
+ws.onmessage = ev => {
+  const f = parse(ev.data);
+  if (!f) return;
+  if (maskSentAt) { lat = performance.now() - maskSentAt; maskSentAt = 0; }
+  for (const r of f.reqs) {
+    if (r.id === 1) effects.push({ x: px(r.a[0]), y: py(r.a[1]), t: 0 }); // REQ_ENEMY_DEATH
+    else console.log("req", r.id, r.a);
+  }
+  latest = f;
+};
+function sendMask() {
+  if (ws.readyState !== 1) return;
+  const b = new ArrayBuffer(4); new DataView(b).setUint32(0, mask, true);
+  ws.send(b); maskSentAt = performance.now();
+}
+setInterval(sendMask, 1000); // 心跳重发
+
+// ── 键盘(BTN 位:UP0 DOWN1 LEFT2 RIGHT3 SHOT4 BOMB5 SLOW6) ──
+const KEYS = { ArrowUp: 0, ArrowDown: 1, ArrowLeft: 2, ArrowRight: 3, KeyZ: 4, KeyX: 5,
+               ShiftLeft: 6, ShiftRight: 6 };
+addEventListener("keydown", e => { if (e.code in KEYS) { const m = mask | (1 << KEYS[e.code]);
+  if (m !== mask) { mask = m; sendMask(); } e.preventDefault(); } });
+addEventListener("keyup", e => { if (e.code in KEYS) { mask &= ~(1 << KEYS[e.code]); sendMask();
+  e.preventDefault(); } });
+
+// ── 绘制 ──
+function draw() {
+  requestAnimationFrame(draw);
+  const f = latest; if (!f) return;
+  cx.clearRect(0, 0, 384, 448);
+  for (const it of f.items) { cx.fillStyle = ["#fff", "#f55", "#55f", "#5f5", "#ff5"][it.t % 5];
+    cx.fillRect(px(it.x) - 3, py(it.y) - 3, 6, 6); }
+  for (const s of f.shots) { cx.fillStyle = "#aac"; cx.fillRect(px(s.x) - 1, py(s.y) - 4, 2, 8); }
+  for (const e of f.enemies) {
+    cx.fillStyle = `hsl(${e.hp / 255 * 120},80%,50%)`;
+    cx.beginPath(); cx.arc(px(e.x), py(e.y), 10, 0, 7); cx.fill();
+  }
+  for (const b of f.bullets) {
+    cx.fillStyle = `hsl(${(b.s * 47) % 360},90%,65%)`;
+    cx.beginPath(); cx.arc(px(b.x), py(b.y), 3, 0, 7); cx.fill();
+  }
+  const p = f.players[0];
+  if (p.life !== 0) {
+    cx.fillStyle = p.invuln > 0 && (f.frame & 4) ? "#888" : "#fff";
+    cx.beginPath(); cx.moveTo(px(p.x), py(p.y) - 6); cx.lineTo(px(p.x) - 5, py(p.y) + 5);
+    cx.lineTo(px(p.x) + 5, py(p.y) + 5); cx.closePath(); cx.fill();
+    if (mask & (1 << 6)) { cx.fillStyle = "#f00"; cx.beginPath();
+      cx.arc(px(p.x), py(p.y), 2, 0, 7); cx.fill(); }
+  }
+  effects = effects.filter(fx => fx.t < 20);
+  for (const fx of effects) {
+    fx.t++; cx.strokeStyle = `rgba(255,200,80,${1 - fx.t / 20})`;
+    cx.beginPath(); cx.arc(fx.x, fx.y, 4 + fx.t * 1.5, 0, 7); cx.stroke();
+  }
+  $("fr").textContent = f.frame;
+  $("cnt").textContent = `${f.bullets.length}/${f.shots.length}/${f.enemies.length}/${f.items.length}`;
+  const bs = f.boss.find(b => b.active) || null;
+  $("bosshp").style.width = bs ? (bs.hp / FX * 200) + "px" : "0";
+  $("spell").textContent = bs ? bs.spell : "-";
+  $("timer").textContent = bs ? Math.ceil(bs.timer / 60) : "-";
+  if (lat !== null) $("lat").textContent = lat.toFixed(0);
+}
+draw();
+</script>
+</body>
+</html>
