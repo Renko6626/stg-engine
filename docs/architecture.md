@@ -116,7 +116,7 @@ InputFrame ──► step ──► [相位 0-10 演化 World] ──► 通道A
 | 里程碑 | 接缝（已就位的焊点） | 还缺 |
 |---|---|---|
 | **M2 表现层**（gdext） | 可见性收口 ✅（写走 API）+ **通道 A `WorldView` ✅**（五池每字段裸切片 + `alive_words()` + `view()` 单入口）+ **通道 B ✅**（`RenderReq` + `emit_req`〔世界 API/syscall 27/`.ecl` 内建〕+ `take_requests()` 出口 + settle 敌死请求）+ **外接前收口 ✅**（快照哨兵防漏 + `tasks`/`rng`/`frame`/`events` 封口配 `frame()`/`frame_events()`/`tasks()` 读口 + `spawn_entry*` 表守卫 + `ENGINE_VER` + 场界常量 pub——断层线两出口齐备、误用面收干净） | 新建 crate（WorldBridge + MultiMesh + 请求分发器 + 定点→浮点边界）；开工先还 A1（道具 sprite 列）/A2（bench 重跑） |
-| **M3 回滚 harness** | 快照 = memcpy（账已实测）；RNG 随快照回滚；回放头素材就位：`seed`（World provenance 字段，`seed()` 读回）+ `content_hash` + `engine_ver` | 环形快照缓冲 + 延迟/输入扰动/校验和风暴 harness |
+| **M3 回滚 harness** | 快照 = memcpy（账已实测）；RNG 随快照回滚；回放头素材就位：`seed`（World provenance 字段，`seed()` 读回）+ `content_hash` + `engine_ver`；**L1 存档字节格式 ✅**（`save_bytes`/`load_bytes` + 身份头 v1）+ **L2 storm 重演闸 ✅**（多点双源存档→逐点重演→校验和流逐位对拍，CI 短版 + 变异检验） | 环形快照调度（已定为消费侧插件，随 godot 线）+ 延迟/输入扰动 harness |
 | **M4 网络** | lockstep+rollback 模型；K=20 采样对拍；`engine_ver`/内容哈希握手 | `stg-net`（UDP + 会话/重同步）起 phase 2 |
 | **M5 headless 并行** | 单 world 单线程、并行只在 world 之间（P3）；无外部依赖 | `stg-py`（PyO3 env） |
 | 玩法小刀 | `FieldPool` 消弹区就位（bomb 首租户）；`Shooter.flags` bit0 预留 homing | bomb 铺一个 field；homing 转向率存放待拍 |

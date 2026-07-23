@@ -10,6 +10,7 @@
 
 use std::process::ExitCode;
 
+mod storm;
 mod tables;
 mod viewer;
 
@@ -22,9 +23,10 @@ fn main() -> ExitCode {
         Some("verify-tables") => cmd_verify_tables(),
         Some("serve") => viewer::cmd_serve(&args[2..]),
         Some("dump") => viewer::cmd_dump(&args[2..]),
+        Some("storm") => storm::cmd_storm(&args[2..]),
         _ => {
             eprintln!(
-                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1]>"
+                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] | storm [--frames N] [--saves K] [--seed S]>"
             );
             ExitCode::FAILURE
         }
