@@ -116,6 +116,66 @@ pub(crate) fn mask_to_input(frame: u32, mask: u32) -> InputFrame {
 
 const INDEX_HTML: &str = include_str!("../viewer/index.html");
 
+/// `dump --out FILE [--frames 900] [--seed 1]`——离线录一局(脚本自动打:射击 + 每秒左右
+/// 横移,golden 场景 2 同款),每帧写 `u32 len(LE) + 线格式 v1 帧`。回放页/调试工具消费
+/// (follow-ups F3 预告的 dump 形态)。
+pub(crate) fn cmd_dump(rest: &[String]) -> ExitCode {
+    use stg_core::input::{BTN_LEFT, BTN_RIGHT, BTN_SHOT};
+    let mut out_path: Option<String> = None;
+    let mut frames: u32 = 900;
+    let mut seed: u64 = 1;
+    let mut i = 0;
+    while i < rest.len() {
+        match (rest[i].as_str(), rest.get(i + 1)) {
+            ("--out", Some(v)) => {
+                out_path = Some(v.clone());
+                i += 2;
+            }
+            ("--frames", Some(v)) => {
+                frames = v.parse().expect("--frames 要 u32");
+                i += 2;
+            }
+            ("--seed", Some(v)) => {
+                seed = v.parse().expect("--seed 要 u64");
+                i += 2;
+            }
+            (a, _) => {
+                eprintln!("dump: 未知参数 {a}（支持 --out/--frames/--seed）");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let Some(path) = out_path else {
+        eprintln!("dump: 缺 --out FILE");
+        return ExitCode::from(2);
+    };
+    let (mut w, image, _boss) = crate::build_rainbow_world(seed);
+    let mut buf = Vec::new();
+    for f in 0..frames {
+        let mask = BTN_SHOT
+            | if (f / 60) % 2 == 0 {
+                BTN_LEFT
+            } else {
+                BTN_RIGHT
+            };
+        let input = mask_to_input(f, mask);
+        stg_core::step(&mut w, &stg_core::tables::TABLES_V0, &image, &input);
+        let fb = encode_frame(&w);
+        buf.extend_from_slice(&(fb.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&fb);
+    }
+    match std::fs::write(&path, &buf) {
+        Ok(()) => {
+            eprintln!("dump: {frames} 帧 → {path}（{} B）", buf.len());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("dump: 写 {path} 失败：{e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 /// `serve [--port 8611] [--seed 1]`——单端口：HTTP GET 回内嵌页，WS 升级进 60Hz 游戏循环。
 /// 单客户端串行伺候；断开/刷新 = 下一局新 World（天然 restart）。
 pub(crate) fn cmd_serve(rest: &[String]) -> ExitCode {
