@@ -109,6 +109,11 @@ impl World {
         self.seed
     }
 
+    /// 通道 A 只读视图（委派 `WorldBody::view`）——godot/表现层持 `World`，经它读世界状态。
+    pub fn view(&self) -> crate::world::WorldView<'_> {
+        self.body.view()
+    }
+
     /// Internal task spawn (pub(crate) for VM opcodes/syscalls; used by SPAWN op
     /// and sys_create_bullet in ecl::vm and ecl::syscall).
     ///

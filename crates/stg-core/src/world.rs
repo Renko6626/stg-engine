@@ -35,6 +35,9 @@ mod motion;
 mod player;
 mod settle;
 mod transform;
+mod view;
+
+pub use view::WorldView;
 
 // ── 常量：池 id / 错误码 / 场界（D7 中轴原点，384×448 + 越界边距）──────────
 pub const POOL_BULLET: usize = 0;
@@ -625,6 +628,11 @@ impl WorldBody {
         &self.players
     }
 
+    /// 通道 A 只读视图入口（A9）——step 后/相位间经它读五池 SoA；活着期间借 &self 挡住 step。
+    pub fn view(&self) -> WorldView<'_> {
+        WorldView { body: self }
+    }
+
     /// ECL 全局变量槽读（D12）。slot ≥ 1024 → 0 + 计数——取 &mut self 正是为了
     /// 坏槽计数入校验和（两机必须一样错）。
     pub fn get_var(&mut self, slot: u16) -> i32 {
@@ -1099,5 +1107,24 @@ mod tests {
         let i = w.body.shots.get(h).unwrap();
         assert_eq!(w.body.shots.radius[i], MAX_ENTITY_RADIUS); // P4-b 钳制
         assert_eq!(w.body.diag.contract_viol, 1);
+    }
+
+    /// WorldView 管线：view() 正确接线各池 + players 委派；World::view 与 WorldBody::view 同源。
+    #[test]
+    fn view_exposes_pools_and_players() {
+        let mut w = crate::step::World::new(1);
+        let _b = crate::world::test_support::bullet_at(&mut w, 5, 7);
+        let _e = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 3);
+
+        let vb = w.body.view();
+        assert_eq!(vb.bullets().iter_alive().count(), 1);
+        assert_eq!(vb.enemies().iter_alive().count(), 1);
+        // 裸切片指向该弹 x（判别 bullets() 未错接 enemies()）
+        let bi = vb.bullets().iter_alive().next().unwrap();
+        assert_eq!(vb.bullets().x()[bi], Fx::from_int(5));
+        // players() 委派刀 A 访问器
+        assert_eq!(vb.players().len(), crate::MAX_PLAYERS);
+        // World::view 委派 == WorldBody::view
+        assert_eq!(w.view().bullets().iter_alive().count(), 1);
     }
 }
