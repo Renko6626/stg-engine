@@ -20,9 +20,11 @@ save = 字段写 ~0.1ms + 载荷 FNV ~1.6ms + 落盘 ⇒ **~2-3ms/次**,随地�
   - `fn write_bytes(&self, out: &mut Vec<u8>)` —— 字段声明序、小端、无 padding(规范字节);
   - `fn read_bytes(&mut self, r: &mut SaveReader<'_>) -> Result<(), LoadError>` —— 逐字段
     读回,长度不足 → `LoadError::Truncated`。
-- **skip 单一口径**:`#[checksum(skip = ...)]` 字段**同时不入档**;`read_bytes` 把它们
-  **清零/复位**(与 `copy_into`"恢复出的 World 必须无陈旧输出"契约同一语义;`phase_guard`
-  debug-only 不入档 ⇒ debug 存 ↔ release 读天然兼容)。
+- **skip 单一口径**:`#[checksum(skip = ...)]` 字段**同时不入档**——derive 在写读两侧都
+  **省略**它们;清零语义由 **`load_bytes` 的零构造契约**承担(目标 World 堆零构造后逐字段
+  读回,skip 字段保持零 = "恢复出的 World 必须无陈旧输出",与 `copy_into` 同口径;
+  `phase_guard` debug-only 不入档 ⇒ debug 存 ↔ release 读天然兼容)。`read_bytes` 的
+  trait 契约写明"目标须零初始化"。
 - 防漏性质白拿:新增 World 字段自动入档(同 checksum 单一真相源);收口刀的尺寸哨兵 +
   "save→load→checksum 相等"测试(§4)双重兜底。
 - 叶型手写 impl(core 侧 trait):整数族/`[T; N]`/`Fx`/`Angle`(raw 出入)。凡有 Checksum
