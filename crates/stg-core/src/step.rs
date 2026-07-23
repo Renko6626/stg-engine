@@ -1963,7 +1963,10 @@ mod tests {
     /// 快照防漏哨兵(checksum-mechanism.md 承诺的二线防护,实现形态=本测试):
     /// **本断言红了 ⇒ 你增/删/改了 World 字段** ⇒ 依次核对
     /// ① `copy_into` 逐字段清单(手写,漏拷编译不报错——这正是本哨兵存在的原因)
-    /// ② checksum(新字段默认入;skip 须理由) ③ D10 容量预算,然后才允许更新下方数字。
+    /// ② checksum(新字段默认入;skip 须理由) ③ D10 容量预算
+    /// ④ SaveBytes 存档(derive 类型自动;**手写 impl 如 XformSegPool 须两侧同步**——
+    ///    这是唯一 checksum 与深等价测试都盲的缝,全靠本哨兵逼人来读此清单),
+    /// 然后才允许更新下方数字。
     /// `phase_guard` 仅 debug 存在 ⇒ 双值。
     #[test]
     fn world_size_sentinel_guards_copy_into_field_list() {

@@ -6,23 +6,25 @@
 
 ## 现在（2026-07-23）
 
-- **位置**：**外接前收口刀落地**（六路系统审阅 2026-07-23 裁决的必修项全清）——快照防漏
-  （尺寸哨兵 + 七字段判别式拷贝测试，审阅唯一 Critical）+ D6 硬面封口（`tasks`/`rng`/`frame`/
-  `events` 收 `pub(crate)`，配 `frame()`/`frame_events()`/`tasks()` 读口 + `rand_range` 转发口）
-  + 场界四常量 pub + `spawn_entry*` coherence 守卫三站共用 + `ENGINE_VER=1` 铸造 + 弹 setter
-  陷阱文档。纯收口刀，金向量逐位不变（终审独立实证）。审阅其余发现已批量记档 follow-ups
-  （A1/A2/C20/C21/D7/D8 等）。**M2 一切前置就绪。**
-- **在飞**：无。
-- **下一阶段候选**（开工前先 grill 定序）：**M2 建 `stg-godot` crate**（WorldBridge +
-  MultiMesh + 请求分发器；开工先还 **A1** 道具 sprite 列 + **A2** bench 重跑）· M3 回滚
-  harness（快照账已实测）· bomb/homing 玩法小刀 · F2 校验和轻量化（M3 前免费窗口）。
-- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；D6 剩
-  `globals`/`boss_ui`/`diag`/`last_status` 四软项，M2 顺手）。乙案与文本 DSL 仍是 modding 扩展点。
+- **位置**：**存档格式（L1）+ 风暴闸（L2）落地**——两线（godot 游戏 / RL）共享底座完工：
+  `SaveBytes` trait/derive（与 Checksum 同源字段清单、同 skip 口径，新字段自动入档）+ 全
+  World 覆盖 + 49B 身份头 + `World::save_bytes/load_bytes`（LoadError 八路径判别）+ harness
+  `storm` 恢复重演闸（CI 短版 + 变异检验；release 全参数 1200×8×双源逐位一致）。**F2 已
+  裁决：保 FNV 冻结**（记档关窗）。金向量逐位不变（终审 merge-base/HEAD 双端独立重跑实证）。
+  存档 ~2-3ms/次；环形缓冲/预测未来 = 消费侧插件（D10/D11），随 godot 线出生。
+- **在飞**：无。**两线自此可真并行**（零文件交集）：godot 线动 `stg-godot`，RL 线动 `stg-py`。
+- **下一阶段候选**（开工前先 grill 定序）：**godot 线**——A1 道具 sprite 列 + A2 bench 重跑
+  → 建 `stg-godot` crate（WorldBridge + MultiMesh + 分发器）→ 预测未来/回溯/存档机制刀
+  （环形调度插件 + 消费 save_bytes）；**RL 线**——建 `stg-py` crate（PyO3 env：reset/step/
+  obs/reward，动作 = BTN 掩码，奖励 = frame_events，观测 v1 绑定层拷贝）。
+- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；新增 B14/B15
+  storm 小件；D6 剩四软项 M2 顺手）。乙案与文本 DSL 仍是 modding 扩展点。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-23 | **存档+风暴闸（L1/L2）** | SaveBytes derive（Checksum 同源防漏）+ 49B 身份头 + save/load_bytes + storm 恢复重演逐位闸；F2 裁决保 FNV；两线共享底座完工 |
 | 2026-07-23 | **WS 查看器** | harness serve/dump——单端口 HTTP/WS + 60Hz 推流 + canvas 页 + 线格式 v1 + 回放转储；通道 A/B 首个交互消费者；坑档 bridge-adaptation-notes.md 开档；金向量逐位不变 |
 | 2026-07-23 | **外接前收口刀** | 六路系统审阅 → 快照哨兵+七字段拷贝测试 + tasks/rng/frame/events 封口配读口 + spawn_entry* 表守卫 + ENGINE_VER + 场界 pub；审阅发现批量记档；金向量逐位不变 |
 | 2026-07-23 | **通道 B anm call** | RenderReq + reqs 缓冲 + emit_req 三层（API/syscall 27/.ecl RawVal 内建）+ take_requests + settle 敌死请求；断层线双出口齐备，M2 前置全清 |

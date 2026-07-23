@@ -76,7 +76,7 @@ pub enum LoadError { BadMagic, BadFileVer, EngineVerMismatch { .. }, HashMismatc
 ## 4. F2 裁决(本刀记档,窗口关闭)
 
 **保 FNV-1a64,不换。** 依据(2026-07-23 实测):校验和 1.56ms/帧**无任何在线逐帧消费者**
-——单机不算、联机 K=20 摊 ~78µs、CI/storm 离线;换字宽 mix 只省离线工具耐心,却要重 bless
+——单机不算、联机 K=20 摊 ~70µs(实测口径,详 follow-ups F2)、CI/storm 离线;换字宽 mix 只省离线工具耐心,却要重 bless
 金向量 + 多背一刀。`ENGINE_VER = 1` 的身份语义**即含 FNV-1a64**;将来真换 = bump + 过评审。
 follow-ups F2 条目改口记裁决(留"若 M4 实测采样成本超预算再启"一句活口)。
 

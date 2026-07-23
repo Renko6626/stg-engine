@@ -22,7 +22,9 @@
 extern crate self as stg_core;
 
 /// 引擎确定性契约版本。**bump 纪律**：凡改 op 表/syscall 号语义、校验和算法、烘焙表内容、
-/// 池 SoA 布局/字段序、step 相位序——任何使旧回放/旧对端不可对拍的变更——必须 +1 并过评审。
+/// 池 SoA 布局/字段序、step 相位序、**SaveBytes 载荷/叶型编码**（存档字节格式——头形变更
+/// 走 `save::SAVE_FILE_VER`，载荷编码变更走本值，见 spec §5）——任何使旧回放/旧对端/旧档
+/// 不可对拍的变更——必须 +1 并过评审。
 /// 回放头（M3）/联机握手（M4）身份三元组之一（另两个：表 `content_hash`、镜像 `content_hash`）。
 pub const ENGINE_VER: u32 = 1;
 
