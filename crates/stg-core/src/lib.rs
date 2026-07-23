@@ -45,6 +45,7 @@ pub mod math;
 pub mod player;
 pub mod reqs;
 pub mod rng;
+pub mod save;
 pub mod shots;
 pub mod step;
 pub mod tables;

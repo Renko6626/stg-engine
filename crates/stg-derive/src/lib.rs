@@ -93,6 +93,88 @@ pub fn derive_checksum(input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// `#[derive(SaveBytes)]`（存档格式 L1，与 `Checksum` 同源字段清单）——逐行镜像
+/// `derive_checksum` 的结构体校验/字段遍历/`#[checksum(skip = "理由")]` 解析（同一 helper
+/// attr，各自独立解析），生成 `stg_core::save::SaveBytes` 的 `write_bytes`/`read_bytes`。
+#[proc_macro_derive(SaveBytes, attributes(checksum))]
+pub fn derive_save_bytes(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+
+    let fields = match &input.data {
+        Data::Struct(s) => &s.fields,
+        _ => {
+            return syn::Error::new_spanned(name, "SaveBytes 只支持 struct")
+                .to_compile_error()
+                .into();
+        }
+    };
+
+    let mut write_stmts = Vec::new();
+    let mut read_stmts = Vec::new();
+    for (i, f) in fields.iter().enumerate() {
+        // 解析 #[checksum(skip = "理由")]：skip 需带理由字符串，否则编译错误。
+        let mut skip = false;
+        for attr in &f.attrs {
+            if attr.path().is_ident("checksum") {
+                let r = attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("skip") {
+                        skip = true;
+                        let _reason: LitStr = meta.value()?.parse()?;
+                        Ok(())
+                    } else {
+                        Err(meta.error("未知 checksum 属性（仅支持 skip = \"理由\"）"))
+                    }
+                });
+                if let Err(e) = r {
+                    return e.to_compile_error().into();
+                }
+            }
+        }
+        if skip {
+            continue;
+        }
+        let accessor = match &f.ident {
+            Some(id) => quote! { #id },
+            None => {
+                let idx = Index::from(i);
+                quote! { #idx }
+            }
+        };
+        write_stmts.push(quote! {
+            ::stg_core::save::SaveBytes::write_bytes(&self.#accessor, __out);
+        });
+        read_stmts.push(quote! {
+            ::stg_core::save::SaveBytes::read_bytes(&mut self.#accessor, __r)?;
+        });
+    }
+
+    // 泛型参数补 SaveBytes 约束（非泛型结构体此循环空转）。
+    let mut generics = input.generics.clone();
+    for tp in generics.type_params_mut() {
+        tp.bounds
+            .push(syn::parse_quote!(::stg_core::save::SaveBytes));
+    }
+    let (ig, tg, wc) = generics.split_for_impl();
+
+    quote! {
+        #[automatically_derived]
+        impl #ig ::stg_core::save::SaveBytes for #name #tg #wc {
+            fn write_bytes(&self, __out: &mut ::std::vec::Vec<u8>) {
+                #(#write_stmts)*
+            }
+            fn read_bytes(
+                &mut self,
+                __r: &mut ::stg_core::save::SaveReader<'_>,
+            ) -> ::core::result::Result<(), ::stg_core::save::LoadError> {
+                #(#read_stmts)*
+                Ok(())
+            }
+        }
+    }
+    .into()
+}
+
 // ───────────────────────── define_pool! （D2 池框架）─────────────────────────
 
 struct FieldDef {
