@@ -115,6 +115,7 @@ docs/ecl-lang.md                 【ECL 脚本作者第一入口】.ecl 表层�
 docs/ecl-ops.md                  ECL 字节码层速查（op/syscall/fault 码；VM/编译器开发用）
 docs/zun-ecl-v2-reference.md     ZUN ECL V2 指令/变量表本地副本 + 逐条对照（源 Priw8）
 docs/bench-baseline.md           性能基线（step 曲线/快照/校验和账；大改后重跑续表）
+docs/bridge-adaptation-notes.md  外接适配坑记录（每接一个消费者踩的坑；M2 WorldBridge 先读）
 .github/workflows/ci.yml         三平台矩阵 + 校验和对拍 + fmt/clippy + 依赖防火墙
 crates/
   stg-core/         确定性内核（断层线以下）
