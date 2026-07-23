@@ -64,8 +64,9 @@ headless 高速模拟。核心性质是**确定性**——同一份 `(初始状�
 - **P6** 全量校验：住在 World 里的字段就参与校验和，无例外（含 `facing` 等"纯表现"字段）。
   唯一例外是三条纯输出缓冲（`reqs`/`hits`/`frame_events`）+ debug 的 `phase_guard`，每个 skip
   必须在 derive 属性里给理由字符串。
-  > **名字漂移警告**：设计文档叫 `frame_events`，**代码里的字段是 `events`**（`hits` 一致；
-  > `reqs` 尚未实现，属 M2）。拿设计去 grep `frame_events` 在代码里搜不到。见 `docs/follow-ups.md`。
+  > **名字漂移警告**：设计文档叫 `frame_events`，**代码里的字段是 `events`**（`hits`/`reqs`
+  > 两边一致；`reqs` 已落地——通道 B 刀，2026-07-23，出口 `take_requests()`）。拿设计去
+  > grep `frame_events` 在代码里搜不到。见 `docs/follow-ups.md`。
 
 ## 确定性契约要点（细节见 D1/D11/§2.1）
 
@@ -124,7 +125,7 @@ crates/
     src/{boss,tables}.rs  boss 公告板（A2）/ WorldTables 静态数据层（shottype+道具+角色参数+appearance；
                      &'static 参数穿线不进 World，M0-15/17）
     src/xform.rs      变换段池（D4；手写特例，段即分配单位）
-    src/{input,events}.rs                      输入抽象 / hits+events 缓冲类型
+    src/{input,events,reqs}.rs                 输入抽象 / hits+events 缓冲 / 通道 B 请求（RenderReq）
     src/world.rs     WorldBody 字段所有权 + 写 API + push_* + PhaseGuard + 场界常量
     src/world/       【模块结构镜像相位骨架】player(相1+3，shottype 表驱动发弹) / transform(相4)
                      / integrate(相5) / collide(相6) / settle(相7) / cleanup(相9) / motion(D3 运动写 API)

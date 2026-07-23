@@ -645,8 +645,9 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | （内部）frame_events 满 | — | 丢弃 | — | `diag.events_dropped` |
 
 注：ECL syscall 层已落地（M1）：号表 v1 见 `crates/stg-core/src/ecl/syscall.rs` 与
-[`docs/ecl-ops.md`](docs/ecl-ops.md)（编号即契约）；本表成员中 `emit_req` 仍属 M2，
-`create_player_shot` 不入 syscall（自机弹归世界相位 3）。`&EclImage` 与 `&WorldTables`
+[`docs/ecl-ops.md`](docs/ecl-ops.md)（编号即契约）；本表成员中 `emit_req` 已落地
+（`SYS_EMIT_REQ = 27`，通道 B 刀 2026-07-23），`create_player_shot` 不入 syscall
+（自机弹归世界相位 3）。`&EclImage` 与 `&WorldTables`
 同款参数穿线。
 
 注：`&WorldTables` 参数已实际穿线（M0-17）：`step`/`step_with_director` +1 参，读表的相位
@@ -655,7 +656,8 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 
 注：`set_var / get_var / boss_set` 世界侧已落地（M0-15）：`globals: [i32; 1024]` +
 `boss_ui: [BossUiSlot; 2]` 照 A2 形状入 WorldBody（自动入校验和 + `copy_into` 快照）；
-坏槽 P4-b 照本表；`get_var` 取 `&mut self`（坏槽计数入校验和）。`emit_req` 仍属 M2。
+坏槽 P4-b 照本表；`get_var` 取 `&mut self`（坏槽计数入校验和）。`emit_req` 已落地
+（通道 B 刀 2026-07-23，处置照本表：满 → 丢弃 + `TRUNCATED` + `diag.reqs_dropped`）。
 
 注：`create_bullets_batch` 世界侧已落地（M0-14，spec 2026-07-17）：N×K 网格（角度外层×速度内层
 = 池槽序）、步长直给（张角/端点推导属作者层语法糖，归 M1 ECL DSL：`ring(n)`/`fan(spread, n)`

@@ -261,7 +261,8 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 **代码里的字段是 `events`**（`WorldBody.events` / `events_len` / `EVENTS_CAP` / `push_event` /
 `diag.events_overflow`）。拿设计文档去 grep `frame_events`，代码里**一个都搜不到**。
 
-`hits` 两边一致；`reqs` 尚未实现（M2）。
+`hits` 两边一致；`reqs` 已落地且两边同名（通道 B 刀，2026-07-23——设计/代码都叫 `reqs`，
+本条漂移仅剩 `frame_events`↔`events` 一处）。
 
 **这不只是审美**：A5 那张表刻意用 `hits`（碰撞命中缓冲）对 `frame_events`（世界大事记）来区分两条
 缓冲，`frame_events` 里的 "frame" 正是它的生命周期语义。代码的 `events` 丢了这个区分度。
