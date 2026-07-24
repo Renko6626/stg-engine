@@ -3,7 +3,10 @@
 
 use godot::prelude::*;
 
+pub mod boot;
 pub mod bridge;
+pub mod frame;
+pub mod save;
 
 struct StgGodotExtension;
 
