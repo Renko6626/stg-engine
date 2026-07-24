@@ -75,6 +75,22 @@ impl World {
         w
     }
 
+    /// 正典开局(spec 2026-07-24 §2.3)——回放可移植性与联机握手 §7.2"初始状态由
+    /// 双方从同一确定性初始化各自构造"的**唯一入口**:new + 写 `GVAR_RANK` +
+    /// `start_main`(Stage 属主)。场景实体摆放归脚本(`spawn_enemy`/`boss_set`/
+    /// `spell_begin` 均为 builtin);**编译不下沉**,只吃成品镜像(依赖方向不可反转)。
+    /// rainbow 金向量的手摆 boss boot 是冻结遗产,不迁移(spec §2.3)。
+    pub fn new_game(
+        seed: u64,
+        rank: i32,
+        image: &crate::ecl::image::EclImage,
+    ) -> Result<Box<World>, crate::ecl::binding::TaskStartError> {
+        let mut w = World::new(seed);
+        w.body.set_var(crate::consts::GVAR_RANK, rank);
+        w.start_main(image)?;
+        Ok(w)
+    }
+
     /// 整块快照（安全逐字段，I7/D11）。
     pub fn copy_into(&self, dst: &mut World) {
         let s = &self.body;

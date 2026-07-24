@@ -393,6 +393,34 @@ mod tests {
 
     // ── Step 1 tests from the brief ─────────────────────────────────────
 
+    /// 正典开局(spec 2026-07-24 §2.3):rank 入 GVAR_RANK、main 一次性已启。
+    #[test]
+    fn new_game_canonical_boot() {
+        let image = root_and_async_image();
+        let mut w = World::new_game(42, 3, &image).expect("boot");
+        assert_eq!(
+            w.body.get_var(crate::consts::GVAR_RANK),
+            3,
+            "rank 写入正典槽"
+        );
+        assert!(
+            matches!(
+                w.start_main(&image),
+                Err(TaskStartError::MainAlreadyStarted)
+            ),
+            "new_game 已启 main,一次性约束生效"
+        );
+    }
+
+    /// 握手 §7.2"同一确定性初始化":同参两次 new_game 世界校验和全等。
+    #[test]
+    fn new_game_same_inputs_same_world() {
+        let image = root_and_async_image();
+        let wa = World::new_game(7, 2, &image).expect("a");
+        let wb = World::new_game(7, 2, &image).expect("b");
+        assert_eq!(wa.checksum(), wb.checksum(), "同参必同世界");
+    }
+
     #[test]
     fn start_main_is_stage_owned_and_once_per_world_lifetime() {
         let image = root_and_async_image();
