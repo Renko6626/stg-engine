@@ -6,27 +6,25 @@
 
 ## 现在（2026-07-24）
 
-- **位置**：**符卡计器机构落地**——ZUN 忠实分工：符卡**记账归引擎**（`SpellSlot`：计时/
-  bonus 衰减/破卡血线自动检测/伤害下钳防打穿/miss·bomb 资格作废/超时/结算入分/事件/req/
-  结束自动清弹/boss_ui 自动喂逐卡血条），**控制归脚本**（宣言/弹幕/换卡）。模式随卡生死
-  （`spell_bound` + **epoch 代际戳**防槽复用 ABA）+ 三 syscall（`spell_begin/end/timer`）+
-  `wait_spell()` 语句糖（保留字化）。rainbow 狗粮化成两行范式，`timer_ui` 轮询删。**A2 拍板
-  范围修订**（记账/控制分家，评审记录入 spec §1 + stg-world-design A2 注）。金向量三刀双变
-  （字段簇取值平移 ×2 + 狗粮化行为变 ×1，非回归——判别式单测 + storm + 跨平台 CI 守）；
-  Critical 槽复用 ABA 已修 + 终审独立复现闭合。
-- **在飞**：无。两线仍可真并行：godot 线动 `stg-godot`，RL 线动 `stg-py`（符卡机构给两线
-  都添了内容/episode 边界：`EVT_SPELL_*` 是 RL episode 正典信号）。
-- **下一阶段候选**（开工前先 grill 定序）：**godot 线**——A1 道具 sprite 列 + A2 bench 重跑
-  → 建 `stg-godot` crate（WorldBridge + MultiMesh + 分发器）→ 预测未来/回溯/存档机制刀
-  （环形调度插件 + 消费 save_bytes）；**RL 线**——建 `stg-py` crate（PyO3 env：reset/step/
-  obs/reward，动作 = BTN 掩码，奖励 = frame_events/EVT_SPELL_*，观测 v1 绑定层拷贝）。
-- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；B16 符卡三小件；B14/B15
-  storm 小件；D6 剩四软项 M2 顺手）。乙案与文本 DSL 仍是 modding 扩展点。
+- **位置**：**前置小刀收官**——桥前三件已还清：A1 `ItemTypeCfg` 加 `sprite` 表列（道具渲染
+  join 归消费端，表 v2 重烘焙，判别式单测钉住"仅 sprite 变不影响行为"）+ 正典开局
+  `World::new_game` 下沉组装层（回放可移植/握手 §7.2 唯一确定性初始化入口，场景摆放归脚本）
+  + A2 bench 第三轮续表（World 实测 1.03MB，校验和/step 比值 13-265×，详见
+  `docs/bench-baseline.md`）。前置账已清。
+- **在飞**：无。
+- **下一阶段候选**：**M2 建桥**——`stg-godot` cdylib（方案 A 薄壳厚核已拍板：boot/frame/save
+  纯 Rust 裸测，bridge.rs gdext 壳零逻辑），冻结面/生命周期/错误映射/`.so` 产物策略见
+  `docs/superpowers/specs/2026-07-24-stg-godot-bridge-design.md` §3-§9（实施 plan 另写）；
+  RL 线仍可并行动 `stg-py`（PyO3 env）。
+- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；follow-ups A1/A2
+  已随本刀销账；B16 符卡三小件；B14/B15 storm 小件；D6 剩四软项 M2 顺手）。乙案与文本 DSL
+  仍是 modding 扩展点。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-24 | 前置小刀 | A1 表列 sprite/正典 boot new_game/bench 第三轮 |
 | 2026-07-24 | **符卡计器机构** | 记账归引擎（SpellSlot 计时/衰减/破卡血线/伤害下钳/结算入分/boss_ui 自动喂）+ 模式随卡生死（spell_bound+epoch 防 ABA）+ 三 syscall + wait_spell 糖 + rainbow 狗粮化；A2 范围修订；金向量三刀双变 |
 | 2026-07-23 | **存档+风暴闸（L1/L2）** | SaveBytes derive（Checksum 同源防漏）+ 49B 身份头 + save/load_bytes + storm 恢复重演逐位闸；F2 裁决保 FNV；两线共享底座完工 |
 | 2026-07-23 | **WS 查看器** | harness serve/dump——单端口 HTTP/WS + 60Hz 推流 + canvas 页 + 线格式 v1 + 回放转储；通道 A/B 首个交互消费者；坑档 bridge-adaptation-notes.md 开档；金向量逐位不变 |

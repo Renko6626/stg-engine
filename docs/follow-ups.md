@@ -16,18 +16,6 @@
 > **判据**：某条债一旦满足"下一刀正好要改这块代码，而这块代码没有网"，就升到 A 组、开工前先还。
 > bomb 那刀要改 `world/player.rs` 的生死状态机 —— 这正是当初把 GAMEOVER 缺口升到 A 组的理由。
 
-### A1. ItemPool 无 sprite 数据源——M2 建桥第一周先补（2026-07-23 系统审阅）
-
-`ItemTypeCfg` 无 sprite 列、`ItemPool` 无外观字段——道具的 `item_type→贴图` 映射在 core 侧
-缺位（弹有 `AppearanceCfg.sprite`、敌有 `EnemyPool.sprite`，唯道具会逼表现层自编硬表，破单一
-真相源）。修法：表加一列 + 烘焙表 bump + join 校验。触发点 = M2 建桥（就是下一刀，故直入 A 组）。
-
-### A2. bench 基线过期——M2 帧预算决策前重跑（2026-07-23 系统审阅）
-
-`docs/bench-baseline.md` 数字过期：World 实测 1.03MB（M1 任务池 ~108KB 从未入账，通道 B
-+7KB 只是零头），校验和/step 比值实测远超文档口径。M2 做帧预算/每帧校验和策略决策前重跑
-bench 续表（F2 的窗口判断也依赖这份数字）。
-
 ---
 
 ## B. 测试覆盖缺口

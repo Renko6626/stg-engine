@@ -533,7 +533,8 @@ release 回绕成负数 → 平方后仍为正巨数 → 全场无条件判撞�
 **实现定稿补记**（spec 2026-07-16 / M0-12 实现定稿）：
 
 - **配置表 v0 落点**：`ItemTypeCfg`（`score`/`eject_speed`/`terminal_vy`/`magnet_speed`/
-  `pickup_radius`/`attract_radius` 六字段）以引擎常量 `ITEM_CFG: [ItemTypeCfg; ITEM_TYPE_COUNT]`
+  `pickup_radius`/`attract_radius`/`sprite` 七字段；sprite 为 A1 表列，2026-07-24，渲染 join
+  归消费端）以引擎常量 `ITEM_CFG: [ItemTypeCfg; ITEM_TYPE_COUNT]`
   落在 `crates/stg-core/src/items.rs`（`player.rs` 同款先例）；WorldTables 建成后整表搬家、
   结构体字段不动。
 - **磁吸圈列**：配置表字段清单补上 `attract_radius`（磁吸触发半径，近距磁吸判定用）——本文前述
