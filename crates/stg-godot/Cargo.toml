@@ -1,0 +1,13 @@
+[package]
+name = "stg-godot"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.94"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+stg-core = { workspace = true }
+stg-ecl-compiler = { workspace = true }
+godot = { version = "=0.5.4", features = ["api-4-6"] }
