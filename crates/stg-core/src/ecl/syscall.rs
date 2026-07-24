@@ -639,17 +639,23 @@ fn sys_emit_req(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
 /// 符卡宣言（`SYS_SPELL_BEGIN`=28；符卡机构 spec 2026-07-24 §5）：7 参逆序弹出；
 /// `self_enemy_handle`（非敌 misuse → Fault，同 `move_enemy_to` 误用策略）。
 ///
-/// **两条控制器补充决策**（复审 T1-m3/T1-m1 落地，spec 未写，本刀新增，syscall 层专属——
-/// 世界侧 `spell_begin_internal` 仍宽松接受负 threshold/双绑定供白盒测直调）：
+/// **四条控制器补充决策**（复审 T1-m3/T1-m1/Task2 复审落地，spec 未写全，本刀新增，
+/// syscall 层专属——世界侧 `spell_begin_internal` 仍宽松接受负 threshold/双绑定供白盒测
+/// 直调）：
 /// - **拒负 threshold**：血线语义非负，`threshold < 0` → P4-b no-op + 计数，不建。
 /// - **防双绑定**：该 boss 已绑到**另一** active 槽 → P4-b no-op + 计数（单卡/boss 是
 ///   设计用法，多卡序靠脚本顺序 begin 下一张，不允许并行两槽绑同一 boss）。
+/// - **拒负 bonus0**（Task 2 复审 Important #2，spec §5 P4-b 拒收条件）：分数语义非负，
+///   `bonus0 < 0` → P4-b no-op + 计数（必须在 `as u32` 转型前拒，否则变 `u32::MAX`）。
+/// - **拒非正 time_limit**（Task 2 复审 Important #3，spec §5 P4-b 拒收条件）：
+///   `time_limit <= 0` → P4-b no-op + 计数（必须在 `as u16` 转型前拒，否则负值抹符号
+///   变成巨大正数，绕过 `spell_begin_internal` 里"`time_limit == 0`"那条守卫）。
 ///
 /// `pattern`（`SubRef`，负值=none）**先查后建**（同 `sys_create_bullet`/`OP_SPAWN` 坏号
 /// 口径）：越界/非 0 参 Async 号 → Fault，零副作用（`spell_begin_internal` 尚未调用）。
 /// `spell_begin_internal` 返 `true` 且 `pattern` 非 none → 照 fire task-spawn 样板 spawn
-/// 模式任务（owner=boss，`spell_bound = slot+1`——"生"，spec §2.1）；返 `false` → 不 spawn
-/// （P4-b 已在 internal 计数）。
+/// 模式任务（owner=boss，`spell_bound = slot+1` + `spell_epoch` 读回本槽刚铸出的代际戳——
+/// "生"，spec §2.1 + ABA 修复复审 Task 2）；返 `false` → 不 spawn（P4-b 已在 internal 计数）。
 fn sys_spell_begin(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let threshold = pop(task)?;
     let flags = pop(task)?;
@@ -661,6 +667,25 @@ fn sys_spell_begin(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
 
     if threshold < 0 {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+        ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+        return Ok(());
+    }
+
+    // 复审 Task 2 补充决策（Important #2，spec §5 P4-b 拒收条件）：`bonus0 < 0` 必须在
+    // `bonus0 as u32` 转型**之前**拒收——否则 `-1i32 as u32` 变 `u32::MAX`，等于凭空发
+    // ~42.9 亿分。血线/分数语义都非负，同 `threshold < 0` 口径处置：no-op + 计数，不建。
+    if bonus0 < 0 {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+        ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+        return Ok(());
+    }
+
+    // 复审 Task 2 补充决策（Important #3，spec §5 P4-b 拒收条件）：`time_limit <= 0` 必须在
+    // `time_limit as u16` 转型**之前**拒收——`spell_begin_internal` 只查 `time_limit == 0`，
+    // 而负值经 `as u16` 抹符号会变成一个巨大的正数（如 `-1 → 65535`），从而绕过那条守卫、
+    // 带着离谱的时限成功 begin。血线语义要求正时限，同上口径处置。
+    if time_limit <= 0 {
         ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
         ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
         return Ok(());
@@ -719,6 +744,11 @@ fn sys_spell_begin(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
                 // "生"：模式任务显式绑定本槽（spec §2.1），与 OP_SPAWN 的"继承"路径
                 // 不同——这是模式树的根，绑定值凭空而来，不是继承自父任务。
                 ctx.tasks.slots[idx as usize].spell_bound = (slot_idx + 1) as u8;
+                // ABA 修复（复审 Task 2，Critical）：同批写入本槽刚铸出的代际戳（begin 内
+                // 已在 `spell_begin_internal` 里推进过 `spell_seq[slot]` 并戳进
+                // `spells[slot].epoch`，此处读回）——模式任务据此锁定"自己是这一代"，
+                // 槽将来被复用给别的卡时，相位 2 调度门禁靠这个戳把它挡在门外。
+                ctx.tasks.slots[idx as usize].spell_epoch = ctx.body.spells[slot_idx].epoch;
             }
             None => {
                 ctx.body.diag.pool_full[crate::world::POOL_TASK] =
@@ -1645,6 +1675,11 @@ mod tests {
             w.tasks.slots[child].spell_bound, 1,
             "槽 0 → spell_bound = slot+1 = 1"
         );
+        assert_eq!(
+            w.tasks.slots[child].spell_epoch, w.body.spells[0].epoch,
+            "模式任务应捕获本槽刚铸出的代际戳（ABA 修复，复审 Task 2）"
+        );
+        assert_ne!(w.body.spells[0].epoch, 0, "首次 begin 后 epoch 应已非零");
     }
 
     /// `pattern=none`（负值）→ begin 仍成功但不 spawn 任何任务。
@@ -1729,6 +1764,49 @@ mod tests {
         assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
         assert_eq!(w.body.spells[0].active, 0, "拒负 threshold：不 begin");
         assert_eq!(w.tasks.iter_alive().count(), 0, "不 spawn");
+    }
+
+    /// 控制器补充决策（Task 2 复审 Important #2，spec §5 P4-b 拒收条件）：`bonus0 < 0` →
+    /// P4-b no-op + 计数，不 begin、不 spawn——必须在 `bonus0 as u32` 转型前拒收，否则
+    /// `-1i32 as u32` 变 `u32::MAX`，等于凭空发 ~42.9 亿分（未拒时的真实后果）。
+    #[test]
+    fn sys_spell_begin_negative_bonus0_is_p4b_noop_no_spawn() {
+        let mut w = World::new(1);
+        let ecl = async_pattern_image();
+        let (_boss, mut task) = enemy_task(&mut w, 1000);
+        let cv0 = w.body.diag.contract_viol;
+        let args = [0, 5, 1, 100, -1, 0, 0]; // bonus0=-1，pattern 合法在册
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args).is_ok());
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.body.spells[0].active, 0, "拒负 bonus0：不 begin");
+        assert_eq!(w.tasks.iter_alive().count(), 0, "不 spawn");
+    }
+
+    /// 控制器补充决策（Task 2 复审 Important #3，spec §5 P4-b 拒收条件）：`time_limit <= 0`
+    /// → P4-b no-op + 计数，不 begin、不 spawn——负值经 `as u16` 抹符号会变成巨大正数
+    /// （如 `-1 → 65535`），绕过 `spell_begin_internal` 内"`time_limit == 0`"那条守卫，
+    /// 未拒时会带着离谱的时限成功 begin。
+    #[test]
+    fn sys_spell_begin_non_positive_time_limit_is_p4b_noop_no_spawn() {
+        let mut w = World::new(1);
+        let ecl = async_pattern_image();
+        let (_boss, mut task) = enemy_task(&mut w, 1000);
+        let cv0 = w.body.diag.contract_viol;
+        let args = [0, 5, 1, -1, 1000, 0, 0]; // time_limit=-1，pattern 合法在册
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args).is_ok());
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.body.spells[0].active, 0, "拒非正 time_limit：不 begin");
+        assert_eq!(w.tasks.iter_alive().count(), 0, "不 spawn");
+
+        // 对照：time_limit=0 同样应被拒（非仅负值——`<= 0` 覆盖两态）。
+        task.sp = 0;
+        let cv1 = w.body.diag.contract_viol;
+        let args0 = [0, 5, 1, 0, 1000, 0, 0];
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args0).is_ok());
+        assert_eq!(w.body.diag.contract_viol, cv1 + 1);
+        assert_eq!(w.body.spells[0].active, 0, "time_limit==0 同样拒收");
     }
 
     /// 控制器补充决策（复审 T1-m1）：该 boss 已绑到另一 active 槽 → P4-b no-op + 计数

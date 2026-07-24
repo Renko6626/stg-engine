@@ -356,6 +356,10 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
                         // 一种继承值）——整棵模式树随卡死绝，`fire` 挂弹任务（syscall.rs 的
                         // task-spawn，非本 op）不走此路，故不继承，见该处文档。
                         ctx.tasks.slots[idx as usize].spell_bound = task.spell_bound;
+                        // ABA 修复（复审 Task 2）：`spell_epoch` 必须与 `spell_bound` 同批
+                        // 继承——只继承槽号、不继承代际戳，子任务会带着"当前"epoch 却本该
+                        // 锁定在 spawn 那一刻的世代，槽复用后就会误判为"仍是同一代"。
+                        ctx.tasks.slots[idx as usize].spell_epoch = task.spell_epoch;
                         push!(idx as i32)
                     }
                     None => {
@@ -453,12 +457,23 @@ pub(crate) fn run_tasks(
             }
         }
 
-        // 符卡机构 spec §2.1"死"：`spell_bound != 0` 且绑定槽已非 active ⇒ 就地静默杀
-        // （镜像上面的 owner 存活门禁——同 owner 失效处置，不发 `EVT_TASK_FAULT`、不计
-        // `task_faults`；池序确定，I4）。
+        // 符卡机构 spec §2.1"死"：`spell_bound != 0` 且（绑定槽已非 active **或** 绑定槽
+        // 已被复用给别的卡）⇒ 就地静默杀（镜像上面的 owner 存活门禁——同 owner 失效处置，
+        // 不发 `EVT_TASK_FAULT`、不计 `task_faults`；池序确定，I4）。
+        //
+        // **ABA 修复（复审 Task 2，Critical）**：只看 `active` 会漏判"同槽换卡"——卡 A 结束
+        // 清槽后，若本轮（同一次 `run_tasks` 扫描内）低索引任务先把卡 B `spell_begin` 进同一
+        // 槽，`active` 会重新变 1，仅看 `active` 的旧门禁会把卡 A 的残留任务误判为"仍绑着
+        // 活槽"而放行，导致卡 A 的模式任务与卡 B 并发。`epoch` 是槽复用时单调递增的代际戳
+        // （`spell_begin_internal` 写入，见 `spell.rs`/`world.rs`），旧任务捕获的
+        // `spell_epoch` 是绑定当刻的值——槽被复用后两者必不相等，据此补一条身份比较：
+        // 槽 `active` 但 `epoch` 不匹配 = 旧卡残党，同样杀。
         if t.spell_bound != 0 {
             let s = t.spell_bound as usize - 1;
-            if s >= crate::boss::MAX_BOSSES || body.spells[s].active == 0 {
+            if s >= crate::boss::MAX_BOSSES
+                || body.spells[s].active == 0
+                || body.spells[s].epoch != t.spell_epoch
+            {
                 tasks.kill(i);
                 continue;
             }
@@ -1326,17 +1341,19 @@ mod tests {
 
     // ── 符卡 `spell_bound`（Task 2；spec §2.1）──────────────────────────────
 
-    /// `OP_SPAWN` 继承（spec §2.1"生""继承"）：子任务的 `spell_bound` 继承父任务当前值——
-    /// 整棵模式树随卡死绝的地基。两态都验：非零值真继承 + 零值（未绑定）同样继承（不是
-    /// "只在非零时才拷贝"的半截实现）。
+    /// `OP_SPAWN` 继承（spec §2.1"生""继承"）：子任务的 `spell_bound` **与** `spell_epoch`
+    /// 一起继承父任务当前值（ABA 修复，复审 Task 2：只继承槽号不继承代际戳会让子任务的
+    /// epoch 冻结在错误的默认值，见 `run_tasks` 门禁文档）——整棵模式树随卡死绝的地基。
+    /// 两态都验：非零值真继承 + 零值（未绑定）同样继承（不是"只在非零时才拷贝"的半截实现）。
     #[test]
-    fn op_spawn_child_inherits_parent_spell_bound() {
+    fn op_spawn_child_inherits_parent_spell_bound_and_epoch() {
         let mut w = test_world();
         let ecl = async_image(vec![OP_END as u32], 0);
 
         let mut budget = u32::MAX;
         let mut bound_task = Task {
             spell_bound: 3, // 模拟"绑定符卡槽 2"（槽号+1）的模式任务
+            spell_epoch: 7, // 模拟绑定当刻捕获的代际戳
             ..Task::default()
         };
         let mut ctx = VmCtx {
@@ -1356,10 +1373,14 @@ mod tests {
             w.tasks.slots[child].spell_bound, 3,
             "子任务应继承父 spell_bound（非零值）"
         );
+        assert_eq!(
+            w.tasks.slots[child].spell_epoch, 7,
+            "子任务应同批继承父 spell_epoch（非零值）"
+        );
 
         // 对照：spell_bound=0（未绑定）的父 spawn 出的子也应是 0——同一条继承逻辑的另一态。
         let mut budget0 = u32::MAX;
-        let mut unbound_task = Task::default(); // spell_bound=0
+        let mut unbound_task = Task::default(); // spell_bound=0, spell_epoch=0
         let mut ctx0 = VmCtx {
             code: &[OP_SPAWN as u32, 1, 0, OP_END as u32],
             budget: &mut budget0,
@@ -1377,6 +1398,7 @@ mod tests {
             w.tasks.slots[child0].spell_bound, 0,
             "未绑定父的子任务仍是 0（不是巧合默认值，是继承结果）"
         );
+        assert_eq!(w.tasks.slots[child0].spell_epoch, 0, "同上，epoch 也是 0");
     }
 
     /// spec §2.1 死路径：相位 2 调度门禁镜像 owner 存活门禁——任务 `spell_bound != 0`
@@ -1438,6 +1460,9 @@ mod tests {
             )
             .unwrap();
         w.tasks.slots[mode_idx as usize].spell_bound = 1;
+        // ABA 修复（复审 Task 2）：`spell_bound`/`spell_epoch` 恒同批——照 `sys_spell_begin`
+        // 的真实写法，捕获 begin 后槽内的当刻 epoch，而非留空默认值 0。
+        w.tasks.slots[mode_idx as usize].spell_epoch = w.body.spells[0].epoch;
 
         // fire 挂弹任务：owner=弹，spell_bound 保持默认 0（不继承，spec §2.1"fire 不继承"）。
         let bh = crate::world::test_support::bullet_at(&mut w, 0, 0);
@@ -1469,6 +1494,10 @@ mod tests {
             "spawn 子任务应继承父 spell_bound（整棵模式树随卡生死）"
         );
         assert_eq!(
+            w.tasks.slots[child_idx].spell_epoch, w.tasks.slots[mode_idx as usize].spell_epoch,
+            "spawn 子任务应同批继承父 spell_epoch（ABA 修复，复审 Task 2）"
+        );
+        assert_eq!(
             w.tasks.slots[child_idx].owner_kind, OWNER_ENEMY,
             "子任务 owner 继承父 owner（OP_SPAWN 既有语义，未被本刀改动）"
         );
@@ -1492,6 +1521,128 @@ mod tests {
         assert_eq!(
             w.body.diag.task_faults, 0,
             "同 owner 失效处置：静默杀，不计 Fault"
+        );
+    }
+
+    /// **Critical 复审修复回归测**（审员两真任务 repro 的永久化）：槽复用 ABA——旧调度门禁
+    /// 只看 `active` 不看身份，同一 `run_tasks` 趟内"卡 A 结束清槽 → 低索引 boss 主控任务
+    /// 恢复并把卡 B `spell_begin` 进同一槽 → 高索引卡 A 残留模式任务被检查"这条时序会让
+    /// 卡 A 残党因为看到 `active==1`（其实是卡 B 的）而被误判"仍绑活槽"从而不被杀——两卡
+    /// 弹幕并发。这正是 spec §8 多卡序列（`spell_begin; wait_spell; spell_begin` 同槽）的
+    /// 主线场景。
+    ///
+    /// 本测试真实驱动一次 `run_tasks`：低索引 master 任务（index 0，owner=boss）的字节码
+    /// 真跑 `OP_SYS SYS_SPELL_BEGIN` 把卡 B 起在槽 0；高索引残留任务（index 1）手工模拟
+    /// "卡 A begin 时 spawn 出、此刻仍活着的模式任务"——`spell_bound=1` 绑槽 0，
+    /// `spell_epoch` 是卡 A 当年的旧值。断言：同一趟 `run_tasks` 后卡 B 已 active 且
+    /// 卡 A 残留任务已死（`!is_alive`），不与卡 B 并发。
+    #[test]
+    fn run_tasks_gate_kills_stale_epoch_leftover_task_on_same_pass_slot_reuse_aba() {
+        let mut w = test_world();
+        let boss = crate::world::test_support::spawn_enemy(&mut w, 0, 80, 999);
+
+        // 卡 A：begin 于槽 0（首次 begin，epoch 从 spell_seq[0]=0 铸出新值 1）。
+        assert!(w.body.spell_begin_internal(0, boss, 1, 100, 1000, 0, 0));
+        let epoch_a = w.body.spells[0].epoch;
+        assert_eq!(epoch_a, 1, "首次 begin 铸出 epoch=1");
+
+        // 字节码：
+        //  0: OP_END                                       — sub0 Root（占位不用）
+        //  1..16: PUSHI ×7（slot=0, spell_id=99, pattern=none(-1), time_limit=100,
+        //         bonus0=1000, flags=0, threshold=0）—— 与 sys_spell_begin 的弹出序
+        //         （threshold 先弹）严格镜像声明序（正序压栈，同既有测试 `args` 数组惯例）。
+        // 15: OP_SYS SYS_SPELL_BEGIN                        — master 任务的核心动作
+        // 17: OP_END                                        — master 任务本轮自然结束
+        // 18: PUSHI 1 / OP_WAIT / OP_JMP 18                 — sub2 leftover 入口：单纯等待
+        //     循环（不会自然终止；真跑到这里说明 ABA 门禁没杀掉它，同既有 mode 任务先例）。
+        let code = vec![
+            OP_END as u32, // 0
+            OP_PUSHI as u32,
+            0, // 1,2: slot=0
+            OP_PUSHI as u32,
+            99, // 3,4: spell_id=99（卡 B）
+            OP_PUSHI as u32,
+            (-1i32) as u32, // 5,6: pattern=none
+            OP_PUSHI as u32,
+            100, // 7,8: time_limit
+            OP_PUSHI as u32,
+            1000, // 9,10: bonus0
+            OP_PUSHI as u32,
+            0, // 11,12: flags
+            OP_PUSHI as u32,
+            0, // 13,14: threshold
+            OP_SYS as u32,
+            crate::ecl::syscall::SYS_SPELL_BEGIN as u32, // 15,16
+            OP_END as u32,                               // 17: master 结束
+            OP_PUSHI as u32,                             // 18
+            1,                                           // 19
+            OP_WAIT as u32,                              // 20
+            OP_JMP as u32,                               // 21
+            18,                                          // 22
+        ];
+        let ecl = test_image(
+            code,
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(1, SubKind::Async, vec![]), // 低索引 master：boss 主控恢复处
+                SubInit::new(18, SubKind::Async, vec![]), // 高索引残留：卡 A 遗留模式任务
+            ],
+            vec![EntryInit::new("entry_1", 1), EntryInit::new("entry_2", 2)],
+            Some(0),
+        );
+
+        // 模拟"卡 A 已在上一帧的 settle 趟结束"：`spell_end_by_owner` 走 HP 路径清槽，
+        // 但持久计数器 `spell_seq[0]` 不随之归零——卡 A 的历史 epoch（epoch_a）只留存在
+        // 残留任务自己捕获的 `spell_epoch` 字段里。
+        w.body.spell_end_by_owner(boss);
+        assert_eq!(w.body.spells[0].active, 0, "卡 A 已清槽");
+
+        // 低索引 master 任务（池索引 0）：owner=boss，本轮将真跑 SYS_SPELL_BEGIN 把卡 B
+        // 起在槽 0（同槽复用）。
+        let master_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(1).unwrap(),
+                &[],
+                (OWNER_ENEMY, boss.index, boss.generation),
+            )
+            .unwrap();
+        // 高索引卡 A 残留模式任务（池索引 1）：`spell_bound=1`（槽 0+1），`spell_epoch`
+        // 是卡 A 当年绑定时的旧值——镜像"`sys_spell_begin` spawn 模式任务时写入"的真实结果。
+        let leftover_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(2).unwrap(),
+                &[],
+                (OWNER_ENEMY, boss.index, boss.generation),
+            )
+            .unwrap();
+        w.tasks.slots[leftover_idx as usize].spell_bound = 1;
+        w.tasks.slots[leftover_idx as usize].spell_epoch = epoch_a;
+        assert!(
+            master_idx < leftover_idx,
+            "前提：master 池索引须低于 leftover（升序遍历，master 先跑）"
+        );
+
+        // 出生帧门禁：两任务均在 frame0 生，推进到 frame1 才会真跑。
+        w.body.frame = 1;
+        run_tasks(&mut w.tasks, &mut w.body, &ecl, &crate::tables::TABLES_V0);
+
+        // 卡 B 已在同一趟 run_tasks 内由 master 任务成功起卡。
+        assert_eq!(w.body.spells[0].active, 1, "master 任务应已把卡 B 起在槽 0");
+        assert_eq!(w.body.spells[0].spell_id, 99, "槽内应是卡 B 的 spell_id");
+        let epoch_b = w.body.spells[0].epoch;
+        assert_ne!(
+            epoch_b, epoch_a,
+            "同槽复用换代：卡 B 的 epoch 必须与卡 A 不同"
+        );
+
+        // 核心断言（Critical 修复的判别点）：即使槽 0 此刻 active==1（卡 B 的），epoch 身份
+        // 比较仍须把卡 A 残留任务挡下——它不能与卡 B 并发。
+        assert!(
+            !w.tasks.is_alive(leftover_idx as usize),
+            "卡 A 残留模式任务的 epoch（{epoch_a}）与当前槽 epoch（{epoch_b}）不匹配，\
+             ABA 门禁必须杀掉它，不能让它与卡 B 并发"
         );
     }
 }

@@ -176,6 +176,11 @@ pub struct WorldBody {
     pub(crate) events_len: u16,
     /// 符卡计器槽（每 boss 一个；spec 2026-07-24）。生而封口，读经 `view().spells()`。
     pub(crate) spells: [crate::spell::SpellSlot; crate::boss::MAX_BOSSES],
+    /// 每槽持久单调代际计数器（ABA 修复，复审 Task 2）：`spell_begin_internal` 成功时
+    /// `wrapping_add(1)` 后把新值戳进 `spells[slot].epoch`。**只增不清**——不随槽结算归零，
+    /// 与 `spells[slot]` 本身（inactive 时全字段清零）刻意分层：槽内 `epoch` 是"当前占用者的
+    /// 世代"，这里是"这个槽历史上一共发过多少代"。全零初始化合法（首次 begin 即从 1 起算）。
+    pub(crate) spell_seq: [u16; crate::boss::MAX_BOSSES],
     #[checksum(skip = "纯输出缓冲，回滚重演确定性再生（P6/§6.2 通道 B）")]
     pub(crate) reqs: [RenderReq; REQS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 reqs 一并 skip（通道 B）")]
@@ -721,6 +726,10 @@ impl WorldBody {
         let hp_start = self.enemies.hp[bi];
         let bonus_floor = bonus0 / 10;
         let dec_per_frame = (bonus0 - bonus_floor) / time_limit as u32;
+        // 代际戳（ABA 修复，复审 Task 2）：先铸新世代再写槽——`spell_seq` 只增不清、跨槽结算
+        // 持久，保证同槽换卡后旧卡残留任务（`Task.spell_epoch` 捕获的是旧值）与新卡 epoch
+        // 必不相等，相位 2 调度门禁据此杀掉旧卡残党（见 `ecl::vm::run_tasks`）。
+        self.spell_seq[slot] = self.spell_seq[slot].wrapping_add(1);
         self.spells[slot] = crate::spell::SpellSlot {
             active: 1,
             flags,
@@ -729,6 +738,7 @@ impl WorldBody {
             spell_id,
             boss_index: boss.index,
             boss_gen: boss.generation,
+            epoch: self.spell_seq[slot],
             frames_left: time_limit,
             hp_threshold,
             hp_start,

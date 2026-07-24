@@ -46,6 +46,13 @@ pub struct Task {
     /// 字段位置刻意卡在 `parent`（u16）后、`sp`（u8）前——`repr(C)` 下恰好落进
     /// `parent`→`stack` 对齐间隙，不改变 `size_of::<Task>()`（尺寸哨兵因此不红）。
     pub spell_bound: u8,
+    /// 绑定槽当刻的代际戳（ABA 修复，复审 Task 2）：`spell_bound` 生效时捕获
+    /// `WorldBody::spells[slot].epoch` 的当刻值，随任务一起 memcpy；`spawn` 派生子任务与
+    /// `spell_bound` 一起继承（整棵模式树共享同一代际身份）。相位 2 调度门禁除了看
+    /// `spell_bound`/槽 `active` 还须比较本值——槽被同帧复用给新卡时代际戳换新，旧卡残留
+    /// 任务的 `spell_epoch` 因而与新槽不匹配，被门禁杀掉，不会与新卡并发（见
+    /// `ecl::vm::run_tasks`）。`spell_bound==0`（未绑）时本值恒为 0，不参与任何判据。
+    pub spell_epoch: u16,
     /// 求值栈栈顶（0..=EVAL_DEPTH）。
     pub sp: u8,
     /// 调用栈栈顶（0..=CALL_DEPTH）。
@@ -69,6 +76,7 @@ impl Default for Task {
             owner_gen: 0,
             parent: 0,
             spell_bound: 0,
+            spell_epoch: 0,
             sp: 0,
             csp: 0,
             stack: [0; EVAL_DEPTH],
@@ -129,6 +137,9 @@ impl TaskPool {
                     // 的语义事后覆写（OP_SPAWN 继承父值 / spell_begin 显式设 slot+1 /
                     // fire 挂弹任务保持 0，spec §2.1）；本池本身不知道符卡是什么（P1）。
                     spell_bound: 0,
+                    // 同 `spell_bound`：默认 0，由调用方按同一三处事后覆写（ABA 修复，
+                    // 复审 Task 2，`spell_bound`/`spell_epoch` 恒同批覆写，从不单独设一个）。
+                    spell_epoch: 0,
                     sp: 0,
                     csp: 0,
                     stack: [0; EVAL_DEPTH],

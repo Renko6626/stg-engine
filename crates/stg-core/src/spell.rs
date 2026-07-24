@@ -28,6 +28,13 @@ pub struct SpellSlot {
     /// 绑定 boss 敌句柄（宣言者 owner）。
     pub boss_index: u16,
     pub boss_gen: u16,
+    /// 本槽当前占用的代际戳（ABA 修复，复审 Task 2）：`spell_begin_internal` 成功时取
+    /// `WorldBody::spell_seq[slot]` 的新值写入（只增，槽结算清零无妨——inactive 槽的 gate
+    /// 先被 `active` 挡）。`Task.spell_epoch` 捕获绑定当刻的这个值；相位 2 调度门禁除了看
+    /// `active` 还须比较 epoch——同槽换卡（卡 A 结束→槽清→同趟卡 B begin）会让槽复用出新
+    /// epoch，旧卡残留任务的 epoch 因而与新槽不匹配而被杀，不会与新卡并发（镜像 `boss_gen`
+    /// 的代际身份先例）。
+    pub epoch: u16,
     /// 时限余帧；0 即超时判定点。
     pub frames_left: u16,
     /// 破卡血线：绑定敌 hp≤此值 → 自动收卡；伤害对本敌下钳至此（非死）。

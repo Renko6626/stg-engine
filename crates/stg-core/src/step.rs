@@ -86,6 +86,7 @@ impl World {
         d.players = s.players; // [PlayerState; N] 是 Copy
         d.boss_ui = s.boss_ui;
         d.spells = s.spells; // [SpellSlot; MAX_BOSSES] 是 Copy
+        d.spell_seq = s.spell_seq; // [u16; MAX_BOSSES] 持久代际计数器，随快照往返（ABA 修复）
         s.shots.copy_into(&mut d.shots);
         s.enemies.copy_into(&mut d.enemies);
         s.fields.copy_into(&mut d.fields);
@@ -1939,6 +1940,40 @@ mod tests {
         assert_eq!(snap.body.players()[0].power, 123, "players 数组漏拷即红");
     }
 
+    /// ABA 修复（复审 Task 2）判别腿：`spells[].epoch`（非零，一次真 begin 产出）与
+    /// `spell_seq`（持久代际计数器）都必须随 `copy_into` 快照往返——这正是 Critical 修复
+    /// 依赖的地基：若快照恢复后 epoch 语义丢失，rollback 场景下"槽复用 ABA"防线会重新破防。
+    #[test]
+    fn snapshot_covers_spells_and_spell_seq() {
+        let mut w = World::new(3);
+        let boss = crate::world::test_support::spawn_enemy(&mut w, 0, 80, 1000);
+        assert!(w.body.spell_begin_internal(0, boss, 5, 100, 1000, 0, 0));
+        let epoch0 = w.body.spells[0].epoch;
+        assert_ne!(epoch0, 0, "前置：真 begin 应已铸出非零 epoch");
+
+        let mut snap = World::new(3);
+        w.copy_into(&mut snap);
+        assert_eq!(snap.body.spells[0].epoch, epoch0, "spells[].epoch 漏拷即红");
+        assert_eq!(
+            snap.body.spell_seq[0], w.body.spell_seq[0],
+            "spell_seq 持久计数器漏拷即红"
+        );
+        assert_eq!(snap.checksum(), w.checksum(), "两者校验和应完全一致");
+
+        // 结算清槽后再 begin 一次（同槽复用），代际应继续往前走且同样能快照往返。
+        w.body.spell_end_by_owner(boss);
+        assert!(w.body.spell_begin_internal(0, boss, 6, 100, 1000, 0, 0));
+        let epoch1 = w.body.spells[0].epoch;
+        assert_ne!(epoch1, epoch0, "同槽复用应换代");
+        let mut snap2 = World::new(3);
+        w.copy_into(&mut snap2);
+        assert_eq!(
+            snap2.body.spells[0].epoch, epoch1,
+            "复用后的新 epoch 同样漏拷即红"
+        );
+        assert_eq!(snap2.checksum(), w.checksum());
+    }
+
     #[test]
     fn snapshot_covers_diag_and_last_status() {
         let mut w = World::new(3);
@@ -1975,10 +2010,15 @@ mod tests {
             core::mem::size_of::<crate::world::WorldBody>(),
             core::mem::size_of::<World>(),
         );
+        // 2026-07-24 复审修（Task 2 复审，ABA 修复）：`SpellSlot` 加 `epoch: u16`
+        // （32→36B）；`WorldBody` 另加 `spell_seq: [u16; MAX_BOSSES]`（4B，字段簇间 padding
+        // 吸收部分增量，故 WorldBody 实测只 +8 非 +12——以编译期 `size_of` 实测值为准，不是
+        // 手算）；`Task` 加 `spell_epoch: u16`（444→448B，×TASK_CAP(256)=+1024，World 增量
+        // 与之吻合）。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (969352, 1083072);
+        const EXPECTED: (usize, usize) = (969360, 1084104);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (969352, 1083072);
+        const EXPECTED: (usize, usize) = (969360, 1084104);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
