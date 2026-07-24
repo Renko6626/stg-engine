@@ -5,6 +5,7 @@
 //!   bake-tables           用 f64 生成 sin/cos/easing 烘焙表原始字节（M0 落地）
 //!   verify-tables         断言现生成的表字节 == 已 commit 的字节（CI 防漂移）
 //!   serve [--port 8611] [--seed 1]  起 WebSocket 查看器
+//!   check <file.ecl>      只编译不跑，渲染诊断（人/agent/CI 共用的最短反馈环）
 //!
 //! 本 crate 在断层线【以上】，可用浮点；stg-core 只消费 commit 的表字节。
 
@@ -24,9 +25,10 @@ fn main() -> ExitCode {
         Some("serve") => viewer::cmd_serve(&args[2..]),
         Some("dump") => viewer::cmd_dump(&args[2..]),
         Some("storm") => storm::cmd_storm(&args[2..]),
+        Some("check") => cmd_check(&args[2..]),
         _ => {
             eprintln!(
-                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] | storm [--frames N] [--saves K] [--seed S]>"
+                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl>>"
             );
             ExitCode::FAILURE
         }
@@ -987,6 +989,33 @@ fn cmd_verify_tables() -> ExitCode {
     }
 }
 
+/// 只编译不跑(编辑体验刀 spec §4):人 / 合作者 agent / CI 共用的最短诊断环。
+fn cmd_check(rest: &[String]) -> ExitCode {
+    let Some(path) = rest.first() else {
+        eprintln!("usage: stg-harness check <file.ecl>");
+        return ExitCode::from(2);
+    };
+    let src = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: 读 {path} 失败: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    match stg_ecl_compiler::lang::compile(&src, path) {
+        Ok(_) => {
+            println!("OK");
+            ExitCode::SUCCESS
+        }
+        Err(errors) => {
+            for e in &errors {
+                eprintln!("{}", e.render(path));
+            }
+            ExitCode::from(1)
+        }
+    }
+}
+
 #[cfg(test)]
 mod ecl_rainbow_tests {
     use super::*;
@@ -1244,6 +1273,30 @@ sub main() {
         assert!(
             picked > 0,
             "场景必须真实走到拾取结算(settle.rs 的 item_cfg 读点),否则判别式空转"
+        );
+    }
+
+    /// check 三路退码:OK=0 / 编译错=1(带行列) / 文件缺失=2。
+    #[test]
+    fn check_exit_codes_three_ways() {
+        use std::process::ExitCode;
+        let dir = std::env::temp_dir().join("ecl-check-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = dir.join("ok.ecl");
+        std::fs::write(&ok, "sub main() { loop { wait(60); } }").unwrap();
+        let bad = dir.join("bad.ecl");
+        std::fs::write(&bad, "sub main() { 这不是脚本 }").unwrap();
+        assert_eq!(
+            super::cmd_check(&[ok.to_string_lossy().into_owned()]),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            super::cmd_check(&[bad.to_string_lossy().into_owned()]),
+            ExitCode::from(1)
+        );
+        assert_eq!(
+            super::cmd_check(&[dir.join("nope.ecl").to_string_lossy().into_owned()]),
+            ExitCode::from(2)
         );
     }
 }
