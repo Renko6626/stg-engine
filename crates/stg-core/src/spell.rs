@@ -310,6 +310,56 @@ mod tests {
         assert_eq!(ev2.data[0], 4);
     }
 
+    /// 超时·普通卡对资格无关（Task 1 复审修 Fix 1 之一）：即使资格已先失（决死窗口清
+    /// `capture_ok`），普通卡到线仍恒 `FAILED(reason=SPELL_FAIL_TIMEOUT=2)`——不是资格失
+    /// （`=1`）。这一格是三参 `settle_one_spell(slot, captured, reason)` 存在的理由：删掉
+    /// `reason` 参数、普通卡超时路径就会误报资格失。
+    #[test]
+    fn timeout_normal_fails_with_timeout_reason_even_when_capture_lost() {
+        let (mut w, boss) = world_with_boss(1000);
+        assert!(w.body.spell_begin_internal(0, boss, 13, 1, 1000, 0, 0));
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW; // 资格先失
+        let score0 = w.body.players[0].score;
+        w.body.settle_spells(&crate::tables::TABLES_V0); // frames_left: 1 → 0（未到判定点）
+        assert_eq!(w.body.spells[0].active, 1, "首次调用只递减，未超时");
+        w.body.settle_spells(&crate::tables::TABLES_V0); // frames_left==0 → 超时判定
+        assert_eq!(w.body.spells[0].active, 0);
+        assert_eq!(w.body.players[0].score, score0, "普通卡超时不付分");
+        let ev = last_event(&w);
+        assert_eq!(ev.kind, EVT_SPELL_FAILED);
+        assert_eq!(
+            ev.data,
+            [13, SPELL_FAIL_TIMEOUT],
+            "reason 恒为超时（=2），不是资格失（=1）——资格无关"
+        );
+    }
+
+    /// 超时·耐久卡资格失（Task 1 复审修 Fix 1 之二）：资格先失（决死窗口）再到线 →
+    /// `FAILED(reason=SPELL_FAIL_CAPTURE_LOST=1)`（与资格在时"活到超时即收卡"CAPTURED
+    /// 分叉，见 `timeout_normal_fails_survival_captures` 的资格在分支）。
+    #[test]
+    fn timeout_survival_fails_with_capture_lost_reason_when_ineligible() {
+        let (mut w, boss) = world_with_boss(1000);
+        assert!(
+            w.body
+                .spell_begin_internal(0, boss, 14, 1, 1000, SPELL_SURVIVAL, 0)
+        );
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW; // 资格先失
+        let score0 = w.body.players[0].score;
+        w.body.settle_spells(&crate::tables::TABLES_V0); // frames_left: 1 → 0
+        assert_eq!(w.body.spells[0].active, 1, "首次调用只递减，未超时");
+        w.body.settle_spells(&crate::tables::TABLES_V0); // frames_left==0 → 超时判定
+        assert_eq!(w.body.spells[0].active, 0);
+        assert_eq!(w.body.players[0].score, score0, "资格失不付分");
+        let ev = last_event(&w);
+        assert_eq!(ev.kind, EVT_SPELL_FAILED);
+        assert_eq!(
+            ev.data,
+            [14, SPELL_FAIL_CAPTURE_LOST],
+            "耐久卡资格失时到线是资格失（=1），不是超时（=2）"
+        );
+    }
+
     /// 逐卡血条：hp_start=1000 threshold=600 时 hp=1000→ratio=1.0、hp=800→ratio=0.5
     /// （真定点除，非圆心重合式判别）。
     #[test]
@@ -370,6 +420,61 @@ mod tests {
             w.body.boss_ui[0].phase_left, 5,
             "阶段规划归脚本，机构不覆写"
         );
+    }
+
+    /// `hp_break` 三路 OR 的 `ENEMY_DYING` 分支判别（Task 1 复审修 Fix 2）：经真
+    /// `damage_enemy`→`ENEMY_DYING` 路径打死 boss（非手写 `hp[i]=0`），断言死亡触发收卡结算。
+    ///
+    /// **判别设计的关键取舍**：字面"最终卡 `threshold=0`"打不出判别力——`damage_enemy` 里
+    /// `hp<=0` 才标 `ENEMY_DYING`，而 `threshold=0` 时 hp_break 第三路 `hp<=s.hp_threshold`
+    /// 恰好是同一个条件（`hp<=0` ⇔ `hp<=0`），删 `ENEMY_DYING` 那路 OR 测试仍绿（已实测，见
+    /// task-1-report.md 复审修节的红绿证据）；`threshold>0` 时下钳会先兜底把 hp 摁在
+    /// threshold（>0）之上，`ENEMY_DYING` 反而永远不会置位——两种取值下第三路都独立盖过它。
+    /// 唯一能让 `hp<=0`（`ENEMY_DYING` 置位判据）与 `hp<=s.hp_threshold`（第三路判据）分道的
+    /// 取值是 **threshold 严格 < 0**（校验只拒 `threshold>hp`，不拒负值，故为合法输入）：
+    /// hp 精确落 0 时 `0<=0` 假（threshold=-1）但 `hp<=0` 真——`ENEMY_DYING` 成为唯一触发源。
+    #[test]
+    fn boss_death_via_enemy_dying_flag_triggers_hp_break() {
+        use crate::shots::ShotInit;
+        let (mut w, boss) = world_with_boss(5);
+        assert!(w.body.spell_begin_internal(0, boss, 21, 100, 1000, 0, -1));
+        let bi = w.body.enemies.get(boss).unwrap();
+        let (bx, by) = (w.body.enemies.x[bi], w.body.enemies.y[bi]);
+        w.body.create_player_shot(ShotInit {
+            x: bx,
+            y: by,
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 5, // == hp：真 damage_enemy 精确击杀，threshold<=0 不下钳，hp 落 0（非负）
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        let score0 = w.body.players[0].score;
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = crate::world::PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0); // 内含伤害（真标 ENEMY_DYING）+ 符卡趟同帧
+        assert_eq!(
+            w.body.enemies.hp[bi], 0,
+            "threshold<0 不触发下钳，hp 精确落 0（非负）"
+        );
+        assert_ne!(
+            w.body.enemies.flags[bi] & ENEMY_DYING,
+            0,
+            "damage_enemy 真标 dying（非手写）"
+        );
+        assert_eq!(
+            w.body.spells[0].active, 0,
+            "ENEMY_DYING 触发收卡结算（hp<=threshold 此处为假，唯一触发源是 dying 旗）"
+        );
+        let ev = last_event(&w);
+        assert_eq!(ev.kind, EVT_SPELL_CAPTURED, "资格在 → CAPTURED");
+        assert_eq!(ev.data[0], 21);
+        assert!(w.body.players[0].score > score0, "收卡付分");
     }
 
     /// begin 成功：DECLARED 事件 + `REQ_SPELL_DECLARE` req 的字段/参数形状。
