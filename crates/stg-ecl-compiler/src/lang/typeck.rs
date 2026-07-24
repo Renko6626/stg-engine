@@ -131,6 +131,9 @@ pub fn check(
     }
 
     for s in &prog.subs {
+        if c.check_not_reserved_sugar_name(s.span, &s.name) {
+            continue;
+        }
         if c.subs.contains_key(&s.name) {
             c.err(s.span, format!("sub '{}' 重复定义", s.name));
         } else {

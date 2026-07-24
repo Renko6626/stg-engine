@@ -34,6 +34,9 @@ impl<'p> Checker<'p> {
 
 impl<'p> Checker<'p> {
     pub(super) fn check_const_def(&mut self, cdef: &ConstDef) {
+        if self.check_not_reserved_sugar_name(cdef.span, &cdef.name) {
+            return;
+        }
         if self.engine_const_names.contains(&cdef.name) {
             self.err(
                 cdef.span,

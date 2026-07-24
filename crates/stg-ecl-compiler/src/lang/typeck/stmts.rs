@@ -77,6 +77,9 @@ impl<'p> Checker<'p> {
                 init,
                 span,
             } => {
+                if self.check_not_reserved_sugar_name(*span, name) {
+                    return None;
+                }
                 let t = self.type_expr(init, locals)?;
                 if t.ty != *ty {
                     self.push_type_mismatch(

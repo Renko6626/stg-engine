@@ -1049,10 +1049,16 @@ mod tests {
         use stg_core::enemy::EnemyInit;
         use stg_core::events::{EVT_SPELL_DECLARED, EVT_SPELL_FAILED};
 
+        // 复审 Minor 强化（Task 3 复审修）：`p()` 每帧真开一发弹（`fire(...)`），不再只是
+        // 计数器自增——生命周期断言不能只靠 globals 代理"模式在跑"，要能看见真实的弹幕
+        // 输出。速度取 0.5fx、原点 (0,0)：60 帧时限内最远飞行 30 单位，远小于场界半宽
+        // （见 `xformdef_turn_changes_bullet_trajectory_survival` 同款边界常量），保证
+        // 观测窗口内弹不会因出界被回收，count 能稳定 > 0。
         let src = "async sub p() {\n\
                      loop {\n\
                        var c: int = global(20);\n\
                        set_global(20, c + 1);\n\
+                       _ = fire(0, 0fx, 0fx, 0.5fx, 0deg, none, none);\n\
                        wait(1);\n\
                      }\n\
                    }\n\
@@ -1097,6 +1103,7 @@ mod tests {
         let mut end_frame: Option<u32> = None;
         let mut end_data: Option<[i32; 2]> = None;
         let mut history: Vec<i32> = Vec::with_capacity(100);
+        let mut bullet_counts: Vec<usize> = Vec::with_capacity(100);
         for f in 0..100u32 {
             step(&mut w, &TABLES_V0, &image, &InputFrame::empty(f));
             for ev in w.body.frame_events() {
@@ -1110,6 +1117,7 @@ mod tests {
                 }
             }
             history.push(w.body.globals[20]);
+            bullet_counts.push(w.body.view().bullets().iter_alive().count());
         }
         assert!(
             declared,
@@ -1126,6 +1134,13 @@ mod tests {
             end_data.unwrap(),
             [5, 2],
             "reason=2（超时）——普通卡（flags=0）超时恒 FAILED，不看资格"
+        );
+        // 复审 Minor 强化：模式任务真开了弹（不只是计数器动）——卡活跃期间（结算帧之前）
+        // 应观察到存活弹数 > 0，直接证明 `windchime_pattern` 风格"宣言 + fire" 的行为，
+        // 不是靠 globals 计数代理"起弹"这一层间接证据。
+        assert!(
+            bullet_counts[..end_frame].iter().any(|&c| c > 0),
+            "符卡活跃期间应观察到真实存活弹数 > 0（模式 p 每帧 fire）：{bullet_counts:?}"
         );
         let counter_at_end = history[end_frame];
         assert!(

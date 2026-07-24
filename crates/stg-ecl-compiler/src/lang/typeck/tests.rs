@@ -532,6 +532,59 @@ fn set_global_is_a_void_call_checked_like_a_builtin() {
     assert!(errors.iter().any(|e| e.msg.contains("cast")), "{errors:?}");
 }
 
+// ── `wait_spell` 保留字化（Task 3 复审修，C16 同类事故）──────────────────────
+//
+// `wait_spell()` 语句糖在 `lang::parse` 层靠"名字恰为 'wait_spell' 且紧跟 '('"这一
+// 纯文本条件截胡展开，**先于任何 sub/const/var 名解析**——跟 C16 修复前的 `global()`
+// 是同一类雷，但 `global` 那次是"改造成普通 builtin、走 sub 优先的调用解析顺序"，这次
+// `wait_spell` 不是可调用符号（它是整条语句的糖，不是表达式位置的函数名），走同一条路
+// 修不通：正确修法是把它保留字化——声明处直接拒绝同名 sub/const/var（详见
+// `typeck::checker::RESERVED_SUGAR_NAMES`）。
+
+#[test]
+fn sub_named_wait_spell_is_rejected_as_reserved_sugar_name() {
+    // 复现审员报告的确切场景：声明 `sub wait_spell() {}` 后在语句位置调用
+    // `wait_spell();`——修复前这段脚本静默编译通过（parser 展开成 while，用户 sub 体
+    // 编译进镜像但永远调不到，零诊断零 fault）；修复后必须在声明处报编译错。
+    let errors = err("sub wait_spell() { } sub main() { wait_spell(); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.msg.contains("wait_spell") && e.msg.contains("保留字")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn const_named_wait_spell_is_rejected_as_reserved_sugar_name() {
+    let errors = err("const wait_spell: int = 1; sub main() { loop { wait(1); } }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.msg.contains("wait_spell") && e.msg.contains("保留字")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn var_named_wait_spell_is_rejected_as_reserved_sugar_name() {
+    let errors = err("sub main() { var wait_spell: int = 1; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.msg.contains("wait_spell") && e.msg.contains("保留字")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn wait_spell_call_as_a_plain_statement_still_type_checks() {
+    // 对照：保留字化只拦"声明同名符号"，不影响 `wait_spell();` 本身作为语句糖正常使用
+    // ——parser 早已把它展开成普通 `Stmt::While`，本趟看到的就是一个平平无奇的 while，
+    // 糖展开路径分毫未动。
+    ok("sub main() { wait_spell(); }");
+}
+
 // ── 字面量折叠交互：`90deg + 10deg` 判型但不做常量折叠 ─────────────────────────
 
 #[test]
