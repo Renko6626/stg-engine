@@ -102,7 +102,7 @@ pub fn new_game(seed: u64, rank: i32, image: &EclImage)
 
 ```
 crates/stg-godot/                cdylib → libstg_godot.so
-  Cargo.toml     crate-type=["cdylib"];deps: stg-core, stg-ecl-compiler, godot(钉支持 4.6 的精确版)
+  Cargo.toml     crate-type=["cdylib"];deps: stg-core, stg-ecl-compiler, godot =0.5.4(api-4-6,§11.1)
   src/lib.rs     gdext 入口(ExtensionLibrary)
   src/boot.rs    纯 Rust:源码文本 → 编译 EclImage → World::new_game;错误带行列
   src/frame.rs   纯 Rust:四渲染层(弹/自机弹/敌/道具)alive 位扫 → f32 实例缓冲编码器
@@ -216,7 +216,7 @@ Godot 场景层    技能演出(残影/滤镜),读通道 A 画
 - Godot 侧开发零 cargo;改 Rust 才重编+重启 Godot;
 - Windows 出货走既有 xwin 交叉编译出 `stg_godot.dll`(同一 `.gdextension` windows 条目),
   本刀不做,路径已通(TheOubliette 先例);
-- gdext 钉精确版本进 `Cargo.lock`(支持 4.6 的版本 plan 期查实)。
+- gdext 钉 `=0.5.4` 进 `Cargo.lock`(§11.1;随附工具链 1.94.0 bump = 桥刀 Task 0)。
 
 ## 10. 后续"Godot 刀"注意事项(提前记账,防丢)
 
@@ -227,13 +227,55 @@ Godot 场景层    技能演出(残影/滤镜),读通道 A 画
   模块文档,分发器照抄;
 - 道具在版面顶端画箭头指示等是表现层状态(位置可从通道 A 推),不进 core。
 
-## 11. plan 期待钉死清单(spec 遗留的具体值)
+## 11. 实现拍板(原"plan 期待钉死清单",二轮 brainstorm 逐项落定,2026-07-24)
 
-1. gdext(`godot` crate)支持 Godot 4.6 的精确版本号;
-2. MultiMesh 2D 实例缓冲的精确 float 排列(transform 行序/custom_data 偏移,查 4.6 文档);
-3. `new_game` 签名定稿(Result 错误型)与所在模块(step.rs 组装层);
-4. `hud_player` 字段实名对 `PlayerState` 代码钉死(`life_state` 坑);
-5. `godot_smoke.ecl` 用到的 `spawn_enemy` 参数表(对 builtins.rs 签名);
-6. smoke 的 `.gdextension` 相对路径与 `entry_symbol`;
-7. `ItemTypeCfg.sprite` 五行的具体贴图索引值(与将来图集约定一致即可,先占位序号);
-8. `checksum() -> int` 的 u64→Godot i64 映射口径(位重解释 as-is,还是十六进制字符串读口)。
+1. **gdext 版本**:`godot = "=0.5.4"` + feature `api-4-6`。支持 4.6 的 0.5.x 全系 MSRV=1.94,
+   与仓库钉死的 1.92.0 冲突 → **拍板升工具链**:`rust-toolchain.toml` 1.92.0→**1.94.0**,
+   作桥刀 **Task 0** 单独 commit(顺手清新 clippy lint;金向量 bump 前后对拍 = 跨编译器
+   版本行为不变的实证;CLAUDE.md"钉死 1.92.0"文案同步)。退回 4.5 保 1.92 与双工具链
+   两案均否(前者推翻已拍的 4.6,后者维护成本高)。
+2. **MultiMesh 2D 实例缓冲**:**12 float/实例** =
+   `[xx, yx, 0, ox, xy, yy, 0, oy]`(transform 行主序,2/6 位补零)+ `custom_data` 4 float
+   紧随(无 color 时偏移 8 起)。证据双源:Godot 4.6 GLES3 `mesh_storage.cpp`
+   `_multimesh_instance_set_transform_2d` 源码 + 本机 4.6.3 headless 实测(stride 12 被
+   接受、错长被拒——**headless 也验尺寸,冒烟能抓步幅错**)。
+3. **`new_game`**:前置小刀已落地(`2682b51`,step.rs 组装层,
+   `new_game(seed: u64, rank: i32, &EclImage) -> Result<Box<World>, TaskStartError>`)。
+4. **hud 字段实名**(对 player.rs 代码钉死):`x/y/lives/bombs/life_pieces/bomb_pieces/
+   power(厘火力 u16)/score(u64)/graze(u32)/life_state/invuln`。
+5. **`spawn_enemy` 签名**(builtins.rs+syscall.rs 钉死):
+   `spawn_enemy(x: fx, y: fx, hp: int, drop_table: int, score: int) -> int`(敌句柄);
+   sprite 固定 0、radius/hurtbox 默认 12/16、主控靠脚本事后 `spawn` 绑定。
+6. **`.gdextension`**:`entry_symbol = "gdext_rust_init"`(gdext 默认;plan 期对 0.5 book
+   模板终核)、`compatibility_minimum = 4.6`、`reloadable = false`;linux debug/release
+   分路指 `target/{debug,release}/libstg_godot.so`。
+7. **道具 sprite 占位值**:前置小刀已落地(0..=4,类型序号)。
+8. **checksum 映射**:`world.checksum() as i64` 位重解释直返;GDScript 侧显示用
+   `"%016x" % v`。不另设十六进制字符串读口(YAGNI)。
+
+## 12. WorldBridge 内部结构细化(拍板,plan 直接引用)
+
+```rust
+// bridge.rs(gdext 壳)                    // boot.rs(纯 Rust)
+#[derive(GodotClass)]                      pub struct Game {
+#[class(base=Node)]                            pub world: Box<World>,
+pub struct WorldBridge {                       pub image: EclImage,
+    base: Base<Node>,                          pub tables: &'static WorldTables, // v1 恒 &TABLES_V0
+    game: Option<Game>,   // new_game 前 None }
+    layers: [Option<Rid>; 4],   // LAYER_BULLETS/SHOTS/ENEMIES/ITEMS
+    warned: u32,                // P4-b 去重日志位集
+}
+```
+
+- **`take_requests` 无缓存**:core 的 `take_requests()` 幂等非消费(C1 实证),桥按需转换,
+  不另持状态;
+- **`frame.rs` 编码器**(纯,单测全覆盖):`encode_layer(view, tables, kind, &mut Vec<f32>)
+  -> u32`(返活数,活槽压实前段);custom = `[sprite, 0, 0, 0]`(`[1..3]` 保留);角度仅弹层
+  (BAM→弧度 f32),敌/自机弹/道具单位旋转;道具 sprite 循环前提 5 元素栈上 LUT;
+- **零层注册可跑**:`layers` 全空时编码照做、上传跳过(恰为 P4-b no-op 语义)——冒烟
+  headless 直接 `WorldBridge.new()` 裸用,无场景无 RID;
+- save/load 身份校验含"存档头镜像哈希 == 当前 `game.image` 哈希",不符 false 不动世界;
+- **桥刀任务骨架**:Task 0 工具链 bump → Task 1 crate 骨架 + `.gdextension` + headless
+  加载冒烟(空桥先通 SMOKE OK 通路)→ Task 2 `boot/frame/save` 三纯模块+单测 →
+  Task 3 gdext 壳接线 + `godot_smoke.ecl` 全流程冒烟 → Task 4 收口簿记。
+  金向量逐字节不变全程押运(Task 0 的对拍窗口除外,那里"不变"正是要验的命题)。
