@@ -143,6 +143,7 @@ crates/
   stg-ecl-compiler/ ECL 编译器：src/lang/【M1.9 表层语言】lex/parse/typeck(三型)/slots(静态槽分配)
                     /codegen —— .ecl 源码启动时编译成 EclImage；lib.rs builder = codegen 后端
   stg-harness/      CLI：golden 两段金向量（scenes/rainbow.ecl 符卡）+ bench 基线 + 烘焙表 bake/verify（允许浮点）
+  stg-godot/        M2 桥：WorldBridge gdext cdylib（boot/frame/save 纯模块+壳；smoke/ headless 冒烟）
 ```
 
 ## 常用命令
@@ -167,14 +168,14 @@ cargo run --release -p stg-harness -- storm      # 恢复重演风暴闸(存档�
   + 世界层全机制（碰撞/结算/道具/变换/批量/shottype 表/WorldTables）+ 金向量对拍 + bench 基线。
 - **M1 ✅**（2026-07-18）ECL 栈机 VM + 协程池 + syscall 白名单沙箱；**M1.9 ✅**（2026-07-19）
   `.ecl` 表层语言 + 编译器（三型/具名函数/静态槽分配），风铃卡狗粮进金向量二号。
-- **M2** `stg-godot`（gdext）WorldBridge + MultiMesh + 请求分发器 —— **前置已全清**
-  （可见性收口 + 通道 A `WorldView` + 通道 B `reqs` + 外接前收口刀，2026-07-23）；
-  开工先还 follow-ups **A1**（道具 sprite 列）/**A2**（bench 重跑）。
+- **M2（进行中）** `stg-godot` WorldBridge 已落地（2026-07-24，桥刀）；余量 = 真 Godot 工程
+  （场景/MultiMesh 节点/分发器/输入映射）。
 - **M3** 环形快照 + 本地回滚 harness（延迟/输入扰动/校验和风暴）。
 - **M4** `stg-net`（UDP + 会话/重同步）—— **phase 2 起点**。
 - **M5** `stg-py`（PyO3 headless 并行 env）。
 
-> 本仓当前**只建 Phase 1 三 crate + stg-derive**；godot/py/net 到各自 milestone 再加。
+> 本仓当前建 Phase 1 三 crate + stg-derive + `stg-godot`（M2 桥半程：cdylib 已通，真 Godot
+> 工程未建）；py/net 到各自 milestone 再加。
 
 ## 开发工作流（全流程）
 

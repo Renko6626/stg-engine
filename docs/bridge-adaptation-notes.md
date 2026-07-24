@@ -5,6 +5,8 @@
 > 对下一次接入的含义。持续追加,条目过时就删(同 follow-ups 无墓碑纪律)。
 >
 > 首批条目来自 **WS 查看器刀**(2026-07-23,通道 A/B 的第一个真实交互消费者,harness `serve`)。
+> 第二批条目来自 **M2 stg-godot 桥刀**(2026-07-24,gdext 宿主 + Rust↔ECL↔GDScript 三层
+> 对接的第一个真实消费者)。
 
 ## 网络/传输层
 
@@ -71,6 +73,80 @@ Rust `encode_frame` ↔ JS `parse()` 是手工同步的两份实现;审查手段
 - `serve` 的 `ws.send` 无写超时:客户端停止收流(后台标签页)会塞满发送缓冲、卡死节拍环。
   单客户端测试工具 = 杀进程重启;**真流式桥(py 远程/观战)必须有背压策略**。
 - 单客户端串行、无 TLS、无断线续联——测试工具本分,不修。
+
+## Godot 宿主运行时(headless bootstrap,M2 桥刀)
+
+### G1. gdext 扩展存在时,冷缓存 `--import` 首跑可能在编辑器收尾阶段 SIGABRT——与扩展加载/注册无关
+
+`godot --headless --path . --import` 首次冷启动(清空 `.godot/`)稳定退出 134(SIGABRT/core
+dumped);担心的问题是"扩展是否根本没被正确加载注册",若是则后续 `--script` 冒烟判定也可能
+假阳性。三重实验定位:①对照组(裸工程、无任何 `.gdextension`)跑同一条 `--import` 干净退出
+0——排除"Godot 4.6.3 headless `--import` 通病",崩溃确定与本扩展被加载有关;②`gdb -batch
+-ex run -ex bt` 抓栈,崩溃点在 `[ DONE ] loading_editor_layout` **之后**——即
+`.gdextension` 解析/`.so` 加载/`entry_symbol` 调用/类注册早已顺利跑完并打出
+`Initialize godot-rust (...)`,是在收尾阶段才炸;③冷/热缓存对比,连续跑三次 `--import`:
+第 1 次(冷缓存)稳定崩溃,第 2、3 次(`.godot/` 已由第 1 次崩溃前的工作写盘)稳定退出
+0——即扩展清单/类缓存等落盘工作在崩溃发生前已完成,崩溃是编辑器 bootstrap 收尾阶段自身的
+既有脆弱点,与"扩展是否被正确加载"完全正交。**对下一次接入的含义**:CI/自动化脚本比照
+`crates/stg-godot/smoke/run-smoke.sh` 把首跑 `--import` 处理为非致命步骤(`|| true`
+兜底、退出码不参与判定),真判定点是随后的 `--script res://smoke.gd`;顺手一提,核验
+`entry_symbol` 是否与 `.gdextension` 里写的名字一致,直接 `nm -D target/.../lib*.so |
+grep -i init` 读产物真实导出符号,比对着简报字面猜可靠。
+
+### G2. `.uid` sidecar 文件是 Godot 4.4+ 的资源引用机制,应随源码一并入库,不当缓存清
+
+`smoke/smoke.gd.uid`、`smoke/stg_godot.gdextension.uid` 由 `--import` 自然产生,简报未提及。
+这是 Godot 4.4+ 起为每个被扫描到的资源(含 `.gd` 脚本、`.gdextension` 文件)自动生成的 UID
+旁车文件(`uid://...` 一行,极小),官方约定要提交进版本库以稳定资源引用——类比 `.import`
+文件的角色,不属于可重新生成的临时缓存(`.godot/` 才是,已 `.gitignore`)。**对下一次接入的
+含义**:目录级 `git add` 会自然带上这些 `.uid` 文件,判为预期内、应保留,不必额外清理;真
+要清理的只有 `.godot/`。
+
+## gdext 0.5.4 API 适配点(实测调整,非简报预判)
+
+### G3. `Dictionary` 已泛型化——裸 `Dictionary`/`Array<Dictionary>` 编译不过
+
+0.5.4 把 `Dictionary` 改成了泛型 `Dictionary<K: Element, V: Element>`(4.4+ 起支持编辑器
+可见的强类型字典),旧版(0.4.x)风格未带类型参数的裸 `Dictionary::new()`/`-> Dictionary`/
+`Array<Dictionary>` 编译不过。**对下一次接入的含义**:换成 crate 自带的未类型化别名
+**`VarDictionary`**(`= Dictionary<Variant, Variant>`,`godot::prelude::*` 已重导出,无需
+额外 `use`);GDScript 侧观感不变(`VarDictionary` 编译期擦除后仍是 GDScript 看到的普通
+`Dictionary`)。
+
+### G4. 非 `Copy` 的 builtin 容器类型走 `AsArg` 是按引用传参的调用约定
+
+`d.set("args", args)` 里 `args: Array<i64>` 传给 `Dictionary::set` 的 `impl AsArg<V>` 时,
+编译期报 `<Array<i64> as ToGodot>::Pass == ByValue` 不满足(期望 `ByRef`)。**对下一次接入
+的含义**:`Array`/`Dictionary`/`GString` 等非 `Copy` builtin 容器类型传给 `AsArg` 形参一律
+按引用传(`d.set("args", &args)`),别假设值语义;`i32`/`f32`/`bool` 等 `Copy` 标量不受影响。
+
+## 桥两侧类型/接口对接(Rust 桥层 ↔ ECL 脚本 ↔ GDScript)
+
+### G5. 动作位常量以 `stg-core` 代码实名为准,别照设计文档口头名字猜
+
+`stg_core::input::BTN_FOCUS` 不存在——`crates/stg-core/src/input.rs` 的 `define_actions!`
+词表里第七个动作位(低速)实名 `BTN_SLOW`(位 6),没有 `BTN_FOCUS` 这个名字,常量本身的值/
+位号未变。**对下一次接入的含义**:桥层暴露给 GDScript 的每个 `#[constant]` 常量名,写代码
+前先 grep `stg-core` 的实际定义处,别按设计文档/简报口头叫法直接编,同类坑此前已见于
+`PlayerState.life_state`(见"杂项"节)。
+
+### G6. ECL 内建函数的 void 返回值不能 `_ =` 丢弃,只能当裸语句
+
+`emit_req` 等 `ret: None` 的内建(`builtins.rs` 表项)编译期强制"无值可丢弃"
+(`typeck` 断言 `_ = pulse_signal(0)` 这类是编译错误),`docs/ecl-lang.md` 也明写"只能做
+语句"。**对下一次接入的含义**:给桥写胶水 `.ecl` 脚本时,调用通道 B/void 类内建一律裸语句
+(`emit_req(64, 1, 2, 3, 4, 5, 6);`),别按"每次调用都赋值/弃值"的惯性加 `_ =` 前缀。
+
+### G7. ECL `fire` 是 7 参、角度参必须走单位字面量后缀,不接受裸整数/裸数量
+
+`fire` 签名是 `(appearance:Int, x:Fx, y:Fx, speed:Fx, angle:Angle, xf:XformRef,
+task:SubRef)`——常见的踩坑设想是 8 参(把 `xf`/`task` 拆成"偏移+计数"两个整数)且角度位传
+裸整数;实际 `xf`/`task` 是编译期解析的标识符(xformdef 名/async sub 名,或字面量
+`none`),`angle` 形参类型是 `Ty::Angle`,裸整数字面量(`Ty::Int`)编译期类型不匹配。
+**对下一次接入的含义**:桥用的胶水脚本里 `fire(...)` 传参数固定 7 个,角度位一律带单位后缀
+(`0deg`/`16384bam`),不挂变换/子任务时两个标识符位填字面量 `none, none`——生成/审阅胶水
+`.ecl` 时对照 `crates/stg-ecl-compiler/src/lang/builtins.rs` 的真实签名表,比凭空写参数列表
+可靠。
 
 ## 杂项
 

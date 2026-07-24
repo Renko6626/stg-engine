@@ -143,6 +143,16 @@ threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy �
 测试间接兜住，后者 `?` 平凡且 `start_main` 错误路径另有测试）。低风险覆盖精度 nit，
 顺路补两行断言即可。
 
+### B18. 四个 HUD 读口 + `register_layer` 拒绝路径仅编译级/静态背书（桥刀终审分诊，2026-07-24）
+
+`hud_boss`/`hud_spell`/`player_pos`/`fields_info` 四个 `bridge.rs` 读口与 `register_layer`
+的坏 `kind`/坏 `RID` 拒绝分支（no-op + 计数），本刀只核对了字段/签名与 stg-core 源码一致
+（编译期类型检查覆盖），`smoke.gd` 冒烟脚本范围内只实际调用了 `hud_player`——没有任何运行期
+断言钉住这四个读口的返回值、也没有真 `MultiMesh` RID 触发过 `register_layer` 的拒绝分支。
+**触发点 = Godot 场景刀真消费这些读口 / 真 `MultiMesh` RID 可得时**：先补判别式断言（dict
+字段值精确匹配互异非零场景，同 CLAUDE.md"圆心重合"纪律——全零/默认值场景测不出错位）与
+层注册拒绝路径（坏 `kind`/坏 `RID` 计数）的运行期回归，再进入正式消费。
+
 
 ## C. 代码整洁（低优先，都是两可）
 

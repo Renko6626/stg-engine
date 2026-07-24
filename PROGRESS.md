@@ -6,24 +6,23 @@
 
 ## 现在（2026-07-24）
 
-- **位置**：**前置小刀收官**——桥前三件已还清：A1 `ItemTypeCfg` 加 `sprite` 表列（道具渲染
-  join 归消费端，表 v2 重烘焙，判别式单测钉住"仅 sprite 变不影响行为"）+ 正典开局
-  `World::new_game` 下沉组装层（回放可移植/握手 §7.2 唯一确定性初始化入口，场景摆放归脚本）
-  + A2 bench 第三轮续表（World 实测 1.03MB，校验和/step 比值 13-265×，详见
-  `docs/bench-baseline.md`）。前置账已清。
+- **位置**：**M2 桥刀收官**——`stg-godot` WorldBridge gdext cdylib 已通：工具链 bump 1.94.0
+  （gdext 0.5.x MSRV）+ 三纯模块 boot/frame/save（零 gdext 依赖）+ bridge.rs 冻结面全量接线
+  + `godot_smoke.ecl` 自举场景 + headless 全流程冒烟（step/save-load 续接/通道 B/违约
+  no-op）全绿；金向量全分支终拍逐字节稳定，依赖防火墙未破。M2 走完"cdylib 桥"半程，真
+  Godot 工程（场景/节点树）未动。
 - **在飞**：无。
-- **下一阶段候选**：**M2 建桥**——`stg-godot` cdylib（方案 A 薄壳厚核已拍板：boot/frame/save
-  纯 Rust 裸测，bridge.rs gdext 壳零逻辑），冻结面/生命周期/错误映射/`.so` 产物策略见
-  `docs/superpowers/specs/2026-07-24-stg-godot-bridge-design.md` §3-§9（实施 plan 另写）；
-  RL 线仍可并行动 `stg-py`（PyO3 env）。
-- **待办**：技术债见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；follow-ups A1/A2
-  已随本刀销账；B16 符卡三小件；B14/B15 storm 小件；D6 剩四软项 M2 顺手）。乙案与文本 DSL
-  仍是 modding 扩展点。
+- **下一阶段候选**：**Godot 场景刀**——真工程/`.tscn`/`MultiMesh` 渲染节点/请求分发器（读
+  `docs/superpowers/specs/2026-07-24-stg-godot-bridge-design.md` §10），或并行 RL 线
+  `stg-py`（PyO3 headless env）。
+- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；新增 B18 = 四个 HUD
+  读口/`register_layer` 拒绝路径待场景刀真消费时补运行期回归；B16/B14/B15/D6 未动）。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-24 | **stg-godot 桥刀** | 工具链 1.94/gdext 0.5.4/三纯模块/冻结面/headless 冒烟；M2 桥半程通 |
 | 2026-07-24 | 前置小刀 | A1 表列 sprite/正典 boot new_game/bench 第三轮 |
 | 2026-07-24 | **符卡计器机构** | 记账归引擎（SpellSlot 计时/衰减/破卡血线/伤害下钳/结算入分/boss_ui 自动喂）+ 模式随卡生死（spell_bound+epoch 防 ABA）+ 三 syscall + wait_spell 糖 + rainbow 狗粮化；A2 范围修订；金向量三刀双变 |
 | 2026-07-23 | **存档+风暴闸（L1/L2）** | SaveBytes derive（Checksum 同源防漏）+ 49B 身份头 + save/load_bytes + storm 恢复重演逐位闸；F2 裁决保 FNV；两线共享底座完工 |
