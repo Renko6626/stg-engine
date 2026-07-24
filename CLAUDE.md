@@ -100,7 +100,7 @@ headless 高速模拟。核心性质是**确定性**——同一份 `(初始状�
 
 ```
 Cargo.toml                       workspace（resolver=3, edition=2024）
-rust-toolchain.toml              钉死 1.92.0 + rustfmt/clippy（可复现）
+rust-toolchain.toml              钉死 1.94.0 + rustfmt/clippy（可复现）
 Cargo.lock                       【提交】—— 确定性须锁依赖版本
 CLAUDE.md  README.md
 PROGRESS.md                      【进度入口】当前位置/下一步/里程碑史的唯一权威（milestone 收口必更）

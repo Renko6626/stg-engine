@@ -3,5 +3,5 @@
 # 但固定版本让 CI 与本地、x86_64 与 aarch64 用同一个编译器，排除工具链漂移这一变量。
 # 升级版本是一次刻意的评审动作（精神上等同 bump engine_ver）。
 [toolchain]
-channel    = "1.92.0"
+channel    = "1.94.0"
 components = ["rustfmt", "clippy"]
