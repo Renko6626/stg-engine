@@ -57,6 +57,15 @@ pub struct Builtin {
     pub params: &'static [ParamKind],
     /// `None` = 无返回值（值消费检查据此判断该调用能不能出现在表达式位置，见 `lang::typeck`）。
     pub ret: Option<Ty>,
+    /// 人可读说明（编辑体验刀：hover/文档生成消费，见 `pub fn all()`）——逐条对照
+    /// `ecl::syscall.rs` 对应 `sys_*` 函数核实过，出入以源码为准记入本刀报告，不是
+    /// 简单转录 spec 草稿。永不为空（`all_builtins_have_doc_and_matching_param_names`
+    /// 单测钉死）。
+    pub doc: &'static str,
+    /// 参数名（与 `params` 等长，一一对应；供签名提示/hover 消费）。`fire`/`spell_begin`
+    /// 的 `Xf`/`Sub` 位置也占一个名字（如 `xf`/`task`/`pattern`），与 `Val`/`RawVal` 位置
+    /// 同等对待——供参考的都是"这一位在表层调用里怎么称呼"，不区分底层求值方式。
+    pub param_names: &'static [&'static str],
 }
 
 use ParamKind::{RawVal, SubRef as Sub, Val, XformRef as Xf};
@@ -73,6 +82,8 @@ const BUILTINS: &[Builtin] = &[
         // T3 codegen 时机负责展开——本表只钉表层可见的 7 位。
         params: &[Val(Int), Val(Fx), Val(Fx), Val(Fx), Val(Angle), Xf, Sub],
         ret: Some(Int),
+        doc: "发一颗弹;appearance 查外观表(越界 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1",
+        param_names: &["appearance", "x", "y", "speed", "angle", "xf", "task"],
     },
     Builtin {
         name: "batch",
@@ -90,6 +101,18 @@ const BUILTINS: &[Builtin] = &[
             Val(Fx),
         ],
         ret: Some(Int),
+        doc: "N-way 批量发环;返实际创建数",
+        param_names: &[
+            "appearance",
+            "x",
+            "y",
+            "n_angle",
+            "angle0",
+            "angle_step",
+            "n_speed",
+            "speed0",
+            "speed_step",
+        ],
     },
     Builtin {
         name: "spawn_enemy",
@@ -97,6 +120,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Fx), Val(Fx), Val(Int), Val(Int), Val(Int)],
         ret: Some(Int),
+        doc: "造敌;sprite 固定 0、判定 12/16 默认;返敌句柄,失败 -1",
+        param_names: &["x", "y", "hp", "drop_table", "score"],
     },
     Builtin {
         name: "drop_item",
@@ -104,6 +129,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Fx), Val(Fx), Val(Int)],
         ret: Some(Int),
+        doc: "掉一颗道具(带随机喷发速度,消耗模拟 RNG);返句柄,失败 -1",
+        param_names: &["x", "y", "item_type"],
     },
     Builtin {
         name: "move_to",
@@ -111,6 +138,12 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Fx), Val(Fx), Val(Int)],
         ret: None,
+        // 核对纠偏（见本刀报告）：草稿表原写 `enemy,x,y,dur`——但 `sys_move_enemy_to`
+        // 里 `self_enemy_handle` 是从 self owner 取的，根本不占栈位；4 参逆序弹出实际是
+        // `easing, y, x, dur`（源码注释原文），正序即 `dur, x, y, easing`。move_to 与
+        // 下方弹 setter 族不同：它没有"占位 handle 参数"，4 位全部真实参与求值/入栈。
+        doc: "敌自身(self owner 非 ENEMY → Fault)按 easing 缓动、dur 帧内平移到 (x,y);四参数皆真实压栈(不同于下方弹 setter 族的占位 handle 首参)",
+        param_names: &["dur", "x", "y", "easing"],
     },
     Builtin {
         name: "boss_set",
@@ -118,6 +151,19 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Fx), Val(Int), Val(Int), Val(Int), Val(Int)],
         ret: None,
+        // 核对纠偏（见本刀报告）：草稿表首参写 `enemy`——但 `enemy` 字段是从 self owner
+        // 取的（非 ENEMY → `EnemyHandle::NULL`，不 Fault），并不占栈位；6 参逆序弹出实际
+        // 是 `active, phase_left, timer_frames, spell_id, hp_ratio, slot`，正序即
+        // `slot, hp_ratio, spell_id, timer_frames, phase_left, active`（源码注释原文）。
+        doc: "整槽写 boss_ui 公告板(脚本写/UI 读);enemy 字段取自 self owner(非 ENEMY → NULL,不 Fault);符卡 active 期 enemy/spell_id/timer_frames/hp_ratio 由引擎逐帧自动覆写,phase_left 不受影响仍归脚本",
+        param_names: &[
+            "slot",
+            "hp_ratio",
+            "spell_id",
+            "timer_frames",
+            "phase_left",
+            "active",
+        ],
     },
     Builtin {
         name: "pulse_signal",
@@ -125,6 +171,11 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: None,
+        // 核对纠偏（见本刀报告）：草稿表 doc 写"唤醒 wait_signal 中的弹任务"——但
+        // `WAIT_SIGNAL` 是弹变换(xform)序列里的一个 op（docs/xform-ops.md #51），由相位 4
+        // `run_transforms` 消费，不是 ECL 任务/协程；"弹任务"一词会与 ECL task 混淆。
+        doc: "脉冲一条信号通道(边沿语义,仅当帧有效);放行处于弹变换 WAIT_SIGNAL 停驻态的弹(非 ECL 任务)",
+        param_names: &["channel"],
     },
     Builtin {
         name: "emit_req",
@@ -133,6 +184,8 @@ const BUILTINS: &[Builtin] = &[
         // 固定 7 参（不足位作者手补 0）；id 位钉 Int，六载荷位 RawVal（spec §2.6）
         params: &[Val(Int), RawVal, RawVal, RawVal, RawVal, RawVal, RawVal],
         ret: None,
+        doc: "通道 B 渲染请求;void 只能裸语句;args 裸载荷(fx 过 raw/angle 过 BAM/int 原样)",
+        param_names: &["id", "a0", "a1", "a2", "a3", "a4", "a5"],
     },
     // ── 读/杂项 ─────────────────────────────────────────────────────────
     Builtin {
@@ -141,6 +194,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: Some(Int),
+        doc: "模拟 RNG 均匀 [0,n);确定性,随快照回卷",
+        param_names: &["n"],
     },
     Builtin {
         name: "global",
@@ -148,6 +203,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: Some(Int),
+        doc: "读 globals 槽(GVAR_RANK=0 为难度)",
+        param_names: &["slot"],
     },
     Builtin {
         name: "set_global",
@@ -155,6 +212,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Int)],
         ret: None,
+        doc: "写 globals 槽;系统段(slot<16)脚本写为 no-op+计数,不 Fault(GVAR_RANK=0 建议脚本只读)",
+        param_names: &["slot", "value"],
     },
     Builtin {
         name: "aim_player",
@@ -162,6 +221,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[],
         ret: Some(Angle),
+        doc: "自身(敌/弹属主)指向自机的 BAM 角",
+        param_names: &[],
     },
     Builtin {
         name: "sin",
@@ -169,6 +230,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: true,
         params: &[Val(Angle)],
         ret: Some(Fx),
+        doc: "查表三角,返 fx(VM op 直发,非 syscall)",
+        param_names: &["angle"],
     },
     Builtin {
         name: "cos",
@@ -176,16 +239,29 @@ const BUILTINS: &[Builtin] = &[
         is_op: true,
         params: &[Val(Angle)],
         ret: Some(Fx),
+        doc: "查表三角,返 fx(VM op 直发,非 syscall)",
+        param_names: &["angle"],
     },
     // ── 弹 setter 族九连（syscall 3x；按 syscall.rs/motion.rs 顺序编号；handle:int 首参，
     // 见 plan 核心接口块——VM 侧 setter 语义实取 self owner，handle 参数的落地方式留 T3
     // 定，T2 只钉表层签名，见本刀报告"contract notes for T3"）───────────────────────
+    //
+    // 核对纠偏（见本刀报告，九条 + move_to 共十条同类修正）：草稿表逐条 doc 写
+    // "(坏句柄 no-op+计数,下同)"——但 `syscall.rs` 模块文档"误用策略拍板"明文：
+    // `self_bullet_handle`（`move_enemy_to`/弹 setter族/`aim_player_angle` 同款）owner
+    // 类型不符是**脚本作者违约 → Fault**（响亮报错），不是静默 no-op+计数（no-op+计数是
+    // `set_var`/`drop_item`/`emit_req` 一类"参数值域违规"的处置，两码事）。且首位
+    // "handle" 从未真正被 `dispatch` 读取——`codegen::gen_builtin_call` 对这九个名字求值
+    // 后立即 `pop()` 丢弃（`is_self_bullet_setter`），实际生效对象恒是 self owner；
+    // "坏句柄"这个说法本身就不成立（没有"句柄值"参与判定）。
     Builtin {
         name: "set_speed",
         syscall: syscall::SYS_SET_BULLET_SPEED,
         is_op: false,
         params: &[Val(Int), Val(Fx)],
         ret: None,
+        doc: "弹 setter:改速率;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定",
+        param_names: &["handle", "speed"],
     },
     Builtin {
         name: "set_angle",
@@ -193,6 +269,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Angle)],
         ret: None,
+        doc: "弹 setter:改方向;同 set_speed 的误用(Fault)/占位 handle 口径",
+        param_names: &["handle", "angle"],
     },
     Builtin {
         name: "turn",
@@ -200,6 +278,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Angle)],
         ret: None,
+        doc: "弹 setter:转向增量;同 set_speed 的误用(Fault)/占位 handle 口径",
+        param_names: &["handle", "delta"],
     },
     Builtin {
         name: "set_vel",
@@ -207,6 +287,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Fx), Val(Fx)],
         ret: None,
+        doc: "弹 setter:直设速度向量;同 set_speed 的误用(Fault)/占位 handle 口径",
+        param_names: &["handle", "vx", "vy"],
     },
     Builtin {
         name: "set_ang_vel",
@@ -214,6 +296,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Int)],
         ret: None,
+        doc: "弹 setter:角速度(POLAR_FX);同 set_speed 的误用(Fault)/占位 handle 口径",
+        param_names: &["handle", "w"],
     },
     Builtin {
         name: "set_accel",
@@ -221,6 +305,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Fx)],
         ret: None,
+        doc: "弹 setter:切向加速度(POLAR_FX);同 set_speed 的误用(Fault)/占位 handle 口径",
+        param_names: &["handle", "a"],
     },
     Builtin {
         name: "set_gravity",
@@ -228,6 +314,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Fx), Val(Fx)],
         ret: None,
+        doc: "弹 setter:直角加速度(CART_FX);同 set_speed 的误用(Fault)/占位 handle 口径",
+        param_names: &["handle", "gx", "gy"],
     },
     Builtin {
         name: "stop_fx",
@@ -235,6 +323,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: None,
+        doc: "弹 setter:停连续效果(清 POLAR_FX/CART_FX);同 set_speed 的误用(Fault)口径,唯一参数即占位 handle",
+        param_names: &["handle"],
     },
     Builtin {
         name: "aim_at_player",
@@ -242,6 +332,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Angle)],
         ret: None,
+        doc: "弹 setter:指向自机+偏移角;同 set_speed 的误用(Fault)/占位 handle 口径",
+        param_names: &["handle", "offset"],
     },
     // ── 符卡计器（syscall 28/29/11；符卡机构 spec 2026-07-24 §5）─────────────
     Builtin {
@@ -260,6 +352,16 @@ const BUILTINS: &[Builtin] = &[
             Val(Int),
         ],
         ret: None,
+        doc: "开卡:绑 boss/血线/计时/计分,spawn pattern 为卡绑定模式任务(随卡生死)",
+        param_names: &[
+            "slot",
+            "spell_id",
+            "pattern",
+            "time_limit",
+            "bonus0",
+            "flags",
+            "hp_threshold",
+        ],
     },
     Builtin {
         name: "spell_end",
@@ -267,6 +369,8 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[],
         ret: None,
+        doc: "手动收卡(取卡按血线自动判,通常不需要)",
+        param_names: &[],
     },
     Builtin {
         name: "spell_timer",
@@ -274,12 +378,21 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[],
         ret: Some(Int),
+        doc: "当前卡剩余帧数",
+        param_names: &[],
     },
 ];
 
 /// 按名字查内建函数（线性扫描；表 <30 项，`lang::typeck` 每次 `Call` 判型调用一次）。
 pub fn lookup(name: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.name == name)
+}
+
+/// 全量导出（编辑体验刀：`gen-ecl-meta`/VS Code 扩展/文档生成的单一真相源——不得另起
+/// 一张手抄表，见模块文档"与计划核心接口块的一处必要出入"）。源码序即导出序（同 `lookup`
+/// 的线性扫描序），不做任何排序/过滤。
+pub fn all() -> &'static [Builtin] {
+    BUILTINS
 }
 
 /// `$` 引擎变量的 syscall 号 + 判型（拍板 6 的 v1 白名单 8 个；`lang::parse` 已把 `$name` 解析
@@ -307,6 +420,20 @@ pub fn engine_var_info(ev: EngVar) -> EngVarInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 编辑体验刀:元数据完备——每条 builtin 有非空 doc,param_names 与 params 等长。
+    #[test]
+    fn all_builtins_have_doc_and_matching_param_names() {
+        for b in all() {
+            assert!(!b.doc.is_empty(), "{} 缺 doc", b.name);
+            assert_eq!(
+                b.param_names.len(),
+                b.params.len(),
+                "{} 参数名/参数型不等长",
+                b.name
+            );
+        }
+    }
 
     #[test]
     fn lookup_finds_every_documented_builtin_by_name() {
