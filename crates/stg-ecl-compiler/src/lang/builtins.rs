@@ -296,7 +296,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Int)],
         ret: None,
-        doc: "弹 setter:角速度;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定",
+        doc: "弹 setter:角速度;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定(POLAR_FX:每帧 angle+=w)",
         param_names: &["handle", "w"],
     },
     Builtin {
@@ -305,7 +305,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Fx)],
         ret: None,
-        doc: "弹 setter:切向加速度;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定",
+        doc: "弹 setter:切向加速度;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定(POLAR_FX:每帧 speed+=a)",
         param_names: &["handle", "a"],
     },
     Builtin {
@@ -314,7 +314,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Fx), Val(Fx)],
         ret: None,
-        doc: "弹 setter:直角加速度;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定",
+        doc: "弹 setter:直角加速度;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定(CART_FX:每帧 v+=(gx,gy);与 POLAR_FX 互斥)",
         param_names: &["handle", "gx", "gy"],
     },
     Builtin {
@@ -323,7 +323,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: None,
-        doc: "弹 setter:停连续效果;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定",
+        doc: "弹 setter:停连续效果;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定(清 POLAR_FX/CART_FX 连续效果)",
         param_names: &["handle"],
     },
     Builtin {
@@ -332,7 +332,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Angle)],
         ret: None,
-        doc: "弹 setter:指向自机+偏移;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定",
+        doc: "弹 setter:指向自机方向再加 offset 偏移角;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定",
         param_names: &["handle", "offset"],
     },
     // ── 符卡计器（syscall 28/29/11；符卡机构 spec 2026-07-24 §5）─────────────
