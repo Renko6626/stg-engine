@@ -41,6 +41,11 @@ pub struct Task {
     pub owner_gen: u16,
     /// 任务池索引 + 1；0 = 无父（仅 `kill_children` 遍历用，T2）。
     pub parent: u16,
+    /// 绑定符卡槽号+1（0=不绑）：`spell_begin` spawn 的模式任务随卡生死（spec §2.1）；
+    /// `spawn` 派生子任务继承本值，`fire` 挂弹任务不继承。POD，checksum/save derive 自动盖。
+    /// 字段位置刻意卡在 `parent`（u16）后、`sp`（u8）前——`repr(C)` 下恰好落进
+    /// `parent`→`stack` 对齐间隙，不改变 `size_of::<Task>()`（尺寸哨兵因此不红）。
+    pub spell_bound: u8,
     /// 求值栈栈顶（0..=EVAL_DEPTH）。
     pub sp: u8,
     /// 调用栈栈顶（0..=CALL_DEPTH）。
@@ -63,6 +68,7 @@ impl Default for Task {
             owner_index: 0,
             owner_gen: 0,
             parent: 0,
+            spell_bound: 0,
             sp: 0,
             csp: 0,
             stack: [0; EVAL_DEPTH],
@@ -119,6 +125,10 @@ impl TaskPool {
                     owner_index: owner.1,
                     owner_gen: owner.2,
                     parent,
+                    // 新任务默认不绑符卡槽——`spell_bound` 由调用方按三处 spawn 各自明确
+                    // 的语义事后覆写（OP_SPAWN 继承父值 / spell_begin 显式设 slot+1 /
+                    // fire 挂弹任务保持 0，spec §2.1）；本池本身不知道符卡是什么（P1）。
+                    spell_bound: 0,
                     sp: 0,
                     csp: 0,
                     stack: [0; EVAL_DEPTH],

@@ -49,6 +49,10 @@ pub const SYS_SELF_AGE: u16 = 9;
 /// owner 上限血量（M1.5 新增）：owner=ENEMY → `enemies.hp_max[idx]`；非敌 → 押 0
 /// （同 `SYS_SELF_HP` 误用策略：静默降级，不 Fault）。
 pub const SYS_SELF_HP_MAX: u16 = 10;
+/// 符卡计时读族（符卡机构 spec 2026-07-24 §5）：owner 绑定的 active 槽 → `frames_left`；
+/// 无绑定 → `-1`（`wait_spell()` 语法糖的判据，同 `SYS_SELF_HP` 误用降级口径：owner
+/// 非 ENEMY 直接押 -1，不 Fault）。
+pub const SYS_SPELL_TIMER: u16 = 11;
 
 // 2x：写——创建/世界变更
 /// 丙方案 8 参（正序压栈）：`appearance, x, y, speed, angle, xform_off, xform_cnt, task_script`。
@@ -69,6 +73,13 @@ pub const SYS_PULSE_SIGNAL: u16 = 26;
 /// 通道 B 渲染请求推送（M2 前置刀；D12/spec §2.5）。无 owner 类别限制——宣言/音效/震屏
 /// 常由 STAGE 任务发。
 pub const SYS_EMIT_REQ: u16 = 27;
+/// 符卡宣言（符卡机构 spec 2026-07-24 §5）：owner 必须 ENEMY（misuse → Fault）；7 参
+/// 正序压栈 `slot, spell_id, pattern:SubRef, time_limit, bonus0, flags, hp_threshold`
+/// （`pattern` 同 `fire` task 参同款 `SubRef`，负值=none）。
+pub const SYS_SPELL_BEGIN: u16 = 28;
+/// 符卡逃生舱口（符卡机构 spec 2026-07-24 §5）：无参；owner 绑定槽走 HP 路径结算，
+/// 无绑定 → no-op（重复调用安全）。
+pub const SYS_SPELL_END: u16 = 29;
 
 // 3x：写——弹 setter 族（self owner 必须是 BULLET；按 motion.rs 九连顺序编号）
 pub const SYS_SET_BULLET_SPEED: u16 = 30;
@@ -133,6 +144,21 @@ fn self_hp_max(task: &Task, ctx: &VmCtx) -> i32 {
         OWNER_ENEMY => ctx.body.enemies.hp_max[task.owner_index as usize],
         _ => 0,
     }
+}
+
+/// `SYS_SPELL_TIMER`（11）：owner 非 ENEMY → 直接押 -1（同 `SYS_SELF_HP` 误用降级口径，
+/// 不 Fault——读族误用是"确定性安全结果"而非脚本作者违约）；敌 → 押
+/// `spell_frames_left_of`（世界侧核已处理"无绑定 → -1"）。
+fn sys_spell_timer(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    if task.owner_kind != OWNER_ENEMY {
+        return push(task, -1);
+    }
+    let h = EnemyHandle {
+        index: task.owner_index,
+        generation: task.owner_gen,
+    };
+    let frames_left = ctx.body.spell_frames_left_of(h);
+    push(task, frames_left)
 }
 
 /// self owner 必须是 BULLET，否则脚本作者违约 → `Fault`（misuse 策略，见模块文档）。
@@ -203,6 +229,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             let hp_max = self_hp_max(task, ctx);
             push(task, hp_max)
         }
+        SYS_SPELL_TIMER => sys_spell_timer(task, ctx),
         SYS_CREATE_BULLET => sys_create_bullet(task, ctx),
         SYS_CREATE_BULLETS_BATCH => sys_create_bullets_batch(task, ctx),
         SYS_SPAWN_ENEMY => sys_spawn_enemy(task, ctx),
@@ -215,6 +242,8 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             Ok(())
         }
         SYS_EMIT_REQ => sys_emit_req(task, ctx),
+        SYS_SPELL_BEGIN => sys_spell_begin(task, ctx),
+        SYS_SPELL_END => sys_spell_end(task, ctx),
         SYS_SET_BULLET_SPEED => {
             let h = self_bullet_handle(task)?;
             let speed = pop(task)?;
@@ -607,6 +636,108 @@ fn sys_emit_req(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
+/// 符卡宣言（`SYS_SPELL_BEGIN`=28；符卡机构 spec 2026-07-24 §5）：7 参逆序弹出；
+/// `self_enemy_handle`（非敌 misuse → Fault，同 `move_enemy_to` 误用策略）。
+///
+/// **两条控制器补充决策**（复审 T1-m3/T1-m1 落地，spec 未写，本刀新增，syscall 层专属——
+/// 世界侧 `spell_begin_internal` 仍宽松接受负 threshold/双绑定供白盒测直调）：
+/// - **拒负 threshold**：血线语义非负，`threshold < 0` → P4-b no-op + 计数，不建。
+/// - **防双绑定**：该 boss 已绑到**另一** active 槽 → P4-b no-op + 计数（单卡/boss 是
+///   设计用法，多卡序靠脚本顺序 begin 下一张，不允许并行两槽绑同一 boss）。
+///
+/// `pattern`（`SubRef`，负值=none）**先查后建**（同 `sys_create_bullet`/`OP_SPAWN` 坏号
+/// 口径）：越界/非 0 参 Async 号 → Fault，零副作用（`spell_begin_internal` 尚未调用）。
+/// `spell_begin_internal` 返 `true` 且 `pattern` 非 none → 照 fire task-spawn 样板 spawn
+/// 模式任务（owner=boss，`spell_bound = slot+1`——"生"，spec §2.1）；返 `false` → 不 spawn
+/// （P4-b 已在 internal 计数）。
+fn sys_spell_begin(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let threshold = pop(task)?;
+    let flags = pop(task)?;
+    let bonus0 = pop(task)?;
+    let time_limit = pop(task)?;
+    let pattern_ref = pop(task)?;
+    let spell_id = pop(task)?;
+    let slot = pop(task)?;
+    let h = self_enemy_handle(task)?;
+
+    if threshold < 0 {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+        ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+        return Ok(());
+    }
+
+    let already_bound_elsewhere = (0..crate::boss::MAX_BOSSES).any(|s| {
+        ctx.body.spells[s].active != 0
+            && ctx.body.spells[s].boss_index == h.index
+            && ctx.body.spells[s].boss_gen == h.generation
+    });
+    if already_bound_elsewhere {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+        ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+        return Ok(());
+    }
+
+    // pattern 号先查后建：坏号 Fault、none（负值）跳过 spawn，均在 internal 调用之前定案。
+    let pattern_sub: Option<SubId> = if pattern_ref >= 0 {
+        let raw = u16::try_from(pattern_ref).map_err(|_| FAULT_BAD_OP)?;
+        let sub = ctx.ecl.sub_id(raw).ok_or(FAULT_BAD_OP)?;
+        let meta = ctx.ecl.sub_meta(sub).ok_or(FAULT_BAD_OP)?;
+        if meta.kind() != SubKind::Async
+            || ctx
+                .ecl
+                .param_types(sub)
+                .is_none_or(|params| !params.is_empty())
+        {
+            return Err(FAULT_BAD_OP);
+        }
+        Some(sub)
+    } else {
+        None
+    };
+
+    let slot_idx = slot as usize; // 负/越界值 wrapping 成巨大 usize，internal 的越界门自然挡
+    let began = ctx.body.spell_begin_internal(
+        slot_idx,
+        h,
+        spell_id as u16,
+        time_limit as u16,
+        bonus0 as u32,
+        flags as u8,
+        threshold,
+    );
+    if began && let Some(pattern_sub) = pattern_sub {
+        // 照 fire 的 task-spawn 样板（sys_create_bullet）：entry 已在上面校验过在册。
+        let pc0 = ctx
+            .ecl
+            .sub_meta(pattern_sub)
+            .expect("已在上面校验过")
+            .code_entry();
+        let owner = (OWNER_ENEMY, h.index, h.generation);
+        let parent = ctx.self_index + 1;
+        match ctx.tasks.spawn(pattern_sub, pc0, owner, parent, ctx.frame) {
+            Some(idx) => {
+                // "生"：模式任务显式绑定本槽（spec §2.1），与 OP_SPAWN 的"继承"路径
+                // 不同——这是模式树的根，绑定值凭空而来，不是继承自父任务。
+                ctx.tasks.slots[idx as usize].spell_bound = (slot_idx + 1) as u8;
+            }
+            None => {
+                ctx.body.diag.pool_full[crate::world::POOL_TASK] =
+                    ctx.body.diag.pool_full[crate::world::POOL_TASK].wrapping_add(1);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 符卡逃生舱口（`SYS_SPELL_END`=29；符卡机构 spec 2026-07-24 §5）：无参；
+/// `self_enemy_handle`（非敌 misuse → Fault）；转交 `spell_end_by_owner`（无绑定 →
+/// no-op，重复调用安全，见该 API 文档）。
+fn sys_spell_end(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    ctx.body.spell_end_by_owner(h);
+    Ok(())
+}
+
 /// 瞄准角查询（SYS 40）：0 参；self 位置（owner 未知/STAGE→原点）朝向 P0 的 `atan2`，
 /// 押回 BAM raw（不消 RNG、不改世界，纯读）。
 fn sys_aim_player_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -655,6 +786,24 @@ mod tests {
 
     fn fresh() -> (Box<World>, EclImage) {
         (World::new(1), EclImage::empty())
+    }
+
+    /// 单个 0 参 Async sub（raw=1）的镜像——`spell_begin` 的 `pattern:SubRef` 测试专用
+    /// （代码体本身无关紧要，只需能被 `run_tasks` 安全 wait）。
+    fn async_pattern_image() -> EclImage {
+        test_image(
+            vec![
+                crate::ecl::ops::OP_PUSHI as u32,
+                1,
+                crate::ecl::ops::OP_WAIT as u32,
+            ],
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(0, SubKind::Async, vec![]),
+            ],
+            vec![EntryInit::new("pattern", 1)],
+            Some(0),
+        )
     }
 
     #[test]
@@ -1446,5 +1595,212 @@ mod tests {
             Err(FAULT_STACK),
             "参数不足 → 栈下溢 Fault（同全族处置）"
         );
+    }
+
+    // ── SYS_SPELL_BEGIN/END/TIMER（Task 2；符卡机构 spec 2026-07-24 §5）─────────
+
+    fn enemy_task(w: &mut World, hp: i32) -> (EnemyHandle, Task) {
+        let boss = crate::world::test_support::spawn_enemy(w, 0, 80, hp);
+        let task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: boss.index,
+            owner_gen: boss.generation,
+            ..Task::default()
+        };
+        (boss, task)
+    }
+
+    /// misuse 策略：owner != ENEMY → Fault，零副作用（同 `move_enemy_to` 口径）。
+    #[test]
+    fn sys_spell_begin_owner_stage_faults() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task {
+            owner_kind: OWNER_STAGE,
+            ..Task::default()
+        };
+        let args = [0, 1, -1, 100, 1000, 0, 0];
+        let r = call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP));
+        assert_eq!(w.body.spells[0].active, 0, "misuse Fault：零副作用");
+    }
+
+    /// 快乐路径：owner=ENEMY 成功 → 槽 active + 模式任务已 spawn，`spell_bound==slot+1`，
+    /// owner 绑定新任务到 boss（"生"，spec §2.1）。
+    #[test]
+    fn sys_spell_begin_success_spawns_pattern_task_bound_to_slot() {
+        let mut w = World::new(1);
+        let ecl = async_pattern_image();
+        let (boss, mut task) = enemy_task(&mut w, 1000);
+        // 声明序：slot, spell_id, pattern_ref, time_limit, bonus0, flags, threshold
+        let args = [0, 5, 1, 100, 1000, 0, 300];
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args).is_ok());
+        assert_eq!(w.body.spells[0].active, 1, "槽应已 active");
+        let child = (0..crate::ecl::task::TASK_CAP)
+            .find(|&i| w.tasks.is_alive(i))
+            .expect("应已 spawn 模式任务");
+        assert_eq!(w.tasks.slots[child].owner_kind, OWNER_ENEMY);
+        assert_eq!(w.tasks.slots[child].owner_index, boss.index);
+        assert_eq!(w.tasks.slots[child].owner_gen, boss.generation);
+        assert_eq!(
+            w.tasks.slots[child].spell_bound, 1,
+            "槽 0 → spell_bound = slot+1 = 1"
+        );
+    }
+
+    /// `pattern=none`（负值）→ begin 仍成功但不 spawn 任何任务。
+    #[test]
+    fn sys_spell_begin_pattern_none_does_not_spawn() {
+        let mut w = World::new(1);
+        let ecl = async_pattern_image();
+        let (_boss, mut task) = enemy_task(&mut w, 1000);
+        let args = [0, 5, -1, 100, 1000, 0, 0];
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args).is_ok());
+        assert_eq!(w.body.spells[0].active, 1);
+        assert_eq!(w.tasks.iter_alive().count(), 0, "pattern=none 不 spawn");
+    }
+
+    /// 坏 `pattern` 号（不在册）→ Fault，先查后建：`spell_begin_internal` 不应已被调用
+    /// （槽仍空闲，同 `sys_create_bullet` 的坏 task_script 口径）。
+    #[test]
+    fn sys_spell_begin_pattern_bad_sub_faults_before_mutating_world() {
+        let mut w = World::new(1);
+        let ecl = async_pattern_image(); // 只有 raw=1 在册
+        let (_boss, mut task) = enemy_task(&mut w, 1000);
+        let args = [0, 5, 99, 100, 1000, 0, 0]; // pattern_ref=99 不在册
+        let r = call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP));
+        assert_eq!(w.body.spells[0].active, 0, "先查后建：坏号不应已写入槽");
+        assert_eq!(w.tasks.iter_alive().count(), 0);
+    }
+
+    /// 槽越界 → P4-b no-op + 计数（`spell_begin_internal` 自身判定，syscall 层直通）。
+    #[test]
+    fn sys_spell_begin_slot_oob_is_p4b_noop() {
+        let (mut w, ecl) = fresh();
+        let (_boss, mut task) = enemy_task(&mut w, 1000);
+        let cv0 = w.body.diag.contract_viol;
+        let args = [99, 5, -1, 100, 1000, 0, 0]; // slot=99 越界
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args).is_ok());
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.tasks.iter_alive().count(), 0);
+    }
+
+    /// `threshold > 当前 hp` → P4-b no-op + 计数。
+    #[test]
+    fn sys_spell_begin_threshold_over_hp_is_p4b_noop() {
+        let (mut w, ecl) = fresh();
+        let (_boss, mut task) = enemy_task(&mut w, 100); // hp=100
+        let cv0 = w.body.diag.contract_viol;
+        let args = [0, 5, -1, 100, 1000, 0, 200]; // threshold=200 > hp=100
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args).is_ok());
+        assert_eq!(w.body.spells[0].active, 0);
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+    }
+
+    /// 该槽已 active（重复 begin 同一槽）→ P4-b no-op + 计数，原槽内容不被覆写。
+    #[test]
+    fn sys_spell_begin_duplicate_active_slot_is_p4b_noop() {
+        let (mut w, ecl) = fresh();
+        let (_boss, mut task) = enemy_task(&mut w, 1000);
+        let args = [0, 5, -1, 100, 1000, 0, 0];
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args).is_ok());
+        assert_eq!(w.body.spells[0].active, 1);
+
+        task.sp = 0;
+        let cv0 = w.body.diag.contract_viol;
+        let args2 = [0, 6, -1, 100, 1000, 0, 0]; // 同槽再次 begin
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args2).is_ok());
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.spells[0].spell_id, 5, "第一次的槽内容未被覆写");
+    }
+
+    /// 控制器补充决策（复审 T1-m3）：`threshold < 0` → P4-b no-op + 计数，不 begin、不
+    /// spawn（血线语义非负；世界 API 层仍宽松接受负值供白盒测）。
+    #[test]
+    fn sys_spell_begin_negative_threshold_is_p4b_noop_no_spawn() {
+        let mut w = World::new(1);
+        let ecl = async_pattern_image();
+        let (_boss, mut task) = enemy_task(&mut w, 1000);
+        let cv0 = w.body.diag.contract_viol;
+        let args = [0, 5, 1, 100, 1000, 0, -1]; // threshold=-1，pattern 合法在册
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args).is_ok());
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.body.spells[0].active, 0, "拒负 threshold：不 begin");
+        assert_eq!(w.tasks.iter_alive().count(), 0, "不 spawn");
+    }
+
+    /// 控制器补充决策（复审 T1-m1）：该 boss 已绑到另一 active 槽 → P4-b no-op + 计数
+    /// （单卡/boss 是设计用法；同 boss 连续 begin 两个不同槽应在第二次被拒）。
+    #[test]
+    fn sys_spell_begin_boss_already_bound_to_another_slot_is_p4b_noop() {
+        let (mut w, ecl) = fresh();
+        let (_boss, mut task) = enemy_task(&mut w, 1000);
+        let args0 = [0, 5, -1, 100, 1000, 0, 0];
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args0).is_ok());
+        assert_eq!(w.body.spells[0].active, 1);
+
+        task.sp = 0;
+        let cv0 = w.body.diag.contract_viol;
+        let args1 = [1, 6, -1, 100, 1000, 0, 0]; // 同 boss，另一空闲槽 1
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_BEGIN, &args1).is_ok());
+        assert_eq!(
+            w.body.diag.contract_viol,
+            cv0 + 1,
+            "同 boss 二次绑定应计数拒绝"
+        );
+        assert_eq!(w.body.spells[1].active, 0, "槽 1 不应被写入");
+    }
+
+    /// 逃生舱口：绑定 owner 调用 → 槽走 HP 路径结算清空。
+    #[test]
+    fn sys_spell_end_bound_owner_settles_slot() {
+        let (mut w, ecl) = fresh();
+        let (boss, mut task) = enemy_task(&mut w, 1000);
+        assert!(w.body.spell_begin_internal(0, boss, 5, 100, 1000, 0, 0));
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_END, &[]).is_ok());
+        assert_eq!(w.body.spells[0].active, 0, "逃生舱口应已结算清槽");
+    }
+
+    /// 无绑定 → no-op，且不计 contract_viol（重复调用安全，同世界 API 文档）。
+    #[test]
+    fn sys_spell_end_unbound_owner_is_noop() {
+        let (mut w, ecl) = fresh();
+        let (_boss, mut task) = enemy_task(&mut w, 1000);
+        let cv0 = w.body.diag.contract_viol;
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_END, &[]).is_ok());
+        assert_eq!(w.body.diag.contract_viol, cv0, "无绑定重复调用安全，不计数");
+    }
+
+    /// 绑定槽 → 压 `frames_left`（begin 当刻即 `time_limit`）。
+    #[test]
+    fn sys_spell_timer_bound_pushes_frames_left() {
+        let (mut w, ecl) = fresh();
+        let (boss, mut task) = enemy_task(&mut w, 1000);
+        assert!(w.body.spell_begin_internal(0, boss, 5, 100, 1000, 0, 0));
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_TIMER, &[]).is_ok());
+        assert_eq!(task.stack[0], 100);
+    }
+
+    /// 无绑定（owner=ENEMY 但从未 begin）→ 押 -1。
+    #[test]
+    fn sys_spell_timer_unbound_pushes_neg1() {
+        let (mut w, ecl) = fresh();
+        let (_boss, mut task) = enemy_task(&mut w, 1000);
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_TIMER, &[]).is_ok());
+        assert_eq!(task.stack[0], -1);
+    }
+
+    /// 读族误用降级（同 `SYS_SELF_HP`）：owner 非 ENEMY → 押 -1，不 Fault。
+    #[test]
+    fn sys_spell_timer_non_enemy_owner_pushes_neg1_no_fault() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task {
+            owner_kind: OWNER_STAGE,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_TIMER, &[]).is_ok());
+        assert_eq!(task.stack[0], -1);
     }
 }

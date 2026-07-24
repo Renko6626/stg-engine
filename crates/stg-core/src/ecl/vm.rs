@@ -352,6 +352,10 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
                         // 子任务 locals 已被 TaskPool::spawn 全零初始化（复用槽写满纪律）——
                         // 只需覆写 [0..argc) 段，argc=0 时这是 no-op（金向量两段不变的地基）。
                         ctx.tasks.slots[idx as usize].locals[..argc].copy_from_slice(&args[..argc]);
+                        // 符卡机构 spec §2.1"继承"：子任务继承父 `spell_bound`（0=不绑也是
+                        // 一种继承值）——整棵模式树随卡死绝，`fire` 挂弹任务（syscall.rs 的
+                        // task-spawn，非本 op）不走此路，故不继承，见该处文档。
+                        ctx.tasks.slots[idx as usize].spell_bound = task.spell_bound;
                         push!(idx as i32)
                     }
                     None => {
@@ -444,6 +448,17 @@ pub(crate) fn run_tasks(
                 _ => false, // 未知 owner_kind：不应由合法路径产生，视同悬垂静默回收
             };
             if !alive {
+                tasks.kill(i);
+                continue;
+            }
+        }
+
+        // 符卡机构 spec §2.1"死"：`spell_bound != 0` 且绑定槽已非 active ⇒ 就地静默杀
+        // （镜像上面的 owner 存活门禁——同 owner 失效处置，不发 `EVT_TASK_FAULT`、不计
+        // `task_faults`；池序确定，I4）。
+        if t.spell_bound != 0 {
+            let s = t.spell_bound as usize - 1;
+            if s >= crate::boss::MAX_BOSSES || body.spells[s].active == 0 {
                 tasks.kill(i);
                 continue;
             }
@@ -1306,6 +1321,177 @@ mod tests {
         assert!(
             w.tasks.is_alive(orphan as usize),
             "D 从未 spawn 过 orphan，KILL_CHILDREN 不应因槽号复用误杀前任的孤儿"
+        );
+    }
+
+    // ── 符卡 `spell_bound`（Task 2；spec §2.1）──────────────────────────────
+
+    /// `OP_SPAWN` 继承（spec §2.1"生""继承"）：子任务的 `spell_bound` 继承父任务当前值——
+    /// 整棵模式树随卡死绝的地基。两态都验：非零值真继承 + 零值（未绑定）同样继承（不是
+    /// "只在非零时才拷贝"的半截实现）。
+    #[test]
+    fn op_spawn_child_inherits_parent_spell_bound() {
+        let mut w = test_world();
+        let ecl = async_image(vec![OP_END as u32], 0);
+
+        let mut budget = u32::MAX;
+        let mut bound_task = Task {
+            spell_bound: 3, // 模拟"绑定符卡槽 2"（槽号+1）的模式任务
+            ..Task::default()
+        };
+        let mut ctx = VmCtx {
+            code: &[OP_SPAWN as u32, 1, 0, OP_END as u32],
+            budget: &mut budget,
+            tasks: &mut w.tasks,
+            ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
+            self_index: 0,
+            frame: 0,
+        };
+        let r = exec(&mut bound_task, &mut ctx);
+        assert_eq!(r, Exec::End);
+        let child = bound_task.stack[0] as usize;
+        assert_eq!(
+            w.tasks.slots[child].spell_bound, 3,
+            "子任务应继承父 spell_bound（非零值）"
+        );
+
+        // 对照：spell_bound=0（未绑定）的父 spawn 出的子也应是 0——同一条继承逻辑的另一态。
+        let mut budget0 = u32::MAX;
+        let mut unbound_task = Task::default(); // spell_bound=0
+        let mut ctx0 = VmCtx {
+            code: &[OP_SPAWN as u32, 1, 0, OP_END as u32],
+            budget: &mut budget0,
+            tasks: &mut w.tasks,
+            ecl: &ecl,
+            body: &mut w.body,
+            tables: &crate::tables::TABLES_V0,
+            self_index: 0,
+            frame: 0,
+        };
+        let r0 = exec(&mut unbound_task, &mut ctx0);
+        assert_eq!(r0, Exec::End);
+        let child0 = unbound_task.stack[0] as usize;
+        assert_eq!(
+            w.tasks.slots[child0].spell_bound, 0,
+            "未绑定父的子任务仍是 0（不是巧合默认值，是继承结果）"
+        );
+    }
+
+    /// spec §2.1 死路径：相位 2 调度门禁镜像 owner 存活门禁——任务 `spell_bound != 0`
+    /// 且绑定槽已非 active ⇒ 就地静默杀（不发 `EVT_TASK_FAULT`，同 owner 死处置）；
+    /// `spawn` 派生的子任务继承 `spell_bound`，故整棵模式树随卡死绝（模式 sub 写成无限
+    /// loop 也一样——杀的是调度门禁，不指望脚本自己终止）；`fire` 挂弹任务
+    /// `spell_bound` 恒 0，不受牵连，收卡结算后仍活。
+    #[test]
+    fn run_tasks_kills_spell_bound_task_tree_on_slot_settle_fire_task_survives() {
+        let mut w = test_world();
+        let boss = crate::world::test_support::spawn_enemy(&mut w, 0, 80, 999);
+        assert!(w.body.spell_begin_internal(0, boss, 1, 100, 1000, 0, 0));
+
+        // code:
+        //  0: OP_END                       — sub0 Root（占位不用）
+        //  1: OP_SPAWN child_raw=2, argc=0 — sub1 mode 入口：spawn 一个子任务
+        //  4: OP_POP                       — 丢弃 SPAWN 压回的子任务 idx
+        //  5: OP_PUSHI 1
+        //  7: OP_WAIT                      — 等 1 帧
+        //  8: OP_JMP 1                     — 跳回 spawn：无限 loop（不会自然终止）
+        // 10: OP_PUSHI 1                   — sub2 child 入口：纯自循环等待（同样不会自然终止）
+        // 12: OP_WAIT
+        // 13: OP_JMP 10
+        let code = vec![
+            OP_END as u32,   // 0
+            OP_SPAWN as u32, // 1
+            2,               // 2: script raw = child(2)
+            0,               // 3: argc = 0
+            OP_POP as u32,   // 4
+            OP_PUSHI as u32, // 5
+            1,               // 6
+            OP_WAIT as u32,  // 7
+            OP_JMP as u32,   // 8
+            1,               // 9: 跳回 mode 入口
+            OP_PUSHI as u32, // 10
+            1,               // 11
+            OP_WAIT as u32,  // 12
+            OP_JMP as u32,   // 13
+            10,              // 14: 跳回 child 入口
+        ];
+        let ecl = test_image(
+            code,
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(1, SubKind::Async, vec![]),
+                SubInit::new(10, SubKind::Async, vec![]),
+            ],
+            vec![EntryInit::new("entry_1", 1), EntryInit::new("entry_2", 2)],
+            Some(0),
+        );
+
+        // mode 任务：owner=boss，模拟 `sys_spell_begin` spawn 时打的 spell_bound=slot+1=1。
+        let mode_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(1).unwrap(),
+                &[],
+                (OWNER_ENEMY, boss.index, boss.generation),
+            )
+            .unwrap();
+        w.tasks.slots[mode_idx as usize].spell_bound = 1;
+
+        // fire 挂弹任务：owner=弹，spell_bound 保持默认 0（不继承，spec §2.1"fire 不继承"）。
+        let bh = crate::world::test_support::bullet_at(&mut w, 0, 0);
+        let fire_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(2).unwrap(),
+                &[],
+                (OWNER_BULLET, bh.index, bh.generation),
+            )
+            .unwrap();
+        assert_eq!(w.tasks.slots[fire_idx as usize].spell_bound, 0);
+
+        // 出生帧门禁会跳过本帧执行——推进一帧再跑，让 mode 任务真的执行到 SPAWN。
+        w.body.frame = 1;
+        run_tasks(&mut w.tasks, &mut w.body, &ecl, &crate::tables::TABLES_V0);
+        assert!(
+            w.tasks.is_alive(mode_idx as usize),
+            "mode 任务本轮应存活（卡仍 active）"
+        );
+        assert!(w.tasks.is_alive(fire_idx as usize));
+
+        // 找到 mode 任务本轮 spawn 出的子任务：既非 mode 也非 fire 的新增 alive 槽。
+        let child_idx = (0..TASK_CAP)
+            .find(|&i| w.tasks.is_alive(i) && i != mode_idx as usize && i != fire_idx as usize)
+            .expect("mode 任务应已 spawn 一个子任务");
+        assert_eq!(
+            w.tasks.slots[child_idx].spell_bound, 1,
+            "spawn 子任务应继承父 spell_bound（整棵模式树随卡生死）"
+        );
+        assert_eq!(
+            w.tasks.slots[child_idx].owner_kind, OWNER_ENEMY,
+            "子任务 owner 继承父 owner（OP_SPAWN 既有语义，未被本刀改动）"
+        );
+
+        // 收卡结算——槽 0 归零（active=0）。
+        w.body.spell_end_by_owner(boss);
+
+        // 下一轮 run_tasks：mode 任务及其 spawn 子任务因绑定槽已非 active 被静默杀；
+        // fire 挂弹任务 spell_bound=0，不受牵连，继续存活。
+        w.body.frame = 2;
+        run_tasks(&mut w.tasks, &mut w.body, &ecl, &crate::tables::TABLES_V0);
+        assert!(
+            !w.tasks.is_alive(mode_idx as usize),
+            "绑定槽已非 active，mode 任务应被杀"
+        );
+        assert!(
+            !w.tasks.is_alive(child_idx),
+            "spawn 子任务同死（继承 spell_bound）"
+        );
+        assert!(w.tasks.is_alive(fire_idx as usize), "fire 挂弹任务不随卡死");
+        assert_eq!(
+            w.body.diag.task_faults, 0,
+            "同 owner 失效处置：静默杀，不计 Fault"
         );
     }
 }
