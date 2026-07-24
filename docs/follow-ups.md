@@ -154,6 +154,17 @@ threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy �
 层注册拒绝路径（坏 `kind`/坏 `RID` 计数）的运行期回归，再进入正式消费。
 
 
+
+同根增补(终审,2026-07-24):`frame.rs` 编码→register_layer→multimesh 上传路径在 Godot
+冒烟里零运行期覆盖(仅纯 Rust 判别单测盖)——同一触发点一并补运行期回归。
+
+### C17. 桥壳三处打磨(桥刀终审分诊,2026-07-24)
+
+`bridge.rs`:①`ping()` 测试助手留在生产冻结面(无害欠整洁);②`save_state()` 未开局静默
+返空 PackedByteArray,与 `load_state` 的 warn_once 不对称,GDScript 分不清"空存档/未开局";
+③`hud_boss` 直读 `body.boss_ui`(pub 公告板,非 P1 违反)而 hud_player/hud_spell 走 view()
+——读口不一致,可加 `WorldView::boss_ui()` 统一。下次动壳时顺手。
+
 ## C. 代码整洁（低优先，都是两可）
 
 ### C1. `world/settle.rs:84,95` —— 两 arm 的门禁 2 行逐字重复
