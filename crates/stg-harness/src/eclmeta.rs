@@ -43,8 +43,23 @@ pub fn signature(b: &Builtin) -> String {
     format!("{}({}){ret}", b.name, params.join(", "))
 }
 
+/// JSON 字符串转义：`\`/`"` 两个结构字符 + 全部 `0x00..=0x1F` 控制字符（JSON 规范禁止
+/// 字面出现在字符串里）。`\n`/`\r`/`\t` 用短转义，其余控制字符落 `\u{:04x}` 通用形式
+/// （修复审裁 Important①：doc/name 里出现换行等控制字符时曾产出非法 JSON）。
 fn esc(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 pub fn render_meta_json() -> String {
@@ -93,6 +108,15 @@ pub fn cmd_gen() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `esc()` 判别式:反斜杠/引号/三个具名短转义(`\n`/`\r`/`\t`)/一个通用 `\u{:04x}`
+    /// 控制字符(0x01,挑一个不属于三条短转义快捷道的值,判别值互异),手算期望输出逐字节比对。
+    #[test]
+    fn esc_escapes_backslash_quote_and_control_chars_as_valid_json() {
+        let input = "a\\b\"c\nd\re\tf\u{01}g";
+        let expected = "a\\\\b\\\"c\\nd\\re\\tf\\u0001g";
+        assert_eq!(esc(input), expected);
+    }
 
     /// 防漂移(verify-tables 同款):现生成 == commit 字节。
     #[test]
