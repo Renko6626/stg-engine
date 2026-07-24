@@ -18,6 +18,16 @@
 
 ---
 
+### A3. `new_game` 硬绑内建 `TABLES_V0`——owned 表路径到来时补 tables 参数化姊妹入口（前置小刀终审分诊，2026-07-24）
+
+正典 boot `World::new_game`（step.rs）内部走 `World::new` → 内建 `TABLES_V0`，签名不收
+`tables`。v1（内建表唯一）自洽；但当 C11 资产管线的 owned 表（`from_bytes` 载盘、
+`content_hash` LIVE）成为消费路径时，这些消费者只能退回 `new_with_tables + set_var +
+start_main` 三步——"唯一正典入口"的防分歧保证对该路径有洞。**触发点 = owned 表消费者
+出现**（C11 资产管线刀 / 任何 mod 表加载），届时补 `new_game_with_tables` 姊妹入口并
+让 `new_game` 委托它。
+
+
 ## B. 测试覆盖缺口
 
 ### B1. P4-a 池满降级：四个写 API 仍零覆盖（道具池份额已还）
@@ -126,6 +136,13 @@ settle_one_spell 清 boss_ui 或按意图记档。
 threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy 死亡路径"的防御,记档非债。
 
 ---
+
+### B17. `new_game` 的 spec 单测四项落地两项（前置小刀终审分诊，2026-07-24）
+
+`frame==0` 与 `TaskStartError` 透传无显式断言（前者由堆零构造隐式保证并被 same-inputs
+测试间接兜住，后者 `?` 平凡且 `start_main` 错误路径另有测试）。低风险覆盖精度 nit，
+顺路补两行断言即可。
+
 
 ## C. 代码整洁（低优先，都是两可）
 
