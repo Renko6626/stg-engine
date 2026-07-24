@@ -1028,20 +1028,22 @@ mod ecl_rainbow_tests {
     }
 
     /// 编译干净：rainbow.ecl 应零错误编译（狗粮验收的地基——语言真的能表达这张卡）。
-    /// 镜像结构：三 sub（patrol/timer_ui/main，规范排序）、named entry 解析正确、
-    /// Root 不可通过 resolve_entry("main") 获取（须走 start_main）。
+    /// 镜像结构：三 sub（patrol/windchime_pattern/main，规范排序；符卡机构狗粮化后
+    /// `timer_ui` 已删除，五环弹幕 loop 搬进 `windchime_pattern`，见 rainbow.ecl 头部
+    /// 注释）、named entry 解析正确、Root 不可通过 resolve_entry("main") 获取
+    /// （须走 start_main）。
     #[test]
     fn rainbow_ecl_compiles_clean_with_named_entries() {
         let image = compile_rainbow_image();
-        assert_eq!(image.sub_count(), 3, "patrol + timer_ui + main");
+        assert_eq!(image.sub_count(), 3, "patrol + windchime_pattern + main");
         assert!(image.root().is_some(), "main 应被标记为 Root");
         assert!(
             image.resolve_entry("patrol").is_ok(),
             "async sub patrol 应是可解析的 named entry"
         );
         assert!(
-            image.resolve_entry("timer_ui").is_ok(),
-            "async sub timer_ui 应是可解析的 named entry"
+            image.resolve_entry("windchime_pattern").is_ok(),
+            "async sub windchime_pattern（spell_begin 的模式引用）应是可解析的 named entry"
         );
         assert_eq!(
             image.resolve_entry("main"),
@@ -1068,10 +1070,13 @@ mod ecl_rainbow_tests {
 
     /// 稳态判别（输入脚本同金向量二号真实建场路径——全程持 BTN_SHOT + 左右缓移，自机弹真的
     /// 会打中 boss，见下方 `hp_ratio` 断言）：600 帧后弹数 >100（持续环流）、boss 存活
-    /// （hp_max 9999 扛得住 600 帧的自机火力，不会归零死亡）、`boss_ui[0].active==1` 且
-    /// `hp_ratio` 是真值（非零、≤1.0fx——C13②"ratio = $self_hp/$self_hp_max 真算"的行为学
-    /// 证据：真实建场下自机弹确实打中 boss，`hp_ratio` 实测 <1.0，不是恒为 1.0 的占位符）、
-    /// 任务数 >=3（main+patrol+timer_ui 三子全存活——三者皆 `loop {}`，不自灭）、全程零 Fault。
+    /// （hp_max 9999、`spell_begin` 血线 `threshold=0`，600 帧自机火力打不穿，符卡收卡
+    /// 路径走不到，卡全程 active）、`boss_ui[0].active==1` 且 `hp_ratio` 是真值（非零、
+    /// ≤1.0fx——符卡机构 settle 趟五"boss_ui 自动喂"用真定点除法算逐卡血条，见 spec
+    /// 2026-07-24 §3；真实建场下自机弹确实打中 boss，`hp_ratio` 实测 <1.0，不是恒为 1.0
+    /// 的占位符）、任务数 >=3（main+patrol+windchime_pattern 三子全存活——`patrol`/
+    /// `windchime_pattern` 皆 `loop {}` 不自灭，`windchime_pattern` 是 spell_begin 生出的
+    /// 模式任务、随卡生死但卡本身 600 帧内不结束）、全程零 Fault。
     #[test]
     fn rainbow_scene_reaches_steady_state() {
         let image = compile_rainbow_image();
@@ -1109,7 +1114,7 @@ mod ecl_rainbow_tests {
         let task_count = w.tasks().iter_alive().count();
         assert!(
             task_count >= 3,
-            "main+patrol+timer_ui 三任务应全存活（实测 {task_count}）"
+            "main+patrol+windchime_pattern 三任务应全存活（实测 {task_count}）"
         );
     }
 }

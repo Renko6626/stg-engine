@@ -403,6 +403,49 @@ fn spawn_stmt_shape_with_args() {
     }
 }
 
+/// `wait_spell()` 语法糖（符卡机构 spec 2026-07-24 §5）：parser 层纯前端展开成
+/// `while spell_timer() >= 0 { wait(1); }` 的等价 AST 子树——没有专属 `Stmt` 变体，
+/// codegen 对它和手写的等价 `while` 一视同仁（判别测试见 `codegen::tests`
+/// "同字节码"）。这里只钉 AST 形状。
+#[test]
+fn wait_spell_stmt_desugars_to_while_spell_timer_shape() {
+    let s = single_stmt("wait_spell();");
+    match s {
+        Stmt::While { cond, body, .. } => {
+            assert_eq!(
+                zero(&cond),
+                Expr::Binary {
+                    op: BinOp::Ge,
+                    l: Box::new(Expr::Call {
+                        name: "spell_timer".to_string(),
+                        args: vec![],
+                        span: Span::default(),
+                    }),
+                    r: Box::new(Expr::IntLit(0)),
+                    span: Span::default(),
+                }
+            );
+            assert_eq!(body.len(), 1, "糖体只应有一条 wait(1)");
+            match &body[0] {
+                Stmt::Wait { frames, .. } => assert_eq!(zero(frames), Expr::IntLit(1)),
+                other => panic!("期望糖体是 Stmt::Wait，得到 {other:?}"),
+            }
+        }
+        other => panic!("期望 wait_spell() 展开为 Stmt::While，得到 {other:?}"),
+    }
+}
+
+/// `wait_spell` 不是关键字（词法层没有为它开专属 token），普通同名标识符只有紧跟 `(`
+/// 才触发糖展开——赋值路径（`Ident(_) if next==Eq`）不受影响，保持既有分派优先序。
+#[test]
+fn wait_spell_name_used_as_plain_assignment_target_is_unaffected() {
+    let s = single_stmt("wait_spell = 1;");
+    match s {
+        Stmt::Assign { name, .. } => assert_eq!(name, "wait_spell"),
+        other => panic!("期望 Stmt::Assign，得到 {other:?}"),
+    }
+}
+
 #[test]
 fn return_break_continue_shapes() {
     assert!(matches!(single_stmt("return;"), Stmt::Return { .. }));

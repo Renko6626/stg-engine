@@ -83,6 +83,7 @@
   状态（复用既有 `Task.born_frame`），对全部 owner 种类（含 STAGE）均有意义。次帧首跑时
   `age==1`（不是 0），见"作者须知" |
 | 10 | `self_hp_max`（M1.5） | — | owner 敌 `hp_max`（非敌读 0，同 `self_hp` 误用策略） |
+| 11 | `spell_timer`（符卡机构，见下方"符卡计器"） | — | owner 绑定槽 `frames_left`；owner 非敌或无绑定槽 → **-1**（`wait_spell` 糖的判据） |
 | 20 | `create_bullet` | appearance,x,y,speed,angle,xform_off,xform_cnt,task_sub | 弹句柄或 -1 |
 | 21 | `create_bullets_batch` | appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step | 实发数 |
 | 22 | `spawn_enemy` | x,y,hp,drop_table,score | 敌句柄或 -1 |
@@ -91,6 +92,8 @@
 | 25 | `boss_set` | slot,hp_ratio,spell_id,timer,phase_left,active | —（enemy 字段写 NULL，见 boss_ui 契约） |
 | 26 | `pulse_signal` | ch | — |
 | 27 | `emit_req` | id a0 a1 a2 a3 a4 a5 | — |
+| 28 | `spell_begin`（符卡机构，见下方"符卡计器"） | slot,spell_id,pattern_sub,time_limit,bonus0,flags,hp_threshold | —（owner 须为敌，否则 Fault） |
+| 29 | `spell_end`（符卡机构，见下方"符卡计器"） | — | —（owner 绑定槽走 HP 路径结算；无绑定槽 → no-op，重复调用安全） |
 | 30-38 | 弹 setter 族 | 按 motion.rs 九连 | —（owner 须为弹，否则 Fault） |
 | 40 | `aim_player_angle` | — | 自 owner 位置瞄 P0 的 BAM 角 |
 
@@ -103,6 +106,34 @@
 - **`emit_req`（27）**：通道 B 渲染请求（`docs/ecl-lang.md`"渲染请求"节）。id 收窄 P4-b：
   栈值超出 `0..=65535` → no-op + `contract_viol` + `BAD_ARGS`，不 Fault；缓冲满走 D12
   （丢弃 + `TRUNCATED` + `diag.reqs_dropped`）。无 owner 类别限制（STAGE 任务可发）。
+
+## 符卡计器（syscall 11/28/29 + `wait_spell` 糖；spec 2026-07-24）
+
+记账（计时/衰减/超时/破卡/`boss_ui` 喂送）全归引擎 `SpellState` 机构（settle 相位符卡趟），
+三条 syscall 是脚本唯一的操作面；表层参考见 [`ecl-lang.md`](ecl-lang.md)"符卡"节。
+
+- **`spell_begin`（28）**：参数**逆序弹栈**（`threshold, flags, bonus0, time_limit,
+  pattern_ref, spell_id, slot`）；owner 须为 `ENEMY`，否则 Fault(0)（同 `move_enemy_to`
+  误用策略）。`pattern_ref`（`SubRef`，负值=none）**先查后建**：越界/非零参 `Async` 号 →
+  Fault(0)（零副作用，同 `create_bullet`/`SPAWN` 坏号口径）；查通过后才调用世界层
+  `spell_begin_internal`，其 P4-b 拒收条件（no-op + `contract_viol` 计数，不 Fault）：
+  `threshold<0`、`bonus0<0`、`time_limit<=0`、槽越界、槽已 `active`、owner 已绑定另一槽。
+  成功：定格 bonus 衰减参数（地板/速率）+ 记 `hp_start` + `pattern_ref` 非 none 时照
+  `create_bullet` 的 task-spawn 样板 spawn 模式任务（owner=本敌，`spell_bound=slot+1`
+  绑定该卡槽，随卡生死见下）+ 发 `EVT_SPELL_DECLARED` 事件 + `REQ_SPELL_DECLARE` 请求。
+- **`spell_end`（29）**：无参，owner 须为 `ENEMY`（Fault(0) 同上）。owner 有绑定槽 → 走
+  HP 路径结算（资格在 → CAPTURED 付 `bonus_now`；资格失 → FAILED）；无绑定槽 → no-op
+  （不计数，重复调用安全——脚本可以无条件调它当"确保收尾"）。
+- **`spell_timer`（11）**：无参，读族。owner 非 `ENEMY` 或无绑定槽 → **押 -1**（同
+  `self_hp`/`self_hp_max` 误用降级口径——不 Fault，方便脚本用 `>= 0` 判活）；有绑定槽 →
+  该槽 `frames_left`。这个 `-1` 判据正是 `wait_spell()` 糖的展开条件。
+
+**`wait_spell()` 语法糖**（纯编译器前端，零 VM/字节码改动）：`lang::parse` 直接把
+`wait_spell();` 展开成等价的 `Stmt::While` 子树，等同于脚本作者手写
+`while spell_timer() >= 0 { wait(1); }`——**没有专属 op、没有专属 syscall**，codegen 拿到
+展开后的 AST 和手写的 while 一视同仁，产出逐字节相同的 `EclImage`（判别测试见
+`stg-ecl-compiler::lang::codegen::tests`）。字节码层看到的永远只是普通的 `JZ`/`SYS 11`/
+`WAIT` 组合，本表其余各条纪律（返回值必须消费、死循环需要 `WAIT` 等）照常适用。
 
 ## globals 段纪律（甲案，M1.5）
 

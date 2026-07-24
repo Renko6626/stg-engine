@@ -828,6 +828,49 @@ fn fire_xf_non_identifier_expr_is_an_error() {
     );
 }
 
+// ── 符卡（spell_begin/spell_end/spell_timer；spec 2026-07-24 §5）──────────────
+
+/// `spell_begin` 第三位 `pattern` 是 `SubRef`（同 `fire` 的 `task` 参同款：sub 名或
+/// `none`，编译期解析，不收求值表达式）——接受已声明的无参 async sub。
+#[test]
+fn spell_begin_third_param_accepts_sub_name() {
+    ok("async sub p() { loop { wait(1); } } \
+        sub main() { spell_begin(0, 1, p, 60, 100, 0, 0); }");
+}
+
+#[test]
+fn spell_begin_third_param_accepts_none() {
+    ok("sub main() { spell_begin(0, 1, none, 60, 100, 0, 0); }");
+}
+
+/// `pattern` 位不收求值表达式——语法上必须是裸标识符/`none`（同 `fire` 的 xf/task 位）。
+#[test]
+fn spell_begin_third_param_rejects_expression() {
+    let errors = err("sub main() { spell_begin(0, 1, 1 + 1, 60, 100, 0, 0); }");
+    assert!(
+        errors.iter().any(|e| e.msg.contains("标识符")),
+        "{errors:?}"
+    );
+}
+
+/// `spell_timer()` 返回 `int`，可用在任何需要 `int` 的位置。
+#[test]
+fn spell_timer_usable_where_int_expected() {
+    ok("sub main() { var t: int = spell_timer(); while spell_timer() >= 0 { wait(1); } }");
+}
+
+/// `spell_end()` 无返回值：只能作独立语句，出现在表达式位置是错误（同其余 `ret:None`
+/// 内建一致的诊断路径）。
+#[test]
+fn spell_end_is_statement_only_and_has_no_return_value() {
+    ok("sub main() { spell_end(); }");
+    let errors = err("sub main() { var x: int = spell_end(); }");
+    assert!(
+        errors.iter().any(|e| e.msg.contains("表达式的值")),
+        "{errors:?}"
+    );
+}
+
 // ── const 折叠 ──────────────────────────────────────────────────────────────
 
 #[test]

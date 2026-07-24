@@ -22,6 +22,20 @@
 // "引擎常量"节）；`for i in 0..5` 里的 `i % 4` 是有意轮转全表，非单指某个 appearance，
 // 不换。环密度算式直接引用注入常量 `global(GVAR_RANK)`，不再手写 `RANK_SLOT` 镜像
 // 同一个槽号——C14 闭环，无剩余手写镜像。
+//
+// 符卡机构狗粮化（spec 2026-07-24 §6，本刀兑现）：`timer_ui`（手写轮询计时 + boss_set
+// 记账）整个删除——符卡记账（计时/衰减/超时判定/boss_ui 喂送）收归引擎 `SpellState`
+// 机构（settle 符卡趟），脚本只剩宣言 + 弹幕行为 + 收尾等待，见 docs/ecl-lang.md「符卡」
+// 节。原五环 loop 搬进新 `async sub windchime_pattern()`——它是 `spell_begin` 第三参
+// （`SubRef` 模式引用），随卡生随卡死（spec §2.1），不必再手写 `kill_children`。`main`
+// 收成两行：`spell_begin(...); wait_spell();`。`time_limit=3600` 远超金向量 600 帧窗口
+// （卡全程 active，弹幕跑满，行为最接近旧的"无限 loop"流）；`hp_threshold=0`（boss
+// hp_max=9999，600 帧内自机火力打不穿，收卡路径走不到——同旧流"boss 全程存活"）；
+// `bonus0=100000`（衰减地板已在 begin 时定格，600 帧内不结算，本局观察不到分数变化，
+// 数值本身只是给脚本一个非零示例）。`SPELL_WINDCHIME` 是脚本侧 `const`（卡 id 归脚本/
+// 关卡资产，引擎不注册，见 spec §5）。
+
+const SPELL_WINDCHIME: int = 1;
 
 xformdef WIND_CHIME {
     set_speed(2.0fx);
@@ -37,22 +51,7 @@ async sub patrol() {
     }
 }
 
-async sub timer_ui(spell: int) {
-    loop {
-        var t: int = 600;
-        while t > 0 {
-            var ratio: fx = $self_hp as fx / $self_hp_max as fx;
-            boss_set(0, ratio, spell, t, 1, 1);
-            wait(60);
-            t = t - 60;
-        }
-    }
-}
-
-sub main() {
-    spawn patrol();
-    spawn timer_ui(1);
-
+async sub windchime_pattern() {
     var base: angle = 0deg;
     var volley: int = 0;
 
@@ -80,4 +79,13 @@ sub main() {
         volley = volley + 1;
         wait(50);
     }
+}
+
+sub main() {
+    spawn patrol();
+    // 符卡宣言：记账（计时/衰减/超时/boss_ui 喂送）全归引擎机构；弹幕行为归
+    // windchime_pattern（随卡生死）；wait_spell() 糖展开为
+    // `while spell_timer() >= 0 { wait(1); }`，收卡后自动放行。
+    spell_begin(0, SPELL_WINDCHIME, windchime_pattern, 3600, 100000, 0, 0);
+    wait_spell();
 }

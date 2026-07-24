@@ -243,6 +243,38 @@ const BUILTINS: &[Builtin] = &[
         params: &[Val(Int), Val(Angle)],
         ret: None,
     },
+    // ── 符卡计器（syscall 28/29/11；符卡机构 spec 2026-07-24 §5）─────────────
+    Builtin {
+        name: "spell_begin",
+        syscall: syscall::SYS_SPELL_BEGIN,
+        is_op: false,
+        // 第三位 `pattern` 是模式 sub 引用（`Sub`——同 `fire` 的 `task` 参同款
+        // `ParamKind::SubRef`：sub 名或 `none`，编译期解析，不收求值表达式）。
+        params: &[
+            Val(Int),
+            Val(Int),
+            Sub,
+            Val(Int),
+            Val(Int),
+            Val(Int),
+            Val(Int),
+        ],
+        ret: None,
+    },
+    Builtin {
+        name: "spell_end",
+        syscall: syscall::SYS_SPELL_END,
+        is_op: false,
+        params: &[],
+        ret: None,
+    },
+    Builtin {
+        name: "spell_timer",
+        syscall: syscall::SYS_SPELL_TIMER,
+        is_op: false,
+        params: &[],
+        ret: Some(Int),
+    },
 ];
 
 /// 按名字查内建函数（线性扫描；表 <30 项，`lang::typeck` 每次 `Call` 判型调用一次）。
@@ -302,6 +334,9 @@ mod tests {
             "set_gravity",
             "stop_fx",
             "aim_at_player",
+            "spell_begin",
+            "spell_end",
+            "spell_timer",
         ];
         for n in names {
             assert!(lookup(n).is_some(), "内建函数 '{n}' 应在表中");
@@ -362,9 +397,40 @@ mod tests {
             "set_gravity",
             "stop_fx",
             "aim_at_player",
+            "spell_begin",
+            "spell_end",
         ] {
             assert_eq!(lookup(n).unwrap().ret, None, "'{n}' 应无返回值");
         }
+    }
+
+    #[test]
+    fn spell_begin_signature_matches_spec_shape() {
+        let b = lookup("spell_begin").expect("spell_begin 应在表中");
+        assert_eq!(
+            b.params,
+            &[
+                Val(Int),
+                Val(Int),
+                Sub,
+                Val(Int),
+                Val(Int),
+                Val(Int),
+                Val(Int)
+            ],
+            "spell_begin 第三位应为 SubRef（同 fire 的 task 参同款）"
+        );
+        assert_eq!(b.ret, None);
+        assert_eq!(b.syscall, syscall::SYS_SPELL_BEGIN);
+        assert!(!b.is_op);
+    }
+
+    #[test]
+    fn spell_timer_has_int_return_and_no_params() {
+        let b = lookup("spell_timer").expect("spell_timer 应在表中");
+        assert_eq!(b.params, &[]);
+        assert_eq!(b.ret, Some(Int));
+        assert_eq!(b.syscall, syscall::SYS_SPELL_TIMER);
     }
 
     #[test]

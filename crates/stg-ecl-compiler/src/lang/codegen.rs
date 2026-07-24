@@ -1009,6 +1009,139 @@ mod tests {
         assert_eq!(img1, img2);
     }
 
+    // ── `wait_spell()` 语法糖：判别测试"糖=纯展开"────────────────────────
+
+    /// `wait_spell();` 与手写的等价 `while spell_timer() >= 0 { wait(1); }` 必须编译出
+    /// **逐字节相同**的 `EclImage`——这是"纯前端展开、codegen 无感"的判别式证据（不是
+    /// "行为大致相同"，是字节级相同：`EclImage` 的 `PartialEq` 覆盖全部段，两者的唯一
+    /// 差异只应是源码文本本身，折叠进 AST 后不留痕迹）。
+    #[test]
+    fn wait_spell_sugar_compiles_to_identical_bytecode_as_hand_written_while() {
+        let sugared = "sub main() {\n\
+                         wait_spell();\n\
+                       }";
+        let hand_written = "sub main() {\n\
+                              while spell_timer() >= 0 { wait(1); }\n\
+                            }";
+        let img_sugar = compile(sugared, "e2e.ecl").unwrap_or_else(|e| panic!("{e:?}"));
+        let img_hand = compile(hand_written, "e2e.ecl").unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(
+            img_sugar, img_hand,
+            "wait_spell() 应与手写等价 while 编译出逐字节相同的 EclImage"
+        );
+    }
+
+    // ── 符卡表层端到端：spell_begin(pattern) + wait_spell() ──────────────
+
+    /// 端到端全链路：`spell_begin` 起模式（`SubRef` 走 fire 同款 codegen 通道）→ 卡活期间
+    /// 模式任务运行（`globals[20]` 逐帧递增可观测）→ 到时限（普通卡，`flags=0`）超时结算
+    /// （`EVT_SPELL_FAILED`，reason=2；矩阵见 spec §4：普通卡超时恒 FAILED，不看资格）
+    /// → 模式任务随卡死（`spell_bound` 调度门禁，结算后 `globals[20]` 不再增长——"模式随卡
+    /// 生死"的行为学判别，`fire` 挂弹任务不继承这条规则的对照见 `stg-core::ecl::vm` 测试）
+    /// → `wait_spell()` 糖循环正确退出，`main` 恢复执行后续语句（`globals[21]` 落地）。
+    ///
+    /// 需要 owner=ENEMY（`spell_begin`/`spell_timer` misuse 策略：非敌 owner 直接 Fault/押
+    /// -1），故不用本文件的 `run()` 助手（恒 `start_main`/STAGE owner）——照 harness
+    /// `build_rainbow_world` 的样板手搭一个 boss 敌 + `start_main_with_owner`。
+    #[test]
+    fn spell_begin_pattern_bound_lifecycle_and_wait_spell_e2e() {
+        use stg_core::ecl::binding::EclOwner;
+        use stg_core::enemy::EnemyInit;
+        use stg_core::events::{EVT_SPELL_DECLARED, EVT_SPELL_FAILED};
+
+        let src = "async sub p() {\n\
+                     loop {\n\
+                       var c: int = global(20);\n\
+                       set_global(20, c + 1);\n\
+                       wait(1);\n\
+                     }\n\
+                   }\n\
+                   sub main() {\n\
+                     spell_begin(0, 5, p, 60, 1000, 0, 0);\n\
+                     wait_spell();\n\
+                     set_global(21, 777);\n\
+                   }";
+        let image = compile(src, "spell_e2e.ecl").unwrap_or_else(|e| panic!("编译失败：{e:?}"));
+        let mut w = World::new(1);
+        let boss = w.body.create_enemy(EnemyInit {
+            x: stg_core::math::Fx::ZERO,
+            y: stg_core::math::Fx::ZERO,
+            vx: stg_core::math::Fx::ZERO,
+            vy: stg_core::math::Fx::ZERO,
+            mv_from_x: stg_core::math::Fx::ZERO,
+            mv_from_y: stg_core::math::Fx::ZERO,
+            mv_to_x: stg_core::math::Fx::ZERO,
+            mv_to_y: stg_core::math::Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp: 1000,
+            hp_max: 1000,
+            radius: stg_core::math::Fx::from_int(12),
+            hurtbox: stg_core::math::Fx::from_int(16),
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 0,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_table: 0,
+            score: 100,
+        });
+        w.start_main_with_owner(&image, EclOwner::Enemy(boss))
+            .expect("main 应能以 enemy owner 派生（新镜像/新池，容量均未耗尽）");
+
+        let mut declared = false;
+        let mut end_frame: Option<u32> = None;
+        let mut end_data: Option<[i32; 2]> = None;
+        let mut history: Vec<i32> = Vec::with_capacity(100);
+        for f in 0..100u32 {
+            step(&mut w, &TABLES_V0, &image, &InputFrame::empty(f));
+            for ev in w.body.frame_events() {
+                if ev.kind == EVT_SPELL_DECLARED {
+                    declared = true;
+                    assert_eq!(ev.data, [5, 1000], "DECLARED 事件应带 [spell_id, bonus0]");
+                }
+                if ev.kind == EVT_SPELL_FAILED && end_frame.is_none() {
+                    end_frame = Some(f);
+                    end_data = Some(ev.data);
+                }
+            }
+            history.push(w.body.globals[20]);
+        }
+        assert!(
+            declared,
+            "应在某帧观察到 EVT_SPELL_DECLARED（spell_begin 成功宣告）"
+        );
+        assert!(
+            history.iter().any(|&c| c > 0),
+            "模式任务 p 应已起跑（globals[20] 应递增过至少一次）"
+        );
+        let end_frame = end_frame
+            .expect("60 帧时限内应观察到 EVT_SPELL_FAILED（普通卡超时恒 FAILED）")
+            as usize;
+        assert_eq!(
+            end_data.unwrap(),
+            [5, 2],
+            "reason=2（超时）——普通卡（flags=0）超时恒 FAILED，不看资格"
+        );
+        let counter_at_end = history[end_frame];
+        assert!(
+            history[(end_frame + 1)..]
+                .iter()
+                .all(|&c| c == counter_at_end),
+            "模式任务应随卡死（spell_bound 调度门禁）：收卡结算后 globals[20] 不应再增长，\
+             实际历史：{history:?}（结算帧={end_frame}）"
+        );
+        assert_eq!(
+            w.body.globals[21], 777,
+            "wait_spell() 糖应在卡结束后正确退出循环，main 恢复执行后续语句"
+        );
+        assert_eq!(w.body.diag.task_faults, 0);
+    }
+
     // ── 错误路径：xformdef 参数非编译期常量 ─────────────────────────────
 
     #[test]

@@ -408,6 +408,15 @@ impl<'s> Parser<'s> {
             TokenKind::For => self.parse_for_stmt(),
             TokenKind::Wait => self.parse_wait_stmt(),
             TokenKind::Spawn => self.parse_spawn_stmt(),
+            // `wait_spell()`——符卡机构 spec 2026-07-24 §5 语法糖：不是关键字（词法层没有
+            // 为它开专属 token，见 `lex::scan_ident_or_keyword`），只在"名字恰为
+            // 'wait_spell' 且紧跟 '('"时才在这里截胡展开；guard 落空（比如误当变量名用
+            // 在别处）照常落回下面通用的赋值/表达式语句路径，不占关键字位。
+            TokenKind::Ident(ref name)
+                if name == "wait_spell" && self.peek_kind_at(1) == Some(&TokenKind::LParen) =>
+            {
+                self.parse_wait_spell_stmt()
+            }
             TokenKind::Return => {
                 let span = self.current_span();
                 self.advance();
@@ -553,6 +562,34 @@ impl<'s> Parser<'s> {
         self.expect(TokenKind::RParen, "期待 ')'")?;
         self.expect(TokenKind::Semi, "期待 ';'")?;
         Ok(Stmt::Wait { frames, span })
+    }
+
+    /// `wait_spell();`——纯前端语法糖（符卡机构 spec 2026-07-24 §5）：等价于
+    /// `while spell_timer() >= 0 { wait(1); }`。**直接产出 `Stmt::While` 子树**，不新增
+    /// 任何 AST 变体、不碰 codegen/typeck——两者对这条语句和手写的等价 `while` 一视同仁，
+    /// 天然保证"糖=纯展开"（判别测试见 `codegen::tests`：两份源码编译出逐字节相同的
+    /// `EclImage`）。`spell_timer`/`wait` 都是已注册的内建/语句，展开点必然可见。
+    fn parse_wait_spell_stmt(&mut self) -> Result<Stmt, ()> {
+        let span = self.current_span();
+        self.advance(); // 'wait_spell'（普通 Ident，非关键字）
+        self.expect(TokenKind::LParen, "期待 '('")?;
+        self.expect(TokenKind::RParen, "期待 ')'")?;
+        self.expect(TokenKind::Semi, "期待 ';'")?;
+        let cond = Expr::Binary {
+            op: BinOp::Ge,
+            l: Box::new(Expr::Call {
+                name: "spell_timer".to_string(),
+                args: Vec::new(),
+                span,
+            }),
+            r: Box::new(Expr::IntLit(0)),
+            span,
+        };
+        let body = vec![Stmt::Wait {
+            frames: Expr::IntLit(1),
+            span,
+        }];
+        Ok(Stmt::While { cond, body, span })
     }
 
     fn parse_spawn_stmt(&mut self) -> Result<Stmt, ()> {

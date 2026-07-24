@@ -9,6 +9,8 @@
 ## 一分钟样例
 
 ```ecl
+const SPELL_WINDCHIME: int = 1;
+
 xformdef WIND_CHIME { set_speed(2.0fx); @30 turn(90deg); }
 
 async sub patrol() {
@@ -18,18 +20,7 @@ async sub patrol() {
     }
 }
 
-async sub timer_ui(spell: int) {
-    var t: int = 600;
-    while t > 0 {
-        boss_set(0, $self_hp as fx / $self_hp_max as fx, spell, t, 1, 1);
-        wait(60);
-        t = t - 60;
-    }
-}
-
-sub main() {
-    spawn patrol();
-    spawn timer_ui(1);
+async sub windchime_pattern() {
     var base: angle = 0deg;
     loop {
         var ways: int = 28 + global(GVAR_RANK) * 2;
@@ -41,7 +32,16 @@ sub main() {
         wait(50);
     }
 }
+
+sub main() {
+    spawn patrol();
+    spell_begin(0, SPELL_WINDCHIME, windchime_pattern, 3600, 100000, 0, 0);
+    wait_spell();
+}
 ```
+
+（记账——计时/衰减/超时/破卡/UI 喂送——全归引擎机构，脚本只管宣言 + 弹幕行为 + 收尾等待；
+细节见下方"符卡"节。）
 
 ## 类型：`int / fx / angle`（三型，无隐式转换）
 
@@ -59,8 +59,10 @@ sub main() {
 
 `var name: type = expr;` · 赋值 · `if c {} else {}` · `while c {}` · `loop {}` ·
 `for i in a..b {}`（半开区间，`i` 为 `int`）· `break`/`continue` · `wait(n);`（n: int 帧）·
-`spawn f(args);` · `return;` · 表达式语句（**值必须消费**——有返回的内建不接收就
-`_ = fire(...);` 显式丢弃，不丢弃 = 编译错误；这是"忘 POP 远处爆栈"足枪的语言层灭除）。
+`spawn f(args);` · `return;` · `wait_spell();`（符卡等待语法糖，纯前端展开为
+`while spell_timer() >= 0 { wait(1); }`，见下"符卡"节）· 表达式语句（**值必须消费**——
+有返回的内建不接收就 `_ = fire(...);` 显式丢弃，不丢弃 = 编译错误；这是"忘 POP 远处爆栈"
+足枪的语言层灭除）。
 
 ## sub 与 async sub（调用途径强制分离）
 
@@ -93,7 +95,7 @@ sub main() {
 编译器在编译期解析名称并编码为 `canonical SubId`（运行时 `EclImage` 无字符串表，
 只有 `(SubId, code_entry)` 的扁平元数据）。这意味着：
 - `spawn patrol()` 在编译期解析 `patrol` 到其 `SubId`，存入 `SPAWN` 指令的操作数。
-- `fire(1, $self_x, $self_y, 0fx, 0deg, WIND_CHIME, timer_ui)` 同理——`timer_ui` 作为
+- `fire(1, $self_x, $self_y, 0fx, 0deg, WIND_CHIME, trail_task)` 同理——`trail_task` 作为
   `async sub` 的名称在编译期被解析并编码。
 - **不存在的 sub 名称在编译期即报错**，不存在运行期"名字未找到"的分支。
 
@@ -116,7 +118,7 @@ sub main() {
 |---|---|:---:|:---:|---|
 | `globals` 系统段 | `[0, 16)` | ✓ | ✗（no-op + `contract_viol` 计数，不 Fault） | **目前仅槽 0 有意义**：`GVAR_RANK`（难度值，game 层建场代码经世界 API 写入，脚本只读后自决）；槽 1-15 保留未用 |
 | `globals` 自由段 | `[16, 1024)` | ✓ | ✓ | 脚本自定义草稿区，语义靠作者自己约定；`n` 是任意运行期表达式（不限编译期常量，可以是循环变量） |
-| `boss_ui[]` | 每 boss 一份 | ✗（无读 syscall） | ✓（`boss_set`） | 血条/spell/计时状态，写给表现层 UI 消费，脚本读不回自己刚写的值 |
+| `boss_ui[]` | 每 boss 一份 | ✗（无读 syscall） | ✓（`boss_set`） | 血条/spell/计时状态，写给表现层 UI 消费，脚本读不回自己刚写的值；**符卡 active 期间** `enemy`/`spell_id`/`timer_frames`/`active`/`hp_ratio` 由符卡机构逐帧自动覆写（见下"符卡"节），脚本的 `boss_set` 此时只对 `phase_left`（阶段号）全权——非符卡段（卡与卡之间）`boss_set` 照旧全权写全部字段 |
 | `signals[8]` | 8 通道 | — | — | 不是存值用的：`pulse_signal(ch)` 发边沿脉冲，`wait_signal` xform op 在变换序列里等；只唤醒当帧已在等待的弹，不锁存 |
 
 `globals`/`set_global` 读写走 `global(n)`/`set_global(n,v)`。**系统段**槽位已有引擎注入的具名
@@ -169,11 +171,66 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 `move_to(dur:int,x:fx,y:fx,easing:int)` · `boss_set(slot,ratio:fx,spell,timer,phase,active)` ·
 `pulse_signal(ch)` · `emit_req(id:int, a0..a5:raw)`（通道 B 渲染请求，见下节）·
 `rand(n:int) -> int` · `global(n) -> int` · `set_global(n,v)`
-（槽 0-15 系统段脚本只读）· `aim_player() -> angle` · `sin/cos(a:angle) -> fx` · 弹 setter 族。
+（槽 0-15 系统段脚本只读）· `aim_player() -> angle` · `sin/cos(a:angle) -> fx` · 弹 setter 族 ·
+`spell_begin(slot,id,pattern:SUB名|none,time_limit,bonus0,flags,hp_threshold)` ·
+`spell_end()` · `spell_timer() -> int`（符卡计器三连，详见下节"符卡"）。
 
 > **弹 setter 的 handle 参数是陷阱位**:首参 `handle:int` **求值后即丢弃**,setter 恒作用于
 > **当前任务的 owner 弹**(`self` 语义)——不能借句柄定向操纵别的弹;owner 不是弹的任务调它
 > → 任务 Fault。想操纵 `fire(...)` 出来的那颗弹,用 xformdef 或 `fire` 的 `task` 参数挂子任务。
+
+## 符卡（`spell_begin` / `spell_end` / `spell_timer` / `wait_spell`）
+
+一张符卡的记账（计时递减、bonus 衰减、资格判定、破卡自动检测、超时判定、`boss_ui[]` 自动
+喂送）全归引擎机构（`SpellState`，settle 相位符卡趟）；脚本只管**宣言 + 弹幕行为 + 收尾
+等待**——两行范式：
+
+```ecl
+spell_begin(slot, id, pattern, time_limit, bonus0, flags, hp_threshold);
+wait_spell();
+```
+
+（多张卡 = boss 主控 sub 里顺序执行多组这两行，前一张 `wait_spell()` 返回后紧跟下一张
+`spell_begin`——见下"多卡序"。）
+
+参数表（声明序）：
+
+| 位 | 类型 | 含义 |
+|---|---|---|
+| `slot` | `int` | 符卡槽号（`0..MAX_BOSSES`，v1 每 boss 一份） |
+| `id` | `int` | 卡 id——纯脚本词汇，引擎不登记，见下"卡 id 约定" |
+| `pattern` | sub 名 \| `none` | 模式 sub 引用（同 `fire` 的 `task` 参同款 `SubRef`）：必须是**无参** `async sub`；`none` 不 spawn（自定义卡留口，配合 `spell_end()` 逃生舱口自行判定结束） |
+| `time_limit` | `int` | 时限，单位帧，必须 `>0` |
+| `bonus0` | `int` | 起始 bonus（分），必须 `≥0`；衰减地板 = `bonus0/10`，衰减速率 = `(bonus0-地板)/time_limit`，均在 `spell_begin` 当帧一次算定 |
+| `flags` | `int` | 位标志：bit0 `SPELL_SURVIVAL`（耐久卡——活到超时即收卡点，而非失败）；bit1 `SPELL_NO_CLEAR`（结束时不自动铺全屏消弹 field） |
+| `hp_threshold` | `int` | 破卡血线，必须 `≥0` 且 `≤` 当前 owner 血量；绑定敌 hp 触底/低于此值时自动收卡结算，且伤害结算对绑定敌**下钳**在此值（防打穿到非最终卡血线以下）——多卡序用"一池总血 + 逐卡递降血线"表达，最终卡 `hp_threshold=0` |
+
+- **`spell_end()`**（无参、无返回值）——逃生舱口：给非 HP/超时的自定义结束条件用（比如
+  剧情触发提前收卡）。owner 有绑定槽时走 HP 路径结算（资格在→CAPTURED 付 `bonus_now`，
+  资格失→FAILED）；无绑定槽调用是 no-op（重复调用安全，不算违约）。
+- **`spell_timer() -> int`**——读 owner 当前绑定槽的剩余帧数 `frames_left`；owner
+  **没有**绑定槽（还没 `spell_begin`，或卡已经结束）恒返回 `-1`——这正是 `wait_spell()`
+  糖的判据，也是原语本身，需要自定义等待逻辑时可以直接手写。
+- **`wait_spell()` 语法糖**——编译期展开为 `while spell_timer() >= 0 { wait(1); }`：
+  纯前端展开，不新增字节码语义,和你手写这行 `while` 编译出**逐字节相同**的 `EclImage`。
+  写 `wait_spell();` 只是省一行样板，语义上和手写等价 `while` 完全没有区别。
+- **模式随卡生死**（`pattern` 参数的核心承诺）：`spell_begin` spawn 出的模式任务绑定
+  本卡槽；它自己 `spawn` 出的**整棵子任务树**继承同一绑定——收卡结算的瞬间，这整棵树
+  下一帧起自动终止（相位 2 调度门禁杀，脚本不必写 `kill_children`）。反例：`fire(...)`
+  挂在弹上的任务**不继承**这条规则（弹命归弹，残留弹演完自己剧本，ZUN 语义）。唯一后果：
+  模式 sub 可以放心写 `loop { ... }` 死循环——不用自己判断"卡是不是已经结束"，引擎替你
+  收尾。
+- **卡 id 约定**：`id` 纯粹是脚本/关卡资产，引擎不做任何登记（不校验唯一、不映射名字或
+  立绘）——每份 `.ecl` 建议用 `const` 命名，如 `const SPELL_WINDCHIME: int = 1;`，同文件
+  内每张卡起一个数字即可；跨 `.ecl` 文件没有共享机制（同"引擎常量"节自由段槽号的纪律，
+  纯靠作者自律对齐）。
+- **多卡序**：卡切换就是主控 sub 里顺序执行下一组 `spell_begin`/`wait_spell`——两行一卡，
+  不需要任何引擎侧"下一张卡"排程；引擎不提供、也不打算提供自动切卡机制（`spell_bound`
+  只管单卡模式树的生死，不管卡与卡之间怎么编排，见世界侧机构 spec 的"不做什么"节）。
+
+字节码层完整规则（syscall 号、越界/坏参数处置、事件/请求 id）见
+[`ecl-ops.md`](ecl-ops.md)"符卡计器"节；世界侧机构设计（结算矩阵、伤害下钳、逐卡血条公式）
+见 `docs/superpowers/specs/2026-07-24-spell-meter-design.md`。
 
 ## 渲染请求（通道 B）
 
