@@ -6,7 +6,8 @@
 //!   verify-tables         断言现生成的表字节 == 已 commit 的字节（CI 防漂移）
 //!   serve [--port 8611] [--seed 1]  起 WebSocket 查看器
 //!   check <file.ecl>      只编译不跑，渲染诊断（人/agent/CI 共用的最短反馈环）
-//!   gen-ecl-meta          生成 editors/vscode/stg-ecl/ecl-meta.json（单一真相源=builtins::all()）
+//!   gen-ecl-meta          生成 editors/vscode/stg-ecl/ecl-meta.json + 刷新 docs/ecl-lang.md
+//!                         生成段（单一真相源=builtins::all()，两个 sink 同一次生成）
 //!
 //! 本 crate 在断层线【以上】，可用浮点；stg-core 只消费 commit 的表字节。
 

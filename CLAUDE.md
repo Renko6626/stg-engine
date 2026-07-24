@@ -111,11 +111,13 @@ docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
 docs/checksum-mechanism.md       校验和机制 + "新字段默认入校验" 保证
 docs/pool-memory-layout.md       池 SoA 布局与缓存精算（热路径驻 L2）
 docs/xform-ops.md                弹变换 op 速查表（编号即契约；作者视角参考）
-docs/ecl-lang.md                 【ECL 脚本作者第一入口】.ecl 表层语言手册（M1.9）
+docs/ecl-lang.md                 【ECL 脚本作者第一入口 / agent 必读】.ecl 表层语言手册（M1.9；
+                     内建函数节由 gen-ecl-meta 生成，改 builtins.rs 后重跑同步，编辑体验刀）
 docs/ecl-ops.md                  ECL 字节码层速查（op/syscall/fault 码；VM/编译器开发用）
 docs/zun-ecl-v2-reference.md     ZUN ECL V2 指令/变量表本地副本 + 逐条对照（源 Priw8）
 docs/bench-baseline.md           性能基线（step 曲线/快照/校验和账；大改后重跑续表）
 docs/bridge-adaptation-notes.md  外接适配坑记录（每接一个消费者踩的坑；M2 WorldBridge 先读）
+editors/vscode/stg-ecl/          VS Code 扩展：高亮/补全/签名/hover，数据源 ecl-meta.json（编辑体验刀）
 .github/workflows/ci.yml         三平台矩阵 + 校验和对拍 + fmt/clippy + 依赖防火墙
 crates/
   stg-core/         确定性内核（断层线以下）

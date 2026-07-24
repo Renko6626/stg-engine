@@ -1,10 +1,39 @@
 # ECL 表层语言参考（作者第一入口）
 
+> **给 coding agent 的三行须知**
+> 1. **本文档是写/改 `.ecl` 的唯一权威**——不要凭对 ZUN ECL 或其它弹幕 DSL 的记忆脑补语法。
+> 2. **改完必跑** `cargo run -p stg-harness -- check <file.ecl>`——看行列错误，见下"debug 循环"节。
+> 3. **builtin 签名以下方"内建函数"生成段为准**（`gen-ecl-meta` 单一真相源，改 `builtins.rs`
+>    才是正确改法，不要手改生成段——手改会被 `cargo test` 的防漂移断言打回）。
+
 > **这是什么**：`.ecl` 脚本作者手册——语法、类型、内建函数、`$` 引擎变量、xformdef、错误格式。
 > **权威来源**（冲突时以它们为准）：`crates/stg-ecl-compiler/src/lang/`（`builtins.rs` 内建表 /
 > `xform_map.rs` xform 操作表）· spec `docs/superpowers/specs/2026-07-18-m19-ecl-language.md`。
 > 字节码层参考（op/syscall/fault 码）见 [`ecl-ops.md`](ecl-ops.md)——作者通常不需要看它。
 > 编译时机：启动时从源码文本编译（`lang::compile`），编译器确定性有测试押运。
+
+## 坑清单（全部实证，逐条对照代码核实过）
+
+- 小数字面量必须带 `fx`/`px` 后缀——裸 `1.5` 无后缀是**词法错误**（"浮点数字面量缺少单位
+  后缀"），不会被当成 int 静默截断。
+- 角度字面量必须带 `deg`/`bam` 后缀——裸 `90` 是 `int`，用在角度位**不会隐式转换**
+  （报"期待 Angle，实际 Int"）；`int as angle` cast 也救不了，它是**位穿透**不是"转成度"
+  （`90 as angle` ≠ 90°）。
+- 有返回值的 builtin **不作表达式用时必须 `_ = ` 显式弃值**（如 `_ = fire(...);`）——不丢弃
+  是编译错误（"返回值未消费"）。
+- **void builtin 只能裸语句**——它前面加 `_ = ` 反而是编译错误（"无返回值，无值可丢弃"）；
+  `_ =` 只对**有**返回值的调用有意义。
+- `fire`/`spell_begin` 的 xf/task/pattern 位是**标识符或字面量 `none`**（xformdef 名 / sub
+  名），不是求值表达式——写 `fire(..., xf_or_none_expr(), ...)` 这种"算出来的引用"通不过。
+- **新建任务出生当帧不跑**：`spawn`/`fire` 的 `task` 参/`spell_begin` 的 `pattern` 新起的
+  协程，创建那一帧（`born_frame`）不执行任何一条指令，**下一帧才首次跑**——从"存在"的
+  角度说是 spawn 后第 2 个 step 才真正活起来，别指望它当帧就能观察到效果。
+- `drop_item` 消耗模拟 RNG（带随机喷发速度）——想要逐帧确定性回放对拍时，留意它和其它
+  `rand(n)` 调用共享同一颗 PRNG 流，调用顺序会影响后续随机数。
+- 难度用 `global(GVAR_RANK)` 读，不要自己另起变量镜像它。
+- 符卡全套 = `spell_begin(slot, id, pattern, time_limit, bonus0, flags, hp_threshold);` +
+  `wait_spell();` 两行；`wait_spell` 在语句位置（`wait_spell(`）**总是**被语法糖截胡，
+  即使你恰好声明了同名 sub 也调不到它——按保留字对待。
 
 ## 一分钟样例
 
@@ -163,21 +192,45 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 这是 C14 记档的"注入常量与运行期表必须同源"这条 coherence 不变量的机制化，见
 `docs/follow-ups.md` C11/C14。
 
-## 内建函数（签名以 `builtins.rs` 为准）
+## 内建函数（生成段，签名以此为准；`cargo run -p stg-harness -- gen-ecl-meta` 从
+`builtins.rs` 的 `Builtin.doc`/`param_names` 渲染，勿手改下面 `<!-- gen -->` 之间的内容——
+改动 builtin 元数据请去改 `crates/stg-ecl-compiler/src/lang/builtins.rs` 再重跑生成器,
+否则会被 `committed_doc_segment_matches_generated` 防漂移测试打回)
 
-`fire(appearance:int, x:fx, y:fx, speed:fx, angle:angle, xf:XFORMDEF名|none, task:ASYNC_SUB名|none) -> int` ·
-`batch(appearance, x, y, n_angle:int, angle0:angle, angle_step:angle, n_speed:int, speed0:fx, speed_step:fx) -> int` ·
-`spawn_enemy(x,y,hp,drop_table,score) -> int` · `drop_item(x,y,ty) -> int` ·
-`move_to(dur:int,x:fx,y:fx,easing:int)` · `boss_set(slot,ratio:fx,spell,timer,phase,active)` ·
-`pulse_signal(ch)` · `emit_req(id:int, a0..a5:raw)`（通道 B 渲染请求，见下节）·
-`rand(n:int) -> int` · `global(n) -> int` · `set_global(n,v)`
-（槽 0-15 系统段脚本只读）· `aim_player() -> angle` · `sin/cos(a:angle) -> fx` · 弹 setter 族 ·
-`spell_begin(slot,id,pattern:SUB名|none,time_limit,bonus0,flags,hp_threshold)` ·
-`spell_end()` · `spell_timer() -> int`（符卡计器三连，详见下节"符卡"）。
+<!-- gen:builtins:begin -->
+- `fire(appearance: int, x: fx, y: fx, speed: fx, angle: angle, xf: xform|none, task: sub|none) -> int` — 发一颗弹;appearance 查外观表(越界 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1
+- `batch(appearance: int, x: fx, y: fx, n_angle: int, angle0: angle, angle_step: angle, n_speed: int, speed0: fx, speed_step: fx) -> int` — N-way 批量发环;返实际创建数
+- `spawn_enemy(x: fx, y: fx, hp: int, drop_table: int, score: int) -> int` — 造敌;sprite 固定 0、判定 12/16 默认;返敌句柄,失败 -1
+- `drop_item(x: fx, y: fx, item_type: int) -> int` — 掉一颗道具(带随机喷发速度,消耗模拟 RNG);返句柄,失败 -1
+- `move_to(dur: int, x: fx, y: fx, easing: int)` — 敌自身(self owner 非 ENEMY → Fault)按 easing 缓动、dur 帧内平移到 (x,y);四参数皆真实压栈(不同于下方弹 setter 族的占位 handle 首参)
+- `boss_set(slot: int, hp_ratio: fx, spell_id: int, timer_frames: int, phase_left: int, active: int)` — 整槽写 boss_ui 公告板(脚本写/UI 读);enemy 字段取自 self owner(非 ENEMY → NULL,不 Fault);符卡 active 期 enemy/spell_id/timer_frames/hp_ratio 由引擎逐帧自动覆写,phase_left 不受影响仍归脚本
+- `pulse_signal(channel: int)` — 脉冲一条信号通道(边沿语义,仅当帧有效);放行处于弹变换 WAIT_SIGNAL 停驻态的弹(非 ECL 任务)
+- `emit_req(id: int, a0: int|fx|angle, a1: int|fx|angle, a2: int|fx|angle, a3: int|fx|angle, a4: int|fx|angle, a5: int|fx|angle)` — 通道 B 渲染请求;void 只能裸语句;args 裸载荷(fx 过 raw/angle 过 BAM/int 原样)
+- `rand(n: int) -> int` — 模拟 RNG 均匀 [0,n);确定性,随快照回卷
+- `global(slot: int) -> int` — 读 globals 槽(GVAR_RANK=0 为难度)
+- `set_global(slot: int, value: int)` — 写 globals 槽;系统段(slot<16)脚本写为 no-op+计数,不 Fault(GVAR_RANK=0 建议脚本只读)
+- `aim_player() -> angle` — 自身(敌/弹属主)指向自机的 BAM 角
+- `sin(angle: angle) -> fx` — 查表三角,返 fx(VM op 直发,非 syscall)
+- `cos(angle: angle) -> fx` — 查表三角,返 fx(VM op 直发,非 syscall)
+- `set_speed(handle: int, speed: fx)` — 弹 setter:改速率;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定
+- `set_angle(handle: int, angle: angle)` — 弹 setter:改方向;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定
+- `turn(handle: int, delta: angle)` — 弹 setter:转向增量;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定
+- `set_vel(handle: int, vx: fx, vy: fx)` — 弹 setter:直设速度向量;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定
+- `set_ang_vel(handle: int, w: int)` — 弹 setter:角速度;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定(POLAR_FX:每帧 angle+=w)
+- `set_accel(handle: int, a: fx)` — 弹 setter:切向加速度;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定(POLAR_FX:每帧 speed+=a)
+- `set_gravity(handle: int, gx: fx, gy: fx)` — 弹 setter:直角加速度;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定(CART_FX:每帧 v+=(gx,gy);与 POLAR_FX 互斥)
+- `stop_fx(handle: int)` — 弹 setter:停连续效果;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定(清 POLAR_FX/CART_FX 连续效果)
+- `aim_at_player(handle: int, offset: angle)` — 弹 setter:指向自机方向再加 offset 偏移角;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定
+- `spell_begin(slot: int, spell_id: int, pattern: sub|none, time_limit: int, bonus0: int, flags: int, hp_threshold: int)` — 开卡:绑 boss/血线/计时/计分,spawn pattern 为卡绑定模式任务(随卡生死)
+- `spell_end()` — 手动收卡(取卡按血线自动判,通常不需要)
+- `spell_timer() -> int` — 当前卡剩余帧数
+<!-- gen:builtins:end -->
 
-> **弹 setter 的 handle 参数是陷阱位**:首参 `handle:int` **求值后即丢弃**,setter 恒作用于
-> **当前任务的 owner 弹**(`self` 语义)——不能借句柄定向操纵别的弹;owner 不是弹的任务调它
-> → 任务 Fault。想操纵 `fire(...)` 出来的那颗弹,用 xformdef 或 `fire` 的 `task` 参数挂子任务。
+> **弹 setter 族的 handle 参数是陷阱位**（`set_speed`/`set_angle`/`turn`/`set_vel`/
+> `set_ang_vel`/`set_accel`/`set_gravity`/`stop_fx`/`aim_at_player` 九个）：首参
+> `handle:int` **求值后即丢弃**，setter 恒作用于**当前任务的 owner 弹**（`self` 语义）——
+> 不能借句柄定向操纵别的弹；owner 不是弹的任务调它 → 任务 Fault。想操纵 `fire(...)`
+> 出来的那颗弹，用 xformdef 或 `fire` 的 `task` 参数挂子任务。
 
 ## 符卡（`spell_begin` / `spell_end` / `spell_timer` / `wait_spell`）
 
@@ -186,8 +239,16 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 等待**——两行范式：
 
 ```ecl
-spell_begin(slot, id, pattern, time_limit, bonus0, flags, hp_threshold);
-wait_spell();
+const SPELL_DEMO: int = 1;
+
+async sub demo_pattern() {
+    loop { wait(60); }
+}
+
+sub main() {
+    spell_begin(0, SPELL_DEMO, demo_pattern, 3600, 100000, 0, 0);
+    wait_spell();
+}
 ```
 
 （多张卡 = boss 主控 sub 里顺序执行多组这两行，前一张 `wait_spell()` 返回后紧跟下一张
@@ -213,7 +274,10 @@ wait_spell();
   糖的判据，也是原语本身，需要自定义等待逻辑时可以直接手写。
 - **`wait_spell()` 语法糖**——编译期展开为 `while spell_timer() >= 0 { wait(1); }`：
   纯前端展开，不新增字节码语义,和你手写这行 `while` 编译出**逐字节相同**的 `EclImage`。
-  写 `wait_spell();` 只是省一行样板，语义上和手写等价 `while` 完全没有区别。
+  写 `wait_spell();` 只是省一行样板，语义上和手写等价 `while` 完全没有区别。它只在
+  **语句位置**（`wait_spell(`）拦截展开——不是真正的词法关键字（词法层没有为它开专属
+  token），但对脚本作者而言效果等同保留字：这个名字用作调用永远被截胡，不会退回成
+  同名 sub 调用。
 - **模式随卡生死**（`pattern` 参数的核心承诺）：`spell_begin` spawn 出的模式任务绑定
   本卡槽；它自己 `spawn` 出的**整棵子任务树**继承同一绑定——收卡结算的瞬间，这整棵树
   下一帧起自动终止（相位 2 调度门禁杀，脚本不必写 `kill_children`）。反例：`fire(...)`
@@ -247,7 +311,16 @@ id 命名空间：`0` 保留无效 · `1..=63` 引擎保留（如 `REQ_ENEMY_DEA
 ## xformdef（弹变换序列声明）
 
 ```ecl
-xformdef NAME { op(args); @wait op(args); ... }
+xformdef ARC_SHOT {
+    set_speed(1.5fx);
+    @20 turn(45deg);
+    @20 turn(-45deg);
+    set_life(180);
+}
+
+sub main() {
+    _ = fire(APPEARANCE_SMALL, 0fx, 0fx, 1.0fx, 0deg, ARC_SHOT, none);
+}
 ```
 
 - op 名 = [`xform-ops.md`](xform-ops.md) 小写助记（`turn`/`set_speed`/`set_ang_vel`/
@@ -255,6 +328,18 @@ xformdef NAME { op(args); @wait op(args); ... }
 - **STEP 族（`step_speed`/`step_angle`）物理占 2 槽**——scratch 由编译器自动补，作者按 1 条写；
   物理槽总数 ≤16。`loop`/`end` 不开放（复杂控制流写任务弹；尾部零填充天然 END）。
 - 被 `fire(..., NAME, ...)` 引用才占 locals 空间（3 字/物理槽，算进引用它的 sub 的容量账）。
+
+## debug 循环（改代码 → check → 再改）
+
+写/改 `.ecl` 脚本的最短反馈环，人 / coding agent / CI 共用：
+
+1. 改 `.ecl` 源码；
+2. `cargo run -p stg-harness -- check <file.ecl>`——**通过** = 打印 `OK`、退出码 0；
+   **不通过** = 逐条 `文件:行:列: 说明` + 源行摘录 + `^` 定位打到 stderr、退出码 1
+   （文件不存在或不带参数是第三路，退出码 2）；回第 1 步照错误位置改，不通过就不必往下走。
+3. `check` 只证明"编译通过"，**不证明"跑起来对"**——真要把脚本接进金向量/查看器/游戏前，
+   先跑一遍 `cargo test --workspace` 保证没有引入既有回归（含编译器自身的确定性测试），
+   再上场跑 `golden`/`serve`。
 
 ## 错误格式与已知限制
 
