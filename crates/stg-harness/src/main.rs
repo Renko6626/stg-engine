@@ -1177,12 +1177,16 @@ mod table_disk_load_tests {
 
 #[cfg(test)]
 mod tests {
-    use stg_core::input::{BTN_LEFT, InputFrame};
+    use stg_core::events::EVT_ITEM_PICKED;
+    use stg_core::input::{BTN_LEFT, BTN_UP, InputFrame};
     use stg_core::step::step_with_director;
 
     /// A1 行为不变性判别式:仅 item sprite 值不同的两份 owned 表(content_hash 同为 0)
     /// → 同种子世界含道具全生命周期(掉落/下坠/磁吸/拾取)演化,逐帧校验和相等;
-    /// 序列化字节则必须不同(sprite 参与身份)。
+    /// 序列化字节则必须不同(sprite 参与身份)。自机全程 `BTN_LEFT|BTN_UP`:自机从
+    /// 场底(y=384)持续上冲,越过 `POC_LINE_Y`(world.rs:109,=128)即触发全场道具磁吸
+    /// （对 x 坐标细节鲁棒,不依赖精调初始几何贴近)——真实走到 `settle.rs` 拾取结算
+    /// (`credit_item`,`item_cfg` 唯一的运行期读点),用 `EVT_ITEM_PICKED` 计数自证。
     #[test]
     fn item_sprite_values_never_affect_world_evolution() {
         const DROP_SRC: &str = r#"
@@ -1217,9 +1221,12 @@ sub main() {
         wa.start_main(&image).expect("main a");
         wb.start_main(&image).expect("main b");
 
+        let mut picked = 0u32;
         for frame in 0..300u32 {
             let mut input = InputFrame::empty(frame);
-            input.actions[0].buttons = BTN_LEFT; // 自机移动,扰动拾取几何
+            // 全程上冲+左移:上冲越过 POC 线触发全场磁吸(见上方文档字符串),
+            // 左移保留原"自机移动,扰动拾取几何"意图。
+            input.actions[0].buttons = BTN_LEFT | BTN_UP;
             step_with_director(&mut wa, &ta, &image, &input, |_| {});
             step_with_director(&mut wb, &tb, &image, &input, |_| {});
             assert_eq!(
@@ -1227,6 +1234,16 @@ sub main() {
                 wb.checksum(),
                 "frame {frame} 演化分歧:sprite 值泄漏进模拟"
             );
+            picked += wa
+                .body
+                .frame_events()
+                .iter()
+                .filter(|e| e.kind == EVT_ITEM_PICKED)
+                .count() as u32;
         }
+        assert!(
+            picked > 0,
+            "场景必须真实走到拾取结算(settle.rs 的 item_cfg 读点),否则判别式空转"
+        );
     }
 }
