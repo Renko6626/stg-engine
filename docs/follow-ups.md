@@ -122,6 +122,21 @@ LOOP 跳回后 `[0, xform_next)` 收缩：活跃 STEP 冻结至重武装、武�
 240 帧 × 3 点的短版闸占 harness 测试总时长 ~全部;ARM CI 更慢。暂不动作;若 CI 墙钟成
 问题,减帧或拆 `#[ignore]` 全量版 + 轻量常开版。
 
+### B16. 符卡机构三小件（符卡计器刀终审分诊，2026-07-24）
+
+① **脚本读自机资源 syscall（原 G1）**：`PlayerState` 有 lives/bombs/score/graze 全套但无读
+syscall——被符卡机构溶解后从"符卡前置"降为独立小件（bonus 结算引擎付、收卡事件世界产出,
+脚本不再需要轮询资源判 miss）。真做花式收卡条件（如"无擦弹收卡"）时再加一族读号。
+② **boss_ui 结算不清致 ≤1 帧陈旧闪**：卡结算清 `spells[slot]` 但不清 `boss_ui[slot]`,下一
+卡相位7自动喂前 UI 保留旧卡 active/spell_id/timer 一帧（确定性、纯表现;表现层经
+`REQ_SPELL_RESULT` 立刻知真结束）。触发点 = M2 godot 桥真渲染 boss_ui 时，顺手在
+settle_one_spell 清 boss_ui 或按意图记档。
+③ **ZUN 分段衰减曲线**：v1 线性衰减（begin 时整除定格 dec_per_frame）;真做关卡内容嫌糙再
+升级为 ZUN 分段（快衰段+慢衰段+地板），参数已隔离在 begin 计算,不动 syscall 接口。
+④ **负 threshold 与 ENEMY_DYING 分支**：syscall 已拒 `threshold<0`（脚本到不了负值）;
+`hp_break` 的三路 OR 中 ENEMY_DYING 一路对 threshold≥0 实为死码（=0 冗余、>0 被下钳挡）,仅
+threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy 死亡路径"的防御,记档非债。
+
 ---
 
 ## C. 代码整洁（低优先，都是两可）

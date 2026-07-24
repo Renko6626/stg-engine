@@ -129,6 +129,8 @@ crates/
     src/xform.rs      变换段池（D4；手写特例，段即分配单位）
     src/{input,events,reqs}.rs                 输入抽象 / hits+events 缓冲 / 通道 B 请求（RenderReq）
     src/consts.rs    脚本可见引擎常量注册表（C14：①结构常量/②表符号；lib.rs 另有 ENGINE_VER）
+    src/spell.rs     符卡计器机构（记账归引擎：SpellSlot 计时/衰减/破卡血线/伤害下钳/结算入分
+                     /boss_ui 自动喂；模式随卡生死靠 spell_bound+epoch；控制归脚本，2026-07-24）
     src/world.rs     WorldBody 字段所有权 + 写 API + 读口(frame/frame_events/take_requests/rand_range)
                      + push_* + PhaseGuard + 场界常量(pub)
     src/world/       【模块结构镜像相位骨架】player(相1+3，shottype 表驱动发弹) / transform(相4)

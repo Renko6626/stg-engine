@@ -18,7 +18,8 @@ pub const MAX_BOSSES: usize = 2;
 pub struct BossUiSlot {
     /// 哪个敌人是 boss（悬垂由读方处置）。
     pub enemy: EnemyHandle,
-    /// 血条比例（脚本负责刷新；通常 = hp/hp_max 的 Fx）。
+    /// 血条比例（Fx）。非符卡段脚本经 `boss_set` 刷；**符卡 active 期间由符卡机构自动喂
+    /// 逐卡血条 `(hp−threshold)/(hp_start−threshold)`（spell.rs settle_spells，2026-07-24）**。
     pub hp_ratio: Fx,
     /// 当前符卡 id。
     pub spell_id: u16,

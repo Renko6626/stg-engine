@@ -124,6 +124,16 @@ pub struct WorldBody {
 
 **`StageState` 概念删除**：原"关卡推进"就是关卡主控任务的 pc + locals（天然随 TaskPool 快照）；原"全局变量槽"即 `globals`；原"boss 阶段"即 `boss_ui` 公告板（当前符卡 id、血量刻度、倒计时——写入方是 ECL 的 `boss_set` syscall，读取方是断层线以上的 UI，**世界自身逻辑不读它**，超时/换卡判断都是 boss 主控任务的事）。
 
+> **范围修订（符卡计器机构，2026-07-24 评审）**：上句"超时/换卡判断都是 boss 主控任务的事"
+> **修订为——控制归脚本、记账归引擎**。换卡/阶段切换/弹幕行为仍归脚本；但符卡**记账**
+> （计时递减、bonus 衰减、破卡血线自动检测、伤害下钳防打穿、miss/bomb 资格作废、超时判定、
+> 结算入分、结束自动清弹、boss_ui 自动喂逐卡血条）收归引擎新机构 `SpellState`（`spell.rs`，
+> settle 尾"符卡趟"，相位数不变）。理由：记账是机械/数据驱动/确定性/无回调的，与道具经济
+> （M0-12）同性质，全脚本方案迫使每卡作者重写轮询记账且脚本层无自机资源读口。模式任务随卡
+> 生死（`spell_bound` + epoch 代际戳）+ 三 syscall（`spell_begin/end/timer`）+ `wait_spell` 糖。
+> 详见 `docs/superpowers/specs/2026-07-24-spell-meter-design.md`。`boss_ui` 仍是表现公告板、
+> 世界逻辑不读它——只是 active 符卡期间由机构自动覆写其余字段（`boss_set` 在非符卡段照旧全权）。
+
 ```rust
 #[repr(C)]
 pub struct BossUiSlot {
@@ -604,7 +614,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | hits | 8192 × 6 B | | 48 KB |
 | frame_events | 512 × 24 B | | 12 KB |
 | reqs | 256 × 28 B | | 7 KB |
-| 自机×2 / boss_ui×2 / spells×2（符卡计器槽，32 B/槽，2026-07-24 刀 1）/ signals×8 / RNG / 帧计数 / 诊断计数器 | | | <1 KB |
+| 自机×2 / boss_ui×2 / spells×2（符卡计器槽，36 B/槽，2026-07-24；含刀 2 加的 epoch 代际戳）/ spell_seq×2 / signals×8 / RNG / 帧计数 / 诊断计数器 | | | <1 KB |
 | **World 总计** | | | **≈ 1.3 MB** |
 
 16 帧快照环 ≈ 21 MB（环归回滚调度器所有，非 stg-world 财产）。
@@ -641,6 +651,11 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | `boss_set` | 槽号 ≥ MAX_BOSSES | no-op | `BAD_ARGS` | `diag.contract_viol` |
 | `pulse_signal` | ch ≥ 8 | no-op | `BAD_ARGS` | `diag.contract_viol` |
 | `emit_req` | reqs 满 | 丢弃 | `TRUNCATED` | `diag.reqs_dropped` |
+| `spell_begin` | owner 非 ENEMY | Fault | — | — |
+| | 槽越界/时限 ≤0/bonus0 <0/threshold >当前 hp 或 <0/槽已 active/boss 已绑他槽 | no-op | `BAD_ARGS` | `diag.contract_viol` |
+| `spell_end` | owner 非 ENEMY | Fault | — | — |
+| | 无绑定槽（逃生舱口，重复安全） | no-op | — | — |
+| `spell_timer` | owner 非 ENEMY / 无绑定槽 | 返回 −1（降级不 Fault） | — | — |
 | （内部）hits 满 | — | 丢弃（**debug panic**） | — | `diag.hits_dropped` |
 | （内部）frame_events 满 | — | 丢弃 | — | `diag.events_dropped` |
 
