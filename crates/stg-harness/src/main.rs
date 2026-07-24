@@ -1174,3 +1174,59 @@ mod table_disk_load_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use stg_core::input::{BTN_LEFT, InputFrame};
+    use stg_core::step::step_with_director;
+
+    /// A1 行为不变性判别式:仅 item sprite 值不同的两份 owned 表(content_hash 同为 0)
+    /// → 同种子世界含道具全生命周期(掉落/下坠/磁吸/拾取)演化,逐帧校验和相等;
+    /// 序列化字节则必须不同(sprite 参与身份)。
+    #[test]
+    fn item_sprite_values_never_affect_world_evolution() {
+        const DROP_SRC: &str = r#"
+sub main() {
+    loop {
+        _ = drop_item(96.0fx, 64.0fx, 0);
+        _ = drop_item(128.0fx, 64.0fx, 1);
+        _ = drop_item(160.0fx, 64.0fx, 2);
+        _ = drop_item(192.0fx, 64.0fx, 3);
+        _ = drop_item(224.0fx, 64.0fx, 4);
+        wait(40);
+    }
+}
+"#;
+        let image = match stg_ecl_compiler::lang::compile(DROP_SRC, "drop.ecl") {
+            Ok(i) => i,
+            Err(errors) => {
+                let msg: Vec<String> = errors.iter().map(|e| e.render("drop.ecl")).collect();
+                panic!("drop.ecl 编译失败:\n{}", msg.join("\n\n"));
+            }
+        };
+
+        let ta = stg_core::tables::build_tables_v0();
+        let mut tb = stg_core::tables::build_tables_v0();
+        for (i, cfg) in tb.item_cfg.iter_mut().enumerate() {
+            cfg.sprite = 100 + i as u16; // 与 ta 的 0..=4 全互异
+        }
+        assert_ne!(ta.to_bytes(), tb.to_bytes(), "sprite 必须参与序列化身份");
+
+        let mut wa = stg_core::step::World::new_with_tables(7, &ta);
+        let mut wb = stg_core::step::World::new_with_tables(7, &tb);
+        wa.start_main(&image).expect("main a");
+        wb.start_main(&image).expect("main b");
+
+        for frame in 0..300u32 {
+            let mut input = InputFrame::empty(frame);
+            input.actions[0].buttons = BTN_LEFT; // 自机移动,扰动拾取几何
+            step_with_director(&mut wa, &ta, &image, &input, |_| {});
+            step_with_director(&mut wb, &tb, &image, &input, |_| {});
+            assert_eq!(
+                wa.checksum(),
+                wb.checksum(),
+                "frame {frame} 演化分歧:sprite 值泄漏进模拟"
+            );
+        }
+    }
+}
