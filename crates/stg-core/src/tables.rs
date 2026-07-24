@@ -43,6 +43,9 @@ pub struct ItemTypeCfg {
     pub magnet_speed: Fx,
     pub pickup_radius: Fx,
     pub attract_radius: Fx,
+    /// 贴图索引(A1,2026-07-24):`item_type→贴图` 的单一真相源。**断层线以下无人读**
+    /// ——渲染期消费者 join(池列方案否决评审记录:spec 2026-07-24 §2.1)。
+    pub sprite: u16,
 }
 
 /// 单角色配置。owned 化后含 `ShotTypeCfg`（有 `Box`）→ **去 `Copy`、留 `Clone`**。
@@ -105,27 +108,33 @@ const STD_ITEM: ItemTypeCfg = ItemTypeCfg {
     magnet_speed: Fx::from_int(8),
     pickup_radius: Fx::from_int(16),
     attract_radius: Fx::from_int(40),
+    sprite: 0,
 };
 
 const ITEM_CFG_V0: [ItemTypeCfg; ITEM_TYPE_COUNT] = [
     ItemTypeCfg {
         score: 10,
+        sprite: 0,
         ..STD_ITEM
     }, // POWER
     ItemTypeCfg {
         score: 100,
+        sprite: 1,
         ..STD_ITEM
     }, // POINT
     ItemTypeCfg {
         score: 50,
+        sprite: 2,
         ..STD_ITEM
     }, // LIFE_PIECE
     ItemTypeCfg {
         score: 50,
+        sprite: 3,
         ..STD_ITEM
     }, // BOMB_PIECE
     ItemTypeCfg {
         score: 30,
+        sprite: 4,
         ..STD_ITEM
     }, // STAR
 ];
@@ -373,7 +382,7 @@ fn read_shooter(r: &mut Reader) -> Result<Shooter, TableLoadError> {
 
 /// 头 16B：magic(4) + version(2) + reserved(2) + content_hash(8)。body = 其后全部字节。
 const TABLE_MAGIC: &[u8; 4] = b"STGT";
-const TABLE_VERSION: u16 = 1;
+const TABLE_VERSION: u16 = 2;
 const TABLE_HEADER: usize = 16;
 
 impl WorldTables {
@@ -400,6 +409,7 @@ impl WorldTables {
             out.extend_from_slice(&it.magnet_speed.raw().to_le_bytes());
             out.extend_from_slice(&it.pickup_radius.raw().to_le_bytes());
             out.extend_from_slice(&it.attract_radius.raw().to_le_bytes());
+            out.extend_from_slice(&it.sprite.to_le_bytes());
         }
         out.extend_from_slice(&(self.drop_tables.len() as u32).to_le_bytes());
         for tbl in self.drop_tables.iter() {
@@ -493,6 +503,7 @@ impl WorldTables {
                 magnet_speed: r.fx()?,
                 pickup_radius: r.fx()?,
                 attract_radius: r.fx()?,
+                sprite: r.u16()?,
             });
         }
         let item_cfg: [ItemTypeCfg; ITEM_TYPE_COUNT] = item_vec
@@ -570,6 +581,31 @@ impl WorldTables {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A1 判别式:序列化往返保 sprite(互异非零判别值,S1 纪律)。
+    #[test]
+    fn item_sprite_roundtrips_with_distinct_values() {
+        let mut t = build_tables_v0();
+        let vals: [u16; ITEM_TYPE_COUNT] = [11, 22, 33, 44, 55];
+        for (i, v) in vals.iter().enumerate() {
+            t.item_cfg[i].sprite = *v;
+        }
+        let back = WorldTables::from_bytes(&t.to_bytes()).expect("roundtrip");
+        for (i, v) in vals.iter().enumerate() {
+            assert_eq!(back.item_cfg[i].sprite, *v, "row {i}");
+        }
+    }
+
+    /// A1 内容健全:v0 五行 sprite 互异(占位序号 0..=4)。
+    #[test]
+    fn item_cfg_v0_sprites_distinct() {
+        let t = build_tables_v0();
+        for a in 0..ITEM_TYPE_COUNT {
+            for b in (a + 1)..ITEM_TYPE_COUNT {
+                assert_ne!(t.item_cfg[a].sprite, t.item_cfg[b].sprite, "{a} vs {b}");
+            }
+        }
+    }
 
     /// `TABLES_V0` 必须过表校验——v0 内容自洽的钉死。
     #[test]
@@ -836,11 +872,14 @@ mod tests {
             Err(TableLoadError::BadMagic)
         );
 
+        // 坏版本样本必须相对 `TABLE_VERSION` 取值（`TABLE_VERSION + 1`），不可写死字面量——
+        // 字面量会在下次 `TABLE_VERSION` bump 时与新的"当前版本"撞车，此测试曾因此误报过。
         let mut bad_ver = good.clone();
-        bad_ver[4..6].copy_from_slice(&2u16.to_le_bytes());
+        let bad_version_value = TABLE_VERSION + 1;
+        bad_ver[4..6].copy_from_slice(&bad_version_value.to_le_bytes());
         assert_eq!(
             WorldTables::from_bytes(&bad_ver),
-            Err(TableLoadError::UnsupportedVersion(2))
+            Err(TableLoadError::UnsupportedVersion(bad_version_value))
         );
 
         assert_eq!(
