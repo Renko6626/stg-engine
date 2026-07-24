@@ -1,0 +1,56 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "ECL",
+  "scopeName": "source.ecl",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#keywords" },
+    { "include": "#wait_spell" },
+    { "include": "#types" },
+    { "include": "#numbers" },
+    { "include": "#consts" },
+    { "include": "#calls" },
+    { "include": "#engvars" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.ecl", "match": "//.*$" },
+        { "name": "comment.block.ecl", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "keywords": {
+      "match": "\\b(sub|async|var|if|else|while|loop|for|in|wait|spawn|return|break|continue|const|xformdef|as)\\b",
+      "name": "keyword.control.ecl"
+    },
+    "wait_spell": {
+      "comment": "wait_spell(...) 不是 lex.rs 关键字(词法层切成普通 Ident)——语法层 parse.rs 用 'Ident(\"wait_spell\") 且紧跟 LParen' 的守卫展开成糖(符卡机构 spec 2026-07-24 §5)。这里用同样的前瞻守卫,避免把变量名 wait_spell 误染色。",
+      "match": "\\bwait_spell\\b(?=\\s*\\()",
+      "name": "keyword.control.sugar.ecl"
+    },
+    "types": {
+      "match": "\\b(int|fx|angle)\\b",
+      "name": "storage.type.ecl"
+    },
+    "numbers": {
+      "patterns": [
+        { "match": "\\b\\d+\\.\\d+(fx|px)\\b", "name": "constant.numeric.fixed.ecl" },
+        { "match": "\\b\\d+(fx|px)\\b", "name": "constant.numeric.fixed.ecl" },
+        { "match": "\\b\\d+(deg|bam)\\b", "name": "constant.numeric.angle.ecl" },
+        { "match": "\\b\\d+\\b", "name": "constant.numeric.int.ecl" }
+      ]
+    },
+    "consts": {
+      "match": "\\b[A-Z][A-Z0-9_]*\\b",
+      "name": "variable.other.constant.ecl"
+    },
+    "calls": {
+      "match": "\\b([a-z_][a-z0-9_]*)\\s*(?=\\()",
+      "name": "entity.name.function.ecl"
+    },
+    "engvars": {
+      "match": "\\$[a-z_]+",
+      "name": "variable.language.engine.ecl"
+    }
+  }
+}

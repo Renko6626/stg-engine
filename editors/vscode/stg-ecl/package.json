@@ -1,0 +1,23 @@
+{
+  "name": "stg-ecl",
+  "displayName": "stg-engine ECL",
+  "description": "stg-engine .ecl 弹幕脚本:高亮/补全/签名/hover(数据源 ecl-meta.json)",
+  "version": "0.1.0",
+  "publisher": "stg-engine-local",
+  "engines": { "vscode": "^1.85.0" },
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ecl",
+        "extensions": [".ecl"],
+        "aliases": ["ECL", "ecl"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      { "language": "ecl", "scopeName": "source.ecl", "path": "./syntaxes/ecl.tmLanguage.json" }
+    ]
+  }
+}
