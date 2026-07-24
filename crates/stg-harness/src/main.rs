@@ -6,11 +6,13 @@
 //!   verify-tables         断言现生成的表字节 == 已 commit 的字节（CI 防漂移）
 //!   serve [--port 8611] [--seed 1]  起 WebSocket 查看器
 //!   check <file.ecl>      只编译不跑，渲染诊断（人/agent/CI 共用的最短反馈环）
+//!   gen-ecl-meta          生成 editors/vscode/stg-ecl/ecl-meta.json（单一真相源=builtins::all()）
 //!
 //! 本 crate 在断层线【以上】，可用浮点；stg-core 只消费 commit 的表字节。
 
 use std::process::ExitCode;
 
+mod eclmeta;
 mod storm;
 mod tables;
 mod viewer;
@@ -26,9 +28,10 @@ fn main() -> ExitCode {
         Some("dump") => viewer::cmd_dump(&args[2..]),
         Some("storm") => storm::cmd_storm(&args[2..]),
         Some("check") => cmd_check(&args[2..]),
+        Some("gen-ecl-meta") => eclmeta::cmd_gen(),
         _ => {
             eprintln!(
-                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl>>"
+                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl> | gen-ecl-meta>"
             );
             ExitCode::FAILURE
         }
