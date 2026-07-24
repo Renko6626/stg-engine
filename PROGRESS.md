@@ -9,7 +9,7 @@
 - **位置**：**M2 桥刀收官**——`stg-godot` WorldBridge gdext cdylib 已通（工具链 1.94.0 +
   三纯模块 boot/frame/save + bridge.rs 冻结面接线 + `godot_smoke.ecl` headless 全流程冒烟
   全绿）；真 Godot 工程（场景/节点树）未动。**编辑体验刀并行落地**：`check` 诊断环 +
-  `gen-ecl-meta`（`builtins.rs` 单一真相源 → JSON/VS Code 扩展/`ecl-lang.md` 生成段三 sink，
+  `gen-ecl-meta`（`builtins.rs` 单一真相源 → JSON/VS Code 扩展/`ecl-lang.md` 生成段两 sink，
   配防漂移）+ VS Code 扩展骨架 + `docs/ecl-lang.md` agent 优先重构（坑清单/debug 循环/全部
   ```ecl 示例可编译押运）；两刀金向量均逐位不变。
 - **在飞**：无。
@@ -23,7 +23,7 @@
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
-| 2026-07-24 | **编辑体验刀** | check 诊断环 + builtin 元数据(doc/param_names)→ gen-ecl-meta 三 sink(JSON/VS Code 扩展/ecl-lang.md 生成段)+ ecl-lang.md agent 优先重构(坑清单/debug 循环/例子可编译押运) |
+| 2026-07-24 | **编辑体验刀** | check 诊断环 + builtin 元数据(doc/param_names)→ gen-ecl-meta 两 sink(JSON/VS Code 扩展/ecl-lang.md 生成段)+ ecl-lang.md agent 优先重构(坑清单/debug 循环/例子可编译押运) |
 | 2026-07-24 | **stg-godot 桥刀** | 工具链 1.94/gdext 0.5.4/三纯模块/冻结面/headless 冒烟；M2 桥半程通 |
 | 2026-07-24 | 前置小刀 | A1 表列 sprite/正典 boot new_game/bench 第三轮 |
 | 2026-07-24 | **符卡计器机构** | 记账归引擎（SpellSlot 计时/衰减/破卡血线/伤害下钳/结算入分/boss_ui 自动喂）+ 模式随卡生死（spell_bound+epoch 防 ABA）+ 三 syscall + wait_spell 糖 + rainbow 狗粮化；A2 范围修订；金向量三刀双变 |

@@ -46,7 +46,9 @@ editors/vscode/stg-ecl/
   字段:一句语义 + 坑注,与签名同源同处维护;
 - harness 新子命令 **`gen-ecl-meta`**:从 builtins 表(name/params/ret/is_op/doc)产
   `editors/vscode/stg-ecl/ecl-meta.json`(含渲染好的签名字符串)+ 同步刷新
-  `docs/ecl-lang.md` 的生成段(§3)与 tmLanguage 的 builtin pattern 段;
+  `docs/ecl-lang.md` 的生成段(§3)。**勘误(plan 期设计微调,终审提请记录)**:tmLanguage 的
+  builtin pattern 段不做生成 sink——高亮改用"调用位标识符"通用 pattern,少一个 sink
+  更抗漂移,builtin 与用户 sub 不作视觉区分(可接受);
 - **防漂移**:CI/测试断言"现生成 == commit 字节"(verify-tables 同款);生成段在文件内
   以显式标记包围(`<!-- gen:begin -->/<!-- gen:end -->` 类),手改必被抓。
 
