@@ -833,6 +833,10 @@ impl WorldBody {
             });
         }
         self.spells[slot] = crate::spell::SpellSlot::default();
+        // B16② 清扫(2026-07-25):结算原子同步清公告板——否则 spells 清零后整槽被
+        // settle_spells 首行跳过,boss_ui 冻结旧值(无后续卡时无界陈旧)。次帧若新卡
+        // 开(相2),相7 步骤5 自动喂真值,清→开→喂按相位全序串行,无竞态。
+        self.boss_ui[slot] = crate::boss::BossUiSlot::default();
     }
 
     /// 逃生舱口（`SYS_SPELL_END` 世界侧核，自定义结束条件用）：owner 绑定的 active 槽走

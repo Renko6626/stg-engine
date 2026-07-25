@@ -429,6 +429,46 @@ mod tests {
         );
     }
 
+    /// 六字段逐一对比 `BossUiSlot::default()`（判别式纪律：不许只看 `active`）。
+    fn assert_boss_ui_default(slot: crate::boss::BossUiSlot) {
+        let d = crate::boss::BossUiSlot::default();
+        assert_eq!(slot.enemy, d.enemy, "enemy 未清默认");
+        assert_eq!(slot.hp_ratio, d.hp_ratio, "hp_ratio 未清默认");
+        assert_eq!(slot.spell_id, d.spell_id, "spell_id 未清默认");
+        assert_eq!(slot.timer_frames, d.timer_frames, "timer_frames 未清默认");
+        assert_eq!(slot.phase_left, d.phase_left, "phase_left 未清默认");
+        assert_eq!(slot.active, d.active, "active 未清默认");
+    }
+
+    /// B16② 回归：`settle_one_spell` 结算时必须同步清 `boss_ui[slot]`，否则无后续卡的场景里
+    /// 公告板无界陈旧——次帧起 `settle_spells` 首行因 `spells[slot].active==0` 整槽跳过，
+    /// 不会自然覆写旧值（不止"≤1 帧"陈旧，是永久冻结）。判别式纪律：结算前一帧先证真喂过
+    /// 非零值（非圆心重合）；结算后六字段逐一比对 default；再空转 3 帧（无新卡）仍 default
+    /// （冻结回归：修复前此处会永久保留结算前的旧值）。
+    #[test]
+    fn spell_settle_clears_boss_ui_slot() {
+        let (mut w, boss) = world_with_boss(1000);
+        assert!(w.body.spell_begin_internal(0, boss, 15, 100, 1000, 0, 300));
+        w.body.settle_spells(&crate::tables::TABLES_V0); // 喂一次真值
+        assert_eq!(
+            w.body.boss_ui[0].active, 1,
+            "结算前一帧已喂非零态（反向对照：证明测试真走到非零态，非圆心重合）"
+        );
+
+        // 打到破卡线（隔离测：直改 hp，路数同 miss_voids_capture_then_hp_break_fails）。
+        let bi = w.body.enemies.get(boss).unwrap();
+        w.body.enemies.hp[bi] = 300;
+        w.body.settle_spells(&crate::tables::TABLES_V0); // hp_break → settle_one_spell 结算
+        assert_eq!(w.body.spells[0].active, 0, "已收卡清槽");
+        assert_boss_ui_default(w.body.boss_ui[0]);
+
+        // 冻结回归：无新卡再空转 3 帧，公告板须继续保持 default（修复前会永久保留旧值）。
+        for _ in 0..3 {
+            w.body.settle_spells(&crate::tables::TABLES_V0);
+            assert_boss_ui_default(w.body.boss_ui[0]);
+        }
+    }
+
     /// `hp_break` 三路 OR 的 `ENEMY_DYING` 分支判别（Task 1 复审修 Fix 2）：经真
     /// `damage_enemy`→`ENEMY_DYING` 路径打死 boss（非手写 `hp[i]=0`），断言死亡触发收卡结算。
     ///
