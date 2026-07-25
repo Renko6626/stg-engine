@@ -7,6 +7,9 @@ var state: int = S.PLAYING
 var bridge: WorldBridge
 var stg_input: StgInput
 var playfield: Playfield
+var dispatcher: Dispatcher
+var hud: Hud
+var effects: Effects
 var smoke := false
 
 const SMOKE_SRC := "sub main() { bgm(3); loop { wait(60); } }"
@@ -19,12 +22,32 @@ func _ready() -> void:
 	add_child(stg_input)
 	playfield = Playfield.new()
 	add_child(playfield)
+	effects = Effects.new()
+	playfield.world_root.get_node("FxRoot").add_child(effects)
+	hud = Hud.new()
+	add_child(hud)
+	dispatcher = Dispatcher.new()
+	add_child(dispatcher)
+	_wire_requests()
 	if smoke:
 		_run_smoke() # async,自行 quit
 	else:
 		if not _boot(0):
 			push_error("[stg] 开局失败")
 			get_tree().quit(1)
+
+func _wire_requests() -> void:
+	dispatcher.register(Dispatcher.REQ_ENEMY_DEATH, func(a):
+		effects.explosion(Vector2(a[0] / 65536.0, a[1] / 65536.0), int(a[3])))
+	dispatcher.register(Dispatcher.REQ_SPELL_DECLARE, func(a):
+		hud.show_banner(ContentTables.SPELL_NAMES.get(int(a[0]), "Spell #%d" % int(a[0])), 2.5))
+	dispatcher.register(Dispatcher.REQ_SPELL_RESULT, func(a):
+		hud.show_banner("取得!" if int(a[1]) == 1 else "失敗…", 2.0))
+	dispatcher.register(Dispatcher.REQ_STAGE_CLEAR, func(_a): _on_stage_clear())
+	dispatcher.register(Dispatcher.REQ_BGM, func(a):
+		hud.set_bgm_label(ContentTables.BGM_NAMES.get(int(a[0]), "BGM #%d" % int(a[0]))))
+	dispatcher.register(Dispatcher.REQ_BG, func(a): playfield.bg.set_bg(int(a[0])))
+	dispatcher.register(Dispatcher.REQ_BG_PHASE, func(a): playfield.bg.set_phase(int(a[0])))
 
 ## 读 res://ecl/demo/*.ecl(按名排序)开局;T3 期目录还没有内容 → 回退内置最小源。
 func _boot(start: int) -> bool:
@@ -51,27 +74,43 @@ func _boot(start: int) -> bool:
 		playfield.update_view(bridge, 0) # 首帧闪位修:免自机在 (0,0) 停一帧才对上真位置
 	return ok
 
+## 双表示规矩:电平追平(开机/读档后一次性对表 hud/bg),含中段开机/读档。
 func _sync_anchors() -> void:
-	var a := bridge.anchors() # T5 起喂给 hud/bg;T3 只留读口热身
+	var a := bridge.anchors()
 	if a.is_empty():
-		push_error("[stg] anchors 空(未开局?)")
+		return
+	hud.set_bgm_label(ContentTables.BGM_NAMES.get(int(a["bgm"]), "BGM #%d" % int(a["bgm"])))
+	playfield.bg.set_bg(int(a["bg"]))
+	playfield.bg.set_phase(int(a["bg_phase"]))
 
 func _physics_process(_dt: float) -> void:
+	if state == S.PAUSED:
+		hud.show_banner("PAUSE", 0.1) # 每帧续,判据只有一条:PAUSED 不 step
+		return
 	if state != S.PLAYING:
 		return
 	var buttons := stg_input.mask() # 算一次,step_frame/update_view 共用(避免帧内读两次输入分叉)
 	bridge.step_frame(buttons)
 	_after_step(buttons)
 
-## T5(分发器 HUD)续挂在此。
 func _after_step(buttons: int) -> void:
+	dispatcher.drain(bridge.take_requests())
+	hud.refresh(bridge)
 	playfield.update_view(bridge, buttons)
+
+func _on_stage_clear() -> void:
+	state = S.STAGE_CLEAR
+	var p := bridge.hud_player()
+	hud.show_banner("STAGE CLEAR  Score %d  (Z restart)" % int(p.get("score", 0)), 3600.0)
 
 func _unhandled_input(ev: InputEvent) -> void:
 	if ev.is_action_pressed("ui_cancel"):
 		if state == S.PLAYING:
 			state = S.PAUSED
 		elif state == S.PAUSED:
+			state = S.PLAYING
+	elif state == S.STAGE_CLEAR and ev.is_action_pressed("stg_shot"):
+		if _boot(0):
 			state = S.PLAYING
 
 ## ── 冒烟(v0:内置源;T6 换 demo 两次开机)────────────────────────────
