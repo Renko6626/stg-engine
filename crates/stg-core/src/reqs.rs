@@ -13,6 +13,10 @@
 //! | `REQ_ENEMY_DEATH` | x (fx raw) | y (fx raw) | sprite (int) | score (int) | 0 |
 //! | `REQ_SPELL_DECLARE` | spell_id (int) | bonus0 (int) | time_limit (int) | survival_flag (int) | 0 |
 //! | `REQ_SPELL_RESULT` | spell_id (int) | captured (int) | 实付 bonus (int) | reason (int) | 0 |
+//! | `REQ_STAGE_CLEAR` | 脚本自定（挂牌协议，脚本经 `emit_req` 自发） | — | — | — | — |
+//! | `REQ_BGM` | id (int，= 写入的 `bgm_id`) | 0 | 0 | 0 | 0 |
+//! | `REQ_BG` | id (int，= 写入的 `bg_id`) | 0 | 0 | 0 | 0 |
+//! | `REQ_BG_PHASE` | phase (int，= 写入的 `bg_phase`) | 0 | 0 | 0 | 0 |
 
 /// 一条渲染请求（§6.2，28 B）。id 语义世界不解释；`(frame, seq)` 全局唯一。
 #[repr(C)]
