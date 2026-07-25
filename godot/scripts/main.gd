@@ -11,8 +11,7 @@ var dispatcher: Dispatcher
 var hud: Hud
 var effects: Effects
 var smoke := false
-
-const SMOKE_SRC := "sub main() { bgm(3); loop { wait(60); } }"
+var _smoke_saw_bgm := false # 冒烟②侦听 REQ_BGM 用(成员变量,lambda 捕获值类型局部不回写)
 
 func _ready() -> void:
 	smoke = "--smoke" in OS.get_cmdline_user_args()
@@ -49,23 +48,22 @@ func _wire_requests() -> void:
 	dispatcher.register(Dispatcher.REQ_BG, func(a): playfield.bg.set_bg(int(a[0])))
 	dispatcher.register(Dispatcher.REQ_BG_PHASE, func(a): playfield.bg.set_phase(int(a[0])))
 
-## 读 res://ecl/demo/*.ecl(按名排序)开局;T3 期目录还没有内容 → 回退内置最小源。
+## 读 res://ecl/demo/*.ecl(按名排序)开局;demo 目录已实存(T6),读不到是真错——硬失败。
 func _boot(start: int) -> bool:
 	var names := PackedStringArray()
 	var sources := PackedStringArray()
 	var dir := DirAccess.open("res://ecl/demo")
-	if dir != null:
-		var files: Array[String] = []
-		for f in dir.get_files():
-			if f.ends_with(".ecl"):
-				files.append(f)
-		files.sort()
-		for f in files:
-			names.append(f)
-			sources.append(FileAccess.get_file_as_string("res://ecl/demo/" + f))
-	if names.is_empty():
-		names.append("inline.ecl")
-		sources.append(SMOKE_SRC)
+	if dir == null:
+		push_error("[stg] res://ecl/demo 目录读取失败")
+		return false
+	var files: Array[String] = []
+	for f in dir.get_files():
+		if f.ends_with(".ecl"):
+			files.append(f)
+	files.sort()
+	for f in files:
+		names.append(f)
+		sources.append(FileAccess.get_file_as_string("res://ecl/demo/" + f))
 	var ok := bridge.new_game_at(names, sources, 1, 2, start, 0, 0, 3, 3)
 	if ok:
 		_sync_anchors() # 双表示规矩:开机后一次性对电平(T5 实装演出)
@@ -126,30 +124,50 @@ func _unhandled_input(ev: InputEvent) -> void:
 		else:
 			push_error("[stg] 重开失败")
 
-## ── 冒烟(v0:内置源;T6 换 demo 两次开机)────────────────────────────
+## ── 冒烟(T6:demo 两次开机——①正常开局杂兵段真实全链路 ②中段开机垫片补偿)─────────
+## 等帧用轮询实际读口(`bridge.frame()`)而非数 `physics_frame` 信号触发次数:实测诊断
+## (非简报预判)`physics_frame` 信号在每 tick 的 `_physics_process` **之前**触发(Godot 4.6
+## 实况),数信号次数会差一帧,不代表 step_frame 真的"每两 tick 一 step"。轮次上限给
+## 目标帧数 2× 余量、并断言实际轮次 ≤ 目标+1——上限防信号真不来时死等,后一条断言防
+## "每两 tick 一 step"这类回归被 2× 宽上限悄悄放过(T3 审阅遗留)。
 func _run_smoke() -> void:
 	var fails := 0
+	# ① start=0 正常开局:杂兵段跑 240 帧,全链路(编码/分发/HUD)真实走
 	if not _boot(0):
-		print("SMOKE FAIL: boot")
+		print("SMOKE FAIL: boot(0)")
 		get_tree().quit(1)
 		return
-	# 实测诊断(非简报预判):`physics_frame` 信号在每 tick 的 `_physics_process` 调用**之前**
-	# 触发(Godot 4.6 实况),故简报原版 `for i in 60: await ...physics_frame` 只兑现 59 次
-	# 真实 step_frame(差一帧,非"物理 tick 不走")。改轮询实际读口而非数信号次数,连锁免疫
-	# 同类差一错;120 轮上限防信号真不来时死等。
-	var waited := 0
-	while bridge.frame() < 60 and waited < 120:
-		await get_tree().physics_frame
-		waited += 1
-	fails += _chk(bridge.frame() >= 60, "frame>=60, got %d" % bridge.frame())
+	_smoke_saw_bgm = false
+	dispatcher.register(Dispatcher.REQ_BGM, func(_a): _smoke_saw_bgm = true) # 覆盖注册以侦听
+	var waited := await _wait_frame(240, 480)
+	fails += _chk(bridge.frame() >= 240, "frame>=240, got %d" % bridge.frame())
+	fails += _chk(waited <= 241, "轮次<=目标+1(防每两 tick 一 step 回归),got %d" % waited)
 	fails += _chk(bridge.checksum() != 0, "checksum!=0")
-	fails += _chk(int(bridge.anchors().get("bgm", -1)) == 3, "anchors.bgm==3")
-	var mm: MultiMesh = playfield.layer_nodes[WorldBridge.LAYER_BULLETS].multimesh
-	var buf := RenderingServer.multimesh_get_buffer(mm.get_rid())
-	fails += _chk(buf.size() == 8192 * 12, "bullets 缓冲尺寸")
+	fails += _chk(_smoke_saw_bgm, "REQ_BGM 应到达分发器")
+	var pp := bridge.player_pos()
+	fails += _chk(pp.x >= -192.0 and pp.x <= 192.0 and pp.y >= 0.0 and pp.y <= 448.0, "player 在场界")
+	# ② start=2 中段开机:垫片补偿电平追平(bgm 块内手写 2/bg 注入 1/bg_phase 手写 1)
+	if not _boot(2):
+		print("SMOKE FAIL: boot(start=2)")
+		get_tree().quit(1)
+		return
+	waited = await _wait_frame(10, 20)
+	fails += _chk(waited <= 11, "轮次<=目标+1(防每两 tick 一 step 回归),got %d" % waited)
+	var a := bridge.anchors()
+	fails += _chk(int(a.get("bgm", -1)) == 2, "mid-start bgm==2, got %s" % str(a.get("bgm")))
+	fails += _chk(int(a.get("bg", -1)) == 1, "mid-start bg==1")
+	fails += _chk(int(a.get("bg_phase", -1)) == 1, "mid-start bg_phase==1")
 	if fails == 0:
 		print("SMOKE OK")
 	get_tree().quit(0 if fails == 0 else 1)
+
+## 轮询等到 `bridge.frame() >= target`(或轮次耗尽);返回实际等待轮数供调用方核验节奏。
+func _wait_frame(target: int, cap: int) -> int:
+	var waited := 0
+	while bridge.frame() < target and waited < cap:
+		await get_tree().physics_frame
+		waited += 1
+	return waited
 
 func _chk(cond: bool, msg: String) -> int:
 	if not cond:
