@@ -48,7 +48,7 @@ pub(crate) fn encode_frame(w: &World) -> Vec<u8> {
 
     // boss 公告板两槽
     out.push(2u8);
-    for slot in &w.body.boss_ui {
+    for slot in v.boss_ui() {
         out.push(slot.active);
         out.extend_from_slice(&slot.hp_ratio.raw().to_le_bytes());
         out.extend_from_slice(&slot.spell_id.to_le_bytes());
@@ -348,14 +348,26 @@ mod tests {
     #[test]
     fn encode_frame_layout_v1_static_open() {
         let (mut w, _image, _boss) = crate::build_rainbow_world(42);
-        w.body.boss_ui[0].active = 1;
-        w.body.boss_ui[0].hp_ratio = stg_core::math::Fx::from_raw(49_152); // 0.75
-        w.body.boss_ui[0].spell_id = 7;
-        w.body.boss_ui[0].timer_frames = 900;
-        w.body.boss_ui[1].active = 2;
-        w.body.boss_ui[1].hp_ratio = stg_core::math::Fx::from_raw(12_345);
-        w.body.boss_ui[1].spell_id = 42;
-        w.body.boss_ui[1].timer_frames = 1234;
+        w.body.boss_set(
+            0,
+            stg_core::boss::BossUiSlot {
+                active: 1,
+                hp_ratio: stg_core::math::Fx::from_raw(49_152), // 0.75
+                spell_id: 7,
+                timer_frames: 900,
+                ..Default::default()
+            },
+        );
+        w.body.boss_set(
+            1,
+            stg_core::boss::BossUiSlot {
+                active: 2,
+                hp_ratio: stg_core::math::Fx::from_raw(12_345),
+                spell_id: 42,
+                timer_frames: 1234,
+                ..Default::default()
+            },
+        );
         let buf = encode_frame(&w);
         let mut o = 0;
         assert_eq!(read_u8(&buf, &mut o), WIRE_VERSION);

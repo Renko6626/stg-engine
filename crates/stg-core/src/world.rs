@@ -150,12 +150,14 @@ pub struct WorldBody {
     /// I3:状态随快照;外部不可触(唯一转发出口见 `rand_range`,不交出 `&Pcg32` 本身)。
     pub(crate) rng: Pcg32,
     /// 全局变量竞技场（A2）——纯 i32 槽，语义归脚本，世界自身不读不写；脚本写读走
-    /// `set_var`/`get_var`。零初始化合法。
-    pub globals: [i32; GLOBALS_CAP],
+    /// `set_var`/`get_var`。零初始化合法。断层线以上只读走 `view().globals()`（D6，
+    /// 2026-07-25：收 `pub(crate)`，绕开 `get_var` 的 `&mut self`/计数副作用）。
+    pub(crate) globals: [i32; GLOBALS_CAP],
     pub(crate) bullets: BulletPool,
     pub(crate) players: [PlayerState; crate::MAX_PLAYERS],
     /// boss 公告板（A2）——脚本写（`boss_set`）、UI 读、世界自身不读。零初始化合法。
-    pub boss_ui: [crate::boss::BossUiSlot; crate::boss::MAX_BOSSES],
+    /// 断层线以上只读走 `view().boss_ui()`（D6，2026-07-25：收 `pub(crate)`）。
+    pub(crate) boss_ui: [crate::boss::BossUiSlot; crate::boss::MAX_BOSSES],
     pub(crate) shots: ShotPool,
     pub(crate) enemies: EnemyPool,
     pub(crate) fields: FieldPool,
@@ -191,8 +193,12 @@ pub struct WorldBody {
     pub(crate) reqs: [RenderReq; REQS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 reqs 一并 skip（通道 B）")]
     pub(crate) reqs_len: u16,
-    pub diag: DiagCounters,
-    pub last_status: u16,
+    /// 诊断计数器。断层线以上只读走 `view().diag()`（D6，2026-07-25：收 `pub(crate)`，
+    /// `Copy` 按值出）。
+    pub(crate) diag: DiagCounters,
+    /// 上一次写 API 调用的状态码（P4-b）。断层线以上只读走 `view().last_status()`（D6，
+    /// 2026-07-25：收 `pub(crate)`）。
+    pub(crate) last_status: u16,
     #[cfg(debug_assertions)]
     #[checksum(skip = "debug-only 时序护栏")]
     pub(crate) phase_guard: u8,

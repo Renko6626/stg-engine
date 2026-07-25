@@ -1157,15 +1157,19 @@ mod ecl_rainbow_tests {
             input.actions[0].buttons = btn;
             step_with_director(&mut w, &stg_core::tables::TABLES_V0, &image, &input, |_| {});
         }
-        assert_eq!(w.body.diag.task_faults, 0, "全程不应产生 Fault");
+        assert_eq!(w.body.view().diag().task_faults, 0, "全程不应产生 Fault");
         let bullet_count = w.body.view().bullets().iter_alive().count();
         assert!(bullet_count > 100, "稳态弹数应 >100（实测 {bullet_count}）");
         assert!(
             w.body.view().enemies().get(boss).is_some(),
             "boss 应存活满 600 帧（hp_max 9999 扛住火力）"
         );
-        assert_eq!(w.body.boss_ui[0].active, 1, "符卡计时器应保持 active=1");
-        let ratio = w.body.boss_ui[0].hp_ratio;
+        assert_eq!(
+            w.body.view().boss_ui()[0].active,
+            1,
+            "符卡计时器应保持 active=1"
+        );
+        let ratio = w.body.view().boss_ui()[0].hp_ratio;
         assert!(
             ratio.raw() > 0 && ratio.raw() <= Fx::ONE.raw(),
             "hp_ratio 应是非零、≤1.0fx 的真值（实测 raw={}）——C13②证据",

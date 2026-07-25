@@ -920,9 +920,9 @@ mod tests {
                      set_global(21, y);\n\
                    }";
         let w = run(src, 2);
-        assert_eq!(w.body.globals[20], 10, "true 分支应落地 then");
-        assert_eq!(w.body.globals[21], 20, "false 分支应落地 else");
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().globals()[20], 10, "true 分支应落地 then");
+        assert_eq!(w.body.view().globals()[21], 20, "false 分支应落地 else");
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     // ── while 计数 ──────────────────────────────────────────────────────
@@ -935,8 +935,8 @@ mod tests {
                      set_global(20, t);\n\
                    }";
         let w = run(src, 2);
-        assert_eq!(w.body.globals[20], 5);
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().globals()[20], 5);
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     // ── for 累加 + continue + break ─────────────────────────────────────
@@ -955,8 +955,8 @@ mod tests {
                      set_global(20, sum);\n\
                    }";
         let w = run(src, 2);
-        assert_eq!(w.body.globals[20], 18);
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().globals()[20], 18);
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     // ── `&&`/`||` 短路（观测替代方案见模块文档）─────────────────────────
@@ -969,8 +969,16 @@ mod tests {
                      set_global(20, 1);\n\
                    }";
         let w = run(src, 2);
-        assert_eq!(w.body.diag.task_faults, 0, "左假应短路，右操作数不该求值");
-        assert_eq!(w.body.globals[20], 1, "短路后应正常继续执行到之后的语句");
+        assert_eq!(
+            w.body.view().diag().task_faults,
+            0,
+            "左假应短路，右操作数不该求值"
+        );
+        assert_eq!(
+            w.body.view().globals()[20],
+            1,
+            "短路后应正常继续执行到之后的语句"
+        );
     }
 
     #[test]
@@ -982,7 +990,8 @@ mod tests {
                    }";
         let w = run(src, 2);
         assert_eq!(
-            w.body.diag.task_faults, 1,
+            w.body.view().diag().task_faults,
+            1,
             "左真必须求值右操作数——除零应真的 Fault"
         );
     }
@@ -995,8 +1004,12 @@ mod tests {
                      set_global(20, 1);\n\
                    }";
         let w = run(src, 2);
-        assert_eq!(w.body.diag.task_faults, 0, "左真应短路，右操作数不该求值");
-        assert_eq!(w.body.globals[20], 1);
+        assert_eq!(
+            w.body.view().diag().task_faults,
+            0,
+            "左真应短路，右操作数不该求值"
+        );
+        assert_eq!(w.body.view().globals()[20], 1);
     }
 
     #[test]
@@ -1008,7 +1021,8 @@ mod tests {
                    }";
         let w = run(src, 2);
         assert_eq!(
-            w.body.diag.task_faults, 1,
+            w.body.view().diag().task_faults,
+            1,
             "左假必须求值右操作数——除零应真的 Fault"
         );
     }
@@ -1027,10 +1041,14 @@ mod tests {
                    }";
         let w = run(src, 2);
         assert_eq!(
-            [w.body.globals[20], w.body.globals[21], w.body.globals[22]],
+            [
+                w.body.view().globals()[20],
+                w.body.view().globals()[21],
+                w.body.view().globals()[22]
+            ],
             [11, 22, 33]
         );
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     // ── spawn 带参（async sub）────────────────────────────────────────
@@ -1047,8 +1065,8 @@ mod tests {
         // 帧序：0=main 出生跳过；1=main 首跑（spawn child，child born_frame=1）；
         // 2=child 首跑（次帧首跑）。
         let w = run(src, 3);
-        assert_eq!(w.body.globals[20], 33);
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().globals()[20], 33);
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     /// `fire(...)` 的 `task` 参数（`CallArg::SubRef`）：与 `xf` 参数（`CallArg::XformRef`）
@@ -1065,8 +1083,8 @@ mod tests {
                    }";
         // 帧序：0=main 出生跳过；1=main 首跑（fire 挂任务，born_frame=1）；2=挂载任务首跑。
         let w = run(src, 3);
-        assert_eq!(w.body.globals[20], 1);
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().globals()[20], 1);
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     // ── xformdef TURN：轨迹差分观测（模块文档）────────────────────────
@@ -1099,7 +1117,7 @@ mod tests {
             "转向后应改沿 y 轴飞，同一时窗内不出界，应存活——\
              反证 xformdef staging → fire xf 解析 → OP_TURN 派发链路生效"
         );
-        assert_eq!(w2.body.diag.task_faults, 0);
+        assert_eq!(w2.body.view().diag().task_faults, 0);
     }
 
     /// STEP 族 scratch 自动补槽的行为学判别（T3 复审 Important 修法）：
@@ -1120,7 +1138,7 @@ mod tests {
             "set_life(1) 必须在 STEP 的 scratch 槽之后照常执行——弹应已回收；\
              若此断言红 = scratch 未自动补，set_life 被引擎 scratch 覆写"
         );
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     // ── cast 往返 ───────────────────────────────────────────────────────
@@ -1138,11 +1156,12 @@ mod tests {
                    }";
         let w = run(src, 2);
         assert_eq!(
-            w.body.globals[20], 5,
+            w.body.view().globals()[20],
+            5,
             "int→fx→int 精确往返（整数无小数损失）"
         );
-        assert_eq!(w.body.globals[21], 1000, "int↔angle 位穿透往返");
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().globals()[21], 1000, "int↔angle 位穿透往返");
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     // ── `$` 引擎变量读 ──────────────────────────────────────────────────
@@ -1155,8 +1174,8 @@ mod tests {
                    }";
         // 出生帧（0）跳过，次帧（1）首跑：$frame 应读到 1。
         let w = run(src, 2);
-        assert_eq!(w.body.globals[FREE as usize], 1);
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().globals()[FREE as usize], 1);
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     // ── 编译器确定性（全管线级别；`lang::mod` 已有一份，这里再钉一份跑真实
@@ -1286,7 +1305,7 @@ mod tests {
                     end_data = Some(ev.data);
                 }
             }
-            history.push(w.body.globals[20]);
+            history.push(w.body.view().globals()[20]);
             bullet_counts.push(w.body.view().bullets().iter_alive().count());
         }
         assert!(
@@ -1321,10 +1340,11 @@ mod tests {
              实际历史：{history:?}（结算帧={end_frame}）"
         );
         assert_eq!(
-            w.body.globals[21], 777,
+            w.body.view().globals()[21],
+            777,
             "wait_spell() 糖应在卡结束后正确退出循环，main 恢复执行后续语句"
         );
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     // ── 错误路径：xformdef 参数非编译期常量 ─────────────────────────────
@@ -1398,6 +1418,6 @@ mod tests {
         assert_eq!(reqs.len(), 1);
         assert_eq!((reqs[0].id, reqs[0].seq), (64, 0));
         assert_eq!(reqs[0].args, [98304, -3, 16384, 5, 0, 0]);
-        assert_eq!(w.body.diag.task_faults, 0);
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 }

@@ -266,7 +266,7 @@ impl WorldBridge {
         let Some(g) = self.game.as_ref() else {
             return d;
         };
-        let Some(s) = g.world.body.boss_ui.get(i as usize) else {
+        let Some(s) = g.world.view().boss_ui().get(i as usize) else {
             return d;
         };
         d.set("active", s.active as i64);

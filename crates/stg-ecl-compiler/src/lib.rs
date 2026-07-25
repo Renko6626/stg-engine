@@ -1237,10 +1237,11 @@ mod tests {
         step(&mut w, &TABLES_V0, &image, &InputFrame::empty(1));
 
         assert_eq!(
-            w.body.globals[SLOT as usize], 3,
+            w.body.view().globals()[SLOT as usize],
+            3,
             "repeat(3) 应恰累加 3 次（读写走 globals，真实 VM 执行）"
         );
-        assert_eq!(w.body.diag.task_faults, 0, "全程不应产生 Fault");
+        assert_eq!(w.body.view().diag().task_faults, 0, "全程不应产生 Fault");
     }
 
     /// M1.5：`sys_self_age`/`sys_self_hp_max` 两个新读口 DSL 薄壳——经真实 VM 跑一遍，
@@ -1270,14 +1271,16 @@ mod tests {
         step(&mut w, &TABLES_V0, &image, &InputFrame::empty(1)); // 次帧首跑
 
         assert_eq!(
-            w.body.globals[AGE_SLOT as usize], 1,
+            w.body.view().globals()[AGE_SLOT as usize],
+            1,
             "born_frame=0，次帧首跑 ctx.frame=1，self_age=1-0=1"
         );
         assert_eq!(
-            w.body.globals[HP_MAX_SLOT as usize], 0,
+            w.body.view().globals()[HP_MAX_SLOT as usize],
+            0,
             "STAGE owner 的 self_hp_max 恒 0"
         );
-        assert_eq!(w.body.diag.task_faults, 0, "全程不应产生 Fault");
+        assert_eq!(w.body.view().diag().task_faults, 0, "全程不应产生 Fault");
     }
 
     /// 端到端小脚本（plan 既定简化版：不涉及敌人）——`wait(1)` 后 `repeat(2)` 两轮 4-way
@@ -1321,6 +1324,6 @@ mod tests {
             8,
             "repeat(2) × 4-way batch = 8 弹"
         );
-        assert_eq!(w.body.diag.task_faults, 0, "全程不应产生 Fault");
+        assert_eq!(w.body.view().diag().task_faults, 0, "全程不应产生 Fault");
     }
 }
