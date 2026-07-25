@@ -49,8 +49,15 @@ start_main` 三步——"唯一正典入口"的防分歧保证对该路径有洞
 `move_enemy_to`/弹 setter 族全被 OWNER 校验挡死，而语言无任何 builtin 能造 enemy-owned 任务
 （`spawn` 继承父 owner；金向量 boss 是 harness 用 Rust `start_main_with_owner(&image,
 EclOwner::Enemy(boss))` 手摆的冻结遗产）。**后果：纯 .ecl 走正典 boot 摆不出 boss/符卡/符卡
-清弹 field。触发点 = Godot 场景刀设计期必须先裁**（语言级 builtin 如 `spawn_for(enemy, sub)` /
-boss 绑定糖 vs boot 面扩口），它决定场景刀的 boss 关卡怎么写。
+清弹 field。触发点 = Godot 场景刀设计期必须先裁**，它决定场景刀的 boss 关卡怎么写。
+
+**初裁（2026-07-25，用户拍板方向）**：收敛为**乙案单干**——`spawn_enemy` 长 `task` 参
+（与 `fire` 第 7 参 identifier-or-none 同构），顺便给 `EnemyPool.main_task` 预留字段通电；
+甲案 `spawn_for(enemy, sub)`（给活敌事后挂任务）判 YAGNI 不做：boss 阶段编排归 boss_main
+自身顺序推进（`wait_spell` 分节），符卡模式任务归 `spell_begin` 卡绑定（`spell_bound+epoch`
+随卡生死），helper 归 `spawn` 恒继承（ENEMY 树随根生死——恒继承由"限制"翻转为"设计"），
+外部导演干预走 globals/信号轮询（P5 口径）。真需求出现再加甲，纯增量零兼容债。
+场景刀 spec 落地时按此写实施形态即可。
 
 ## B. 测试覆盖缺口
 
