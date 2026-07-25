@@ -133,6 +133,13 @@ crates/stg-godot/                cdylib → libstg_godot.so
 | `player_pos() -> Vector2` | 自机等低频对象按 §6.4 用正常 Godot 节点当"显示器" |
 | `fields_info() -> Array[Dictionary]` | 作用区低频读口(炸弹圈等演出参考),v1 不做 MultiMesh 层 |
 
+**冻结面扩口(整局流程刀 spec §3/§4,2026-07-25)**:13→15,新增两口:
+
+| 方法 | 说明 |
+|---|---|
+| `new_game_at(names: PackedStringArray, sources: PackedStringArray, seed: int, rank: int, start: int, character: int, power: int, lives: int, bombs: int) -> bool` | 多单元中段开机;`names`/`sources` 两条平行数组代替 GDScript 无原生元组容器;长度不等 → false(P4-b);装备四标量壳层 clamp 到各自域(`character/lives/bombs` 到 `u8`、`power` 到 `u16`)再收窄,`power` 核内 `new_game_at` 还会钳 `POWER_MAX`(双保险) |
+| `anchors() -> Dictionary` | 表现锚点四读口 `{bgm, bg, bg_phase, bg_phase_frame}`,`WorldView` 四方法直转发;未开局同 `hud_*` 口径返回空字典 |
+
 **实例缓冲布局**:2D transform(8 float/实例;旋转 = BAM→弧度桥侧算)+ `CUSTOM_DATA`
 4 float(`[0]`=sprite 索引,`[1..3]` 保留置 0);shader 按 custom_data 取图集区域。
 **活槽压实**(alive 压到缓冲前段)+ `visible_instance_count` 每帧设——少画死槽。

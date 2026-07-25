@@ -86,6 +86,57 @@ impl WorldBridge {
         }
     }
 
+    /// 多单元中段开机(整局流程刀 spec §3/§4 扩口;T1 `compile_units` + T6 `new_game_at`
+    /// 桥面落地,冻结面 13→15)。`names`/`sources` 是两条平行数组(GDScript 侧无原生元组
+    /// 容器,壳层惯例);长度不等视为调用方违约(P4-b,no-op+false)。装备四标量壳层先
+    /// `clamp` 到各自域再收窄——`power` 核内 `new_game_at` 还会钳 `POWER_MAX`,双保险。
+    #[func]
+    #[allow(clippy::too_many_arguments)] // gdext #[func] 天然参数面(GString/Rid 类比先例)；GDScript 侧无原生元组/结构体传入，装备四标量+多单元两数组只能平铺
+    fn new_game_at(
+        &mut self,
+        names: PackedStringArray,
+        sources: PackedStringArray,
+        seed: i64,
+        rank: i64,
+        start: i64,
+        character: i64,
+        power: i64,
+        lives: i64,
+        bombs: i64,
+    ) -> bool {
+        if names.len() != sources.len() {
+            godot_error!(
+                "[stg] new_game_at:names/sources 长度不等({} vs {})",
+                names.len(),
+                sources.len()
+            );
+            return false;
+        }
+        let units: Vec<(String, String)> = names
+            .as_slice()
+            .iter()
+            .zip(sources.as_slice().iter())
+            .map(|(n, s)| (n.to_string(), s.to_string()))
+            .collect();
+        let loadout = stg_core::player::Loadout {
+            character: character.clamp(0, u8::MAX as i64) as u8,
+            power: power.clamp(0, u16::MAX as i64) as u16,
+            lives: lives.clamp(0, u8::MAX as i64) as u8,
+            bombs: bombs.clamp(0, u8::MAX as i64) as u8,
+        };
+        match boot::boot_at(&units, seed as u64, rank as i32, start as i32, loadout) {
+            Ok(g) => {
+                self.game = Some(g);
+                self.warned = 0;
+                true
+            }
+            Err(e) => {
+                godot_error!("[stg] new_game_at 失败:{e:?}");
+                false
+            }
+        }
+    }
+
     #[func]
     fn step_frame(&mut self, buttons: i64) {
         let Some(game) = self.game.as_mut() else {
@@ -241,6 +292,23 @@ impl WorldBridge {
         d.set("bonus_now", s.bonus_now as i64);
         d.set("capture_ok", s.capture_ok as i64);
         d.set("flags", s.flags as i64);
+        d
+    }
+
+    /// 表现锚点四读口(整局流程刀 spec §4 扩口;`WorldView` 四方法直转发)。未开局同
+    /// `hud_*` 既有口径:返回空字典而非零填充,GDScript 侧靠 `Dictionary.has()`/`get()`
+    /// 默认值区分"未开局"与"锚点仍是初值 0"。
+    #[func]
+    fn anchors(&self) -> VarDictionary {
+        let mut d = VarDictionary::new();
+        let Some(g) = self.game.as_ref() else {
+            return d;
+        };
+        let v = g.world.view();
+        d.set("bgm", v.bgm_id() as i64);
+        d.set("bg", v.bg_id() as i64);
+        d.set("bg_phase", v.bg_phase() as i64);
+        d.set("bg_phase_frame", v.bg_phase_frame() as i64);
         d
     }
 
