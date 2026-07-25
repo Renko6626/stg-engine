@@ -475,4 +475,152 @@ mod tests {
             "JMP 目标必须严格晚于落点（正常流跳过整段垫片，不落进补偿块）"
         );
     }
+
+    // ── Task 5：mark 自动补偿（最近声明注入）── 字节码形状断言 ──────────────
+    //
+    // 端到端版本（真跑 `World`/`step`，经 `new_game_at(start=id)` 中段启动观察补偿
+    // 生效）依赖 Task 6 的 `new_game_at`，本刀尚不存在——按简报"依赖顺序说明"，退而
+    // 直接比对 `image.code()` 在 `resolve_mark` 落点处的指令形状：注入形态恒为
+    // `push_i(v); sys(SYS_*)` 直发（`OP_PUSHI v, OP_SYS no` 两字一组），顺序固定
+    // bgm→bg→bg_phase，且严格排在作者块之前。
+
+    use stg_core::ecl::ops::OP_SYS;
+    use stg_core::ecl::syscall::{SYS_BG, SYS_BG_PHASE, SYS_BGM};
+
+    /// ① 最近声明注入三类齐全 + ⑤ 跨 sub（声明住被同步调用的 sub 里）取得到——单个
+    /// 测试两条覆盖同时钉住：`mark(7)` 前最近一条同步调用链是 `main → stage1`，
+    /// `stage1` 顶层依次声明 bgm/bg/bg_phase 三个常量，三类应全部注入且顺序固定。
+    #[test]
+    fn mark_injects_nearest_anchor_declarations_across_sub_call() {
+        const SRC: &str = r#"
+sub stage1() { bgm(11); bg(21); bg_phase(1); wait(1); }
+sub main() {
+    stage1();
+    mark(7);
+    loop { wait(60); }
+}
+"#;
+        let img = compile(SRC, "comp.ecl").expect("编译");
+        let ip = img.resolve_mark(7).expect("mark(7) 应已注册落点") as usize;
+        let code = img.code();
+        assert_eq!(
+            &code[ip..ip + 12],
+            &[
+                OP_PUSHI as u32,
+                11,
+                OP_SYS as u32,
+                SYS_BGM as u32,
+                OP_PUSHI as u32,
+                21,
+                OP_SYS as u32,
+                SYS_BG as u32,
+                OP_PUSHI as u32,
+                1,
+                OP_SYS as u32,
+                SYS_BG_PHASE as u32,
+            ],
+            "三类锚点应按 bgm→bg→bg_phase 顺序各注入一组 push_i/sys：{code:?}"
+        );
+    }
+
+    /// ② 作者块顶层手写 bgm 则只注入 bg/bg_phase——逐类独立抑制，手写的那一类不再
+    /// 自动补，未手写的两类（这里 bg_phase 从未声明过，恒 None；bg 未被手写）照常。
+    #[test]
+    fn mark_manual_override_suppresses_injection_per_kind() {
+        const SRC: &str = r#"
+sub stage1() { bgm(11); bg(21); wait(1); }
+sub main() {
+    stage1();
+    mark(3) { bgm(99); }
+    loop { wait(60); }
+}
+"#;
+        let img = compile(SRC, "comp.ecl").expect("编译");
+        let ip = img.resolve_mark(3).expect("mark(3) 应已注册落点") as usize;
+        let code = img.code();
+        // 只注入 bg（bgm 被作者块手写抑制；bg_phase 从未声明，本就是 None），随后紧跟
+        // 作者块自己写的 `bgm(99)`。
+        assert_eq!(
+            &code[ip..ip + 8],
+            &[
+                OP_PUSHI as u32,
+                21,
+                OP_SYS as u32,
+                SYS_BG as u32,
+                OP_PUSHI as u32,
+                99,
+                OP_SYS as u32,
+                SYS_BGM as u32,
+            ],
+            "bgm 类应被作者块手写抑制（不注入 11），bg 类仍注入，紧接作者块自己的 \
+             bgm(99)：{code:?}"
+        );
+    }
+
+    /// ③ `bg_phase` 声明早于最近一条 `bg` 声明 → 不注入 phase（旧背景的段号）；
+    /// `bg` 本身仍正常注入。
+    #[test]
+    fn stale_bg_phase_older_than_bg_not_injected() {
+        const SRC: &str = r#"
+sub main() {
+    bg_phase(5);
+    bg(30);
+    mark(1);
+    loop { wait(60); }
+}
+"#;
+        let img = compile(SRC, "comp.ecl").expect("编译");
+        let ip = img.resolve_mark(1).expect("mark(1) 应已注册落点") as usize;
+        let code = img.code();
+        assert_eq!(
+            &code[ip..ip + 4],
+            &[OP_PUSHI as u32, 30, OP_SYS as u32, SYS_BG as u32],
+            "只应注入 bg（30）；bg_phase(5) 早于 bg(30)，视为旧背景段号，不注入：{code:?}"
+        );
+    }
+
+    /// ④ 变量参声明被跳过——`bgm(x)` 的 `x` 是局部变量（`LocalRef`），不是常量，
+    /// 扫描不捕获；`mark` 处不应有任何注入，落点直接是作者块之后的第一条真实指令。
+    #[test]
+    fn mark_skips_declaration_with_variable_arg() {
+        const SRC: &str = r#"
+sub stage1() { var x: int = 5; bgm(x); wait(1); }
+sub main() {
+    stage1();
+    mark(4);
+    loop { wait(60); }
+}
+"#;
+        let img = compile(SRC, "comp.ecl").expect("编译");
+        let ip = img.resolve_mark(4).expect("mark(4) 应已注册落点") as usize;
+        let code = img.code();
+        // mark(4) 无补偿块，若无注入，落点直接是 main 里下一条语句 `loop { wait(60); }`
+        // 的第一条指令：`wait(60)` 降低为 `push_i(60); OP_WAIT`。
+        assert_eq!(
+            &code[ip..ip + 3],
+            &[OP_PUSHI as u32, 60, stg_core::ecl::ops::OP_WAIT as u32],
+            "bgm(x) 的 x 是变量参，不应被捕获，落点不应有任何注入指令：{code:?}"
+        );
+    }
+
+    /// ⑥ if 块内的声明取不到——扫描"不下潜"if/while/for/loop 块体，`if` 分支里的
+    /// `bgm(77)` 不参与"最近声明"，`mark` 处应无任何注入。
+    #[test]
+    fn mark_skips_declaration_inside_if_block() {
+        const SRC: &str = r#"
+sub main() {
+    if 1 == 1 { bgm(77); }
+    mark(2);
+    loop { wait(60); }
+}
+"#;
+        let img = compile(SRC, "comp.ecl").expect("编译");
+        let ip = img.resolve_mark(2).expect("mark(2) 应已注册落点") as usize;
+        let code = img.code();
+        assert_eq!(
+            &code[ip..ip + 3],
+            &[OP_PUSHI as u32, 60, stg_core::ecl::ops::OP_WAIT as u32],
+            "if 块内的 bgm(77) 不该参与顶层线性扫描，落点不应有任何注入指令：{code:?}"
+        );
+    }
 }

@@ -68,8 +68,9 @@ use crate::lang::typeck::{
     TypedStmt, TypedSub, UnIntent,
 };
 use crate::{BuilderSubRef, ImageBuilder, SubBuilder};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use stg_core::ecl::image::{EclImage, EclValueType, ImageBuildError, SubKind};
+use stg_core::ecl::syscall;
 use stg_core::xform::XformSlot;
 
 // xformdef 操作名映射表已上移 `lang::xform_map`（slots 趟与本趟共用的单一权威，含物理
@@ -120,6 +121,11 @@ struct Gen<'p> {
     name_to_ref: BTreeMap<String, BuilderSubRef>,
     sub_params: BTreeMap<String, Vec<String>>,
     consts: BTreeMap<String, (Ty, i32)>,
+    /// mark 自动补偿表（Task 5）：`mark(id)` → 该落点应注入的三类锚点值。整个 codegen 趟
+    /// 期间不变（同 `xformdefs`/`consts` 一样是"全程序"范围数据，故与它们同样落在 `Gen`
+    /// 自己身上，而不是随 `gen_block`/`gen_stmt` 调用链层层穿参——这批字段本就不是
+    /// "当前生成到哪个 sub"这种逐帧变化的状态）。
+    comp: BTreeMap<i32, AnchorComp>,
     errors: Vec<CompileError>,
 }
 
@@ -381,8 +387,22 @@ impl<'p> Gen<'p> {
                 // 中段启动经 `EclImage::resolve_mark(id)` 直接跳进 `landing` 执行补偿块。
                 let skip = b.raw_jmp();
                 b.mark_here(*id); // 落点 = 垫片首指令（紧跟在 JMP 之后）
-                // Task 5 在此前注入自动补偿（bgm/boss_set 等世界锚点的"最近声明"补齐）；
-                // 本刀只生成作者显式写在补偿块里的语句。
+                // Task 5：自动补偿注入，直发 `push_i(值); sys(SYS_*)`（不经 `gen_expr`——
+                // 值已在 `scan_mark_compensation` 折叠为编译期常量，无需再走表达式求值）。
+                // 顺序固定 bgm→bg→bg_phase，且严格在作者块之前（作者手写的同类调用若
+                // 存在，`comp` 里对应类已被 `scan_mark_compensation` 抑制为 `None`）。
+                if let Some(c) = self.comp.get(id) {
+                    for (v, sysno) in [
+                        (c.bgm, syscall::SYS_BGM),
+                        (c.bg, syscall::SYS_BG),
+                        (c.bg_phase, syscall::SYS_BG_PHASE),
+                    ] {
+                        if let Some(v) = v {
+                            b.push_i(v);
+                            b.sys(sysno);
+                        }
+                    }
+                }
                 self.gen_block(b, loops, slots, sub, body);
                 let after = b.here();
                 b.patch(skip, after);
@@ -610,6 +630,142 @@ impl<'p> Gen<'p> {
     }
 }
 
+// ── mark 自动补偿扫描（Task 5；整局流程刀 spec §5）──────────────────────────
+//
+// 三类锚点 builtin 名字与下标的唯一绑定处：改名字只需要改 `anchor_kind`。
+
+const ANCHOR_BGM: usize = 0;
+const ANCHOR_BG: usize = 1;
+const ANCHOR_BG_PHASE: usize = 2;
+
+fn anchor_kind(name: &str) -> Option<usize> {
+    match name {
+        "bgm" => Some(ANCHOR_BGM),
+        "bg" => Some(ANCHOR_BG),
+        "bg_phase" => Some(ANCHOR_BG_PHASE),
+        _ => None,
+    }
+}
+
+/// `mark(id)` 自动补偿的一次快照（spec §5）：`bgm`/`bg`/`bg_phase` 各自"其前最近"的
+/// 常量声明值——`None` 表示扫描期间未见过该类声明，或已被作者块顶层同名手写调用
+/// 逐类抑制（三类互不影响）。
+#[derive(Debug, Clone, Copy, Default)]
+struct AnchorComp {
+    bgm: Option<i32>,
+    bg: Option<i32>,
+    bg_phase: Option<i32>,
+}
+
+/// 裸调用的唯一常量实参值（spec §5"只捕获常量参"）：typed AST 的 `ConstRef`（`const`
+/// 引用折叠出的原始值）或 `IntLit`（整型字面量）——`LocalRef`/`Binary`/`Cast`/`Call`…
+/// 等一律视为"变量参"跳过，垫片处（`mark` 落点）是跳进来的落地指令，不可能重新求值
+/// 一个依赖运行期状态的表达式。
+fn anchor_const_arg(args: &[CallArg]) -> Option<i32> {
+    match args.first()? {
+        CallArg::Val(TypedExpr { kind, .. }) => match kind {
+            TypedExprKind::IntLit(v) | TypedExprKind::ConstRef(v) => Some(*v),
+            _ => None,
+        },
+        CallArg::XformRef(_) | CallArg::SubRef(_) => None,
+    }
+}
+
+/// mark 补偿扫描（spec §5）：沿 `main` 的**同步调用链顶层线性**展开——顶层语句按源码序
+/// 走，遇到对另一个 sub 的同步调用（`TypedStmt::ExprStmtVoid` 且 `CallTarget::Sub`）就
+/// 递归进该 sub 的顶层继续走（`visited` 集合防环，同一 sub 全程只走一次）；**不下潜**
+/// if/while/for/loop 块体（对应语句变体落在 catch-all 分支，直接跳过，不递归其 `body`）；
+/// 也不跟 `spawn`/`fire`——它们分别是 `TypedStmt::Spawn`（新任务根，不是同步调用边）与
+/// 需要显式消费返回值的 `TypedStmt::ExprStmtDiscard`（`fire` 恒有返回句柄），两者都不落
+/// 在本函数唯一匹配的两个语句变体（`ExprStmtVoid`/`Mark`）里，天然被排除。
+///
+/// 沿途记录三类锚点 builtin（`bgm`/`bg`/`bg_phase`）裸调用的"目前最新常量值 + 单调位置"
+/// （位置只用来判断 `bg_phase` 是否早于最近一次 `bg`——`bg` 未声明时隐式默认位置视为
+/// 0，对应 spec"bg 缺省视位置 0"）。每遇到一个 `TypedStmt::Mark`，对当前"最新值"三元组
+/// 拍一次快照：`bgm`/`bg` 直接取当前最新值；`bg_phase` 仅当其记录位置严格晚于 `bg` 的
+/// 记录位置才取（否则是"旧背景的段号"，弃，不注入）；再用该 `mark` 块顶层手写的锚点
+/// 调用名逐类抑制（作者已经手写的那一类不再自动注入，三类各自独立判断，不影响其余两
+/// 类）。`TypedStmt::Mark` 只可能出现在 `main` 顶层（typeck 已经拒绝其余位置），故本函数
+/// 对每个 sub 的顶层语句一视同仁地扫描，不需要额外区分"当前是不是在 main 里"。
+fn scan_mark_compensation(ti: &TypedInfo) -> BTreeMap<i32, AnchorComp> {
+    let by_name: BTreeMap<&str, &TypedSub> = ti.subs.iter().map(|s| (s.name.as_str(), s)).collect();
+    let mut out = BTreeMap::new();
+    let Some(&main) = by_name.get("main") else {
+        return out;
+    };
+    let mut visited: BTreeSet<&str> = BTreeSet::new();
+    visited.insert("main");
+    // latest[ANCHOR_*] = (值, 单调位置)；位置只在 pos+=1 时前进，仅由锚点声明本身推进。
+    let mut latest: [Option<(i32, u32)>; 3] = [None; 3];
+    let mut pos: u32 = 0;
+    walk_mark_scan(
+        main,
+        &by_name,
+        &mut visited,
+        &mut pos,
+        &mut latest,
+        &mut out,
+    );
+    out
+}
+
+fn walk_mark_scan<'a>(
+    sub: &'a TypedSub,
+    by_name: &BTreeMap<&'a str, &'a TypedSub>,
+    visited: &mut BTreeSet<&'a str>,
+    pos: &mut u32,
+    latest: &mut [Option<(i32, u32)>; 3],
+    out: &mut BTreeMap<i32, AnchorComp>,
+) {
+    for stmt in &sub.body {
+        match stmt {
+            TypedStmt::ExprStmtVoid { call } => match &call.target {
+                CallTarget::Builtin(_) => {
+                    if let Some(k) = anchor_kind(&call.name)
+                        && let Some(v) = anchor_const_arg(&call.args)
+                    {
+                        *pos += 1;
+                        latest[k] = Some((v, *pos));
+                    }
+                }
+                CallTarget::Sub => {
+                    if let Some(&callee) = by_name.get(call.name.as_str())
+                        && visited.insert(callee.name.as_str())
+                    {
+                        walk_mark_scan(callee, by_name, visited, pos, latest, out);
+                    }
+                }
+            },
+            TypedStmt::Mark { id, body } => {
+                let bg_pos = latest[ANCHOR_BG].map_or(0, |(_, p)| p);
+                let mut comp = AnchorComp {
+                    bgm: latest[ANCHOR_BGM].map(|(v, _)| v),
+                    bg: latest[ANCHOR_BG].map(|(v, _)| v),
+                    bg_phase: latest[ANCHOR_BG_PHASE]
+                        .filter(|&(_, p)| p > bg_pos)
+                        .map(|(v, _)| v),
+                };
+                // 作者块顶层手写了同名锚点 builtin 裸调用 → 该类不注入（逐类独立判断，
+                // 只看块顶层——同 scan 本身"不下潜"的纪律一致，块内嵌套控制流不查）。
+                for s in body {
+                    if let TypedStmt::ExprStmtVoid { call } = s
+                        && matches!(call.target, CallTarget::Builtin(_))
+                    {
+                        match anchor_kind(&call.name) {
+                            Some(ANCHOR_BGM) => comp.bgm = None,
+                            Some(ANCHOR_BG) => comp.bg = None,
+                            Some(ANCHOR_BG_PHASE) => comp.bg_phase = None,
+                            _ => {}
+                        }
+                    }
+                }
+                out.insert(*id, comp);
+            }
+            _ => {} // if/while/for/loop/wait/spawn/… 不下潜（spec §5"顶层线性"）。
+        }
+    }
+}
+
 /// codegen 趟入口：`TypedInfo`/`SlotMap`/原始 `Program`（xformdef 常量折叠用）→
 /// `EclImage`。所有 sub 先声明再生成；Builder 按名字确定最终 ABI。
 pub fn generate(
@@ -664,6 +820,7 @@ pub fn generate(
         .collect();
     let xformdefs: BTreeMap<String, &crate::lang::ast::XformDef> =
         prog.xformdefs.iter().map(|x| (x.name.clone(), x)).collect();
+    let comp = scan_mark_compensation(ti);
 
     let mut g = Gen {
         sm,
@@ -671,6 +828,7 @@ pub fn generate(
         name_to_ref,
         sub_params,
         consts,
+        comp,
         errors: Vec::new(),
     };
 
