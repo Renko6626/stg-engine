@@ -1,0 +1,76 @@
+<h2>ECL 命名入口 ABI：名称是身份，数字是镜像内索引</h2>
+<p class="subtitle">方案 2 的完整映射；重点确认 Root 与普通 Async 入口是否应该分成两条启动通道。</p>
+
+<div class="section">
+  <div class="label">1 · 单文件就是一关</div>
+  <div class="mockup">
+    <div class="mockup-header">stage_1.ecl</div>
+    <div class="mockup-body" style="font-family:monospace;line-height:1.9">
+      <div><b>sub main()</b> <span style="opacity:.65">// 唯一、零参 Root</span></div>
+      <div><b>async sub bullet_task(speed: fx)</b> <span style="opacity:.65">// 公开 Async</span></div>
+      <div><b>sub update_rank()</b> <span style="opacity:.65">// CallOnly</span></div>
+    </div>
+  </div>
+</div>
+
+<div style="text-align:center;font-size:28px;opacity:.55;margin:6px">↓ 编译器按名称字典序分配 SubId</div>
+
+<div class="section">
+  <div class="label">2 · EclImage 的统一符号表</div>
+  <div class="mockup">
+    <div class="mockup-header">symbols: Vec&lt;SubMeta&gt;（按 name 排序，可二分查找）</div>
+    <div class="mockup-body" style="display:grid;grid-template-columns:70px 1.5fr 100px 90px 1.7fr;gap:8px;font-family:monospace;align-items:center">
+      <b>SubId</b><b>name</b><b>kind</b><b>pc</b><b>params</b>
+      <span>0</span><span>bullet_task</span><span>Async</span><span>120</span><span>speed: Fx</span>
+      <span>1</span><span>main</span><span>Root</span><span>0</span><span>—</span>
+      <span>2</span><span>update_rank</span><span>CallOnly</span><span>82</span><span>—</span>
+    </div>
+  </div>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Root 通道</div>
+    <div class="mockup-body">
+      <p><code>root: SubId(1)</code></p>
+      <p><code>start_main(image)</code></p>
+      <p>检查 <code>main_started == false</code>，随后永久置位。</p>
+      <p><b>不能</b>经 resolve/spawn/fire 启动。</p>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">Async 通道</div>
+    <div class="mockup-body">
+      <p><code>entries[0] → SubId(0)</code></p>
+      <p><code>resolve_entry("bullet_task") → EntryId(0)</code></p>
+      <p>便利 API 校验 <code>speed: Fx</code>；快速 API 接收编码后的 <code>[i32]</code>。</p>
+      <p>CallOnly 名称可查诊断，但不能 resolve 为 EntryId。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">3 · 两类数字句柄的职责</div>
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>SubId</h4>
+      <ul><li>覆盖全部 sub</li><li>供字节码和 Fault 定位</li><li>按所有 sub 名排序</li></ul>
+    </div>
+    <div class="pros">
+      <h4>EntryId</h4>
+      <ul><li>只覆盖 Async 入口</li><li>供外部绑定和任务派生</li><li>按 Async 名排序</li></ul>
+    </div>
+  </div>
+</div>
+
+<h3>这条 Root / Async 分流是否符合你的预期？</h3>
+<div class="options">
+  <div class="option" data-choice="approve-root-async-split" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content"><h3>符合，继续</h3><p>main 使用独立 root 通道，EntryId 只表示可重复派生的 async 入口。</p></div>
+  </div>
+  <div class="option" data-choice="revise-root-async-split" onclick="toggleSelect(this)">
+    <div class="letter">↺</div>
+    <div class="content"><h3>需要调整</h3><p>点击后在终端说明希望改变哪条映射或启动规则。</p></div>
+  </div>
+</div>

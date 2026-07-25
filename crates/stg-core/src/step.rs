@@ -2370,6 +2370,21 @@ mod tests {
         assert_eq!(wa.checksum(), wb.checksum(), "委托改造零行为差");
     }
 
+    /// B17 销账(2026-07-25 文档整理):`new_game` spec 四断言的最后两项——①开局帧号
+    /// 恒 0(堆零构造隐式保证,此处显式钉住);②`TaskStartError` 经委托链原样透传
+    /// (空镜像无 root → `NoRoot`,`new_game` 不吞不换)。
+    #[test]
+    fn new_game_frame_zero_and_error_passthrough() {
+        let image = root_image(vec![OP_END as u32]);
+        let w = World::new_game(7, 2, &image).expect("new_game");
+        assert_eq!(w.frame(), 0, "开局帧号 0");
+        assert_eq!(
+            World::new_game(7, 2, &crate::ecl::image::EclImage::empty()).unwrap_err(),
+            crate::ecl::binding::TaskStartError::NoRoot,
+            "start_main 错误经 new_game 委托链原样透传"
+        );
+    }
+
     /// 装备钳位:power 越 `POWER_MAX` 钳、lives/bombs 全域直收(u8 无上限常量);
     /// score/graze 仍出场默认 0(装备面不碰这两个字段)。
     #[test]

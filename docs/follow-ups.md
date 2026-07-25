@@ -7,7 +7,9 @@
 > **维护规矩**：解决一条就删一条（别留"已完成"的墓碑，git log 才是历史）。新增的复审 follow-up
 > 往这里写，别只写账本。**写之前先核实**——本清单每条都经过代码核对，不是复述当年的复审原文。
 >
-> 最后核实：2026-07-17（M0-12 道具池 B1 份额核销之后，分支 `m0-12-items`）
+> 最后核实：2026-07-25（整局流程刀合入后文档整理：销 B17（两行断言已补，见
+> `step.rs::new_game_frame_zero_and_error_passthrough`）、C17 挪回 C 组归位、A3/B18 表述
+> 追平 `new_game_at`/`anchors()` 现实）
 
 ---
 
@@ -23,9 +25,10 @@
 正典 boot `World::new_game`（step.rs）内部走 `World::new` → 内建 `TABLES_V0`，签名不收
 `tables`。v1（内建表唯一）自洽；但当 C11 资产管线的 owned 表（`from_bytes` 载盘、
 `content_hash` LIVE）成为消费路径时，这些消费者只能退回 `new_with_tables + set_var +
-start_main` 三步——"唯一正典入口"的防分歧保证对该路径有洞。**触发点 = owned 表消费者
-出现**（C11 资产管线刀 / 任何 mod 表加载），届时补 `new_game_with_tables` 姊妹入口并
-让 `new_game` 委托它。
+start_main` 三步——"唯一正典入口"的防分歧保证对该路径有洞。（2026-07-25 追注：正典
+完全体现为 `new_game_at`，它同样硬绑 `TABLES_V0`——character 越界检查/重 spawn/标记表
+跳转全走内建表——本条的 tables 参数化届时应落在 `new_game_at` 身上、`new_game` 链式
+委托。）**触发点 = owned 表消费者出现**（C11 资产管线刀 / 任何 mod 表加载）。
 
 ### A4. 背景 STD 式 mini-VM——表现层解释器 + 文本格式（整局流程刀 spec §7 记档，2026-07-25）
 
@@ -149,12 +152,6 @@ threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy �
 
 ---
 
-### B17. `new_game` 的 spec 单测四项落地两项（前置小刀终审分诊，2026-07-24）
-
-`frame==0` 与 `TaskStartError` 透传无显式断言（前者由堆零构造隐式保证并被 same-inputs
-测试间接兜住，后者 `?` 平凡且 `start_main` 错误路径另有测试）。低风险覆盖精度 nit，
-顺路补两行断言即可。
-
 ### B18. 四个 HUD 读口 + `register_layer` 拒绝路径仅编译级/静态背书（桥刀终审分诊，2026-07-24）
 
 `hud_boss`/`hud_spell`/`player_pos`/`fields_info` 四个 `bridge.rs` 读口与 `register_layer`
@@ -169,6 +166,10 @@ threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy �
 
 同根增补(终审,2026-07-24):`frame.rs` 编码→register_layer→multimesh 上传路径在 Godot
 冒烟里零运行期覆盖(仅纯 Rust 判别单测盖)——同一触发点一并补运行期回归。
+
+范围勘定(2026-07-25):整局流程刀新增的 `anchors()` 读口**不在**本条余量内——冒烟已有
+运行期判别断言(mid-start 走垫片补偿路径取 `bgm==3`,非默认值场景)。余量仍 = 上列四读口
++ `register_layer` 拒绝路径 + 编码上传链。
 
 ### B19. 清弹 builtin——语义空间未定（整局流程刀 spec §8 记档，2026-07-25）
 
@@ -203,16 +204,6 @@ mark(2);`（`sub common() { bgm(9); }`）。`visited` 在第一次遇到 `common
 调用链里连续调用两次（ZUN 式关卡是"顺序调不同的关卡 sub"，不是"重复调同一个"）。**修法
 方向**：把 `visited` 的粒度从"全局只访问一次"收紧为"按调用点/调用路径重扫"，让同一 sub
 在不同调用点各自贡献一次"最新值"快照——真实脚本出现这种写法、或想让补偿更贴近直觉时再做。
-
-### C17. 桥壳四处打磨(桥刀终审分诊,2026-07-24;整局流程刀追一项,2026-07-25)
-
-`bridge.rs`:①`ping()` 测试助手留在生产冻结面(无害欠整洁);②`save_state()` 未开局静默
-返空 PackedByteArray,与 `load_state` 的 warn_once 不对称,GDScript 分不清"空存档/未开局";
-③`hud_boss` 直读 `body.boss_ui`(pub 公告板,非 P1 违反)而 hud_player/hud_spell 走 view()
-——读口不一致,可加 `WorldView::boss_ui()` 统一;④`new_game_at`(bridge.rs)的 loadout 参数是
-`character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dictionary——v1 装备维度少(四件)尚可
-承受,将来若长出更多装备维度(如子机类型/初始道具)时考虑 Dictionary 化。下次动壳时顺手,
-与①②③同批打磨。
 
 ## C. 代码整洁（低优先，都是两可）
 
@@ -369,6 +360,16 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 
 **仍开放**：T1 复审四 Minor（parser 无递归深度护栏/链式比较左结合未钉/`@70000` wait
 越界测试缺/`i32::MIN` 字面量不可拼写）——与常量注入无关，未在本刀清。
+
+### C17. 桥壳四处打磨(桥刀终审分诊,2026-07-24;整局流程刀追一项,2026-07-25)
+
+`bridge.rs`:①`ping()` 测试助手留在生产冻结面(无害欠整洁);②`save_state()` 未开局静默
+返空 PackedByteArray,与 `load_state` 的 warn_once 不对称,GDScript 分不清"空存档/未开局";
+③`hud_boss` 直读 `body.boss_ui`(pub 公告板,非 P1 违反)而 hud_player/hud_spell 走 view()
+——读口不一致,可加 `WorldView::boss_ui()` 统一;④`new_game_at`(bridge.rs)的 loadout 参数是
+`character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dictionary——v1 装备维度少(四件)尚可
+承受,将来若长出更多装备维度(如子机类型/初始道具)时考虑 Dictionary 化。下次动壳时顺手,
+与①②③同批打磨。
 
 ### C20. 数学核小件三包（2026-07-23 系统审阅分诊）
 

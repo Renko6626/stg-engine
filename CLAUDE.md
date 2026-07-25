@@ -133,17 +133,19 @@ crates/
     src/consts.rs    脚本可见引擎常量注册表（C14：①结构常量/②表符号；lib.rs 另有 ENGINE_VER）
     src/spell.rs     符卡计器机构（记账归引擎：SpellSlot 计时/衰减/破卡血线/伤害下钳/结算入分
                      /boss_ui 自动喂；模式随卡生死靠 spell_bound+epoch；控制归脚本，2026-07-24）
-    src/world.rs     WorldBody 字段所有权 + 写 API + 读口(frame/frame_events/take_requests/rand_range)
-                     + push_* + PhaseGuard + 场界常量(pub)
+    src/world.rs     WorldBody 字段所有权 + 写 API + 读口(frame/frame_events/take_requests/rand_range
+                     /表现锚点四读口 bgm_id·bg_id·bg_phase·bg_phase_frame) + push_* + PhaseGuard + 场界常量(pub)
     src/world/       【模块结构镜像相位骨架】player(相1+3，shottype 表驱动发弹) / transform(相4)
                      / integrate(相5) / collide(相6) / settle(相7) / cleanup(相9) / motion(D3 运动写 API)
                      / view(通道 A `WorldView` 零拷贝只读视图)
     src/ecl/         【M1】栈机 VM：task(协程池 256) / ops(op 表+ARITY) / vm(解释核+相2调度租户)
                      / image(EclImage) / syscall(号表+白名单沙箱绑定)
     src/step.rs      P2 组装层：§3.5 宪法顺序的唯一持有者 + World{body,tasks} + 快照
+                     + 正典开机 new_game/new_game_at(Loadout 装备 + mark 中段启动,2026-07-25)
   stg-derive/       proc-macro：#[derive(Checksum)] + define_pool!
   stg-ecl-compiler/ ECL 编译器：src/lang/【M1.9 表层语言】lex/parse/typeck(三型)/slots(静态槽分配)
-                    /codegen —— .ecl 源码启动时编译成 EclImage；lib.rs builder = codegen 后端
+                    /codegen(含 mark 垫片降低+锚点自动补偿)/units(多文件编译单元,目录整取按名排序)
+                    —— .ecl 源码启动时编译成 EclImage；lib.rs builder = codegen 后端
   stg-harness/      CLI：golden 两段金向量（scenes/rainbow.ecl 符卡）+ bench 基线 + 烘焙表 bake/verify（允许浮点）
   stg-godot/        M2 桥：WorldBridge gdext cdylib（boot/frame/save 纯模块+壳；smoke/ headless 冒烟）
 ```
@@ -157,6 +159,8 @@ cargo fmt --all                               # 格式化（CI 用 -- --check）
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p stg-harness -- golden --out c.txt   # 跑金向量输出逐帧校验和
 cargo run -p stg-harness -- verify-tables        # 断言烘焙表字节 == commit
+cargo run -p stg-harness -- check <f.ecl|目录>   # .ecl 只编译不跑,行列报错(目录=多文件整局)
+cargo run -p stg-harness -- gen-ecl-meta         # 改 builtins.rs 后同步元数据/文档两生成 sink
 cargo run -p stg-harness -- serve            # WebSocket 查看器(浏览器玩风铃卡,ssh -L 转发)
 cargo run --release -p stg-harness -- storm      # 恢复重演风暴闸(存档正确性)
 ```
@@ -169,7 +173,9 @@ cargo run --release -p stg-harness -- storm      # 恢复重演风暴闸(存档�
 - **M0 ✅**（2026-07-14~18，18 刀）`stg-core` 数学核 + 池 + step 骨架 + 快照/校验和 + Checksum derive
   + 世界层全机制（碰撞/结算/道具/变换/批量/shottype 表/WorldTables）+ 金向量对拍 + bench 基线。
 - **M1 ✅**（2026-07-18）ECL 栈机 VM + 协程池 + syscall 白名单沙箱；**M1.9 ✅**（2026-07-19）
-  `.ecl` 表层语言 + 编译器（三型/具名函数/静态槽分配），风铃卡狗粮进金向量二号。
+  `.ecl` 表层语言 + 编译器（三型/具名函数/静态槽分配），风铃卡狗粮进金向量二号；
+  **整局流程刀续**（2026-07-25）多文件 `compile_units`/`mark` 中段启动+自动补偿/
+  `Loadout`+`new_game_at`/表现锚点四字段（spec `2026-07-25-game-flow-midstart-design.md`）。
 - **M2（进行中）** `stg-godot` WorldBridge 已落地（2026-07-24，桥刀）；余量 = 真 Godot 工程
   （场景/MultiMesh 节点/分发器/输入映射）。
 - **M3** 环形快照 + 本地回滚 harness（延迟/输入扰动/校验和风暴）。

@@ -2,7 +2,8 @@
 
 > **给 coding agent 的三行须知**
 > 1. **本文档是写/改 `.ecl` 的唯一权威**——不要凭对 ZUN ECL 或其它弹幕 DSL 的记忆脑补语法。
-> 2. **改完必跑** `cargo run -p stg-harness -- check <file.ecl>`——看行列错误，见下"debug 循环"节。
+> 2. **改完必跑** `cargo run -p stg-harness -- check <file.ecl|目录>`——看行列错误（目录 =
+>    多文件整局，见下"多文件"节），debug 环见下"debug 循环"节。
 > 3. **builtin 签名以下方"内建函数"生成段为准**（`gen-ecl-meta` 单一真相源，改 `builtins.rs`
 >    才是正确改法，不要手改生成段——手改会被 `cargo test` 的防漂移断言打回）。
 
