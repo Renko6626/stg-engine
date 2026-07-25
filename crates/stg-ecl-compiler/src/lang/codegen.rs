@@ -1347,6 +1347,33 @@ mod tests {
         assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
+    // ── spawn_enemy task 参（A5 乙案；task-1-brief.md）─────────────────────
+
+    /// `spawn_enemy(...)` 尾追的 `task` 参数（`CallArg::SubRef`）走 `fire`/`spell_begin`
+    /// 同款 codegen 通道（sub 名标识符 / `none`，编译期解析，不参与求值型检查）——钉编译面：
+    /// 标识符/none 两形态都应通过。语义端到端断言在 `stg-core::ecl::syscall` 测试；这里只钉
+    /// "能编译通过"，同 `fire_task_script_attaches_and_runs_async_sub_on_new_bullet` 先例。
+    #[test]
+    fn spawn_enemy_task_param_lowers_like_fire() {
+        let src = "async sub boss_main() {\n\
+                     loop { wait(60); }\n\
+                   }\n\
+                   sub main() {\n\
+                     _ = spawn_enemy(0.0fx, 96.0fx, 100, 1, 500, 3, boss_main);\n\
+                     _ = spawn_enemy(1.0fx, 2.0fx, 10, 0, 0, 0, none);\n\
+                   }";
+        let _image = compile(src, "spawn_enemy_task.ecl")
+            .unwrap_or_else(|e| panic!("7 参 spawn_enemy 应编译通过：{e:?}"));
+    }
+
+    /// `task` 位不收求值表达式——语法上必须是裸标识符 / `none`（同 `fire` 的 xf/task 位、
+    /// `spell_begin` 的 `pattern` 位一脉；typeck 侧判据见 `lang::typeck::tests`）。
+    #[test]
+    fn spawn_enemy_task_param_rejects_value_expr() {
+        let src = "sub main() { _ = spawn_enemy(0.0fx, 0.0fx, 1, 0, 0, 0, 1 + 2); }";
+        assert!(compile(src, "bad.ecl").is_err());
+    }
+
     // ── 错误路径：xformdef 参数非编译期常量 ─────────────────────────────
 
     #[test]

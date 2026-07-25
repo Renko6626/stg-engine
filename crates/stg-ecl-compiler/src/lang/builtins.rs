@@ -118,10 +118,21 @@ const BUILTINS: &[Builtin] = &[
         name: "spawn_enemy",
         syscall: syscall::SYS_SPAWN_ENEMY,
         is_op: false,
-        params: &[Val(Fx), Val(Fx), Val(Int), Val(Int), Val(Int)],
+        // A5 乙案（append-only）：旧 5 参前缀不动，尾追 sprite（求值参）、task（`SubRef`，
+        // 同 fire 第 7 参同构）。
+        params: &[Val(Fx), Val(Fx), Val(Int), Val(Int), Val(Int), Val(Int), Sub],
         ret: Some(Int),
-        doc: "造敌;sprite 固定 0、判定 12/16 默认;返敌句柄,失败 -1",
-        param_names: &["x", "y", "hp", "drop_table", "score"],
+        doc: "造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌,敌死任务亡);返敌句柄,失败 -1",
+        param_names: &["x", "y", "hp", "drop_table", "score", "sprite", "task"],
+    },
+    Builtin {
+        name: "enemy_hp",
+        syscall: syscall::SYS_ENEMY_HP,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Int),
+        doc: "查敌当前 hp;死/悬垂/越界句柄返 -1(P4-b;句柄是池 index,槽复用不可辨)——stage 编排等 boss 死用",
+        param_names: &["handle"],
     },
     Builtin {
         name: "drop_item",
@@ -478,6 +489,7 @@ mod tests {
             "fire",
             "batch",
             "spawn_enemy",
+            "enemy_hp",
             "drop_item",
             "move_to",
             "boss_set",
