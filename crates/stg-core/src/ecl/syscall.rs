@@ -550,7 +550,8 @@ fn sys_create_bullets_batch(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> 
 
 /// 敌人创建（SYS 22；v1 直参，无 appearance 表——见 follow-ups）：5 参逆序弹出。
 /// 半径/受击盒/sprite 用固定默认值（同 `world::test_support::spawn_enemy` 惯例）；
-/// `main_task`/`death_script` 恒 0（脚本层自行事后 `spawn_task` 绑定主控协程）。
+/// `main_task`/`death_script` 恒 0（敌任务绑定现仅 Rust host API——`spawn_entry`/
+/// `spawn_entry_named` 携 `EclOwner::Enemy`——可达；脚本面缺口见 follow-ups A5）。
 fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let score = pop(task)?;
     let drop_table = pop(task)?;

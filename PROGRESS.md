@@ -6,22 +6,26 @@
 
 ## 现在（2026-07-25）
 
-- **位置**：**整局流程刀收官**——`compile_units` 多文件编译(目录=编译单元集,按文件名字节
-  序合并,扁平命名空间撞名双位置报错)+`mark` 中段启动(三编译规则/JMP 垫片/`EclImage` 标记
-  表/同步调用链自动补偿)+`Loadout`+`World::new_game_at`(装备钳位+`UnknownMark`/
-  `InvalidCharacter` 开机期响亮错)+表现锚点四字段(声明式 builtin+5x syscall 族+桥口
-  `new_game_at`/`anchors`)+转场挂牌协议(纯约定,引擎零改)全部落地；金向量因锚点字段入
-  校验和整体平移(判别式测试护住行为不变)。
+- **位置**：**前置债清账**——场景刀会直接踩到的债本刀清完：boss_ui 结算清扫（B16②）+ D6
+  四字段收口（49 处直读迁移）+ `register_layer` 换 buffer 判据 + 冒烟大扩（B18 可达面）+
+  D8 蓝图口径乙案落笔（`stg-world-design.md` 追认计数式降级，废止 debug panic 例外）；
+  同刀新记 **follow-ups A5**——脚本面无法产生 enemy-owned 任务（`spell_begin`/
+  `move_enemy_to`/弹 setter 族全被 OWNER 校验挡死，语言无 builtin 能造，金向量 boss 是
+  harness Rust 手摆的冻结遗产），纯 .ecl 走正典 boot 摆不出 boss/符卡/符卡清弹 field——
+  **场景刀设计期须先裁 A5**（语言级 builtin 扩口方案）才能写 boss 关卡。
 - **在飞**：无。
-- **下一阶段候选**：Godot 场景刀（真工程/`.tscn`/`MultiMesh`/请求分发器）/ RL 线 `stg-py`
-  （PyO3 headless env）/ 背景刀（follow-ups A4，STD 式 mini-VM，锚点契约已钉死）。
-- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（新增 A4/B19-B21，C17 追一项；
-  B14/B15/B16/D6/B18 未动）。
+- **下一阶段候选**：Godot 场景刀（真工程/`.tscn`/`MultiMesh`/请求分发器，**开工前先裁
+  follow-ups A5**）/ RL 线 `stg-py`（PyO3 headless env）/ 背景刀（follow-ups A4，STD 式
+  mini-VM，锚点契约已钉死）。
+- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（**A5 置顶**——enemy-owned 任务
+  语言面缺口，场景刀设计输入；B16②/D6/D8 已清账销条，C17 销②③；B18 收窄为余量；
+  B14/B15/B19-B21/C 组/D 组其余未动）。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-25 | 前置债务刀 | boss_ui 结算清扫(B16②)+D6 四字段收口(49 处迁移)+register_layer 换 buffer 判据+冒烟大扩(B18 可达面)+D8 乙案+新 A5(enemy-owned 任务语言缺口=场景刀设计输入) |
 | 2026-07-25 | 文档整理 | CLAUDE.md 结构树/命令/里程碑追新 + follow-ups 对账(销 B17 顺手补两断言/C17 归位 C 组/A3·B18 追注 new_game_at·anchors 现实) + D10 杂项行记锚点四字段 + ecl-lang check 目录用法 |
 | 2026-07-25 | **整局流程刀** | 方案A拍板(整局一World一镜像)+compile_units多文件+mark中段启动(垫片/标记表/自动补偿)+Loadout/new_game_at+表现锚点四字段(bgm/bg/bg_phase声明式)+转场挂牌协议;金向量因锚点字段整体平移(判别式护行为) |
 | 2026-07-24 | **编辑体验刀** | check 诊断环 + builtin 元数据(doc/param_names)→ gen-ecl-meta 两 sink(JSON/VS Code 扩展/ecl-lang.md 生成段)+ ecl-lang.md agent 优先重构(坑清单/debug 循环/例子可编译押运) |

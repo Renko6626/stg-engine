@@ -202,7 +202,7 @@ WorldTables 清单（v1）：
 
 有效期契约：**events 仅在产出它的那次 step 之后、下次 step 之前有意义。**
 
-耗尽语义：确定性丢弃 + 计数（P4）。但注意：丢弃一条 `PlayerHitByBullet` 意味着"本该死的自机活了"——确定性无损（两机同丢）而游戏性是错的，故 `hits` 容量按最坏情况给足（全弹同帧入擦圈），且 **debug 构建下 `hits` 溢出直接 panic** 而非静默计数。
+耗尽语义：确定性丢弃 + 计数（P4）。但注意：丢弃一条 `PlayerHitByBullet` 意味着"本该死的自机活了"——确定性无损（两机同丢）而游戏性是错的，故 `hits` 容量按最坏情况给足（全弹同帧入擦圈）；溢出时确定性丢弃 + 计数（`diag.hits_overflow`），debug/release 行为一致，不 panic（同 P4-a 资源耗尽铁律。勘注 2026-07-25：行 1/2 同弹双计 × 双自机的理论最坏为 4×CAP，超额由降级语义覆盖——真实弹幕不可达；原"debug panic"例外与 P4-a 自相矛盾，经评审废止，实现从未采纳）。
 
 ## A6 创建即分配（spawn_q 删除）
 
@@ -657,7 +657,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | `spell_end` | owner 非 ENEMY | Fault | — | — |
 | | 无绑定槽（逃生舱口，重复安全） | no-op | — | — |
 | `spell_timer` | owner 非 ENEMY / 无绑定槽 | 返回 −1（降级不 Fault） | — | — |
-| （内部）hits 满 | — | 丢弃（**debug panic**） | — | `diag.hits_dropped` |
+| （内部）hits 满 | — | 丢弃（不 panic，同 P4-a） | — | `diag.hits_overflow` |
 | （内部）frame_events 满 | — | 丢弃 | — | `diag.events_dropped` |
 
 注：ECL syscall 层已落地（M1）：号表 v1 见 `crates/stg-core/src/ecl/syscall.rs` 与

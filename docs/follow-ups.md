@@ -7,9 +7,10 @@
 > **维护规矩**：解决一条就删一条（别留"已完成"的墓碑，git log 才是历史）。新增的复审 follow-up
 > 往这里写，别只写账本。**写之前先核实**——本清单每条都经过代码核对，不是复述当年的复审原文。
 >
-> 最后核实：2026-07-25（整局流程刀合入后文档整理：销 B17（两行断言已补，见
-> `step.rs::new_game_frame_zero_and_error_passthrough`）、C17 挪回 C 组归位、A3/B18 表述
-> 追平 `new_game_at`/`anchors()` 现实）
+> 最后核实：2026-07-25（前置债务刀收口：新增 A5——脚本面无法产生 enemy-owned 任务，Godot
+> 场景刀设计输入；销 B16②（boss_ui 结算清扫）/D6（外部写口收口完成，知会句挪入 D7 尾注）/
+> D8（hits 溢出蓝图口径经评审改判，见 `stg-world-design.md` 乙案）；C17 销②③（`save_state`
+> 对称化/`hud_boss` 统一读口）；B18 改写为余量）
 
 ---
 
@@ -42,6 +43,14 @@ start_main` 三步——"唯一正典入口"的防分歧保证对该路径有洞
 读档/中段启动后历史丢失也能重建；变长 boss 段 = 段尾无限 loop、phase 切换破环）。详见
 `docs/superpowers/specs/2026-07-25-game-flow-midstart-design.md` §7。
 
+### A5. enemy-owned 任务语言面缺口——纯 .ecl 摆不出 boss/符卡（前置债务刀新记，2026-07-25；Godot 场景刀设计输入）
+
+脚本面无法产生 enemy-owned 任务——`spell_begin`（`syscall.rs:714` `self_enemy_handle` 门禁）/
+`move_enemy_to`/弹 setter 族全被 OWNER 校验挡死，而语言无任何 builtin 能造 enemy-owned 任务
+（`spawn` 继承父 owner；金向量 boss 是 harness 用 Rust `start_main_with_owner(&image,
+EclOwner::Enemy(boss))` 手摆的冻结遗产）。**后果：纯 .ecl 走正典 boot 摆不出 boss/符卡/符卡
+清弹 field。触发点 = Godot 场景刀设计期必须先裁**（语言级 builtin 如 `spawn_for(enemy, sub)` /
+boss 绑定糖 vs boot 面扩口），它决定场景刀的 boss 关卡怎么写。
 
 ## B. 测试覆盖缺口
 
@@ -137,13 +146,13 @@ LOOP 跳回后 `[0, xform_next)` 收缩：活跃 STEP 冻结至重武装、武�
 
 ### B16. 符卡机构三小件（符卡计器刀终审分诊，2026-07-24）
 
+**已还**（2026-07-25 前置债务刀）：② **boss_ui 结算不清致 ≤1 帧陈旧闪**——`settle_one_spell`
+（`world.rs`）结算原子里紧随 `spells[slot]` 清零同步清 `boss_ui[slot]`，卡结算后下一卡相位 7
+自动喂前不再残留旧卡 active/spell_id/timer 一帧陈旧值。
+
 ① **脚本读自机资源 syscall（原 G1）**：`PlayerState` 有 lives/bombs/score/graze 全套但无读
 syscall——被符卡机构溶解后从"符卡前置"降为独立小件（bonus 结算引擎付、收卡事件世界产出,
 脚本不再需要轮询资源判 miss）。真做花式收卡条件（如"无擦弹收卡"）时再加一族读号。
-② **boss_ui 结算不清致 ≤1 帧陈旧闪**：卡结算清 `spells[slot]` 但不清 `boss_ui[slot]`,下一
-卡相位7自动喂前 UI 保留旧卡 active/spell_id/timer 一帧（确定性、纯表现;表现层经
-`REQ_SPELL_RESULT` 立刻知真结束）。触发点 = M2 godot 桥真渲染 boss_ui 时，顺手在
-settle_one_spell 清 boss_ui 或按意图记档。
 ③ **ZUN 分段衰减曲线**：v1 线性衰减（begin 时整除定格 dec_per_frame）;真做关卡内容嫌糙再
 升级为 ZUN 分段（快衰段+慢衰段+地板），参数已隔离在 begin 计算,不动 syscall 接口。
 ④ **负 threshold 与 ENEMY_DYING 分支**：syscall 已拒 `threshold<0`（脚本到不了负值）;
@@ -154,22 +163,10 @@ threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy �
 
 ### B18. 四个 HUD 读口 + `register_layer` 拒绝路径仅编译级/静态背书（桥刀终审分诊，2026-07-24）
 
-`hud_boss`/`hud_spell`/`player_pos`/`fields_info` 四个 `bridge.rs` 读口与 `register_layer`
-的坏 `kind`/坏 `RID` 拒绝分支（no-op + 计数），本刀只核对了字段/签名与 stg-core 源码一致
-（编译期类型检查覆盖），`smoke.gd` 冒烟脚本范围内只实际调用了 `hud_player`——没有任何运行期
-断言钉住这四个读口的返回值、也没有真 `MultiMesh` RID 触发过 `register_layer` 的拒绝分支。
-**触发点 = Godot 场景刀真消费这些读口 / 真 `MultiMesh` RID 可得时**：先补判别式断言（dict
-字段值精确匹配互异非零场景，同 CLAUDE.md"圆心重合"纪律——全零/默认值场景测不出错位）与
-层注册拒绝路径（坏 `kind`/坏 `RID` 计数）的运行期回归，再进入正式消费。
-
-
-
-同根增补(终审,2026-07-24):`frame.rs` 编码→register_layer→multimesh 上传路径在 Godot
-冒烟里零运行期覆盖(仅纯 Rust 判别单测盖)——同一触发点一并补运行期回归。
-
-范围勘定(2026-07-25):整局流程刀新增的 `anchors()` 读口**不在**本条余量内——冒烟已有
-运行期判别断言(mid-start 走垫片补偿路径取 `bgm==3`,非默认值场景)。余量仍 = 上列四读口
-+ `register_layer` 拒绝路径 + 编码上传链。
+`hud_spell`/`fields_info` 非默认判别断言被 A5 阻塞（`spell_begin` 不可达 → field 唯一
+生产路径同不可达）；`visible_instances` dummy renderer 恒 0 不可 headless 断言——三项触发点
+= A5 解锁后/场景刀真渲染。其余（四读口其二/`register_layer` 三路/编码上传链回读/
+`LAYER_SHOTS` 判别）已于 2026-07-25 前置债务刀清账。
 
 ### B19. 清弹 builtin——语义空间未定（整局流程刀 spec §8 记档，2026-07-25）
 
@@ -363,13 +360,14 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 
 ### C17. 桥壳四处打磨(桥刀终审分诊,2026-07-24;整局流程刀追一项,2026-07-25)
 
-`bridge.rs`:①`ping()` 测试助手留在生产冻结面(无害欠整洁);②`save_state()` 未开局静默
-返空 PackedByteArray,与 `load_state` 的 warn_once 不对称,GDScript 分不清"空存档/未开局";
-③`hud_boss` 直读 `body.boss_ui`(pub 公告板,非 P1 违反)而 hud_player/hud_spell 走 view()
-——读口不一致,可加 `WorldView::boss_ui()` 统一;④`new_game_at`(bridge.rs)的 loadout 参数是
-`character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dictionary——v1 装备维度少(四件)尚可
-承受,将来若长出更多装备维度(如子机类型/初始道具)时考虑 Dictionary 化。下次动壳时顺手,
-与①②③同批打磨。
+**已还**(2026-07-25 前置债务刀):②`save_state()` 未开局分支已补 `warn_once`(`W_NO_GAME`),
+与 `load_state` 对称,GDScript 侧现可靠 warning 区分"空存档/未开局";③`hud_boss` 已改走
+`g.world.view().boss_ui()`(`WorldView::boss_ui()`),与 `hud_player`/`hud_spell` 读口一致。
+
+`bridge.rs`:①`ping()` 测试助手留在生产冻结面(无害欠整洁);④`new_game_at`(bridge.rs)的
+loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dictionary——v1 装备维度
+少(四件)尚可承受,将来若长出更多装备维度(如子机类型/初始道具)时考虑 Dictionary 化。下次动
+壳时与①一并顺手打磨。
 
 ### C20. 数学核小件三包（2026-07-23 系统审阅分诊）
 
@@ -412,29 +410,6 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 会把新敌人叠在幸存者身上、同时留一个永久空位。**确定且更病态**（两敌重叠更能压碰撞路径），
 诊断场景可接受 —— 但若这个场景被复用到位置敏感的用途，先修这里。
 
-### D6. WorldBody/World 剩余外部写口 —— 任务池整赋值 + 非池 pub 字段（通道 A 终审记档）
-
-通道 A 刀把五池读写全封后，断层线以上还剩两类写口（2026-07-23 whole-branch 终审浮出，均既存、非本刀引入）。
-**外接前收口刀 2/3（2026-07-23）已收 `tasks`（+`TaskPool::new`）/`rng`/`frame`/`events`/`events_len`
-五口** `pub(crate)`，配齐读口 `World::tasks()`/`frame()`/`frame_events()`（`WorldBody` 同名三口，
-`World` 委派）；场界四常量 `FIELD_HALF_W`/`FIELD_HEIGHT`/`OOB_MARGIN`/`ENEMY_OOB_MARGIN` 同刀放行
-`pub`（消费者视角文档，M2/py 观测器用）。
-
-- 实现期发现迁移面探测有漏：`stg-harness` 场景搭建代码（`main.rs`，符卡弹幕扩散角撒随机）
-  存在一处经 `WorldBody.rng` 直读的外部调用点，brief 拟定时漏收（原判"crate 外零读者"）。
-  按同款读口纪律补了 `WorldBody::rand_range(&mut self, n) -> u32`（转发 `Pcg32::rand_range`，
-  只交出一次性抽签结果、不交出 `&Pcg32` 本身，I3"外部不可触"仍成立）——这是 `rng` 唯一的外部
-  转发口，harness 调用点已迁 `b.rand_range(384)`。金向量逐位复核 `BYTE-IDENTICAL`（纯路由改道，
-  行为不变）。
-
-**剩** `globals`/`boss_ui`/`diag`/`last_status` 四字段：`globals`/`boss_ui` 已有 `set_var`/
-`boss_set` 写 API 全覆盖，越权直写只破 P1 纪律（"调用方只走安全 API"），不破确定性/内存安全；
-`diag` 要先补 `diag()` 读口并迁 harness:1073 直读（当前合法读，只是路径未收）；`last_status`
-纯诊断，暂无外部读者。
-**触发点**：M2 建桥第一版 PR 顺手。
-（知会：`TaskPool` 的 `impl Default` 仍可外部构造空池——但 `tasks` 字段已封,无注入路径,
-终审 2026-07-23 判无动作必要,记此防将来误判为漏网。）
-
 ### D7. 池 generation u16 回绕的理论 ABA（2026-07-23 系统审阅新记）
 
 `define_pool!` 的 `generation` 是 u16、`first_free()` 恒取最低空位——池内最热槽必是低索引，
@@ -442,13 +417,9 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 新实体）。全仓现无触发路径（模拟内句柄短命,`Handle::NULL` 哨兵不依赖全零),但 M5 headless
 高频 churn 长跑（RL 训练百万帧级）量级上够得到。**触发点**：M5 开工前过一遍 churn 估算，
 必要时 gen 扩 u32（池账 +2B/槽）或文档写死"外部句柄不得跨 >N 帧持有"。
-
-### D8. hits 溢出的蓝图承诺与实现不符（2026-07-23 系统审阅新记）
-
-`stg-world-design.md` 三处明写"debug 构建 `hits` 溢出直接 panic"（丢一条自机中弹 = 游戏性
-错误,故意比其余溢出严）；实现 `push_hit` debug/release 一致只计数不 panic,且既有测试显式
-断言"不 panic"。另 `HITS_CAP=8192` 按"全弹入擦圈"单自机估,行 1/2 同弹双计 + 双自机可超。
-**触发点**：M2 顺手二选一——补 debug panic 落实蓝图,或改蓝图口径认可计数式降级（过评审）。
+（知会，原 D6 尾注，2026-07-25 前置债务刀随 D6 收口挪存于此：`TaskPool` 的 `impl Default`
+仍可外部构造空池——但 `tasks` 字段已封,无注入路径,终审 2026-07-23 判无动作必要,记此防将来
+误判为漏网。）
 
 
 ---
