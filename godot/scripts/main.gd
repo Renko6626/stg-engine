@@ -74,13 +74,23 @@ func _boot(start: int) -> bool:
 		playfield.update_view(bridge, 0) # 首帧闪位修:免自机在 (0,0) 停一帧才对上真位置
 	return ok
 
-## 双表示规矩:电平追平(开机/读档后一次性对表 hud/bg),含中段开机/读档。
+## 双表示规矩:电平追平(开机/读档后一次性对表 hud/bg),含中段开机/读档。真正不可替代
+## 的场合是 load_state(读档口未建,T7 follow-up)——new_game_at 路径本身也会在随后
+## 经 REQ_BGM/REQ_BG 边沿事件追平,这里只是免去开局瞬间的占位闪烁。
 func _sync_anchors() -> void:
 	var a := bridge.anchors()
 	if a.is_empty():
+		push_error("[stg] anchors 空(未开局?)")
 		return
-	hud.set_bgm_label(ContentTables.BGM_NAMES.get(int(a["bgm"]), "BGM #%d" % int(a["bgm"])))
-	playfield.bg.set_bg(int(a["bg"]))
+	# new_game_at 后锚点字段要到第 2 个 step 帧才被脚本写入,此刻读到的 0 是引擎侧
+	# 默认初值(0 = 保留无效值,render-contract id 分区),不是真实 bgm/bg 号——跳过
+	# 写标签/换色,免打一帧假 "BGM #0"/0 号底色;bg_phase 的 0(=滚动)是合法态,照设。
+	var bgm_id := int(a["bgm"])
+	if bgm_id != 0:
+		hud.set_bgm_label(ContentTables.BGM_NAMES.get(bgm_id, "BGM #%d" % bgm_id))
+	var bg_id := int(a["bg"])
+	if bg_id != 0:
+		playfield.bg.set_bg(bg_id)
 	playfield.bg.set_phase(int(a["bg_phase"]))
 
 func _physics_process(_dt: float) -> void:
@@ -111,7 +121,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 			state = S.PLAYING
 	elif state == S.STAGE_CLEAR and ev.is_action_pressed("stg_shot"):
 		if _boot(0):
+			hud.hide_banner()
 			state = S.PLAYING
+		else:
+			push_error("[stg] 重开失败")
 
 ## ── 冒烟(v0:内置源;T6 换 demo 两次开机)────────────────────────────
 func _run_smoke() -> void:

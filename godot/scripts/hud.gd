@@ -58,6 +58,12 @@ func show_banner(text: String, secs: float) -> void:
 	banner.visible = true
 	_banner_left = secs
 
+## 立即收回横幅(重开等场合用;`show_banner("", 0.0)` 不等价——`_process` 的
+## `_banner_left > 0.0` 判据会跳过 0.0,变成"空文案常显"而非隐藏)。
+func hide_banner() -> void:
+	banner.visible = false
+	_banner_left = 0.0
+
 func set_bgm_label(n: String) -> void:
 	bgm_l.text = "♪ " + n
 
