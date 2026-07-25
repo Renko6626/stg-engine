@@ -134,6 +134,11 @@ pub struct ImageParts {
     pub subs: Vec<SubInit>,
     pub entries: Vec<EntryInit>,
     pub root: Option<u16>,
+    /// 中段启动标记表：`(id, ip)` 对，`id` 是脚本作者写的 `mark(id)` 编号（正整数），`ip` 是
+    /// 该标记在 `code` 里的落点垫片首指令（全局绝对字索引）。调用方（`stg-ecl-compiler` 的
+    /// `ImageBuilder::build`）负责按 `id` 严格升序排好——`try_from_parts` 只校验，不排序
+    /// （整局流程刀 spec §2；Task 6 `new_game_at` 经 [`EclImage::resolve_mark`] 消费）。
+    pub marks: Vec<(i32, u32)>,
     pub content_hash: u64,
 }
 
@@ -178,6 +183,14 @@ pub enum ImageBuildError {
         entry: usize,
         sub: u16,
     },
+    /// `marks` 里存在 `id <= 0`（`mark` 编号契约是正整数，`typeck::validate_marks` 本该
+    /// 在编译期已挡下，这里是运行时镜像契约的第二道防线）。
+    MarkIdNonPositive,
+    /// `marks` 未按 `id` 严格升序排列（含重复 id——`build()` 端的编译期查重理应已挡下，
+    /// 这里同上是契约防线，不是唯一权威判定点）。
+    MarksNotStrictlySorted,
+    /// `marks` 里某条落点 `ip >= code.len()`（垫片首指令必须落在合法指令边界内）。
+    MarkIpOutOfBounds,
     EntryKindMismatch {
         entry: usize,
         kind: SubKind,
@@ -227,6 +240,8 @@ pub struct EclImage {
     entries: Box<[RuntimeEntryMeta]>,
     entry_names: Box<[u8]>,
     root: Option<SubId>,
+    /// 中段启动标记表：按 `id` 严格升序（`try_from_parts` 校验），`resolve_mark` 二分查找。
+    marks: Box<[(i32, u32)]>,
     content_hash: u64,
 }
 
@@ -239,6 +254,7 @@ impl EclImage {
             entries: Box::new([]),
             entry_names: Box::new([]),
             root: None,
+            marks: Box::new([]),
             content_hash: 0,
         }
     }
@@ -260,6 +276,19 @@ impl EclImage {
             return Err(ImageBuildError::CodeTooLong {
                 words: parts.code.len(),
             });
+        }
+
+        // 标记表校验（Task 4；整局流程刀 spec §2）：id 全正 → 严格升序 → 落点在合法指令
+        // 边界内。故意放在"空镜像哨兵"分支之前——空 `code` 时任何非空 `marks` 的落点必然
+        // 越界，让它照常在这里被拒，不必在哨兵分支里另开一条特判。
+        if parts.marks.iter().any(|m| m.0 <= 0) {
+            return Err(ImageBuildError::MarkIdNonPositive);
+        }
+        if parts.marks.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err(ImageBuildError::MarksNotStrictlySorted);
+        }
+        if parts.marks.iter().any(|m| m.1 as usize >= parts.code.len()) {
+            return Err(ImageBuildError::MarkIpOutOfBounds);
         }
 
         if parts.code.is_empty()
@@ -428,6 +457,7 @@ impl EclImage {
                     actual: parts.subs.len(),
                 }
             })?)),
+            marks: parts.marks.into_boxed_slice(),
             content_hash: parts.content_hash,
         })
     }
@@ -475,6 +505,14 @@ impl EclImage {
             image: self,
             id: EntryId(u16::try_from(index).expect("validated entry count fits u16 domain")),
         })
+    }
+
+    /// 中段启动标记表：id → main 内落点(全局绝对字索引)。整局流程刀 spec §2。
+    pub fn resolve_mark(&self, id: i32) -> Option<u32> {
+        self.marks
+            .binary_search_by_key(&id, |m| m.0)
+            .ok()
+            .map(|i| self.marks[i].1)
     }
 
     fn entry_name(&self, entry: RuntimeEntryMeta) -> &str {
@@ -543,6 +581,7 @@ pub(crate) fn test_image(
         subs,
         entries,
         root,
+        marks: vec![],
         content_hash: 0,
     })
     .expect("test image must satisfy the runtime image contract")
@@ -570,6 +609,7 @@ mod tests {
             ],
             entries: vec![EntryInit::new("bullet_task", 0)],
             root: Some(1),
+            marks: vec![],
             content_hash: 0,
         })
         .unwrap();
@@ -606,6 +646,7 @@ mod tests {
             ],
             entries,
             root: Some(2),
+            marks: vec![],
             content_hash: 7,
         }
     }
@@ -663,6 +704,7 @@ mod tests {
                 subs: vec![],
                 entries: vec![],
                 root: None,
+                marks: vec![],
                 content_hash: 0,
             }),
             Ok(EclImage::empty())
@@ -673,6 +715,7 @@ mod tests {
             subs: vec![SubInit::new(0, SubKind::CallOnly, vec![])],
             entries: vec![],
             root: None,
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(nonempty, Err(ImageBuildError::MissingRoot));
@@ -688,6 +731,7 @@ mod tests {
             ],
             entries: vec![],
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(multiple, Err(ImageBuildError::MultipleRoots));
@@ -700,6 +744,7 @@ mod tests {
             ],
             entries: vec![],
             root: Some(1),
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(mismatch, Err(ImageBuildError::RootIndexMismatch));
@@ -709,6 +754,7 @@ mod tests {
             subs: vec![SubInit::new(0, SubKind::Root, vec![EclValueType::Int])],
             entries: vec![],
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(params, Err(ImageBuildError::RootHasParameters));
@@ -724,6 +770,7 @@ mod tests {
             ],
             entries: vec![EntryInit::new("helper", 1)],
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(
@@ -758,6 +805,7 @@ mod tests {
             ],
             entries: vec![],
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(
@@ -783,6 +831,7 @@ mod tests {
             subs,
             entries: vec![],
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(
@@ -801,6 +850,7 @@ mod tests {
             subs: max_subs,
             entries: vec![],
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         })
         .unwrap();
@@ -813,6 +863,7 @@ mod tests {
                 .collect(),
             entries: vec![],
             root: None,
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(
@@ -825,6 +876,7 @@ mod tests {
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: (0..65_537).map(|_| EntryInit::new("x", 0)).collect(),
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(
@@ -850,6 +902,7 @@ mod tests {
             subs,
             entries: vec![],
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         })
         .unwrap();
@@ -867,6 +920,7 @@ mod tests {
             subs: vec![SubInit::new(1, SubKind::Root, vec![])],
             entries: vec![],
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(
@@ -882,6 +936,7 @@ mod tests {
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![EntryInit::new("worker", 1)],
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(
@@ -901,6 +956,7 @@ mod tests {
             ],
             entries: vec![EntryInit::new(name.clone(), 1)],
             root: Some(0),
+            marks: vec![],
             content_hash: 0,
         });
         assert_eq!(
@@ -910,5 +966,44 @@ mod tests {
                 bytes: u16::MAX as usize + 1,
             })
         );
+    }
+
+    // ── Task 4：中段启动标记表 ───────────────────────────────────────────
+
+    fn parts_for_marks(marks: Vec<(i32, u32)>) -> ImageParts {
+        ImageParts {
+            code: vec![0, 0, 0],
+            subs: vec![SubInit::new(0, SubKind::Root, vec![])],
+            entries: vec![],
+            root: Some(0),
+            marks,
+            content_hash: 0,
+        }
+    }
+
+    #[test]
+    fn resolve_mark_finds_registered_ip() {
+        let image = EclImage::try_from_parts(parts_for_marks(vec![(3, 1)]))
+            .expect("单条合法 mark（id=3, ip=1 < code.len()=3）应通过契约校验");
+        assert_eq!(image.resolve_mark(3), Some(1));
+        assert_eq!(image.resolve_mark(4), None, "未注册的 id 不该命中");
+        assert_eq!(image.resolve_mark(0), None, "id=0 非法，自然也查不到");
+    }
+
+    #[test]
+    fn marks_must_be_sorted_and_in_bounds() {
+        let unsorted = EclImage::try_from_parts(parts_for_marks(vec![(5, 0), (3, 0)]));
+        assert_eq!(unsorted, Err(ImageBuildError::MarksNotStrictlySorted));
+
+        let code_len = 3usize;
+        let out_of_bounds =
+            EclImage::try_from_parts(parts_for_marks(vec![(3, code_len as u32 + 10)]));
+        assert_eq!(out_of_bounds, Err(ImageBuildError::MarkIpOutOfBounds));
+    }
+
+    #[test]
+    fn mark_id_must_be_positive() {
+        let result = EclImage::try_from_parts(parts_for_marks(vec![(0, 1)]));
+        assert_eq!(result, Err(ImageBuildError::MarkIdNonPositive));
     }
 }

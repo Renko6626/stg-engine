@@ -118,6 +118,14 @@ pub enum TypedStmt {
     Return,
     Break,
     Continue,
+    /// `mark(id)`/`mark(id) { body }`（整局流程刀 spec §2，Task 4）——`id` 已在 typeck 阶段
+    /// 经 `const_eval::evaluate` 折叠为原始值（不占用 locals 槽，同 `ConstRef` 精神）；
+    /// `body` 是补偿块的判型结果（无补偿块时为空 `Vec`）。`lang::codegen` 的对应臂把它
+    /// 降低为落点垫片：`JMP` 跨过 + 垫片首指令登记进 `EclImage` 标记表。
+    Mark {
+        id: i32,
+        body: Vec<TypedStmt>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

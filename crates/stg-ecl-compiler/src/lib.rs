@@ -100,6 +100,10 @@ pub struct SubBuilder {
     /// `loop_forever` 用它）。
     jump_fixups: Vec<JumpFixup>,
     target_fixups: Vec<TargetFixup>,
+    /// `mark(id)` 落点垫片登记（Task 4；整局流程刀 spec §2.1）：`(id, 本地 code 位置)`——
+    /// `here()` 的语义与 `jump_fixups` 的 `target` 同款"本 sub 本地下标"，`ImageBuilder::build`
+    /// 拼接时同样 `+= base_offset` 得全局绝对 ip，汇总进 `ImageParts.marks`。
+    pub(crate) marks: Vec<(i32, usize)>,
     next_repeat_slot: u8,
     ended: bool,
 }
@@ -116,6 +120,7 @@ impl SubBuilder {
             code: Vec::new(),
             jump_fixups: Vec::new(),
             target_fixups: Vec::new(),
+            marks: Vec::new(),
             next_repeat_slot: (LOCALS - 1) as u8,
             ended: false,
         }
@@ -170,6 +175,16 @@ impl SubBuilder {
             target: 0,
         });
         p
+    }
+
+    /// `mark(id)` 落点垫片降低（Task 4；整局流程刀 spec §2.1）：把**当前位置**登记为 `id`
+    /// 的落点（垫片首指令，紧跟在 `raw_jmp()` 之后调用，见 `lang::codegen` 的
+    /// `TypedStmt::Mark` 臂）——`ImageBuilder::build` 汇总 `base + 本地位置` 得全局绝对 ip，
+    /// 塞 `ImageParts.marks`（Task 6 `resolve_mark` 消费）。id 重复在编译期
+    /// `typeck::validate_marks` 已经拒绝，本方法不重复校验。
+    pub(crate) fn mark_here(&mut self, id: i32) {
+        let h = self.here();
+        self.marks.push((id, h));
     }
 
     /// `wait(e)`（`e` 是任意表达式，不是编译期常量）：调用方已把等待帧数表达式的求值
@@ -819,6 +834,31 @@ impl ImageBuilder {
             }
         }
 
+        // 中段启动标记表汇总（Task 4；整局流程刀 spec §2）：`SubBuilder::mark_here` 登记的
+        // 都是本地（本 sub 自己的 `code`）位置，同 `jump_fixups` 一样 `base + 本地位置` 得
+        // 全局绝对 ip；`id` 重复在编译期 `typeck::validate_marks` 已经拒绝，这里只
+        // `debug_assert`（P4-c：引擎自身 bug 才会撞上，不是正常源码能触发的路径）。
+        let mut marks: Vec<(i32, u32)> = Vec::new();
+        for &decl_index in &order {
+            let base = bases[decl_index];
+            let body = self.subs[decl_index]
+                .body
+                .as_ref()
+                .expect("definitions checked above");
+            for &(id, local_ip) in &body.marks {
+                let absolute = base
+                    .checked_add(local_ip)
+                    .ok_or(ImageBuildError::OperandOverflow)?;
+                let ip = u32::try_from(absolute).map_err(|_| ImageBuildError::OperandOverflow)?;
+                marks.push((id, ip));
+            }
+        }
+        marks.sort_by_key(|m| m.0);
+        debug_assert!(
+            marks.windows(2).all(|pair| pair[0].0 != pair[1].0),
+            "mark id 重复应已在编译期 typeck::validate_marks 挡下"
+        );
+
         let mut subs = Vec::with_capacity(order.len());
         let mut entries = Vec::new();
         let mut root = None;
@@ -840,6 +880,7 @@ impl ImageBuilder {
             subs,
             entries,
             root,
+            marks,
             content_hash,
         })
     }
@@ -1087,6 +1128,7 @@ mod tests {
                 target: usize::MAX,
             }],
             target_fixups: vec![],
+            marks: vec![],
             next_repeat_slot: (LOCALS - 1) as u8,
             ended: true,
         };

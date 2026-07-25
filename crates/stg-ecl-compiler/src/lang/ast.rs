@@ -147,6 +147,16 @@ pub enum Stmt {
     Continue {
         span: Span,
     },
+    /// `mark(<编译期常量 int，>0>);` 或 `mark(<id>) { <补偿块> }`（整局流程刀 spec §2）——
+    /// 仅 `sub main` 顶层语句位合法（`lang::typeck::validate_marks` 校验），降低为落点垫片
+    /// （`lang::codegen` 的 `TypedStmt::Mark` 臂：`JMP` 跨过正常流 / 垫片首指令登记进
+    /// `EclImage` 标记表供 `resolve_mark(id)` 中段启动跳入）。`block` 是可选的补偿块——
+    /// 没有 `{ }` 时是纯落点（`None`），此时 `mark(id);` 后仍需分号（`parse::parse_mark_stmt`）。
+    Mark {
+        id: Expr,
+        block: Option<Block>,
+        span: Span,
+    },
 }
 
 /// 二元运算符（`Binary` 携带的 `op`；具体选哪条 VM 指令是 T2 按类型趟判型后的事，T1 只记

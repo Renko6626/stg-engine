@@ -197,6 +197,9 @@ fn collect_locals(body: &[TypedStmt], out: &mut Vec<String>) {
                 }
             }
             TypedStmt::While { body, .. } | TypedStmt::Loop { body } => collect_locals(body, out),
+            // mark 补偿块与本 sub 其余代码共享同一段静态 locals 区间（同 if/while/for 的
+            // 嵌套块——不是独立作用域），块内声明的 var/for 归纳变量照常递归收集。
+            TypedStmt::Mark { body, .. } => collect_locals(body, out),
             TypedStmt::Assign { .. }
             | TypedStmt::Wait { .. }
             | TypedStmt::Spawn { .. }
@@ -289,6 +292,8 @@ fn stmt_depth(s: &TypedStmt) -> usize {
         // 无返回值：dispatch 之后不残留任何值，不需要 `max(..,1)`。
         TypedStmt::ExprStmtVoid { call } => call_args_depth(&call.args),
         TypedStmt::Return | TypedStmt::Break | TypedStmt::Continue => 0,
+        // id 已在 typeck 折叠为原始值（不发求值指令，见 typed_ast 文档）——峰值只看补偿块。
+        TypedStmt::Mark { body, .. } => body_depth(body),
     }
 }
 

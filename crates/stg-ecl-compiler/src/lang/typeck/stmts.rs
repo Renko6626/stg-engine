@@ -338,6 +338,26 @@ impl<'p> Checker<'p> {
                     None
                 }
             }
+            Stmt::Mark { id, block, .. } => {
+                // 位置/id 合法性（仅 main 顶层、编译期常量、正整数、不重复）由独立趟
+                // `validate_marks` 负责（见 `typeck` 模块入口 `check`）——错误已经/将会
+                // 并入 `c.errors`，本臂不重复诊断，只管求值 + typecheck 补偿块，保证
+                // 无论位置是否合法都能产出一份 `TypedStmt::Mark`（合法性判定失败时整体
+                // `check()` 终归返回 `Err`，这里的产出不会被下游消费）。
+                let id_val = match crate::lang::const_eval::evaluate(id, &self.consts) {
+                    Ok((_ty, v)) => v,
+                    Err(_) => 0,
+                };
+                // 补偿块是否执行取决于运行期入口（正常流跳过 / 中段跳入执行），同
+                // if/while 的"可能不执行"分支一样，块内声明的局部出块后不可见。
+                let visible_before = locals.snapshot();
+                let body = match block {
+                    Some(b) => self.check_block(b, locals, in_loop),
+                    None => Vec::new(),
+                };
+                locals.restore(visible_before);
+                Some(TypedStmt::Mark { id: id_val, body })
+            }
         }
     }
 

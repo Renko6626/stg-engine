@@ -714,6 +714,7 @@ mod tests {
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],
             root: Some(0),
+            marks: vec![],
             content_hash: 0xAAAA_AAAA,
         })
         .unwrap();
@@ -736,6 +737,7 @@ mod tests {
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],
             root: Some(0),
+            marks: vec![],
             content_hash: 0x1234,
         })
         .unwrap();
@@ -773,6 +775,7 @@ mod tests {
             ],
             entries: vec![EntryInit::new("worker", 1)],
             root: Some(0),
+            marks: vec![],
             content_hash,
         })
         .unwrap()

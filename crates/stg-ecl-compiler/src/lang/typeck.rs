@@ -82,7 +82,7 @@
 //!   `xformdef` 名或 `none`），见 `exprs::check_builtin_call_args`。此为有意收窄范围的选择，
 //!   非疏漏，报告中列为 T3 交接注意事项。
 
-use crate::lang::ast::{CompileError, Program, Ty};
+use crate::lang::ast::{Block, CompileError, Program, Span, Stmt, Ty};
 use checker::Checker;
 use std::collections::{BTreeMap, BTreeSet};
 use stg_core::consts::EngineConst;
@@ -145,6 +145,8 @@ pub fn check(
         c.check_const_def(cdef);
     }
 
+    c.errors.extend(validate_marks(prog, &c.consts));
+
     let mut typed_subs = Vec::with_capacity(prog.subs.len());
     for s in &prog.subs {
         typed_subs.push(c.check_sub(s));
@@ -173,6 +175,138 @@ fn eclty_to_ty(t: EclValueType) -> Ty {
         EclValueType::Int => Ty::Int,
         EclValueType::Fx => Ty::Fx,
         EclValueType::Angle => Ty::Angle,
+    }
+}
+
+// ── mark 语句结构校验（Task 4；整局流程刀 spec §2）─────────────────────────────────
+//
+// 独立于 `check_stmt` 的逐语句判型（那里只管求值 id / typecheck 补偿块，见
+// `stmts::check_stmt` 的 `Stmt::Mark` 臂文档）——本趟管三条位置/顺序规则 + id 合法性：
+// 1. `mark` 只能出现在 `main` 顶层（非 main 任意位置、main 内嵌套块位置皆拒）；
+// 2. `main` 顶层的 `var` 声明不得先于 `mark`（任务帧零初始化，中段跳入后局部为 0，先声明
+//    的 var 在跳入路径上不会被正常执行到，语义不自洽）；
+// 3. `id` 必须是编译期常量、正整数、程序内不重复（`const_eval::evaluate` 求值，`consts`
+//    是 `check()` 入口在 sub 登记 + const 折叠之后传入的完整常量表，含引擎常量）。
+//
+// `check()` 入口在 const 折叠之后、`check_sub` 之前调用，错误并入 `c.errors`。
+
+/// mark 语句结构合法性校验：见上方"mark 语句结构校验"小节。
+fn validate_marks(prog: &Program, consts: &BTreeMap<String, (Ty, i32)>) -> Vec<CompileError> {
+    let mut errors = Vec::new();
+
+    // 规则 1（前半）：非 main 的任何 sub，出现在任意深度的 mark 一律拒绝。
+    for sub in &prog.subs {
+        if sub.name == "main" {
+            continue;
+        }
+        let mut found = Vec::new();
+        collect_marks_recursive(&sub.body, &mut found);
+        for span in found {
+            errors.push(mark_err(span, "mark 只能出现在 main 顶层"));
+        }
+    }
+
+    let Some(main) = prog.subs.iter().find(|s| s.name == "main") else {
+        return errors;
+    };
+
+    // 规则 1（后半）+ 2 + 3：main 顶层线性扫描。顶层直接出现的 `Stmt::Mark` 走完整 id
+    // 合法性校验；任何嵌套在 if/while/for/loop 块或 mark 自己补偿块内的 mark 都算"非顶层"
+    // （规则 1 后半），走 `push_nested_mark_errors`。
+    let mut var_seen = false;
+    let mut seen_ids: BTreeMap<i32, Span> = BTreeMap::new();
+    for stmt in &main.body {
+        match stmt {
+            Stmt::Var { .. } => {
+                var_seen = true;
+            }
+            Stmt::Mark { id, block, span } => {
+                if var_seen {
+                    errors.push(mark_err(
+                        *span,
+                        "main 顶层 var 声明不得先于 mark（任务帧零初始化，跳入后局部为 0）",
+                    ));
+                }
+                match crate::lang::const_eval::evaluate(id, consts) {
+                    Ok((_ty, val)) => {
+                        if val <= 0 {
+                            errors.push(mark_err(*span, "mark 编号必须是正整数"));
+                        } else if let std::collections::btree_map::Entry::Vacant(e) =
+                            seen_ids.entry(val)
+                        {
+                            e.insert(*span);
+                        } else {
+                            errors.push(mark_err(*span, format!("mark 编号 {val} 重复")));
+                        }
+                    }
+                    Err(_) => {
+                        errors.push(mark_err(*span, "mark 编号必须是编译期常量"));
+                    }
+                }
+                if let Some(b) = block {
+                    push_nested_mark_errors(b, &mut errors);
+                }
+            }
+            Stmt::If { then_b, else_b, .. } => {
+                push_nested_mark_errors(then_b, &mut errors);
+                if let Some(e) = else_b {
+                    push_nested_mark_errors(e, &mut errors);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::Loop { body, .. } | Stmt::For { body, .. } => {
+                push_nested_mark_errors(body, &mut errors);
+            }
+            _ => {}
+        }
+    }
+
+    errors
+}
+
+/// 递归收集 `block` 内全部 `Stmt::Mark` 的 span（"mark 只能在 main 顶层语句位（不进
+/// if/while/for/loop 块）"错误），逐一并入 `errors`。
+fn push_nested_mark_errors(block: &Block, errors: &mut Vec<CompileError>) {
+    let mut found = Vec::new();
+    collect_marks_recursive(block, &mut found);
+    for span in found {
+        errors.push(mark_err(
+            span,
+            "mark 只能在 main 顶层语句位（不进 if/while/for/loop 块）",
+        ));
+    }
+}
+
+/// 递归收集一段语句序列（含任意深度嵌套块，含 mark 自身补偿块）内全部 `Stmt::Mark` 的
+/// span——供"非 main"与"main 内嵌套"两种"非法位置"扫描共用。
+fn collect_marks_recursive(stmts: &[Stmt], out: &mut Vec<Span>) {
+    for s in stmts {
+        match s {
+            Stmt::Mark { block, span, .. } => {
+                out.push(*span);
+                if let Some(b) = block {
+                    collect_marks_recursive(b, out);
+                }
+            }
+            Stmt::If { then_b, else_b, .. } => {
+                collect_marks_recursive(then_b, out);
+                if let Some(e) = else_b {
+                    collect_marks_recursive(e, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::Loop { body, .. } | Stmt::For { body, .. } => {
+                collect_marks_recursive(body, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn mark_err(span: Span, msg: impl Into<String>) -> CompileError {
+    CompileError {
+        line: span.line,
+        col: span.col,
+        msg: msg.into(),
+        src_line: String::new(),
     }
 }
 

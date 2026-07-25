@@ -375,6 +375,18 @@ impl<'p> Gen<'p> {
                     .continue_fixups
                     .push(p);
             }
+            TypedStmt::Mark { id, body } => {
+                // 落点垫片降低（Task 4；整局流程刀 spec §2.1）：
+                // `JMP after; landing: <Task5 注入><作者块>; after:`——正常流一跳跨过垫片，
+                // 中段启动经 `EclImage::resolve_mark(id)` 直接跳进 `landing` 执行补偿块。
+                let skip = b.raw_jmp();
+                b.mark_here(*id); // 落点 = 垫片首指令（紧跟在 JMP 之后）
+                // Task 5 在此前注入自动补偿（bgm/boss_set 等世界锚点的"最近声明"补齐）；
+                // 本刀只生成作者显式写在补偿块里的语句。
+                self.gen_block(b, loops, slots, sub, body);
+                let after = b.here();
+                b.patch(skip, after);
+            }
         }
     }
 

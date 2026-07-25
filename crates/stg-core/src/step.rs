@@ -2142,6 +2142,7 @@ mod tests {
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],
             root: Some(0),
+            marks: vec![],
             content_hash: crate::tables::TABLES_V0.content_hash,
         })
         .expect("root-only 镜像必须满足运行期镜像契约");

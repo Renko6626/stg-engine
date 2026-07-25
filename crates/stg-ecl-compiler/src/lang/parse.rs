@@ -417,6 +417,15 @@ impl<'s> Parser<'s> {
             {
                 self.parse_wait_spell_stmt()
             }
+            // `mark(...)`——同 `wait_spell` 的语句位前瞻截胡（整局流程刀 spec §2，Task 4）：
+            // 不是关键字，只在"名字恰为 'mark' 且紧跟 '('"时才在这里截胡；guard 落空
+            // （比如作为变量名用在别处，词法层未开专属 token）照常落回下面通用的赋值/
+            // 表达式语句路径，不占关键字位——同 `wait_spell` 一致的"糖不抢词法位"纪律。
+            TokenKind::Ident(ref name)
+                if name == "mark" && self.peek_kind_at(1) == Some(&TokenKind::LParen) =>
+            {
+                self.parse_mark_stmt()
+            }
             TokenKind::Return => {
                 let span = self.current_span();
                 self.advance();
@@ -590,6 +599,26 @@ impl<'s> Parser<'s> {
             span,
         }];
         Ok(Stmt::While { cond, body, span })
+    }
+
+    /// `mark(<id>);` 或 `mark(<id>) { <补偿块> }`（整局流程刀 spec §2，Task 4）：吃
+    /// `mark ( <expr> )`，后随 `{` 则 [`Self::parse_block`] 收补偿块（此时无分号——同
+    /// `if`/`while`/`for` 块收尾惯例），否则期待 `;`（纯落点，无补偿块）。位置/id 合法性
+    /// （仅 main 顶层、编译期常量、正整数、不重复）不在这里查——那是 `lang::typeck`
+    /// 的 `validate_marks` 的职责，语法层只管形状。
+    fn parse_mark_stmt(&mut self) -> Result<Stmt, ()> {
+        let span = self.current_span();
+        self.advance(); // 'mark'（普通 Ident，非关键字）
+        self.expect(TokenKind::LParen, "期待 '('")?;
+        let id = self.parse_top_expr()?;
+        self.expect(TokenKind::RParen, "期待 ')'")?;
+        let block = if *self.peek_kind() == TokenKind::LBrace {
+            Some(self.parse_block())
+        } else {
+            self.expect(TokenKind::Semi, "期待 ';'")?;
+            None
+        };
+        Ok(Stmt::Mark { id, block, span })
     }
 
     fn parse_spawn_stmt(&mut self) -> Result<Stmt, ()> {

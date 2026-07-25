@@ -383,4 +383,87 @@ mod tests {
         assert_ne!(img.content_hash(), 0, "绑定 TABLES_V0（LIVE hash）");
         assert_eq!(img.content_hash(), stg_core::tables::TABLES_V0.content_hash);
     }
+
+    // ── Task 4：`mark` 语句 + EclImage 标记表 ─────────────────────────────
+
+    #[test]
+    fn mark_compiles_in_main_top_level() {
+        let img = compile(
+            "const M: int = 3;\nsub main() { wait(1); mark(M); wait(1); }",
+            "m.ecl",
+        )
+        .expect("合法 mark");
+        assert!(img.resolve_mark(3).is_some());
+    }
+
+    #[test]
+    fn mark_with_block_compiles() {
+        compile("sub main() { mark(1) { bgm(2); } wait(1); }", "m.ecl").expect("带补偿块");
+    }
+
+    #[test]
+    fn mark_outside_main_rejected() {
+        let e = expect_compile_err("sub main() { s(); }\nsub s() { mark(1); }", "m.ecl");
+        assert!(
+            e.iter()
+                .any(|e| e.msg.contains("mark") && e.msg.contains("main"))
+        );
+    }
+
+    #[test]
+    fn mark_nested_in_block_rejected() {
+        let e = expect_compile_err("sub main() { if (1) { mark(1); } }", "m.ecl");
+        assert!(e.iter().any(|e| e.msg.contains("顶层")));
+    }
+
+    #[test]
+    fn mark_id_zero_or_dup_or_nonconst_rejected() {
+        assert!(
+            expect_compile_err("sub main() { mark(0); }", "m.ecl")
+                .iter()
+                .any(|e| e.msg.contains("正整数"))
+        );
+        assert!(
+            expect_compile_err("sub main() { mark(1); wait(1); mark(1); }", "m.ecl")
+                .iter()
+                .any(|e| e.msg.contains("重复"))
+        );
+        assert!(
+            expect_compile_err("sub main() { var x: int = 1; mark(x); }", "m.ecl")
+                .iter()
+                .any(|e| e.msg.contains("常量"))
+        );
+    }
+
+    #[test]
+    fn var_before_mark_rejected() {
+        let e = expect_compile_err("sub main() { var x: int = 1; mark(2); }", "m.ecl");
+        assert!(
+            e.iter()
+                .any(|e| e.msg.contains("var") && e.msg.contains("mark"))
+        );
+    }
+
+    /// 字节码形状断言（简报 Step 3）：`resolve_mark` 落点前一条指令是 `OP_JMP` 且目标 > 落点
+    /// ——正常流一跳跨过垫片，不落入补偿块。端到端（真正跑 `World`/`step` 观察正常流不执行
+    /// 补偿块副作用）版本归 Task 6（`new_game_at` 消费 `resolve_mark` 之后才有意义）。
+    #[test]
+    fn normal_flow_skips_landing_pad() {
+        use stg_core::ecl::ops::OP_JMP;
+        let img =
+            compile("sub main() { mark(9) { bgm(9); } wait(1); }", "m.ecl").expect("合法 mark");
+        let ip = img.resolve_mark(9).expect("mark(9) 应已注册落点") as usize;
+        // `JMP` 是 2 字指令（操作码 + 目标操作数）：落点前紧邻的两个字必须恰是这条 JMP。
+        assert!(ip >= 2, "落点前必须还有至少两个字（JMP 操作码 + 操作数）");
+        assert_eq!(
+            img.code()[ip - 2],
+            OP_JMP as u32,
+            "落点前一条指令必须是 OP_JMP（正常流跨过垫片）"
+        );
+        let jmp_target = img.code()[ip - 1] as usize; // JMP 的操作数字（已回填为绝对目标）
+        assert!(
+            jmp_target > ip,
+            "JMP 目标必须严格晚于落点（正常流跳过整段垫片，不落进补偿块）"
+        );
+    }
 }
