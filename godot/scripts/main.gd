@@ -6,6 +6,7 @@ enum S { PLAYING, PAUSED, STAGE_CLEAR }
 var state: int = S.PLAYING
 var bridge: WorldBridge
 var stg_input: StgInput
+var playfield: Playfield
 var smoke := false
 
 const SMOKE_SRC := "sub main() { bgm(3); loop { wait(60); } }"
@@ -16,6 +17,8 @@ func _ready() -> void:
 	add_child(bridge)
 	stg_input = StgInput.new()
 	add_child(stg_input)
+	playfield = Playfield.new()
+	add_child(playfield)
 	if smoke:
 		_run_smoke() # async,自行 quit
 	else:
@@ -43,6 +46,8 @@ func _boot(start: int) -> bool:
 	var ok := bridge.new_game_at(names, sources, 1, 2, start, 0, 0, 3, 3)
 	if ok:
 		_sync_anchors() # 双表示规矩:开机后一次性对电平(T5 实装演出)
+		if not playfield.setup(bridge):
+			return false
 	return ok
 
 func _sync_anchors() -> void:
@@ -56,9 +61,9 @@ func _physics_process(_dt: float) -> void:
 	bridge.step_frame(stg_input.mask())
 	_after_step()
 
-## T4(渲染)/T5(分发器 HUD)在此挂逐帧消费;T3 空置。
+## T5(分发器 HUD)续挂在此。
 func _after_step() -> void:
-	pass
+	playfield.update_view(bridge)
 
 func _unhandled_input(ev: InputEvent) -> void:
 	if ev.is_action_pressed("ui_cancel"):
@@ -85,6 +90,9 @@ func _run_smoke() -> void:
 	fails += _chk(bridge.frame() >= 60, "frame>=60, got %d" % bridge.frame())
 	fails += _chk(bridge.checksum() != 0, "checksum!=0")
 	fails += _chk(int(bridge.anchors().get("bgm", -1)) == 3, "anchors.bgm==3")
+	var mm: MultiMesh = playfield.layer_nodes[WorldBridge.LAYER_BULLETS].multimesh
+	var buf := RenderingServer.multimesh_get_buffer(mm.get_rid())
+	fails += _chk(buf.size() == 8192 * 12, "bullets 缓冲尺寸")
 	if fails == 0:
 		print("SMOKE OK")
 	get_tree().quit(0 if fails == 0 else 1)
