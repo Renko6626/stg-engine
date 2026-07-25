@@ -10,6 +10,7 @@ use crate::frame::{self, FLOATS_PER_INSTANCE, LAYER_COUNT};
 /// 去重日志位(warned 位集)。
 const W_NO_GAME: u32 = 1 << 0;
 const W_BAD_LAYER: u32 = 1 << 1;
+const W_BAD_MM: u32 = 1 << 2;
 
 #[derive(GodotClass)]
 #[class(base=Node)]
@@ -165,6 +166,13 @@ impl WorldBridge {
         }
     }
 
+    /// 校验判据(T5 冻结面行为微调,记文档):`multimesh_get_buffer(rid).len() ==
+    /// cap × FLOATS_PER_INSTANCE`,不用 `multimesh_get_instance_count`。理由(实验判决 +
+    /// 生产语义双赢):①headless dummy renderer 下 `instance_count` 恒 0(2026-07-25 实验
+    /// 判决),合法注册永远被拒、上传链无法冒烟;buffer 尺寸判据在冒烟侧可用 `set_buffer`
+    /// 播种定长零缓冲过闸。②`instance_count` 判不出格式错位(3D 格式 multimesh 数量对但
+    /// stride 全错仍会放行);buffer 尺寸直接锁死壳依赖的 12 float/实例 stride,比旧判据
+    /// 更严而非更松。③`get_buffer` 在真渲染器上是一次性注册期读回,成本可忽略。
     #[func]
     fn register_layer(&mut self, kind: i64, multimesh_rid: Rid) -> bool {
         let layer = kind as usize;
@@ -174,9 +182,13 @@ impl WorldBridge {
         }
         let cap = frame::layer_cap(layer);
         let rs = RenderingServer::singleton();
-        let got = rs.multimesh_get_instance_count(multimesh_rid);
-        if got as usize != cap {
-            godot_error!("[stg] register_layer:层 {layer} 需 instance_count=={cap},实际 {got}");
+        let got = rs.multimesh_get_buffer(multimesh_rid).len();
+        let need = cap * FLOATS_PER_INSTANCE;
+        if got != need {
+            self.warn_once(
+                W_BAD_MM,
+                "register_layer:multimesh 缓冲尺寸不符(需 cap×12,含坏 RID/未播种;headless 下须先 set_buffer 播种),no-op",
+            );
             return false;
         }
         self.bufs[layer] = vec![0.0; cap * FLOATS_PER_INSTANCE];
@@ -207,10 +219,13 @@ impl WorldBridge {
     }
 
     #[func]
-    fn save_state(&self) -> PackedByteArray {
+    fn save_state(&mut self) -> PackedByteArray {
         match self.game.as_ref() {
             Some(g) => PackedByteArray::from(crate::save::save(g).as_slice()),
-            None => PackedByteArray::new(),
+            None => {
+                self.warn_once(W_NO_GAME, "save_state:尚未 new_game,返回空");
+                PackedByteArray::new()
+            }
         }
     }
 

@@ -210,4 +210,39 @@ sub main() {
             0
         );
     }
+
+    // 圆心重合纪律缺口补位(task-3-brief.md Step 3;CLAUDE.md M0-7 教训的同类变种——
+    // `empty_layer_returns_zero` 只钉了 shots 层空池 `n==0`,判不出 ox/oy/xx 编码错位,
+    // 圆心(全零)测试对坐标映射是瞎的)。持住 `BTN_SHOT` 让角色0 tier0 单发发射器
+    // (`tables.rs` `BASE_SHOOTER`:`interval=4,delay=0`)在**首帧**即命中(`shot_timer`
+    // 出生即 0,"先判后加"语义——见 player.rs `char0_update_shot` doc),拿池内真值与
+    // 编码输出逐字段对拍(非空 + 坐标一致 + 无旋转)。
+    #[test]
+    fn shots_layer_nonempty_matches_pool() {
+        let mut g = crate::boot::boot("sub main() { }", 7, 2).expect("boot");
+        let mut input = stg_core::input::InputFrame::empty(g.world.frame());
+        input.actions[0].buttons = stg_core::input::BTN_SHOT;
+        for _ in 0..4 {
+            input.frame = g.world.frame();
+            stg_core::step::step_with_director(&mut g.world, g.tables, &g.image, &input, |_| {});
+        }
+
+        let p = g.world.view().shots();
+        let first = p
+            .iter_alive()
+            .next()
+            .expect("BTN_SHOT 持住 4 帧后 shots 池应非空(tier0 delay=0,首帧即发)");
+        let (xs, ys) = (p.x(), p.y());
+        let (expect_x, expect_y) = (fx_f32(xs[first]), fx_f32(ys[first]));
+
+        let mut out = vec![0.0f32; layer_cap(LAYER_SHOTS) * FLOATS_PER_INSTANCE];
+        let n = encode_layer(g.world.view(), g.tables, LAYER_SHOTS, &mut out);
+        assert!(n > 0, "shots 层应非空");
+        assert_eq!(
+            out[0], 1.0,
+            "shots 层 xx 恒 1.0(write_instance 固定传 cos=1.0/sin=0.0,无旋转)"
+        );
+        assert_eq!(out[3], expect_x, "实例0 ox 应与池内首活自机弹坐标一致");
+        assert_eq!(out[7], expect_y, "实例0 oy 应与池内首活自机弹坐标一致");
+    }
 }
