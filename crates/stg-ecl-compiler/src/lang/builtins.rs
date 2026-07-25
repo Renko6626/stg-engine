@@ -381,6 +381,43 @@ const BUILTINS: &[Builtin] = &[
         doc: "当前卡剩余帧数",
         param_names: &[],
     },
+    // ── 表现锚点四字段（syscall 5x；整局流程刀 Task 2/3）─────────────────────
+    Builtin {
+        name: "add_score",
+        syscall: syscall::SYS_ADD_SCORE,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: None,
+        doc: "给自机记分:delta 允许负(扣分),饱和钳 [0,u64::MAX] 不回绕;关底 bonus/结算记账用",
+        param_names: &["delta"],
+    },
+    Builtin {
+        name: "bgm",
+        syscall: syscall::SYS_BGM,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: None,
+        doc: "声明当前 BGM:写世界锚点字段 bgm_id 并发 REQ_BGM;mark 跳入自动补偿最近声明(常量参)",
+        param_names: &["id"],
+    },
+    Builtin {
+        name: "bg",
+        syscall: syscall::SYS_BG,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: None,
+        doc: "声明当前背景:写锚点 bg_id 并发 REQ_BG;换背景隐含新的 phase 纪元(补偿细则见 ecl-lang)",
+        param_names: &["id"],
+    },
+    Builtin {
+        name: "bg_phase",
+        syscall: syscall::SYS_BG_PHASE,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: None,
+        doc: "声明背景演出段号:写 bg_phase 并自动盖 bg_phase_frame=当前帧,发 REQ_BG_PHASE;表现层按段内局部时间 seek",
+        param_names: &["phase"],
+    },
 ];
 
 /// 按名字查内建函数（线性扫描；表 <30 项，`lang::typeck` 每次 `Call` 判型调用一次）。
@@ -464,6 +501,10 @@ mod tests {
             "spell_begin",
             "spell_end",
             "spell_timer",
+            "add_score",
+            "bgm",
+            "bg",
+            "bg_phase",
         ];
         for n in names {
             assert!(lookup(n).is_some(), "内建函数 '{n}' 应在表中");
@@ -526,6 +567,10 @@ mod tests {
             "aim_at_player",
             "spell_begin",
             "spell_end",
+            "add_score",
+            "bgm",
+            "bg",
+            "bg_phase",
         ] {
             assert_eq!(lookup(n).unwrap().ret, None, "'{n}' 应无返回值");
         }

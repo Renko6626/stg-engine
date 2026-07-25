@@ -1307,6 +1307,37 @@ sub main() {
         );
     }
 
+    /// 端到端判别:四条表现锚点 builtin(add_score/bgm/bg/bg_phase)经编译→VM 执行,
+    /// 真落到 world 锚点字段(见 `world.rs` 的 `set_bgm`/`set_bg`/`set_bg_phase`/
+    /// `SYS_ADD_SCORE`)——不是"编译通过就算数",是读回字段值判别式。
+    #[test]
+    fn anchor_builtins_write_fields_and_reqs_via_script() {
+        const SRC: &str = r#"
+sub main() {
+    bgm(5);
+    bg(2);
+    bg_phase(1);
+    add_score(1000);
+    add_score(-2000);
+    loop { wait(60); }
+}
+"#;
+        let image = stg_ecl_compiler::lang::compile(SRC, "anchors.ecl").expect("编译");
+        let mut w = stg_core::step::World::new_game(7, 2, &image).expect("boot");
+        let t = &stg_core::tables::TABLES_V0;
+        // `InputFrame` 无 `Default`(见 input.rs);`frame` 字段不参与译码(decode_input
+        // 只读 `actions`),`empty(0)` 与 spec 草稿的 `default()` 等价(机械调整许可)。
+        let input = stg_core::input::InputFrame::empty(0);
+        stg_core::step::step(&mut w, t, &image, &input); // 出生帧不跑(born_frame 门禁)
+        stg_core::step::step(&mut w, t, &image, &input); // 次帧首跑:main 实际执行
+        let v = w.body.view();
+        assert_eq!(v.bgm_id(), 5);
+        assert_eq!(v.bg_id(), 2);
+        assert_eq!(v.bg_phase(), 1);
+        assert_eq!(v.bg_phase_frame(), 1, "phase 帧戳 = 声明发生帧");
+        assert_eq!(v.players()[0].score, 0, "1000-2000 饱和钳 0");
+    }
+
     /// check 三路退码:OK=0 / 编译错=1(带行列) / 文件缺失=2。
     #[test]
     fn check_exit_codes_three_ways() {

@@ -26,6 +26,10 @@
     {"name": "aim_at_player", "signature": "aim_at_player(handle: int, offset: angle)", "ret": null, "doc": "弹 setter:指向自机方向再加 offset 偏移角;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定", "params": [{"name": "handle", "ty": "int"}, {"name": "offset", "ty": "angle"}]},
     {"name": "spell_begin", "signature": "spell_begin(slot: int, spell_id: int, pattern: sub|none, time_limit: int, bonus0: int, flags: int, hp_threshold: int)", "ret": null, "doc": "开卡:绑 boss/血线/计时/计分,spawn pattern 为卡绑定模式任务(随卡生死)", "params": [{"name": "slot", "ty": "int"}, {"name": "spell_id", "ty": "int"}, {"name": "pattern", "ty": "sub|none"}, {"name": "time_limit", "ty": "int"}, {"name": "bonus0", "ty": "int"}, {"name": "flags", "ty": "int"}, {"name": "hp_threshold", "ty": "int"}]},
     {"name": "spell_end", "signature": "spell_end()", "ret": null, "doc": "手动收卡(取卡按血线自动判,通常不需要)", "params": []},
-    {"name": "spell_timer", "signature": "spell_timer() -> int", "ret": "int", "doc": "当前卡剩余帧数", "params": []}
+    {"name": "spell_timer", "signature": "spell_timer() -> int", "ret": "int", "doc": "当前卡剩余帧数", "params": []},
+    {"name": "add_score", "signature": "add_score(delta: int)", "ret": null, "doc": "给自机记分:delta 允许负(扣分),饱和钳 [0,u64::MAX] 不回绕;关底 bonus/结算记账用", "params": [{"name": "delta", "ty": "int"}]},
+    {"name": "bgm", "signature": "bgm(id: int)", "ret": null, "doc": "声明当前 BGM:写世界锚点字段 bgm_id 并发 REQ_BGM;mark 跳入自动补偿最近声明(常量参)", "params": [{"name": "id", "ty": "int"}]},
+    {"name": "bg", "signature": "bg(id: int)", "ret": null, "doc": "声明当前背景:写锚点 bg_id 并发 REQ_BG;换背景隐含新的 phase 纪元(补偿细则见 ecl-lang)", "params": [{"name": "id", "ty": "int"}]},
+    {"name": "bg_phase", "signature": "bg_phase(phase: int)", "ret": null, "doc": "声明背景演出段号:写 bg_phase 并自动盖 bg_phase_frame=当前帧,发 REQ_BG_PHASE;表现层按段内局部时间 seek", "params": [{"name": "phase", "ty": "int"}]}
   ]
 }
