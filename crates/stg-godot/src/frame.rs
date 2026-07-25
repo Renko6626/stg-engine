@@ -171,7 +171,10 @@ sub main() {
         let n = encode_layer(g.world.view(), g.tables, LAYER_ENEMIES, &mut out);
         assert_eq!(n, 1);
         assert_eq!(&out[0..8], &[1.0, -0.0, 0.0, -96.0, 0.0, 1.0, 0.0, -64.0]);
-        assert_eq!(out[8], 0.0, "spawn_enemy sprite 固定 0");
+        assert_eq!(
+            out[8], 0.0,
+            "本调用 spawn_enemy 的 sprite 参传 0（A5 后 sprite 可传参，非恒 0）"
+        );
     }
 
     #[test]

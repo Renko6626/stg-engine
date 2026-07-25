@@ -298,16 +298,18 @@ impl<'p> Checker<'p> {
                     Some(t) => out.push(CallArg::Val(t)),
                     None => ok = false,
                 },
-                ParamKind::XformRef => match self.resolve_ident_ref(a, span, RefKind::Xform) {
-                    Some(r) => {
-                        if let Some(n) = &r {
-                            self.push_xform_ref(n.clone());
+                ParamKind::XformRef => {
+                    match self.resolve_ident_ref(a, span, RefKind::Xform, b.name) {
+                        Some(r) => {
+                            if let Some(n) = &r {
+                                self.push_xform_ref(n.clone());
+                            }
+                            out.push(CallArg::XformRef(r));
                         }
-                        out.push(CallArg::XformRef(r));
+                        None => ok = false,
                     }
-                    None => ok = false,
-                },
-                ParamKind::SubRef => match self.resolve_ident_ref(a, span, RefKind::Sub) {
+                }
+                ParamKind::SubRef => match self.resolve_ident_ref(a, span, RefKind::Sub, b.name) {
                     Some(r) => out.push(CallArg::SubRef(r)),
                     None => ok = false,
                 },
@@ -321,6 +323,7 @@ impl<'p> Checker<'p> {
         a: &Expr,
         call_span: Span,
         kind: RefKind,
+        builtin_name: &str,
     ) -> Option<Option<String>> {
         match a {
             Expr::Var(name, vspan) => {
@@ -333,24 +336,29 @@ impl<'p> Checker<'p> {
                 };
                 if known {
                     // fire 的 task 引用与 spawn 同途（新任务根 + 实参基址 0），
-                    // 同样只许 async sub（分离规则第三腿）。
+                    // 同样只许 async sub（分离规则第三腿）——`spawn_enemy`/`spell_begin`
+                    // 的 task/pattern 位走同一通道，报错文案按实际调用的 builtin 名报，
+                    // 不硬写 "fire"（task-1 复审 Minor-3）。
                     if let (RefKind::Sub, Some(sub)) = (kind, self.subs.get(name).copied()) {
                         if !sub.is_async {
                             self.err(
                                 *vspan,
-                                format!("'{name}' 用作 fire 的 task 引用必须声明为 async sub"),
+                                format!(
+                                    "'{name}' 用作 {builtin_name} 的 task 引用必须声明为 async sub"
+                                ),
                             );
                             return None;
                         }
                         // 分离规则第四腿（M1.9 终审 Critical）：fire 的派生走 syscall 内部
                         // spawn，**不带实参**——带参 async sub 在此通道参数恒读零（T2 那颗
-                        // 实参错位 Critical 的孪生路径）。语言层拒绝：fire task 引用必须无参。
+                        // 实参错位 Critical 的孪生路径）。语言层拒绝：task 引用必须无参
+                        // （同一约束适用于 fire/spawn_enemy/spell_begin 等全部 SubRef 位）。
                         if !sub.params.is_empty() {
                             self.err(
                                 *vspan,
                                 format!(
-                                    "'{name}' 用作 fire 的 task 引用必须是无参 async sub\
-                                     （fire 派生不带实参——需要传参请用 spawn）"
+                                    "'{name}' 用作 {builtin_name} 的 task 引用必须是无参 async sub\
+                                     （派生不带实参——需要传参请用 spawn）"
                                 ),
                             );
                             return None;

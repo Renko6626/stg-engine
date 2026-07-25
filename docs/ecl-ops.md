@@ -94,9 +94,10 @@
   `age==1`（不是 0），见"作者须知" |
 | 10 | `self_hp_max`（M1.5） | — | owner 敌 `hp_max`（非敌读 0，同 `self_hp` 误用策略） |
 | 11 | `spell_timer`（符卡机构，见下方"符卡计器"） | — | owner 绑定槽 `frames_left`；owner 非敌或无绑定槽 → **-1**（`wait_spell` 糖的判据） |
+| 12 | `enemy_hp`（A5 补遗） | handle | 活敌 `hp`；死/悬垂/越界句柄 → **-1**（P4-b，不比对 generation，不 Fault——stage 编排等 boss 死的轮询原语） |
 | 20 | `create_bullet` | appearance,x,y,speed,angle,xform_off,xform_cnt,task_sub | 弹句柄或 -1 |
 | 21 | `create_bullets_batch` | appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step | 实发数 |
-| 22 | `spawn_enemy` | x,y,hp,drop_table,score | 敌句柄或 -1 |
+| 22 | `spawn_enemy` | x,y,hp,drop_table,score,sprite,task_sub | 敌句柄或 -1（A5 乙案：`task_sub` 同 20 号 `create_bullet` 同款 canonical `SubId`/-1=none；`task_sub>=0` 时必须指向零参数 `Async` sub，绑定层派子任务，owner=新敌） |
 | 23 | `drop_item` | x,y,item_type | 道具句柄或 -1 |
 | 24 | `move_enemy_to` | **dur,x,y,easing** | —（owner 须为敌，否则 Fault；参数序以 syscall.rs 为准，勿凭直觉写 x,y 在前） |
 | 25 | `boss_set` | slot,hp_ratio,spell_id,timer,phase_left,active | —（enemy 字段写 NULL，见 boss_ui 契约） |

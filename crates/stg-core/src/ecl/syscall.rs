@@ -1630,9 +1630,13 @@ mod tests {
     fn enemy_hp_reads_alive_and_rejects_dead() {
         let (mut w, ecl) = fresh();
         let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 77);
+        // `test_support::spawn_enemy` 令 hp==hp_max==77——单独把 hp_max 拉开，逐位命中排除
+        // "读混 hp/hp_max 两个同族字段"的变异（同 `sys_self_hp_max_dispatch_by_owner_kind`
+        // 先例：hp_max=9999 排除读混字段）。
+        w.body.enemies.hp_max[eh.index as usize] = 9999;
         let mut task = Task::default();
         assert!(call(&mut w, &ecl, &mut task, SYS_ENEMY_HP, &[eh.index as i32]).is_ok());
-        assert_eq!(task.stack[0], 77, "活敌返当前 hp（判别值）");
+        assert_eq!(task.stack[0], 77, "活敌返当前 hp（判别值，非 hp_max）");
 
         w.body.enemies.free(eh);
         task.sp = 0;

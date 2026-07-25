@@ -558,6 +558,40 @@ mod tests {
         assert!(!b.is_op);
     }
 
+    /// A5 乙案（task-1 复审 Important-3）：`spawn_enemy` 7 位形状——`sprite` 在第 6 位
+    /// （`Val(Int)`，求值参），`task` 在第 7 位（`Sub`，`SubRef` 同 `fire` 第 7 参同构）；
+    /// 防 params 表两位对调静默错位（沿用 `fire_signature_matches_plan_shape` 先例）。
+    #[test]
+    fn spawn_enemy_signature_matches_plan_shape() {
+        let b = lookup("spawn_enemy").expect("spawn_enemy 应在表中");
+        assert_eq!(
+            b.params,
+            &[
+                Val(Fx),
+                Val(Fx),
+                Val(Int),
+                Val(Int),
+                Val(Int),
+                Val(Int),
+                Sub
+            ],
+            "spawn_enemy 第 6 位应为 sprite:Val(Int)，第 7 位应为 task:SubRef"
+        );
+        assert_eq!(b.ret, Some(Int));
+        assert_eq!(b.syscall, syscall::SYS_SPAWN_ENEMY);
+        assert!(!b.is_op);
+    }
+
+    /// A5 补遗（task-1 复审 Important-3）：`enemy_hp` 单参 `handle:int`，返 `int`。
+    #[test]
+    fn enemy_hp_signature_matches_plan_shape() {
+        let b = lookup("enemy_hp").expect("enemy_hp 应在表中");
+        assert_eq!(b.params, &[Val(Int)]);
+        assert_eq!(b.ret, Some(Int));
+        assert_eq!(b.syscall, syscall::SYS_ENEMY_HP);
+        assert!(!b.is_op);
+    }
+
     #[test]
     fn sin_cos_dispatch_via_raw_vm_op_not_syscall() {
         let sin = lookup("sin").unwrap();
