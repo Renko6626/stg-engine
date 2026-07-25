@@ -230,6 +230,35 @@ mark(2);`（`sub common() { bgm(9); }`）。`visited` 在第一次遇到 `common
 `rc`/`grep -q "SMOKE OK"` 判定。**触发点 = 下一次动 smoke 脚本时顺手**（非阻塞：本刀所有
 冒烟断言均已由终审独立跑红/跑绿实证过）。
 
+### B23. `layer.gdshader` 图集选格 UV 垂直朝向嫌疑——占位图元对称，暂不可判（渲染链刀 T4 复审 Important，2026-07-26）
+
+审阅者本机（无 GPU/无 X）用 `QuadMesh(32,32).get_mesh_arrays()` 静态读出顶点/UV 配对：
+`v=(16,-16) uv=(1,1)` 与 `v=(16,16) uv=(1,0)`（Godot 2D 里 y 向下，顶点 y=+16 是屏幕下方）。
+若这组配对在真渲染管线里如实生效，`layer.gdshader::fragment()` 的
+`uv = (cell + UV) / vec2(grid_cols, grid_rows)` 会把每个格**上下镜像**贴到 quad 上——
+UV.y=0（贴图该格顶行）贴到 quad 下沿（y=+16），UV.y=1（该格底行）贴到 quad 上沿（y=-16）。
+当前占位图集（`tools/gen_atlas.gd`）画的全是上下对称图元（圆/菱形/竖直椭圆/居中方块），
+真镜像了也肉眼看不出——**无法用现有占位资源判别**；自机走独立 `Sprite2D`（`playfield.gd`
+`_make_player`），不经这条 shader，同样绕不开这个问题域。换真美术、格内图案一旦上下不对称
+（比如带朝向的弹幕图元）就会暴露：自机正常、弹/敌/道具全上下镜像。
+
+**不盲修的理由**：本机无 GPU/无 X（`xdpyinfo` 探测失败），`QuadMesh.get_mesh_arrays()` 是
+CPU 侧网格数据，不代表 GPU 光栅化管线的最终采样结果（NDC/视口变换/`CanvasItem` 自身坐标系
+翻转等中间环节可能已经把这次"镜像"抵消）——没有真渲染器出图对照，盲改等于拿猜测覆盖猜测，
+可能把不存在的问题"修"出真问题。
+
+**判决程序**（留给首个有 GPU/X 的环境）：往 `gen_atlas.gd` 临时加一张上下不对称的测试格
+（例如上半格纯红、下半格纯蓝），塞进某一层图集第 0 格，有头跑
+`godot --path godot`，肉眼看落地画面该格是"上红下蓝"（未镜像）还是"上蓝下红"（镜像）。
+
+**候选修法**（若判决确认镜像，一行改 `layer.gdshader::fragment()`）：
+
+```glsl
+vec2 uv = (cell + vec2(UV.x, 1.0 - UV.y)) / vec2(grid_cols, grid_rows);
+```
+
+确认后同步在 `docs/render-contract.md` §3 补一条 UV 朝向约定（记录判决结果 + 该行改法）。
+
 ## C. 代码整洁（低优先，都是两可）
 
 ### C1. `world/settle.rs:84,95` —— 两 arm 的门禁 2 行逐字重复

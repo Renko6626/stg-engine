@@ -48,6 +48,7 @@ func _boot(start: int) -> bool:
 		_sync_anchors() # 双表示规矩:开机后一次性对电平(T5 实装演出)
 		if not playfield.setup(bridge):
 			return false
+		playfield.update_view(bridge, 0) # 首帧闪位修:免自机在 (0,0) 停一帧才对上真位置
 	return ok
 
 func _sync_anchors() -> void:
@@ -58,12 +59,13 @@ func _sync_anchors() -> void:
 func _physics_process(_dt: float) -> void:
 	if state != S.PLAYING:
 		return
-	bridge.step_frame(stg_input.mask())
-	_after_step()
+	var buttons := stg_input.mask() # 算一次,step_frame/update_view 共用(避免帧内读两次输入分叉)
+	bridge.step_frame(buttons)
+	_after_step(buttons)
 
 ## T5(分发器 HUD)续挂在此。
-func _after_step() -> void:
-	playfield.update_view(bridge)
+func _after_step(buttons: int) -> void:
+	playfield.update_view(bridge, buttons)
 
 func _unhandled_input(ev: InputEvent) -> void:
 	if ev.is_action_pressed("ui_cancel"):

@@ -15,5 +15,5 @@ void vertex() {
 
 void fragment() {
 	vec2 uv = (cell + UV) / vec2(grid_cols, grid_rows);
-	COLOR = texture(TEXTURE, uv);
+	COLOR = texture(TEXTURE, uv) * COLOR; // 乘回 vertex/modulate 色(custom.y/z/w 将来接 alpha 可组合)
 }

@@ -24,6 +24,10 @@ sprite 号 = 格号（行优先）；越界号 mod 回卷。QuadMesh 尺寸 = ce
 自机 assets/player.png（32×32 单图）/判定点 assets/hitbox.png（16×16）。
 换真美术：只换 PNG（同网格），契约与代码零改动；要变网格，改本表 + playfield.gd 常量即可。
 
+**UV 垂直朝向存疑，待 GPU 判决**（`docs/follow-ups.md` B23）：`layer.gdshader` 图集选格是否
+上下镜像贴图尚未在真渲染器上验证（本机无 GPU/无 X）；判决前占位图元（圆/菱形/方块等）全
+上下对称，无观感差异，不阻塞本刀。换上下不对称的真美术前必须先跑 B23 的判决程序。
+
 **sprite 号截断/回卷语义（跨层唯一权威）**：syscall 侧 `sprite` 参在入池前做
 `sprite as u16` 截断——只取低 16 位，脚本传入的越界值（负数或 > 65535）在核心层就已经静默
 折叠成某个 `u16`，池内 `sprite` 字段本身即为 `u16`（`enemy.rs`/`bullets.rs` 等同款）。核心层

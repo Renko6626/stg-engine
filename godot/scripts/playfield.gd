@@ -92,6 +92,6 @@ func setup(bridge: WorldBridge) -> bool:
 			ok = false
 	return ok
 
-func update_view(bridge: WorldBridge) -> void:
+func update_view(bridge: WorldBridge, buttons: int) -> void:
 	player.position = bridge.player_pos()
-	hitbox.visible = Input.is_action_pressed("stg_slow")
+	hitbox.visible = (buttons & WorldBridge.BTN_SLOW) != 0
