@@ -17,11 +17,13 @@ pub mod parse;
 pub mod slots;
 mod type_rules;
 pub mod typeck;
+mod units;
 pub(crate) mod xform_map;
 
 pub use ast::{CompileError, Program};
 pub use debug::{DebugParamMeta, DebugSubMeta, EclDebugSymbols, PcSourceSpan};
 pub use stg_core::ecl::image::EclImage;
+pub use units::compile_units;
 
 /// 调试信息产出级别（Task 4 侧载开关）。`None` 侧载不存在（默认，`compile` 便利包装使用）；
 /// `Full` 侧载包含完整 sub/参数/PC 区间/源码定位信息，EclImage 本身保持不变。

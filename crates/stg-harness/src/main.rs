@@ -5,7 +5,8 @@
 //!   bake-tables           用 f64 生成 sin/cos/easing 烘焙表原始字节（M0 落地）
 //!   verify-tables         断言现生成的表字节 == 已 commit 的字节（CI 防漂移）
 //!   serve [--port 8611] [--seed 1]  起 WebSocket 查看器
-//!   check <file.ecl>      只编译不跑，渲染诊断（人/agent/CI 共用的最短反馈环）
+//!   check <file.ecl|目录>  只编译不跑，渲染诊断（人/agent/CI 共用的最短反馈环；目录 =
+//!                         多文件编译单元，走 compile_units）
 //!   gen-ecl-meta          生成 editors/vscode/stg-ecl/ecl-meta.json + 刷新 docs/ecl-lang.md
 //!                         生成段（单一真相源=builtins::all()，两个 sink 同一次生成）
 //!
@@ -993,27 +994,53 @@ fn cmd_verify_tables() -> ExitCode {
     }
 }
 
+/// 目录 → 全部 *.ecl 按文件名字节序;单文件 → 单元素。整局流程刀 spec §1 收集约定。
+fn collect_units(path: &str) -> std::io::Result<Vec<(String, String)>> {
+    let meta = std::fs::metadata(path)?;
+    if meta.is_dir() {
+        let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(path)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "ecl"))
+            .collect();
+        names.sort(); // 路径字节序 = 文件名字节序(同目录)
+        names
+            .into_iter()
+            .map(|p| {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                std::fs::read_to_string(&p).map(|s| (name, s))
+            })
+            .collect()
+    } else {
+        std::fs::read_to_string(path).map(|s| vec![(path.to_string(), s)])
+    }
+}
+
 /// 只编译不跑(编辑体验刀 spec §4):人 / 合作者 agent / CI 共用的最短诊断环。
+/// 支持单文件与目录(整局流程刀 spec §1:目录 = 多文件编译单元,走 `compile_units`)。
 fn cmd_check(rest: &[String]) -> ExitCode {
     let Some(path) = rest.first() else {
-        eprintln!("usage: stg-harness check <file.ecl>");
+        eprintln!("usage: stg-harness check <file.ecl|目录>");
         return ExitCode::from(2);
     };
-    let src = match std::fs::read_to_string(path) {
-        Ok(s) => s,
+    let units = match collect_units(path) {
+        Ok(u) if !u.is_empty() => u,
+        Ok(_) => {
+            eprintln!("error: {path} 目录下没有 .ecl 文件");
+            return ExitCode::from(2);
+        }
         Err(e) => {
             eprintln!("error: 读 {path} 失败: {e}");
             return ExitCode::from(2);
         }
     };
-    match stg_ecl_compiler::lang::compile(&src, path) {
+    match stg_ecl_compiler::lang::compile_units(&units) {
         Ok(_) => {
             println!("OK");
             ExitCode::SUCCESS
         }
         Err(errors) => {
-            for e in &errors {
-                eprintln!("{}", e.render(path));
+            for (file, e) in &errors {
+                eprintln!("{}", e.render(file));
             }
             ExitCode::from(1)
         }
@@ -1302,5 +1329,19 @@ sub main() {
             super::cmd_check(&[dir.join("nope.ecl").to_string_lossy().into_owned()]),
             ExitCode::from(2)
         );
+    }
+
+    /// 整局流程刀 spec §1:`collect_units` 目录收集 + `compile_units` 贯通。
+    #[test]
+    fn check_accepts_directory_of_units() {
+        let dir = std::env::temp_dir().join(format!("gameflow_units_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a_main.ecl"), "sub main() { helper(); }\n").unwrap();
+        std::fs::write(dir.join("b_lib.ecl"), "sub helper() { wait(1); }\n").unwrap();
+        let units = super::collect_units(dir.to_str().unwrap()).unwrap();
+        assert_eq!(units.len(), 2);
+        assert_eq!(units[0].0, "a_main.ecl", "按名排序");
+        assert!(stg_ecl_compiler::lang::compile_units(&units).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
