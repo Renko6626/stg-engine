@@ -75,20 +75,69 @@ impl World {
         w
     }
 
+    /// 正典开机完全体(整局流程刀 spec §2.2/§3):回放/握手身份 = (seed, rank, start, loadout,
+    /// image_hash)。start=0 从头;非 0 查标记表把根任务 pc 直接搁到 main 内落点(landing pad,
+    /// 编译器保证合法指令边界)。中段启动是"规范态"开局(符卡练习语义):被跳过流程的世界
+    /// 效果由脚本 mark 块+自动补偿承担(见 stg-ecl-compiler codegen `scan_mark_compensation`)。
+    ///
+    /// 两条宿主期响亮错(P4-a)必须发生在任何任务落池之前——失败后世界不可半初始化,
+    /// 直接返回 `Err` 丢弃调用方持有的 `Box<World>` 半成品:`loadout.character` 越
+    /// `tables.characters.len()` → `InvalidCharacter`;`start != 0` 且标记表查无该 id
+    /// （含负值——标记表 id 恒正,天然不命中）→ `UnknownMark`。两校验先于 `World::new`
+    /// 分配之后、`start_main` 任务落池之前完成。
+    pub fn new_game_at(
+        seed: u64,
+        rank: i32,
+        start: i32,
+        loadout: crate::player::Loadout,
+        image: &crate::ecl::image::EclImage,
+    ) -> Result<Box<World>, crate::ecl::binding::TaskStartError> {
+        use crate::ecl::binding::TaskStartError;
+        let tables = &crate::tables::TABLES_V0;
+        if loadout.character as usize >= tables.characters.len() {
+            return Err(TaskStartError::InvalidCharacter(loadout.character));
+        }
+        let landing = if start != 0 {
+            Some(
+                image
+                    .resolve_mark(start)
+                    .ok_or(TaskStartError::UnknownMark(start))?,
+            )
+        } else {
+            None
+        };
+        let mut w = World::new(seed);
+        w.body.players[0] = crate::player::PlayerState::spawn(
+            loadout.character,
+            &tables.characters[loadout.character as usize],
+        );
+        let p = &mut w.body.players[0];
+        p.power = loadout.power.min(crate::items::POWER_MAX);
+        p.lives = loadout.lives;
+        p.bombs = loadout.bombs;
+        w.body.set_var(crate::consts::GVAR_RANK, rank);
+        let root_idx = w.start_main(image)?;
+        if let Some(ip) = landing {
+            w.tasks.slots[root_idx as usize].pc = ip;
+        }
+        Ok(w)
+    }
+
     /// 正典开局(spec 2026-07-24 §2.3)——回放可移植性与联机握手 §7.2"初始状态由
     /// 双方从同一确定性初始化各自构造"的**唯一入口**:new + 写 `GVAR_RANK` +
     /// `start_main`(Stage 属主)。场景实体摆放归脚本(`spawn_enemy`/`boss_set`/
     /// `spell_begin` 均为 builtin);**编译不下沉**,只吃成品镜像(依赖方向不可反转)。
     /// rainbow 金向量的手摆 boss boot 是冻结遗产,不迁移(spec §2.3)。
+    ///
+    /// 委托 `new_game_at(seed, rank, 0, Loadout::default(), image)`(整局流程刀 spec
+    /// §2.2):零行为差——默认装备与从头启动逐位同旧实现(见判别测试
+    /// `new_game_delegates_bitwise_to_default_path`)。
     pub fn new_game(
         seed: u64,
         rank: i32,
         image: &crate::ecl::image::EclImage,
     ) -> Result<Box<World>, crate::ecl::binding::TaskStartError> {
-        let mut w = World::new(seed);
-        w.body.set_var(crate::consts::GVAR_RANK, rank);
-        w.start_main(image)?;
-        Ok(w)
+        Self::new_game_at(seed, rank, 0, crate::player::Loadout::default(), image)
     }
 
     /// 整块快照（安全逐字段，I7/D11）。
@@ -2305,5 +2354,84 @@ mod tests {
             World::load_bytes(&b, t, &image).unwrap_err(),
             LoadError::ImageMismatch { .. }
         ));
+    }
+
+    // ── Task 6：Loadout + new_game_at(核心开机面)───────────────────────────
+
+    /// 委托改造零行为差(整局流程刀 spec §2.2):`new_game` 与
+    /// `new_game_at(.., 0, Loadout::default(), ..)` 同 seed/rank/image → 逐位一致
+    /// （校验和相等,P6 白拿的全字段深比较）。
+    #[test]
+    fn new_game_delegates_bitwise_to_default_path() {
+        let image = root_image(vec![OP_END as u32]);
+        let wa = World::new_game(7, 2, &image).expect("new_game");
+        let wb = World::new_game_at(7, 2, 0, crate::player::Loadout::default(), &image)
+            .expect("new_game_at 默认路径");
+        assert_eq!(wa.checksum(), wb.checksum(), "委托改造零行为差");
+    }
+
+    /// 装备钳位:power 越 `POWER_MAX` 钳、lives/bombs 全域直收(u8 无上限常量);
+    /// score/graze 仍出场默认 0(装备面不碰这两个字段)。
+    #[test]
+    fn new_game_at_applies_loadout_with_clamp() {
+        let image = root_image(vec![OP_END as u32]);
+        let loadout = crate::player::Loadout {
+            character: 0,
+            power: 9999,
+            lives: 8,
+            bombs: 1,
+        };
+        let w = World::new_game_at(7, 2, 0, loadout, &image).expect("new_game_at");
+        let p = &w.body.players[0];
+        assert_eq!(p.power, crate::items::POWER_MAX, "power 钳到 POWER_MAX");
+        assert_eq!(p.lives, 8, "lives 全域直收");
+        assert_eq!(p.bombs, 1, "bombs 全域直收");
+        assert_eq!(p.score, 0);
+        assert_eq!(p.graze, 0);
+    }
+
+    /// 两条宿主期响亮错(P4-a):`start` 无此标记 → `UnknownMark`;`character` 越
+    /// `tables.characters.len()` → `InvalidCharacter`。两者必须发生在任何任务落池
+    /// 之前——本测试只断言返回值,不去戳"世界半初始化"(设计上 `Err` 分支下调用方
+    /// 手里的 `Box<World>` 半成品被直接丢弃,无从观测)。
+    #[test]
+    fn new_game_at_unknown_mark_and_bad_character_fail_loud() {
+        use crate::ecl::binding::TaskStartError;
+        let image = root_image(vec![OP_END as u32]);
+
+        let err = World::new_game_at(7, 2, 42, crate::player::Loadout::default(), &image)
+            .expect_err("start=42 无此标记");
+        assert_eq!(err, TaskStartError::UnknownMark(42));
+
+        let bad_character = crate::player::Loadout {
+            character: 9,
+            ..crate::player::Loadout::default()
+        };
+        let err = World::new_game_at(7, 2, 0, bad_character, &image)
+            .expect_err("character=9 越 TABLES_V0.characters.len()==1");
+        assert_eq!(err, TaskStartError::InvalidCharacter(9));
+    }
+
+    /// 中段启动:根任务(tasks 池 0 号,首次分配必落最低空位——I4)pc 直接搁到标记
+    /// 落点 L,而非 `code_entry` E。手工镜像(P1:core 不依赖编译器)——`marks: [(7, 2)]`,
+    /// E=0(root sub 入口),L=2(< code.len()==3,满足 `try_from_parts` 落点边界契约)。
+    #[test]
+    fn new_game_at_moves_root_pc_to_mark_landing() {
+        use crate::ecl::image::ImageParts;
+        let image = EclImage::try_from_parts(ImageParts {
+            code: vec![OP_END as u32, OP_END as u32, OP_END as u32],
+            subs: vec![SubInit::new(0, SubKind::Root, vec![])],
+            entries: vec![],
+            root: Some(0),
+            marks: vec![(7, 2)],
+            content_hash: 0,
+        })
+        .expect("root+marks 镜像必须满足运行期镜像契约");
+        let w = World::new_game_at(7, 2, 7, crate::player::Loadout::default(), &image)
+            .expect("new_game_at start=7");
+        assert_eq!(
+            w.tasks.slots[0].pc, 2,
+            "根任务(tasks 池 0 号)pc 应搁到标记落点 L=2,而非 code_entry E=0"
+        );
     }
 }

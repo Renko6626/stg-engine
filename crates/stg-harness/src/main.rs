@@ -1375,4 +1375,139 @@ sub main() {
         assert!(stg_ecl_compiler::lang::compile_units(&units).is_ok());
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    // ── Task 6：`new_game_at` 端到端(整局流程刀 spec §2.2/§3)────────────────
+
+    /// 中段启动确定性跳过(Task 6 简报 Step 3):从头 vs `start=2` 中段启动同一份
+    /// 脚本——正常流 stage1 正常声明 bgm(1)、mark 垫片被跨过;中段启动 stage1 整段
+    /// 被跳过,垫片自动补 bgm(1) 后 stage2 同帧覆写为 2。外加两条同参中段启动世界
+    /// 120 帧逐帧校验和一致(确定性自证)。
+    #[test]
+    fn midstart_skips_earlier_stages_deterministically() {
+        const SRC: &str = r#"
+const M2: int = 2;
+sub stage1() { bgm(1); wait(120); }
+sub stage2() { bgm(2); wait(120); }
+sub main() {
+    stage1();
+    mark(M2);
+    stage2();
+    loop { wait(60); }
+}
+"#;
+        let image = stg_ecl_compiler::lang::compile(SRC, "mid.ecl").expect("编译");
+        let t = &stg_core::tables::TABLES_V0;
+        // `InputFrame` 无 `Default`(见 input.rs);`empty(0)` 与简报草稿的 `default()`
+        // 等价(机械调整许可,同 `anchor_builtins_write_fields_and_reqs_via_script` 先例)。
+        let input = stg_core::input::InputFrame::empty(0);
+        // 从头:第 2 步后 bgm==1(stage1 正常声明,垫片被跨过)。
+        let mut w0 = stg_core::step::World::new_game(7, 2, &image).expect("boot0");
+        stg_core::step::step(&mut w0, t, &image, &input);
+        stg_core::step::step(&mut w0, t, &image, &input);
+        assert_eq!(w0.body.view().bgm_id(), 1);
+        // 中段:start=2 → stage1 整跳,垫片补偿 bgm(1) 后 stage2 立即执行覆写为 2。
+        let mut w2 =
+            stg_core::step::World::new_game_at(7, 2, 2, Default::default(), &image).expect("boot2");
+        stg_core::step::step(&mut w2, t, &image, &input);
+        stg_core::step::step(&mut w2, t, &image, &input);
+        assert_eq!(
+            w2.body.view().bgm_id(),
+            2,
+            "跳入后 stage2 的声明生效(同帧覆写补偿值)"
+        );
+        // 确定性:同参中段启动两次,120 帧逐帧校验和一致。
+        let mut wa =
+            stg_core::step::World::new_game_at(7, 2, 2, Default::default(), &image).unwrap();
+        let mut wb =
+            stg_core::step::World::new_game_at(7, 2, 2, Default::default(), &image).unwrap();
+        for f in 0..120 {
+            stg_core::step::step(&mut wa, t, &image, &input);
+            stg_core::step::step(&mut wb, t, &image, &input);
+            assert_eq!(wa.checksum(), wb.checksum(), "frame {f}");
+        }
+    }
+
+    /// Task 5 端到端①(简报 Step 1 原型,Task 6 解锁):正常流 start=0 跳过垫片、
+    /// 锚点由 stage1 正常写;中段启动 start=7 时 stage1 整个被跳过,垫片自动补
+    /// bgm/bg/bg_phase 三类——用 `new_game_at` 真跑 `World`/`step`,读回锚点字段
+    /// 判别(不是编译器侧字节码形状断言;那三条在 `stg-ecl-compiler::lang::mod::tests`
+    /// 保留不动,本测试是端到端补齐)。
+    #[test]
+    fn mark_injects_nearest_anchor_declarations() {
+        const SRC: &str = r#"
+sub stage1() { bgm(11); bg(21); bg_phase(1); wait(1); }
+sub main() {
+    stage1();
+    mark(7);
+    loop { wait(60); }
+}
+"#;
+        let image = stg_ecl_compiler::lang::compile(SRC, "comp.ecl").expect("编译");
+        let t = &stg_core::tables::TABLES_V0;
+        // `InputFrame` 无 `Default`(见 input.rs);`empty(0)` 与简报草稿的 `default()`
+        // 等价(机械调整许可,同 `anchor_builtins_write_fields_and_reqs_via_script` 先例)。
+        let input = stg_core::input::InputFrame::empty(0);
+        let mut w =
+            stg_core::step::World::new_game_at(7, 2, 7, Default::default(), &image).expect("boot");
+        stg_core::step::step(&mut w, t, &image, &input);
+        stg_core::step::step(&mut w, t, &image, &input);
+        let v = w.body.view();
+        assert_eq!((v.bgm_id(), v.bg_id(), v.bg_phase()), (11, 21, 1));
+    }
+
+    /// Task 5 端到端②:作者块顶层手写 `bgm(99)` 逐类抑制该类注入,`bg` 类仍照常
+    /// 补(stage1 里声明的 21 未被手写覆盖)。
+    #[test]
+    fn mark_manual_override_suppresses_injection_per_kind() {
+        const SRC: &str = r#"
+sub stage1() { bgm(11); bg(21); wait(1); }
+sub main() {
+    stage1();
+    mark(3) { bgm(99); }
+    loop { wait(60); }
+}
+"#;
+        let image = stg_ecl_compiler::lang::compile(SRC, "override.ecl").expect("编译");
+        let t = &stg_core::tables::TABLES_V0;
+        // `InputFrame` 无 `Default`(见 input.rs);`empty(0)` 与简报草稿的 `default()`
+        // 等价(机械调整许可,同 `anchor_builtins_write_fields_and_reqs_via_script` 先例)。
+        let input = stg_core::input::InputFrame::empty(0);
+        let mut w =
+            stg_core::step::World::new_game_at(7, 2, 3, Default::default(), &image).expect("boot");
+        stg_core::step::step(&mut w, t, &image, &input);
+        stg_core::step::step(&mut w, t, &image, &input);
+        let v = w.body.view();
+        assert_eq!(v.bgm_id(), 99, "作者块手写 bgm(99) 不被自动注入的 11 覆盖");
+        assert_eq!(v.bg_id(), 21, "bg 类未手写,仍照常注入");
+    }
+
+    /// Task 5 端到端③:`bg_phase` 声明位置早于最近一条 `bg` 声明 → 视为旧背景
+    /// 段号,不注入;`bg` 本身仍正常补。
+    #[test]
+    fn stale_bg_phase_older_than_bg_not_injected() {
+        const SRC: &str = r#"
+sub main() {
+    bg_phase(5);
+    bg(30);
+    mark(1);
+    loop { wait(60); }
+}
+"#;
+        let image = stg_ecl_compiler::lang::compile(SRC, "stale.ecl").expect("编译");
+        let t = &stg_core::tables::TABLES_V0;
+        // `InputFrame` 无 `Default`(见 input.rs);`empty(0)` 与简报草稿的 `default()`
+        // 等价(机械调整许可,同 `anchor_builtins_write_fields_and_reqs_via_script` 先例)。
+        let input = stg_core::input::InputFrame::empty(0);
+        let mut w =
+            stg_core::step::World::new_game_at(7, 2, 1, Default::default(), &image).expect("boot");
+        stg_core::step::step(&mut w, t, &image, &input);
+        stg_core::step::step(&mut w, t, &image, &input);
+        let v = w.body.view();
+        assert_eq!(v.bg_id(), 30, "bg 正常注入");
+        assert_eq!(
+            v.bg_phase(),
+            0,
+            "旧背景段号(早于 bg 的 bg_phase 声明)不注入"
+        );
+    }
 }

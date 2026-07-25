@@ -92,6 +92,12 @@ pub enum TaskStartError {
     PoolFull,
     /// The compiled image's content_hash does not match the World's bound table hash.
     TableImageMismatch { image: u64, tables: u64 },
+    /// `new_game_at`'s `start` mark id has no registered landing point in the image
+    /// (整局流程刀 spec §2：中段启动查标记表未命中——宿主期响亮错，不半初始化世界).
+    UnknownMark(i32),
+    /// `new_game_at`'s `Loadout.character` is out of range for `WorldTables::characters`
+    /// (宿主期响亮错，见上).
+    InvalidCharacter(u8),
 }
 
 // ── World extension methods ────────────────────────────────────────────────

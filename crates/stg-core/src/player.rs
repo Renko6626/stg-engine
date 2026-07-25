@@ -49,10 +49,36 @@ pub struct PlayerState {
     pub graze: u32,
 }
 
+/// 开局装备面（整局流程刀 spec §2.2/§3）——回放/握手身份组成部分之一
+/// （`(seed, rank, start, loadout, image_hash)`，见 `step::new_game_at`）。
+/// `power` 由消费方（`new_game_at`）钳到 [`crate::items::POWER_MAX`]；`lives`/`bombs`
+/// 是 `u8` 全域即合法域——引擎不为它们造上限常量（比赛规则/关卡设计的事，非引擎不变量）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Loadout {
+    pub character: u8,
+    pub power: u16,
+    pub lives: u8,
+    pub bombs: u8,
+}
+
+impl Default for Loadout {
+    /// 正典默认 = 机体0/0火力/3残/3雷——`PlayerState::spawn` 的硬编码收编为此单一来源。
+    fn default() -> Self {
+        Loadout {
+            character: 0,
+            power: 0,
+            lives: 3,
+            bombs: 3,
+        }
+    }
+}
+
 impl PlayerState {
     /// 出场初值（场底中心，Alive，3 命 3 弹）。判定/擦弹半径从角色配置表取
-    /// （M0-17 T3：迁表零行为搬家，值逐位同源）。
+    /// （M0-17 T3：迁表零行为搬家，值逐位同源）。默认装备（火力/命/雷）收编自
+    /// [`Loadout::default`]（整局流程刀 spec §2.2）——单一来源，改默认值只改那一处。
     pub fn spawn(character_id: u8, cfg: &crate::tables::CharacterCfg) -> Self {
+        let ld = Loadout::default();
         PlayerState {
             x: Fx::ZERO,
             y: Fx::from_int(384),
@@ -67,9 +93,9 @@ impl PlayerState {
             bomb_phase: 0,
             bomb_timer: 0,
             shot_timer: 0,
-            power: 0,
-            lives: 3,
-            bombs: 3,
+            power: ld.power,
+            lives: ld.lives,
+            bombs: ld.bombs,
             life_pieces: 0,
             bomb_pieces: 0,
             score: 0,
