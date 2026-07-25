@@ -75,8 +75,13 @@ pub fn compile_units(units: &[(String, String)]) -> Result<EclImage, Vec<(String
         return Err(errs);
     }
     // ② 拼接(每单元保证换行收尾)+ 行号边界:bases[i] = 单元 i 之前累计的全局行数,
-    //    即单元 i 内局部行 L 对应全局行 bases[i] + L。lines().count() 对 \n 收尾文本
-    //    = 真实行数;非 \n 收尾拼接时补一个换行,补的换行不新增行。
+    //    即单元 i 内局部行 L 对应全局行 bases[i] + L。acc 必须数**拼接后 combined 里
+    //    实际追加的物理换行数**——`src.lines().count()` 对空单元 `""` 返回 0,但拼接
+    //    时因非 `\n` 收尾补了一个物理 `\n`(占 1 行),两者在空单元上不等价,会让 acc
+    //    比实际物理行数少 1、后续单元的行号基准整体偏低(批审 batch-review-1.md
+    //    Important-1)。改用"数 combined 里实际增加的换行符数"消除该角落:物理 `\n`
+    //    个数 + 非换行收尾补的那一个(空串 `!ends_with('\n')` 为 true → 补 1,与拼接
+    //    补的换行一致)。对"以 `\n` 收尾的正常文件"与旧式等值,只修正空/无尾换行角落。
     let mut combined = String::new();
     let mut bases: Vec<u32> = Vec::with_capacity(units.len());
     let mut acc: u32 = 0;
@@ -86,7 +91,7 @@ pub fn compile_units(units: &[(String, String)]) -> Result<EclImage, Vec<(String
         if !src.ends_with('\n') {
             combined.push('\n');
         }
-        acc += src.lines().count() as u32;
+        acc += src.matches('\n').count() as u32 + u32::from(!src.ends_with('\n'));
     }
     // ③ 单管线编译 + 行号回译:全局行 L(1-based)属于满足 bases[i] < L <= bases[i]+行数
     //    的单元 i,即 bases 中最后一个 < L 的元素;局部行 = L - bases[i]。
@@ -185,5 +190,37 @@ mod tests {
     #[test]
     fn empty_units_rejected() {
         assert!(compile_units(&[]).is_err(), "空清单必须报错而非 panic");
+    }
+
+    #[test]
+    fn empty_unit_does_not_shift_line_attribution() {
+        // 注意:语法错(parse 阶段)在①预检就独立按单元 src 报,天然带正确局部行号,
+        // 根本不经过②③的 acc/bases 拼接回译——不能拿它判别本缺陷。真正会经过
+        // bases[] 回译的是③单管线 compile() 才能发现的错误(typeck/slots/codegen),
+        // 故这里复用 typeck_error_line_translates_back_to_unit 的判型错场景。
+        //
+        // 对照:不含空单元时的期望行号。
+        let baseline_errs = compile_units(&[
+            u("main.ecl", "sub main() { helper(); }\n"),
+            u("lib.ecl", "sub helper() {\n    var x: fx = 1;\n}\n"), // int→fx 需 cast,第 2 行
+        ])
+        .expect_err("判型错必须报");
+        let (baseline_file, baseline_e) = &baseline_errs[0];
+        assert_eq!(baseline_file, "lib.ecl");
+        assert_eq!(baseline_e.line, 2, "无空单元时的期望行号(判别基准)");
+
+        // 插入一个空单元(empty.ecl,0 字节)后,行号归属不得偏移、错误不得跑到别的文件。
+        let errs = compile_units(&[
+            u("main.ecl", "sub main() { helper(); }\n"),
+            u("empty.ecl", ""),
+            u("lib.ecl", "sub helper() {\n    var x: fx = 1;\n}\n"),
+        ])
+        .expect_err("判型错必须报");
+        let (file, e) = &errs[0];
+        assert_eq!(file, "lib.ecl", "空单元不得使错误归到别的文件");
+        assert_eq!(
+            e.line, baseline_e.line,
+            "空单元不得使行号偏移(与无空单元时的行号一致)"
+        );
     }
 }
