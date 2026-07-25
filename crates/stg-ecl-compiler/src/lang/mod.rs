@@ -435,6 +435,15 @@ mod tests {
         );
     }
 
+    /// Task 4 复审修：mark 编号必须判为 `Ty::Int`（spec §2.1"编译期常量 int"）。
+    /// `1.5fx` 折叠出的原始值 `98304`（Q16.16 raw）满足 `> 0`，仅看原始值会误放行；
+    /// 必须连 `const_eval::evaluate` 返回的 `Ty` 一并判断。
+    #[test]
+    fn mark_id_must_be_int_typed() {
+        let e = expect_compile_err("sub main() { mark(1.5fx); }", "m.ecl");
+        assert!(e.iter().any(|e| e.msg.contains("int")), "{e:?}");
+    }
+
     #[test]
     fn var_before_mark_rejected() {
         let e = expect_compile_err("sub main() { var x: int = 1; mark(2); }", "m.ecl");

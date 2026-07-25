@@ -585,6 +585,24 @@ fn wait_spell_call_as_a_plain_statement_still_type_checks() {
     ok("sub main() { wait_spell(); }");
 }
 
+// ── Task 4 复审修：`RESERVED_SUGAR_NAMES` 冲突文案按撞上的名字动态生成 ──────────
+//
+// `check_not_reserved_sugar_name` 原先硬编码"符卡等待语句糖 `wait_spell()` 专用"，
+// `mark` 加入保留名单（Task 4）后，若脚本声明 `sub mark()`，会报出这句字面提到
+// `wait_spell()` 却答非所问的话——用户撞的明明是 `mark`。文案须按实际撞上的名字动态
+// 生成，两个保留名各自的报错都必须点名自己、不能串到另一个身上。
+
+#[test]
+fn sub_named_mark_is_rejected_with_name_specific_message() {
+    let errors = err("sub mark() { } sub main() { loop { wait(1); } }");
+    assert!(
+        errors.iter().any(|e| e.msg.contains("mark")
+            && e.msg.contains("保留字")
+            && !e.msg.contains("wait_spell")),
+        "mark 撞保留字的报错必须点名 mark、不能残留 wait_spell 字样：{errors:?}"
+    );
+}
+
 // ── 字面量折叠交互：`90deg + 10deg` 判型但不做常量折叠 ─────────────────────────
 
 #[test]

@@ -64,7 +64,7 @@ impl<'p> Checker<'p> {
             self.err(
                 span,
                 format!(
-                    "'{name}' 是保留字——符卡等待语句糖 `wait_spell()` 专用，不能用作 \
+                    "'{name}' 是保留字——语句糖 `{name}()` 专用，不能用作 \
                      sub/const/var 的标识符名"
                 ),
             );

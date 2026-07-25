@@ -228,8 +228,10 @@ fn validate_marks(prog: &Program, consts: &BTreeMap<String, (Ty, i32)>) -> Vec<C
                     ));
                 }
                 match crate::lang::const_eval::evaluate(id, consts) {
-                    Ok((_ty, val)) => {
-                        if val <= 0 {
+                    Ok((ty, val)) => {
+                        if ty != Ty::Int {
+                            errors.push(mark_err(*span, "mark 编号必须是 int 型编译期常量"));
+                        } else if val <= 0 {
                             errors.push(mark_err(*span, "mark 编号必须是正整数"));
                         } else if let std::collections::btree_map::Entry::Vacant(e) =
                             seen_ids.entry(val)
