@@ -180,8 +180,7 @@ fn sys_spell_timer(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
 fn sys_enemy_hp(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let handle = pop(task)?;
     let idx = handle as usize;
-    let alive =
-        handle >= 0 && idx < crate::enemy::EnemyPool::CAP && ctx.body.enemies.is_alive(idx);
+    let alive = handle >= 0 && idx < crate::enemy::EnemyPool::CAP && ctx.body.enemies.is_alive(idx);
     push(task, if alive { ctx.body.enemies.hp[idx] } else { -1 })
 }
 
@@ -582,8 +581,7 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
         let raw = u16::try_from(task_script).map_err(|_| FAULT_BAD_OP)?;
         let sub = ctx.ecl.sub_id(raw).ok_or(FAULT_BAD_OP)?;
         let meta = ctx.ecl.sub_meta(sub).ok_or(FAULT_BAD_OP)?;
-        if meta.kind() != SubKind::Async || ctx.ecl.param_types(sub).is_none_or(|p| !p.is_empty())
-        {
+        if meta.kind() != SubKind::Async || ctx.ecl.param_types(sub).is_none_or(|p| !p.is_empty()) {
             return Err(FAULT_BAD_OP);
         }
         Some(sub)
@@ -1402,7 +1400,15 @@ mod tests {
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
         // 正序：x,y,hp,drop_table,score,sprite,task(none=-1)（A5 乙案：7 参，尾追 sprite/task）
-        let args = [Fx::from_int(5).raw(), Fx::from_int(6).raw(), 42, 1, 100, 0, -1];
+        let args = [
+            Fx::from_int(5).raw(),
+            Fx::from_int(6).raw(),
+            42,
+            1,
+            100,
+            0,
+            -1,
+        ];
         assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
         let idx = task.stack[0];
         assert!(idx >= 0);
@@ -1471,7 +1477,15 @@ mod tests {
     fn spawn_enemy_task_none_leaves_main_task_zero() {
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
-        let args = [Fx::from_int(0).raw(), Fx::from_int(80).raw(), 10, 0, 0, 0, -1];
+        let args = [
+            Fx::from_int(0).raw(),
+            Fx::from_int(80).raw(),
+            10,
+            0,
+            0,
+            0,
+            -1,
+        ];
         assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
         let eidx = task.stack[0];
         assert!(eidx >= 0);
@@ -1546,7 +1560,8 @@ mod tests {
         let eidx = task.stack[0];
         assert!(eidx >= 0, "任务池满不应阻止敌建成");
         assert_eq!(
-            w.body.diag.pool_full[crate::world::POOL_TASK], 1,
+            w.body.diag.pool_full[crate::world::POOL_TASK],
+            1,
             "任务池满应计一次 P4-a 降级"
         );
         assert_eq!(

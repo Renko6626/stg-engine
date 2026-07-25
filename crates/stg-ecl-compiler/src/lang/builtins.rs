@@ -120,7 +120,15 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         // A5 乙案（append-only）：旧 5 参前缀不动，尾追 sprite（求值参）、task（`SubRef`，
         // 同 fire 第 7 参同构）。
-        params: &[Val(Fx), Val(Fx), Val(Int), Val(Int), Val(Int), Val(Int), Sub],
+        params: &[
+            Val(Fx),
+            Val(Fx),
+            Val(Int),
+            Val(Int),
+            Val(Int),
+            Val(Int),
+            Sub,
+        ],
         ret: Some(Int),
         doc: "造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌,敌死任务亡);返敌句柄,失败 -1",
         param_names: &["x", "y", "hp", "drop_table", "score", "sprite", "task"],

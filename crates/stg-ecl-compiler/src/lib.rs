@@ -534,12 +534,27 @@ impl SubBuilder {
         self.sys(syscall::SYS_CREATE_BULLETS_BATCH);
     }
 
-    pub fn sys_spawn_enemy(&mut self, x: Fx, y: Fx, hp: i32, drop_table: u16, score: u16) {
+    /// A5 乙案（append-only）：旧 5 参前缀不动，尾追 `sprite`/`task_script`——栈序须与
+    /// `ecl::syscall::sys_spawn_enemy` 的弹出序（`x,y,hp,drop_table,score,sprite,task`
+    /// 正序压栈）保持一致，同 [`Self::sys_create_bullet`] 的 `task_script` 尾参同款惯例。
+    #[allow(clippy::too_many_arguments)]
+    pub fn sys_spawn_enemy(
+        &mut self,
+        x: Fx,
+        y: Fx,
+        hp: i32,
+        drop_table: u16,
+        score: u16,
+        sprite: u16,
+        task_script: Option<BuilderSubRef>,
+    ) {
         self.push_i(x.raw());
         self.push_i(y.raw());
         self.push_i(hp);
         self.push_i(drop_table as i32);
         self.push_i(score as i32);
+        self.push_i(sprite as i32);
+        self.push_task_ref(task_script);
         self.sys(syscall::SYS_SPAWN_ENEMY);
     }
 

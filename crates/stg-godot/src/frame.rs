@@ -125,7 +125,7 @@ mod tests {
     // 与简报原意的"角度 0"/"角度 16384" 数值等价，只是补上语言要求的类型后缀。
     const SRC: &str = r#"
 sub main() {
-    _ = spawn_enemy(-96.0fx, -64.0fx, 100, 0, 0);
+    _ = spawn_enemy(-96.0fx, -64.0fx, 100, 0, 0, 0, none);
     _ = drop_item(32.0fx, 48.0fx, 2);
     _ = fire(1, 10.0fx, 20.0fx, 0.0fx, 0deg, none, none);
     _ = fire(1, 11.0fx, 21.0fx, 0.0fx, 16384bam, none, none);
