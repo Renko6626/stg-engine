@@ -59,6 +59,15 @@ EclOwner::Enemy(boss))` 手摆的冻结遗产）。**后果：纯 .ecl 走正典
 外部导演干预走 globals/信号轮询（P5 口径）。真需求出现再加甲，纯增量零兼容债。
 场景刀 spec 落地时按此写实施形态即可。
 
+**连带定式（2026-07-25 同日续裁）——符卡练习模式不需要任何新引擎面**：练习是 select
+语义（只打一张，打完即散）而非 resume 语义，引擎跳 boss 任务 ip 在语义上就是错的
+（会继续打后面的卡）。定式 = `mark` 垫片写选卡变量 + boss_main 开头分派：
+`mark(4102) { set_global(GVAR_PRACTICE, 2); }` 落进 boss 段，`boss_main` 读
+`GVAR_PRACTICE` 非零则单卡分支（`spell_begin`+`wait_spell`+return），恒 0 走整战。
+选卡由 `start` 单整数携带（回放身份零新字段），正常流被 JMP 跨过零污染；ZUN 原作
+符卡练习同构（boss ECL 内查 practice 标志）。注意 `GVAR_PRACTICE` 须落**槽 ≥16**
+（M1.5 系统段 0-15 脚本写保护）。
+
 ## B. 测试覆盖缺口
 
 ### B1. P4-a 池满降级：四个写 API 仍零覆盖（道具池份额已还）
