@@ -27,6 +27,18 @@ start_main` 三步——"唯一正典入口"的防分歧保证对该路径有洞
 出现**（C11 资产管线刀 / 任何 mod 表加载），届时补 `new_game_with_tables` 姊妹入口并
 让 `new_game` 委托它。
 
+### A4. 背景 STD 式 mini-VM——表现层解释器 + 文本格式（整局流程刀 spec §7 记档，2026-07-25）
+
+机器模型已拍板采纳 ZUN STD 式（`goto label @ time` 同时设 ip 和时钟，纯控制流静态、任意帧
+状态可解析求出）；本刀只交付 §4 表现锚点四字段契约（`bgm_id`/`bg_id`/`bg_phase`/
+`bg_phase_frame`），解释器本体（连同其文本格式）**不做**——它是**表现层资产**：住
+`stg-godot`/Godot 侧，可用浮点、不进校验和、不占任务槽，断层线判据同 F1。**触发点 = Godot
+场景刀真做背景演出时**：落地时钉死"嫁接 phase 分段保寻位"这条约定——背景脚本按
+`bg_phase` 切段，段内 wait/loop/jump 随便，跨段转移只认 `bg_phase` 边沿；寻位配方
+`local_t = 世界帧 - bg_phase_frame`，从该段入口重新解析执行到 `local_t`（段是无记忆的，
+读档/中段启动后历史丢失也能重建；变长 boss 段 = 段尾无限 loop、phase 切换破环）。详见
+`docs/superpowers/specs/2026-07-25-game-flow-midstart-design.md` §7。
+
 
 ## B. 测试覆盖缺口
 
@@ -158,12 +170,49 @@ threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy �
 同根增补(终审,2026-07-24):`frame.rs` 编码→register_layer→multimesh 上传路径在 Godot
 冒烟里零运行期覆盖(仅纯 Rust 判别单测盖)——同一触发点一并补运行期回归。
 
-### C17. 桥壳三处打磨(桥刀终审分诊,2026-07-24)
+### B19. 清弹 builtin——语义空间未定（整局流程刀 spec §8 记档，2026-07-25）
+
+practice 单场景不需要清弹；真实整局脚本关底转场（`REQ_STAGE_CLEAR` 挂牌前）大概率需要，
+但语义有内容层设计空间未拍板：直接消（静默清空）/ 转点（消弹换分/道具）/ 护盾帧（清弹同时
+给自机短暂无敌）三种玩法权重不同，`FieldPool` 已有通用消弹区机制（bomb 那刀是它的首个
+真租户，见本文件"E. bomb 那一刀开工前"）可复用，缺的是脚本层 builtin 与语义选型。**触发点
+= 真实整局脚本落地、关底转场需求出现时**，届时再定语义、开新 syscall 号（5x 族之后的下一个
+空号）。
+
+### B20. `set_power`/`set_lives`/`set_bombs` 账面 setter 三件——脚本侧暂无场景（整局流程刀 spec §3 记档，2026-07-25）
+
+装备/命数/炸弹数三件账面 setter 曾在早期草案里设想给脚本用（如"道中事件奖一条命"），但
+`Loadout`（`crates/stg-core/src/player.rs`）已把**装备上行**这唯一确定场景收编——菜单侧
+practice 装备走 `new_game_at` 的 `loadout` 参数，不需要脚本再写一次。四件套因此**缩编为
+一件 `add_score`**（关底 bonus/结算记账必须在世界内发生，其余三个暂无消费者）。**触发点 =
+"道中事件奖命/加炸弹"一类脚本需求真出现时**，届时按 `add_score` 同款 5x 族口径（1 参、无
+返回、钳位/饱和语义见 P4-b）补开 syscall。
+
+### B21. mark 自动补偿的 `visited` 防环在"同一 sub 被同步调用两次"场景下与纯线性执行序背离（整局流程刀批审 Minor-1，2026-07-25）
+
+`scan_mark_compensation`/`walk_mark_scan`（`crates/stg-ecl-compiler/src/lang/codegen.rs`）
+沿 `main` 的同步调用链顶层线性展开时，用 `visited: BTreeSet<&str>` 保证每个 sub 全程**只
+走一次**（防环，I4 同款确定性容器纪律）。病态场景：同一个 sub 在 `main` 顶层被同步调用
+**两次**，且两次调用之间还有一条顶层锚点声明——例如 `common(); bgm(5); mark(1); common();
+mark(2);`（`sub common() { bgm(9); }`）。`visited` 在第一次遇到 `common` 时就把它标记为
+已访问，第二次调用点**不会**被重新展开，于是 `mark(2)` 处注入的补偿值仍是第一次展开时
+算出的"最新值"（`bgm=5`），而不是"真按顺序回放到这里"会得到的值（`bgm=9`，来自第二次
+`common()` 调用）——扫描顺序与**纯线性执行序**背离。影响评估：注入的值不是垃圾/未定义
+状态，是脚本里确实声明过的某个值（只是不一定是最近那次）；同一份脚本永远编译出同一张
+标记表，确定性/回放/跨平台一致性不受影响；真实整局脚本几乎不会把同一个 sub 在同一条同步
+调用链里连续调用两次（ZUN 式关卡是"顺序调不同的关卡 sub"，不是"重复调同一个"）。**修法
+方向**：把 `visited` 的粒度从"全局只访问一次"收紧为"按调用点/调用路径重扫"，让同一 sub
+在不同调用点各自贡献一次"最新值"快照——真实脚本出现这种写法、或想让补偿更贴近直觉时再做。
+
+### C17. 桥壳四处打磨(桥刀终审分诊,2026-07-24;整局流程刀追一项,2026-07-25)
 
 `bridge.rs`:①`ping()` 测试助手留在生产冻结面(无害欠整洁);②`save_state()` 未开局静默
 返空 PackedByteArray,与 `load_state` 的 warn_once 不对称,GDScript 分不清"空存档/未开局";
 ③`hud_boss` 直读 `body.boss_ui`(pub 公告板,非 P1 违反)而 hud_player/hud_spell 走 view()
-——读口不一致,可加 `WorldView::boss_ui()` 统一。下次动壳时顺手。
+——读口不一致,可加 `WorldView::boss_ui()` 统一;④`new_game_at`(bridge.rs)的 loadout 参数是
+`character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dictionary——v1 装备维度少(四件)尚可
+承受,将来若长出更多装备维度(如子机类型/初始道具)时考虑 Dictionary 化。下次动壳时顺手,
+与①②③同批打磨。
 
 ## C. 代码整洁（低优先，都是两可）
 

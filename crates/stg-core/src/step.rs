@@ -80,11 +80,11 @@ impl World {
     /// 编译器保证合法指令边界)。中段启动是"规范态"开局(符卡练习语义):被跳过流程的世界
     /// 效果由脚本 mark 块+自动补偿承担(见 stg-ecl-compiler codegen `scan_mark_compensation`)。
     ///
-    /// 两条宿主期响亮错(P4-a)必须发生在任何任务落池之前——失败后世界不可半初始化,
-    /// 直接返回 `Err` 丢弃调用方持有的 `Box<World>` 半成品:`loadout.character` 越
-    /// `tables.characters.len()` → `InvalidCharacter`;`start != 0` 且标记表查无该 id
-    /// （含负值——标记表 id 恒正,天然不命中）→ `UnknownMark`。两校验先于 `World::new`
-    /// 分配之后、`start_main` 任务落池之前完成。
+    /// 两条宿主期响亮错(P4-a)钉在 `World::new` 分配**之前**完成,而非事后回滚:
+    /// `loadout.character` 越 `tables.characters.len()` → `InvalidCharacter`;`start != 0`
+    /// 且标记表查无该 id(含负值——标记表 id 恒正,天然不命中)→ `UnknownMark`。两项校验
+    /// 全通过才分配 `World`,失败路径下从未存在过半初始化的 `Box<World>`——`Err` 分支
+    /// 不持有、也无需丢弃任何世界实例。
     pub fn new_game_at(
         seed: u64,
         rank: i32,

@@ -37,6 +37,16 @@
 | 52 | `KILL_CHILDREN` | — | — | 升序杀**直系**子任务（不递归） |
 | 60 | `SYS` | syscall 号 | 按号 | 一切副作用唯一通道（白名单） |
 
+### `mark` 降低（纯前端语法糖，无新 op；整局流程刀 spec §2）
+
+`mark(id)` / `mark(id) { 补偿块 }` 不新增 opcode——降低为既有 `JMP`/`PUSHI`/`SYS` 的固定
+序列：`JMP after; landing: <自动补偿 push_i/sys 序列><作者块>; after:`；正常流一步 `JMP`
+跨过整段垫片，中段启动直接把根任务 `pc` 摆到 `landing`（= `EclImage::resolve_mark(id)` 的
+返回值）。标记表（`(id, ip)` 严格升序对）随镜像一起产出，存在 `EclImage` 内部私有字段
+（`try_from_parts` 校验 id 正整数/严格升序/落点在 `code` 边界内），不占字节码正文；
+`resolve_mark` 对它做二分查找。表层参考见 [`ecl-lang.md`](ecl-lang.md)"mark（中段启动
+标记）"节。
+
 ### SubKind 检查（Root / Async / CallOnly）
 
 `EclImage` 中每个 sub 有且仅有以下三类之一：
@@ -96,6 +106,10 @@
 | 29 | `spell_end`（符卡机构，见下方"符卡计器"） | — | —（owner 绑定槽走 HP 路径结算；无绑定槽 → no-op，重复调用安全） |
 | 30-38 | 弹 setter 族 | 按 motion.rs 九连 | —（owner 须为弹，否则 Fault） |
 | 40 | `aim_player_angle` | — | 自 owner 位置瞄 P0 的 BAM 角 |
+| 50 | `add_score`（整局流程刀，见 consts.rs 5x 族） | delta | —（自机 0 记分；`delta` 允许负值扣分，结果**饱和钳** `[0, u64::MAX]`——扣穿停在 0、加满停在上限，不回绕；不做参数收窄，不 Fault，owner 类别无限制） |
+| 51 | `bgm` | id | —（写表现锚点 `bgm_id` + 发 `REQ_BGM`；`id` 收窄 `0..=65535`，越界 → no-op + `diag.contract_viol` +1 + `last_status=BAD_ARGS`，**不 Fault**（P4-b），owner 类别无限制） |
+| 52 | `bg` | id | —（同上，写 `bg_id` + 发 `REQ_BG`；同一收窄/no-op 口径） |
+| 53 | `bg_phase` | n | —（写 `bg_phase`，同时把 `bg_phase_frame` 盖为当前帧，再发 `REQ_BG_PHASE`；`n` 同上收窄/no-op 口径） |
 
 `create_bullet` 走**丙方案**：`(xform_off, xform_cnt)` 指向本任务 locals 内打包槽
 （每槽 3 字：`word0=(wait<<16)|(op<<8)`、`word1/2=args`，≤16 槽）；`xform_cnt=0` 哑弹；

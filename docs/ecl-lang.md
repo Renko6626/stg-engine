@@ -34,6 +34,16 @@
 - 符卡全套 = `spell_begin(slot, id, pattern, time_limit, bonus0, flags, hp_threshold);` +
   `wait_spell();` 两行；`wait_spell` 在语句位置（`wait_spell(`）**总是**被语法糖截胡，
   即使你恰好声明了同名 sub 也调不到它——按保留字对待。
+- `mark` 只能在 `sub main` 顶层语句位（不进 `if`/`while`/`for`/`loop` 块，也不能出现在
+  别的 sub 里），编号是 **int 型编译期常量**、必须是正整数、且全镜像唯一（跨文件合并后
+  仍在同一份名字空间里查重）；main 顶层的 `var` 不得先于任何 `mark`（任务帧局部零初始化，
+  跳入 mark 落点时局部区还没被跑到）。跳进来的世界里，`mark` 之前正常流程本该写过的全局
+  变量/局部变量全是初始零值，需要的值在 `mark` 的补偿块里手写补。
+- 锚点自动补偿只认**顶层线性位**的常量参声明——`if`/难度分支里、`spawn`/`fire` 挂出的
+  异步任务里写的 `bgm`/`bg`/`bg_phase` 一律扫不到（扫描不下潜控制流、不跟异步边），中段
+  启动时只会拿到"扫描能看见的那条"最近声明；这类分支/异步声明得靠 `mark` 块里手写覆盖。
+- `add_score` 的 `delta` 允许负值（扣分），结果**饱和钳**在 `[0, u64::MAX]`——扣穿只会
+  停在 0，不会像有符号回绕那样绕成一个巨大正数。
 
 ## 一分钟样例
 
@@ -93,12 +103,73 @@ sub main() {
 有返回的内建不接收就 `_ = fire(...);` 显式丢弃，不丢弃 = 编译错误；这是"忘 POP 远处爆栈"
 足枪的语言层灭除）。
 
+## mark（中段启动标记）
+
+`mark` 给整局脚本开"练习/中段启动"的落点（整局流程刀 spec §2）——语义是**规范态开局**
+（符卡练习那味儿），不是"仿佛打过来的状态"：跳进来的世界不重放被跳过的帧，靠脚本自己
+声明"这里该长成什么样"。
+
+两种写法：
+
+```ecl
+const MARK_S2: int = 2;
+const GVAR_ROUTE: int = 16;
+
+sub stage1() { bgm(1); wait(60); }
+sub stage2() { bgm(2); wait(60); }
+
+sub main() {
+    stage1();
+    mark(MARK_S2) {
+        set_global(GVAR_ROUTE, 1); // 被跳过流程写的全局变量,在此手写补
+    }
+    stage2();
+    loop { wait(60); }
+}
+```
+
+- `mark(<id>);`——纯落点，无补偿块。
+- `mark(<id>) { <补偿块> }`——落点带一段"跳入时才执行"的补偿块。
+
+**landing pad 语义**：降低为固定序列 `JMP after; landing: <编译期自动补偿><作者手写补偿块>;
+after:`。正常流程（从头开局，或本次中段启动的落点不是这个 `mark`）执行到这条 `JMP` 时
+一步**跨过**整段垫片（自动补偿 + 作者块都不执行），落进 `after` 接着往下——垫片不会被
+正常流程重复执行第二遍。中段启动命中这个 `mark` 时，根任务的 `pc` 直接摆在 `landing`，
+从垫片首指令开始顺序往下跑（补偿代码 → 作者块 → 自然接上 `after`），不会绕回来第二次。
+
+**自动补偿规则**：编译器把 `main` 的同步调用链按**顶层线性位**展开（`main` 自己 + 递归进
+被同步调用的 sub；不下潜 `if`/`while`/`for`/`loop`，不跟 `spawn`/`fire` 挂出的异步任务；
+访问过的 sub 不重复展开，防环），沿途记录 `bgm`/`bg`/`bg_phase` 三类声明"当前最新的常量
+实参值"（只认字面量/`const`，变量参视为"没声明过"）。每个 `mark` 处按这一刻的"最新值"
+快照，为三类里作者没有手写覆盖的类别各注入一条 `push_i(值); sys(...)`（顺序固定
+`bgm → bg → bg_phase`，严格排在作者手写块之前）；`bg_phase` 只有在其记录位置**严格晚于**
+最近一次 `bg` 声明时才注入，否则视为"旧背景的段号"弃置不用。作者若在补偿块**顶层**手写了
+同名的锚点调用（如上例没写 `bgm`/`bg`），对应那一类就不再自动注入——三类各自独立判断。
+
+以上例为例：正常流程（`start=0`）执行到 `stage1()`（`bgm=1`）后一步跳过整段
+`mark(MARK_S2)` 垫片（`GVAR_ROUTE` 不会被写），直接进 `stage2()`（`bgm=2`）。中段启动
+`start=MARK_S2` 时 `stage1()` 整个不执行，垫片自动补 `bgm=1`（`stage1` 里的声明）后走
+作者块把 `GVAR_ROUTE` 设成 1，再自然接上 `stage2()` 把 `bgm` 覆写成 2——两条路径最终看到
+的 `bgm_id` 相同，但 `GVAR_ROUTE` 只有中段启动这条路径会被设置。
+
+**`new_game_at(seed, rank, start, loadout)` 宿主侧对应关系**：`start=0` 等价于从头开局
+（`new_game(seed, rank, image)` 就是 `new_game_at(seed, rank, 0, Loadout::default(), image)`
+的委托）；`start=<mark id>` 直接把根任务 `pc` 定到该 `mark` 的落点（`EclImage::resolve_mark`
+查表）。`start` 若未在镜像标记表命中（含负值——标记表 id 恒正，天然不命中）是**宿主期
+响亮错**（`TaskStartError::UnknownMark`），发生在 `World` 被分配之前，不会返回一个半初始化
+的世界。`loadout`（`character`/`power`/`lives`/`bombs` 四个标量）与 `start` 相互独立、
+同一次调用一起给：`power`/`lives`/`bombs` 越界直接钳位（P4-b），`character` 越
+`WorldTables::characters` 表界是另一条宿主期响亮错（`TaskStartError::InvalidCharacter`）——
+装备是"玩家在菜单调好的数据"，从建世界的门直接进，不走脚本。
+
 ## sub 与 async sub（调用途径强制分离）
 
 ### 根入口 `sub main()`
 
-每一份 `.ecl` 文件**必须且仅有一个**零参数 `sub main()`（`async` 不可修饰 main）。
-它是关卡的根入口脚本，只能通过引擎的 `start_main` / `start_main_with_owner` API 启动。
+整份编译产物（单文件，或"多文件"节说的多文件合并成的一整个 `EclImage`）**必须且仅有一个**
+零参数 `sub main()`（`async` 不可修饰 main）——单文件时它就在那一个文件里；多文件时它只
+出现在其中一个文件里，其余文件不需要、也不能再声明一个。它是关卡的根入口脚本，只能通过
+引擎的 `start_main` / `start_main_with_owner` API 启动。
 生命周期是**singleton**：每个 `World` 实例最多成功启动一次——即使 main 任务自然结束
 或 fault，再次调用 `start_main` 也会返回 `MainAlreadyStarted`（同时触发 `contract_viol`
 计数）。这一保护确保确定性回放中 main 不会重复派发。
@@ -127,6 +198,42 @@ sub main() {
 - `fire(1, $self_x, $self_y, 0fx, 0deg, WIND_CHIME, trail_task)` 同理——`trail_task` 作为
   `async sub` 的名称在编译期被解析并编码。
 - **不存在的 sub 名称在编译期即报错**，不存在运行期"名字未找到"的分支。
+
+## 多文件（整局脚本布局）
+
+一局完整的游戏可能是好几十个符卡/关卡拼起来的——巨型单文件 `.ecl` 不好维护。表层语言把
+"一局一镜像"这个约束（一局 = 一个 `EclImage` = 一个 `content_hash`，回放/握手身份的一部分，
+整局流程刀 spec §1/§0）和"源码摊几个文件"这件事解耦：
+
+```
+stage/
+  01_intro.ecl    // sub main() 在这里
+  02_stage1.ecl   // sub stage1() 等
+  03_stage2.ecl
+  99_boss.ecl
+```
+
+```
+cargo run -p stg-harness -- check stage/
+```
+
+- **目录 = 编译单元集**：无论是 `stg-harness check <目录>` 还是引擎宿主的加载入口，收到
+  一个目录路径时都会收集该目录下全部 `*.ecl` 文件、**按文件名字节序排序**后逐个读入，
+  作为一批编译单元合并编译；单文件路径照旧当成单元素单元集处理，行为与只有单文件时完全
+  一致。这是零配置格式——没有 manifest/清单文件，文件名怎么排全靠文件名本身的字节序。
+- **编译期先各自独立 `lex`/`parse`**——每个文件的语法错误各自带**该文件的文件名 + 局部
+  行号**（不是拼接后的全局行号），预检阶段同时收集全部顶层名字（`sub`/`const`/`xformdef`）
+  做跨文件撞名检查；预检通过后合并 AST 走已有 `typeck`/`slots`/`codegen` 单管线（这几个
+  阶段本就不知道"文件"这个概念，产物类型检查/字节码生成侧零改动）。
+- **扁平命名空间**：所有文件共享同一个全局符号表——`sub`/`const`/`xformdef` 的名字不分
+  文件，跨文件重名在编译期报错，错误信息带**两处位置**（本次撞上的文件:行 + 另一处定义
+  所在的文件:行）。这意味着多文件不是模块系统——不能靠文件名做命名空间隔离，两个文件各写
+  一个同名 `sub helper()` 就是重复定义，不会因为在不同文件里而相安无事。
+- **收集顺序不影响产物字节**：不管传入的文件先后序是 A→B 还是 B→A，合并后的 `EclImage`
+  逐位相同——codegen 本就按 sub 名排序出 canonical id，与源码收集顺序无关；目录收集仍然
+  固定按文件名字节序，只是"结果不随之改变"，不是"顺序随意写"。
+- **明确不做**：`include` 语法（会逼编译器做路径解析，破坏"编译器是纯函数、文件收集归
+  调用方"这条断层线纪律）、模块系统/命名空间（扁平全局名字空间 + 撞名报错已经够用）。
 
 ## `$` 引擎变量（只读；读取即 syscall）
 
@@ -309,8 +416,31 @@ sub main() {
 限制——关卡任务也能发。
 
 id 命名空间：`0` 保留无效 · `1..=63` 引擎保留（如 `REQ_ENEMY_DEATH`）· `64+` 脚本自由——
-建议 `const MY_REQ: int = REQ_SCRIPT_BASE + n;` 起名。引擎 id 的逐位 args 约定表见
-`stg-core/src/reqs.rs` 模块文档（编码律：连续量 Q16.16 raw / 离散量裸 int / 角度 BAM raw）。
+建议 `const MY_REQ: int = REQ_SCRIPT_BASE + n;` 起名。引擎 id `1..=3` 的逐位 args 约定表见
+`stg-core/src/reqs.rs` 模块文档（编码律：连续量 Q16.16 raw / 离散量裸 int / 角度 BAM raw）；
+`4..=7`（整局流程刀新增，同一编码律）见下表：
+
+| id | args[0] | args[1..] |
+|---|---|---|
+| `REQ_STAGE_CLEAR`（4） | 脚本自定（挂牌用；见下方转场协议） | 0 |
+| `REQ_BGM`（5） | `id`（int，同写入的 `bgm_id`） | 0 |
+| `REQ_BG`（6） | `id`（int，同写入的 `bg_id`） | 0 |
+| `REQ_BG_PHASE`（7） | `phase`（int，同写入的 `bg_phase`） | 0 |
+
+`REQ_BGM`/`REQ_BG`/`REQ_BG_PHASE` 由 `bgm`/`bg`/`bg_phase` 三个 builtin 内部经对应的 5x
+syscall 自动发出——脚本不需要、也不应该自己再手写一次 `emit_req` 发这三个 id。
+`REQ_STAGE_CLEAR` 没有专属 syscall/builtin，是纯粹的挂牌协议常量：脚本用通用的
+`emit_req(REQ_STAGE_CLEAR, ...)` 自己发。
+
+**关卡结算转场协议**（spec §6 摘编；纯宿主约定，引擎侧零改动——`World` 是纯被动状态机，
+宿主不调 `step` 就是完美冻结）：
+
+1. 脚本关底先把账在世界内记完（`add_score(bonus);`），再 `emit_req(REQ_STAGE_CLEAR, …);`
+   挂牌，随后**直接续行**（比如接着调用 `stage2();`）——世界对"暂停"这件事零感知。
+2. 宿主每帧 `step` 后经 `take_requests()` 看见 `REQ_STAGE_CLEAR` 挂牌，就此**停手不再
+   `step`**，用读口数据画结算/菜单页（原生 UI，`World` 冻结不动，不进这条时间线）。
+3. 玩家确认后宿主恢复 `step`——世界里 `stage2` 的第一帧才真正发生。回放文件里没有"结算页"
+   这个概念（暂停期贡献零帧），重播时直接穿过，行为与真实机台一致。
 
 ## xformdef（弹变换序列声明）
 

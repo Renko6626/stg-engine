@@ -4,25 +4,25 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-07-24）
+## 现在（2026-07-25）
 
-- **位置**：**M2 桥刀收官**——`stg-godot` WorldBridge gdext cdylib 已通（工具链 1.94.0 +
-  三纯模块 boot/frame/save + bridge.rs 冻结面接线 + `godot_smoke.ecl` headless 全流程冒烟
-  全绿）；真 Godot 工程（场景/节点树）未动。**编辑体验刀并行落地**：`check` 诊断环 +
-  `gen-ecl-meta`（`builtins.rs` 单一真相源 → JSON/VS Code 扩展/`ecl-lang.md` 生成段两 sink，
-  配防漂移）+ VS Code 扩展骨架 + `docs/ecl-lang.md` agent 优先重构（坑清单/debug 循环/全部
-  ```ecl 示例可编译押运）；两刀金向量均逐位不变。
+- **位置**：**整局流程刀收官**——`compile_units` 多文件编译(目录=编译单元集,按文件名字节
+  序合并,扁平命名空间撞名双位置报错)+`mark` 中段启动(三编译规则/JMP 垫片/`EclImage` 标记
+  表/同步调用链自动补偿)+`Loadout`+`World::new_game_at`(装备钳位+`UnknownMark`/
+  `InvalidCharacter` 开机期响亮错)+表现锚点四字段(声明式 builtin+5x syscall 族+桥口
+  `new_game_at`/`anchors`)+转场挂牌协议(纯约定,引擎零改)全部落地；金向量因锚点字段入
+  校验和整体平移(判别式测试护住行为不变)。
 - **在飞**：无。
-- **下一阶段候选**：**Godot 场景刀**——真工程/`.tscn`/`MultiMesh` 渲染节点/请求分发器（读
-  `docs/superpowers/specs/2026-07-24-stg-godot-bridge-design.md` §10），或并行 RL 线
-  `stg-py`（PyO3 headless env）。
-- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（开工前先读；新增 B18 = 四个 HUD
-  读口/`register_layer` 拒绝路径待场景刀真消费时补运行期回归；B16/B14/B15/D6 未动）。
+- **下一阶段候选**：Godot 场景刀（真工程/`.tscn`/`MultiMesh`/请求分发器）/ RL 线 `stg-py`
+  （PyO3 headless env）/ 背景刀（follow-ups A4，STD 式 mini-VM，锚点契约已钉死）。
+- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（新增 A4/B19-B21，C17 追一项；
+  B14/B15/B16/D6/B18 未动）。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-25 | **整局流程刀** | 方案A拍板(整局一World一镜像)+compile_units多文件+mark中段启动(垫片/标记表/自动补偿)+Loadout/new_game_at+表现锚点四字段(bgm/bg/bg_phase声明式)+转场挂牌协议;金向量因锚点字段整体平移(判别式护行为) |
 | 2026-07-24 | **编辑体验刀** | check 诊断环 + builtin 元数据(doc/param_names)→ gen-ecl-meta 两 sink(JSON/VS Code 扩展/ecl-lang.md 生成段)+ ecl-lang.md agent 优先重构(坑清单/debug 循环/例子可编译押运) |
 | 2026-07-24 | **stg-godot 桥刀** | 工具链 1.94/gdext 0.5.4/三纯模块/冻结面/headless 冒烟；M2 桥半程通 |
 | 2026-07-24 | 前置小刀 | A1 表列 sprite/正典 boot new_game/bench 第三轮 |
