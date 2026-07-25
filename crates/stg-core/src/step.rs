@@ -103,6 +103,10 @@ impl World {
         d.boss_ui = s.boss_ui;
         d.spells = s.spells; // [SpellSlot; MAX_BOSSES] 是 Copy
         d.spell_seq = s.spell_seq; // [u16; MAX_BOSSES] 持久代际计数器，随快照往返（ABA 修复）
+        d.bgm_id = s.bgm_id;
+        d.bg_id = s.bg_id;
+        d.bg_phase = s.bg_phase;
+        d.bg_phase_frame = s.bg_phase_frame;
         s.shots.copy_into(&mut d.shots);
         s.enemies.copy_into(&mut d.enemies);
         s.fields.copy_into(&mut d.fields);
@@ -2012,6 +2016,55 @@ mod tests {
         assert_eq!(snap.tables_hash, 0xDEAD_BEEF, "tables_hash 漏拷即红");
     }
 
+    // ── 表现锚点四字段判别式（整局流程刀 Task 2；spec §10-8 拍板形态）──────────────
+
+    /// 判别式：锚字段必须"仅 builtin 写、仅表现读"——任何相位一旦读了它们参与决策，
+    /// 两个仅锚字段不同的 world 就会在别处（rng/players/bullets…）分叉。手法：每帧把
+    /// wa 的四锚字段临时抄给 wb 后比对整体校验和（含锚字段自身，此刻应相等），再把
+    /// wb 的抄回 0（否则下一帧 wa 的"新"锚值会被 wb 的陈旧值错误掩盖）。红 = 有相位
+    /// 读了锚字段。
+    #[test]
+    fn anchor_fields_are_write_only_for_simulation() {
+        let mut wa = World::new(1);
+        let mut wb = World::new(1);
+        wa.body.bgm_id = 7;
+        wa.body.bg_id = 8;
+        wa.body.bg_phase = 9;
+        wa.body.bg_phase_frame = 100;
+        for f in 0..120u32 {
+            let input = InputFrame::empty(f);
+            crate::world::test_support::step_t(&mut wa, &input);
+            crate::world::test_support::step_t(&mut wb, &input);
+            wb.body.bgm_id = wa.body.bgm_id;
+            wb.body.bg_id = wa.body.bg_id;
+            wb.body.bg_phase = wa.body.bg_phase;
+            wb.body.bg_phase_frame = wa.body.bg_phase_frame;
+            assert_eq!(
+                wa.checksum(),
+                wb.checksum(),
+                "frame {f}：抄平锚字段后仍分叉 ⇒ 某相位读了锚字段"
+            );
+            wb.body.bgm_id = 0;
+            wb.body.bg_id = 0;
+            wb.body.bg_phase = 0;
+            wb.body.bg_phase_frame = 0;
+        }
+    }
+
+    /// 新 World 四锚字段全 0；无脚本跑 60 帧后仍全 0（无相位写它们，金向量不会因本刀
+    /// 平移——本任务实际会因字段本身入校验和而平移，本测试只钉"没有相位额外写它们"）。
+    #[test]
+    fn anchor_fields_default_zero_keeps_golden_quiet() {
+        let mut w = World::new(1);
+        for f in 0..60u32 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+        }
+        assert_eq!(w.body.bgm_id, 0);
+        assert_eq!(w.body.bg_id, 0);
+        assert_eq!(w.body.bg_phase, 0);
+        assert_eq!(w.body.bg_phase_frame, 0);
+    }
+
     /// 快照防漏哨兵(checksum-mechanism.md 承诺的二线防护,实现形态=本测试):
     /// **本断言红了 ⇒ 你增/删/改了 World 字段** ⇒ 依次核对
     /// ① `copy_into` 逐字段清单(手写,漏拷编译不报错——这正是本哨兵存在的原因)
@@ -2026,15 +2079,18 @@ mod tests {
             core::mem::size_of::<crate::world::WorldBody>(),
             core::mem::size_of::<World>(),
         );
-        // 2026-07-24 复审修（Task 2 复审，ABA 修复）：`SpellSlot` 加 `epoch: u16`
-        // （32→36B）；`WorldBody` 另加 `spell_seq: [u16; MAX_BOSSES]`（4B，字段簇间 padding
-        // 吸收部分增量，故 WorldBody 实测只 +8 非 +12——以编译期 `size_of` 实测值为准，不是
-        // 手算）；`Task` 加 `spell_epoch: u16`（444→448B，×TASK_CAP(256)=+1024，World 增量
-        // 与之吻合）。
+        // 2026-07-25（整局流程刀 Task 2）：`WorldBody` 新增表现锚点四字段
+        // `bgm_id/bg_id/bg_phase:u16`×3 + `bg_phase_frame:u32`（逻辑 10B，紧邻 `reqs`
+        // 数组前，对齐吸收后 WorldBody 实测 +16：969360→969376；`World` 同步 +16：
+        // 1084104→1084120（无新池/无 Task 字段改动，增量 1:1 对应，非新增分摊乘数）。
+        // 不是新池（③ D10 容量预算不适用——D10 只管池容量常数，本刀四字段是标量）；
+        // ② checksum 走 derive 默认全量入（未加 skip）；④ SaveBytes 走 derive 自动
+        // （WorldBody 用 `#[derive(... SaveBytes)]`，非手写 impl，无需两侧同步）。
+        // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (969360, 1084104);
+        const EXPECTED: (usize, usize) = (969376, 1084120);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (969360, 1084104);
+        const EXPECTED: (usize, usize) = (969376, 1084120);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 

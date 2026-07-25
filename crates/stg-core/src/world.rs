@@ -181,6 +181,12 @@ pub struct WorldBody {
     /// 与 `spells[slot]` 本身（inactive 时全字段清零）刻意分层：槽内 `epoch` 是"当前占用者的
     /// 世代"，这里是"这个槽历史上一共发过多少代"。全零初始化合法（首次 begin 即从 1 起算）。
     pub(crate) spell_seq: [u16; crate::boss::MAX_BOSSES],
+    /// 表现锚点（整局流程刀 spec §4）：存读档/回滚/中段启动后表现层重同步的世界侧真相。
+    /// 仅 5x 族 syscall 写、任何相位不读（判别式测试押运）；P6 全量入校验和，facing 先例。
+    pub(crate) bgm_id: u16,
+    pub(crate) bg_id: u16,
+    pub(crate) bg_phase: u16,
+    pub(crate) bg_phase_frame: u32,
     #[checksum(skip = "纯输出缓冲，回滚重演确定性再生（P6/§6.2 通道 B）")]
     pub(crate) reqs: [RenderReq; REQS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 reqs 一并 skip（通道 B）")]
@@ -937,6 +943,34 @@ impl WorldBody {
     /// 帧内多次调用返回同一切片；缓冲下帧 `begin` 清空，headless 无人消费 = 零成本。
     pub fn take_requests(&self) -> &[RenderReq] {
         &self.reqs[..self.reqs_len as usize]
+    }
+
+    /// 5x 族锚点写口（syscall 专用；写字段+发 req 一体，保证"字段可 seek、req 可边沿"双通道）。
+    pub(crate) fn set_bgm(&mut self, id: u16) {
+        self.bgm_id = id;
+        self.emit_req(crate::consts::REQ_BGM, [id as i32, 0, 0, 0, 0, 0]);
+    }
+    pub(crate) fn set_bg(&mut self, id: u16) {
+        self.bg_id = id;
+        self.emit_req(crate::consts::REQ_BG, [id as i32, 0, 0, 0, 0, 0]);
+    }
+    pub(crate) fn set_bg_phase(&mut self, n: u16) {
+        self.bg_phase = n;
+        self.bg_phase_frame = self.frame;
+        self.emit_req(crate::consts::REQ_BG_PHASE, [n as i32, 0, 0, 0, 0, 0]);
+    }
+    /// 表现锚点只读口（bgm_id/bg_id/bg_phase/bg_phase_frame）——`WorldView` 亦转发同名方法。
+    pub fn bgm_id(&self) -> u16 {
+        self.bgm_id
+    }
+    pub fn bg_id(&self) -> u16 {
+        self.bg_id
+    }
+    pub fn bg_phase(&self) -> u16 {
+        self.bg_phase
+    }
+    pub fn bg_phase_frame(&self) -> u32 {
+        self.bg_phase_frame
     }
 
     /// 当前帧号只读口(I6;M2 表现层水位协议消费)。写帧号唯 `advance`(相位 10)。

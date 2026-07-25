@@ -96,6 +96,16 @@ pub const SYS_AIM_BULLET_AT_PLAYER: u16 = 38;
 /// 0 参：读 self 位置 → 朝向 P0 的角度（BAM，供脚本自算瞄准环）。
 pub const SYS_AIM_PLAYER_ANGLE: u16 = 40;
 
+// 5x：写——账面/表现声明族（整局流程刀 spec §4；owner 类别无限制，STAGE 任务常发）。
+/// 1 参：`delta`（允许负，饱和钳 `[0, u64::MAX]`，P4-b）。
+pub const SYS_ADD_SCORE: u16 = 50;
+/// 1 参：`id`（`0..=65535` 收窄，越界 no-op+viol）。写 `bgm_id` + 发 `REQ_BGM`。
+pub const SYS_BGM: u16 = 51;
+/// 同上，写 `bg_id` + `REQ_BG`。
+pub const SYS_BG: u16 = 52;
+/// 1 参：`n`。写 `bg_phase` + 自动盖 `bg_phase_frame` = 当前帧 + 发 `REQ_BG_PHASE`。
+pub const SYS_BG_PHASE: u16 = 53;
+
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
 fn pop(task: &mut Task) -> Result<i32, u8> {
@@ -302,8 +312,44 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             Ok(())
         }
         SYS_AIM_PLAYER_ANGLE => sys_aim_player_angle(task, ctx),
+        SYS_ADD_SCORE => {
+            let d = pop(task)?;
+            let s = &mut ctx.body.players[0].score;
+            *s = if d >= 0 {
+                s.saturating_add(d as u64)
+            } else {
+                s.saturating_sub(d.unsigned_abs() as u64)
+            };
+            Ok(())
+        }
+        SYS_BGM => sys_anchor_u16(task, ctx, AnchorKind::Bgm),
+        SYS_BG => sys_anchor_u16(task, ctx, AnchorKind::Bg),
+        SYS_BG_PHASE => sys_anchor_u16(task, ctx, AnchorKind::BgPhase),
         _ => Err(FAULT_BAD_OP),
     }
+}
+
+/// 5x 族锚点写口的三种目标字段（`sys_anchor_u16` 判据）。
+enum AnchorKind {
+    Bgm,
+    Bg,
+    BgPhase,
+}
+
+/// 三锚共用：弹 1 参收窄 u16（越界 = P4-b no-op+viol，同 `sys_emit_req` 口径），再走 world 写口。
+fn sys_anchor_u16(task: &mut Task, ctx: &mut VmCtx, kind: AnchorKind) -> Result<(), u8> {
+    let v = pop(task)?;
+    if !(0..=u16::MAX as i32).contains(&v) {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+        ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+        return Ok(());
+    }
+    match kind {
+        AnchorKind::Bgm => ctx.body.set_bgm(v as u16),
+        AnchorKind::Bg => ctx.body.set_bg(v as u16),
+        AnchorKind::BgPhase => ctx.body.set_bg_phase(v as u16),
+    }
+    Ok(())
 }
 
 /// 栈顶 i32 的低 16 位 → BAM（同 `OP_SINB`/`OP_COSB` 的取角惯例）。
@@ -1880,5 +1926,64 @@ mod tests {
         };
         assert!(call(&mut w, &ecl, &mut task, SYS_SPELL_TIMER, &[]).is_ok());
         assert_eq!(task.stack[0], -1);
+    }
+
+    // ── SYS_ADD_SCORE/SYS_BGM/SYS_BG/SYS_BG_PHASE（整局流程刀 Task 2；5x 族）────────
+
+    #[test]
+    fn sys_bgm_writes_field_and_emits_req() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_BGM, &[5]).is_ok());
+        assert_eq!(w.body.bgm_id, 5);
+        let reqs = w.body.take_requests();
+        let last = reqs.last().expect("SYS_BGM 必须发一条 req");
+        assert_eq!(last.id, crate::consts::REQ_BGM);
+        assert_eq!(last.args[0], 5);
+    }
+
+    #[test]
+    fn sys_bg_phase_stamps_current_frame() {
+        let (mut w, ecl) = fresh();
+        w.body.frame = 42;
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_BG_PHASE, &[3]).is_ok());
+        assert_eq!(w.body.bg_phase, 3);
+        assert_eq!(w.body.bg_phase_frame, 42);
+        let reqs = w.body.take_requests();
+        let last = reqs.last().expect("SYS_BG_PHASE 必须发一条 req");
+        assert_eq!(last.id, crate::consts::REQ_BG_PHASE);
+    }
+
+    /// 越界 → P4-b no-op + viol（与 `sys_emit_req` 的 id 收窄同款口径，syscall.rs:622 参照）。
+    #[test]
+    fn sys_anchor_out_of_range_is_noop_with_viol() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let cv0 = w.body.diag.contract_viol;
+        assert!(call(&mut w, &ecl, &mut task, SYS_BGM, &[-1]).is_ok());
+        assert_eq!(w.body.bgm_id, 0, "字段不动");
+        assert_eq!(w.body.take_requests().len(), 0, "无 req");
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+    }
+
+    #[test]
+    fn sys_add_score_saturates_at_zero() {
+        let (mut w, ecl) = fresh();
+        w.body.players[0].score = 10;
+        let mut task = Task::default();
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_SCORE, &[-100]).is_ok());
+        assert_eq!(w.body.players[0].score, 0, "下溢钳 0，不回绕");
+
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_SCORE, &[7]).is_ok());
+        assert_eq!(w.body.players[0].score, 7);
+
+        w.body.players[0].score = u64::MAX - 1;
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_SCORE, &[100]).is_ok());
+        assert_eq!(w.body.players[0].score, u64::MAX, "上溢钳 u64::MAX");
     }
 }

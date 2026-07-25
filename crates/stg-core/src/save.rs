@@ -64,7 +64,9 @@ impl<'a> SaveReader<'a> {
 /// 身份头魔数（"STGW" ascii）。
 pub(crate) const SAVE_MAGIC: [u8; 4] = *b"STGW";
 /// 存档文件格式版本（与 `ENGINE_VER` 独立演化——格式不变而引擎内部改版时后者才动）。
-pub(crate) const SAVE_FILE_VER: u8 = 1;
+/// 1→2（整局流程刀 Task 2）：`WorldBody` 新增表现锚点四字段（bgm_id/bg_id/bg_phase/
+/// bg_phase_frame），载荷字段清单变化，旧存档不可用新版解析——bump 拒收。
+pub(crate) const SAVE_FILE_VER: u8 = 2;
 /// 头总长 = 魔数4 + file_ver1 + ENGINE_VER4 + 表哈希8 + 镜像哈希8 + seed8 + frame4
 ///          + payload_len4 + payload_fnv8(与 `save_bytes` 写出序逐项对应,=49)。
 pub(crate) const SAVE_HEADER_LEN: usize = 4 + 1 + 4 + 8 + 8 + 8 + 4 + 4 + 8;
