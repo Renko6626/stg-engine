@@ -15,6 +15,9 @@
 *~
 *.tags
 
+# Godot 编辑器本地缓存(资源导入缓存/UID索引;.uid sidecar 相反要入库,见坑档 G2)
+/godot/.godot/
+
 # 操作系统
 .DS_Store
 Thumbs.db
