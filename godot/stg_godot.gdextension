@@ -3,8 +3,12 @@ entry_symbol = "gdext_rust_init"
 compatibility_minimum = 4.6
 reloadable = false
 
+; 路径口径:一律指向 cargo【原生】产物布局 target/{debug,release}/——即在哪个平台开发,
+; 就在那个平台跑 `cargo build -p stg-godot`,产物自然落在这里(见 godot/README.md)。
+; 交叉编译(如 Linux 上用 cargo-xwin 出 Windows DLL)产物在 target/<三元组>/debug/,
+; 不匹配本表;那条路只用于"验证能编过",要让 Godot 真加载须自行拷到 target/debug/。
 [libraries]
 linux.debug.x86_64 = "res://../target/debug/libstg_godot.so"
 linux.release.x86_64 = "res://../target/release/libstg_godot.so"
-windows.debug.x86_64 = "res://../target/x86_64-pc-windows-msvc/debug/stg_godot.dll"
-windows.release.x86_64 = "res://../target/x86_64-pc-windows-msvc/release/stg_godot.dll"
+windows.debug.x86_64 = "res://../target/debug/stg_godot.dll"
+windows.release.x86_64 = "res://../target/release/stg_godot.dll"

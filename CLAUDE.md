@@ -153,6 +153,9 @@ crates/
 godot/            真 Godot 工程（场景刀）：场景树/四层 MultiMesh 渲染链/请求分发器/HUD/
                   demo 局 .ecl（杂兵+风铃卡 boss）；渲染契约见 docs/render-contract.md；
                   冒烟 godot/smoke/run-smoke.sh
+  README.md       【异机开跑第一入口】clone 后怎么build/跑/排错（Windows 与 Linux 各一条路径口径）
+scripts/find-godot.sh   两个冒烟共用：选 Godot 二进制（≥4.6 版本闸）+ 超时上限
+                  （低版本不加载扩展 → headless 挂死不报错，坑档 G14）
 ```
 
 ## 常用命令
@@ -170,7 +173,13 @@ cargo run -p stg-harness -- serve            # WebSocket 查看器(浏览器玩�
 cargo run --release -p stg-harness -- storm      # 恢复重演风暴闸(存档正确性)
 bash crates/stg-godot/smoke/run-smoke.sh     # 桥级冒烟(桥面回归)
 bash godot/smoke/run-smoke.sh                # 真工程冒烟(demo 局两次开机:正常/中段)
+cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 先读 godot/README.md)
 ```
+
+> 冒烟脚本的 `GODOT_BIN` 依次取:环境变量 → PATH 里的 `godot` → 本开发机绝对路径。
+> **异机/Windows** 上跑请先读 [`godot/README.md`](godot/README.md)——`.gdextension` 认的是
+> **cargo 原生产物布局**(`target/{debug,release}/`),Windows 上带 `--target` 三元组编译反而会
+> 让 Godot 找不到 DLL。
 
 ## Milestone 地图（design_doc.md §11 / §1.3）
 
