@@ -31,6 +31,8 @@ jobs:
             echo "::error::stg-core 拉入了禁用依赖（确定性防火墙）"; exit 1
           fi
           echo "确定性防火墙通过 ✔"
+      - name: godot demo 局 .ecl 编译检查（单平台即可，纯 cargo，不涉及三平台校验和）
+        run: cargo run -p stg-harness -- check godot/ecl/demo
 
   # ── 三平台构建 + 金向量校验和 ──────────────────────────────────────────
   vector:
