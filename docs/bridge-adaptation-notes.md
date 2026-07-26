@@ -205,6 +205,37 @@ uniform 声明等),不证明**运行期数据通路**(`INSTANCE_CUSTOM` 实际�
 以后若要加菜单/选关等需要把 `Playfield` 摆进某个自适应布局的场景,想清楚这条尺寸传导链;
 纯 HUD 类叠加层继续走 `CanvasLayer` 绝对定位是更省心的默认选择。
 
+### G13. `.gdextension` 的库路径必须匹配 **cargo 原生产物布局**——带 `--target` 三元组编译会把产物挪走
+
+cargo 的产物落点有两套:`cargo build` 落 `target/{debug,release}/`,而 `cargo build --target
+<三元组>` 落 `target/<三元组>/{debug,release}/`。`.gdextension` 的 `[libraries]` 每个平台键
+只能写**一条**路径(feature-tag 组合不可重复,没有回退列表),所以两套布局只能认一套。本工程
+(2026-07-26 工具链刀)统一认**原生布局**:Windows 上 `cargo build -p stg-godot` →
+`target\debug\stg_godot.dll`,Linux 上 → `target/debug/libstg_godot.so`。**对下一次接入的含义**:
+①异机 clone 后按 `godot/README.md` 走,Windows 上**别**加 `--target x86_64-pc-windows-msvc`
+——加了产物进三元组目录,Godot 静默找不到库,表现是 `WorldBridge` 类不存在(而不是"库加载失败"
+这种指向明确的报错),排查成本远高于起因;②Linux 上用 cargo-xwin 交叉出 Windows DLL 那条路
+(见用户全局笔记)只用于**验证能编过**,产物在三元组目录、不被本表认领,要真让 Godot 加载须自行
+拷进 `target/debug/`;③交叉编译验证仍是划算的——本刀实测 `cargo-xwin build -p stg-godot
+--target x86_64-pc-windows-msvc` 在 Linux 上产出 PE32+ DLL 且 `llvm-objdump -p` 导出表里有
+`gdext_rust_init`(与 `entry_symbol` 一致),等于在没有 Windows 机器的情况下证明了整条
+core+compiler+gdext 链在 MSVC 目标下编得过、符号对得上。注意钉死的工具链(`rust-toolchain.toml`
+1.94.0)需要 `rustup target add x86_64-pc-windows-msvc` 单独装标准库,否则报 `can't find crate
+for std`——这不是代码问题。
+
+### G14. 扩展加载失败时 headless Godot **永不退出**——冒烟表现为挂死而非报错,故必须有版本闸 + 超时
+
+`.gdextension` 的 `compatibility_minimum = 4.6`:低于该版本的 Godot **不加载**本扩展,于是
+`WorldBridge` 类不存在,`main.gd`/`smoke.gd` 在解析期就报 `Identifier "WorldBridge" not declared`
+——脚本根本没跑到那句 `quit()`,而 `--headless` 又没有窗口可关,进程就**一直挂着**。实测
+(2026-07-26 工具链刀):本机 PATH 上的 `godot` 是 4.5.1、开发钉的是 4.6.3;冒烟脚本一度改成
+"优先取 PATH 里的 godot",当场挂死 18 分钟、输出为空,从现象上完全看不出是版本问题。
+**对下一次接入的含义**:①任何"自动发现 Godot 二进制"的逻辑都要带**版本闸**,别只判存在
+(本仓的闸在 `scripts/find-godot.sh`,自动候选须 ≥4.6,显式 `GODOT_BIN` 只警告不否决);
+②每条 godot 调用都要 `timeout` 兜底,把"无限等"降级成"可诊断的失败"——挂死比失败难查得多,
+因为它连一行错误都不给;③反过来,这也是一条**极好的负控**:临时喂个旧版 Godot 就能验证你的
+冒烟脚本在扩展失效时是否真的会红(本刀实测:退出码 1 + 打印超时诊断,而非静默绿或永远转)。
+
 ## 杂项
 
 - `PlayerState` 生死字段实名 `life_state`(非设计文档口头的 life);写外接层前先 grep 实名。
