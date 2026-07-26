@@ -7,7 +7,8 @@ extends SubViewportContainer
 # 桥面冻结不出容量口——漂移由 register_layer false + 冒烟兜底,见 setup)
 const CAPS := { 0: 8192, 1: 1024, 2: 256, 3: 512 } # key = WorldBridge.LAYER_*
 const CELLS := { 0: 32, 1: 32, 2: 64, 3: 32 }
-const COLS := { 0: 8, 1: 4, 2: 4, 3: 8 }
+const COLS := { 0: 16, 1: 4, 2: 4, 3: 8 }
+const ROWS := { 0: 12, 1: 1, 2: 1, 3: 1 }
 const TEXTURES := {
 	0: "res://assets/bullets.png", 1: "res://assets/shots.png",
 	2: "res://assets/enemies.png", 3: "res://assets/items.png",
@@ -63,7 +64,7 @@ func _make_layer(kind: int) -> MultiMeshInstance2D:
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/layer.gdshader")
 	mat.set_shader_parameter("grid_cols", float(COLS[kind]))
-	mat.set_shader_parameter("grid_rows", 1.0)
+	mat.set_shader_parameter("grid_rows", float(ROWS[kind]))
 	mmi.material = mat
 	# 播种定长零缓冲:①headless dummy renderer 下 get_buffer 才可用;②register_layer
 	# 的判据就是 buffer 长度==cap×12(bridge.rs 契约注释)
