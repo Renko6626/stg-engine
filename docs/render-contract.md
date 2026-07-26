@@ -28,6 +28,10 @@ sprite 号 = 格号（行优先）；越界号 mod 回卷。QuadMesh 尺寸 = ce
 上下镜像贴图尚未在真渲染器上验证（本机无 GPU/无 X）；判决前占位图元（圆/菱形/方块等）全
 上下对称，无观感差异，不阻塞本刀。换上下不对称的真美术前必须先跑 B23 的判决程序。
 
+占位图集"再生成对拍"验证（`gen_atlas.gd` 重跑、`md5sum` 比对生成产物与 commit 版本逐位相同）
+需要本机装有真 Godot 二进制才能跑（`--headless --path godot --script res://tools/gen_atlas.gd`；
+不是 GPU 问题，纯粹是 CI 镜像不装 Godot 可执行文件），CI 不可跑，只能本机手工核对。
+
 **sprite 号截断/回卷语义（跨层唯一权威）**：syscall 侧 `sprite` 参在入池前做
 `sprite as u16` 截断——只取低 16 位，脚本传入的越界值（负数或 > 65535）在核心层就已经静默
 折叠成某个 `u16`，池内 `sprite` 字段本身即为 `u16`（`enemy.rs`/`bullets.rs` 等同款）。核心层
@@ -53,4 +57,6 @@ bg 段内局部时间 = `frame - bg_phase_frame`（A4 mini-VM 的 seek 契约，
 场界 x∈[-192,192], y∈[0,448]（中轴原点）；SubViewport 384×448 @容器(32,16)，
 世界根 Node2D@(192,0)；640×480 窗口，canvas_items 拉伸。定点→浮点只发生在消费端边界，
 公式统一 `raw/65536`（编码器 `frame.rs::fx_f32`；`bridge.rs` 各读口如 `hud_player`/
-`hud_boss` 的 `hp_ratio`/`player_pos`/`fields_info` 内联同式）。
+`hud_boss` 的 `hp_ratio`/`player_pos`/`fields_info` 内联同式；第五处见 `main.gd`
+`REQ_ENEMY_DEATH` 处理器——`_wire_requests` 里 `a[0] / 65536.0, a[1] / 65536.0` 把请求
+携带的原始定点坐标换回浮点世界坐标喂 `effects.explosion`，同式内联在 GDScript 侧）。

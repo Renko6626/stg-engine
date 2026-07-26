@@ -6,24 +6,19 @@
 
 ## 现在（2026-07-26）
 
-- **位置**：**M2 收口**——Godot 场景刀七任务全部落地：A5 乙案（`spawn_enemy` 追 `task` 参
-  + `enemy_hp` 读口）解锁 enemy-owned 任务，纯 .ecl 终于摆得出 boss/符卡；渲染契约收口
-  （图集网格/stride 12/请求分发/锚点双表示）+ 真 Godot 工程竖切（场景树/四层 MultiMesh
-  渲染链/请求分发器/HUD/结算挂牌）+ demo 局（`godot/ecl/demo` 杂兵段 → 风铃卡 boss 战 →
-  挂牌结算三文件）+ 双冒烟（桥级 `crates/stg-godot/smoke` + 真工程级 `godot/smoke`）。
-  金向量全程逐位零平移。`stg-godot`（桥）+ `godot/`（真工程）合计 = M2 全部落地。
+- **位置**：**M2 收口**——Godot 场景刀七任务全部落地（A5 乙案 `spawn_enemy`+`enemy_hp` 解锁
+  enemy-owned 任务/渲染契约收口/真 Godot 工程竖切/demo 局杂兵+风铃卡 boss/双冒烟桥级+真工程级）。
+  `stg-godot`（桥）+ `godot/`（真工程）合计 = M2 全部落地；金向量全程逐位零平移（证据归 git 历史）。
 - **在飞**：无。
-- **下一阶段候选**：M3 环形快照 + 本地回滚 harness / RL 线 `stg-py`（PyO3 headless env）/
-  背景刀（follow-ups A4，STD 式 mini-VM，锚点契约已钉死）/ 内容与美术期（真美术换占位图集、
-  演出打磨小件，follow-ups A9）。
-- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（本刀销 A5/B22，B18 收窄为独苗，
-  新记 A6-A9/B24-B25/D9/F4；**B23 的 UV 判决须首个 GPU/有头环境才能做**，B18 独苗同批）。
+- **下一阶段候选**：M3 环形快照回滚 / `stg-py` RL 线 / 背景刀（follow-ups A4）/ 内容美术期（A9）。
+- **待办**：细目见 [`docs/follow-ups.md`](docs/follow-ups.md)（**B23/B18/DoD 目验三件套须首个
+  GPU/有头环境才能做**）。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
-| 2026-07-26 | **Godot 场景刀** | A5 乙案 `spawn_enemy` 7 参+`enemy_hp`/渲染契约收口/真 Godot 工程竖切(场景树/四层 MultiMesh/请求分发器/HUD)/demo 局(杂兵+风铃卡 boss)/双冒烟(桥级+真工程级);M2 全落地;金向量全程逐位零平移(`golden-base.txt` 为证) |
+| 2026-07-26 | **Godot 场景刀** | A5 乙案 `spawn_enemy` 7 参+`enemy_hp`/渲染契约收口/真 Godot 工程竖切(场景树/四层 MultiMesh/请求分发器/HUD)/demo 局(杂兵+风铃卡 boss)/双冒烟(桥级+真工程级);M2 全落地;金向量全程逐位零平移(证据归 git 历史) |
 | 2026-07-25 | 前置债务刀 | boss_ui 结算清扫(B16②)+D6 四字段收口(49 处迁移)+register_layer 换 buffer 判据+冒烟大扩(B18 可达面)+D8 乙案+新 A5(enemy-owned 任务语言缺口=场景刀设计输入) |
 | 2026-07-25 | 文档整理 | CLAUDE.md 结构树/命令/里程碑追新 + follow-ups 对账(销 B17 顺手补两断言/C17 归位 C 组/A3·B18 追注 new_game_at·anchors 现实) + D10 杂项行记锚点四字段 + ecl-lang check 目录用法 |
 | 2026-07-25 | **整局流程刀** | 方案A拍板(整局一World一镜像)+compile_units多文件+mark中段启动(垫片/标记表/自动补偿)+Loadout/new_game_at+表现锚点四字段(bgm/bg/bg_phase声明式)+转场挂牌协议;金向量因锚点字段整体平移(判别式护行为) |

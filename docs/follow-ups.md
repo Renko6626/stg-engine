@@ -14,6 +14,10 @@
 > 缺失/GAME_OVER 三态裁定/演出打磨小件四包（以上四条 A 组）、冒烟 `enemy_seen` 判别盲区/
 > `spawn_enemy`&`fire` task 号三拒绝支路零测试（以上两条 B 组）、敌"主协程返回即自燃"承诺
 > 未落地为代码（D9）、逐帧全缓冲上传性能账未记（F4））
+>
+> 终审全分支修复波追记（2026-07-26）：A8 措辞刷新（残机耗尽最小处置已落地，深度流程降级
+> 待办）；A9 补第⑤件（effects.gd 三处）；F4 数值订正（468.75KB→468KB整=479232B）；新记
+> **B26**（B18/B23/DoD 可玩目验三件套合并单，均卡在"首个有 GPU/X 环境"）。
 
 ---
 
@@ -67,18 +71,20 @@ UI/按键。`_sync_anchors`（双表示规矩：电平追平 hud/bg）目前的�
 必须靠 `_sync_anchors` 读 `anchors()` 把 HUD/背景电平拉回存档那一帧的状态。**触发点 = 宿主
 侧真正要做"继续游戏"/存档菜单时**，届时 `_sync_anchors` 直接复用，缺的只是调用点与 UI。
 
-### A8. `GAME_OVER` 态——spec 四态，实施三态（场景刀 T7 记档，2026-07-26）
+### A8. `GAME_OVER` 态——spec 四态，实施三态（场景刀 T7 记档，2026-07-26；终审修复波部分兑现）
 
 `docs/superpowers/specs/2026-07-25-godot-scene-design.md` §6 写的状态机是
-`PLAYING / PAUSED / STAGE_CLEAR / GAME_OVER` 四态；`main.gd` 的 `enum S` 只落地了前三个，
-`GAME_OVER` 未实现（历次任务复审均未把它升级为阻塞项，等同裁定"本刀不做"）。直接后果：
-**残机耗尽（`life_state` 打光）宿主侧无任何处理**——`world/player.rs` 的生死状态机本身
-按既有设计正常演化（`LIFE_DEATHWINDOW`→...），只是没有一条 GDScript 路径去侦测"耗尽"
-并切状态/给玩家反馈；demo 局本身也没有把残机耗尽设计进平衡（boss hp 已按人工可达调过）。
-**触发点 = 真实内容期需要"打光残机就算输"这条规则被实际感受到时**（含 practice 模式外的
-正常整局关卡）。
+`PLAYING / PAUSED / STAGE_CLEAR / GAME_OVER` 四态；`main.gd` 的 `enum S` 仍只有三个，没有
+新增独立的 `GAME_OVER` 态。但**残机耗尽已有宿主侧最小处置**（终审修复波 I-1）：`_after_step`
+侦测 `hud_player().life_state == 4`（`LIFE_GAMEOVER`，`stg-core/src/player.rs`）后复用既有
+`STAGE_CLEAR` 三态，切状态 + `hud.show_banner("GAME OVER  (Z restart)", 3600.0)`，拦住了
+"残机打光却无任何反馈、宿主继续当胜利处理"这个假胜利缺口——`world/player.rs` 的生死状态机
+本身按既有设计正常演化（`LIFE_DEATHWINDOW`→...），只是复用而非新增状态，也没有区分
+"胜利结算"与"落败"两条横幅之外的任何后续（continue 续命、计分对齐胜利/落败两条路径的
+account 差异）。**触发点 = 已部分兑现**（假胜利已拦，本条降级为深度流程债）：真实内容期若
+要做 continue 续命/落败与胜利分道的计分对齐，再回来把 `GAME_OVER` 升格为独立第四态。
 
-### A9. 演出打磨小件四包——spec 写了、实施未接（场景刀 T7 记档，2026-07-26）
+### A9. 演出打磨小件五包——spec 写了、实施未接（场景刀 T7 记档，2026-07-26；终审补第⑤件）
 
 `docs/superpowers/specs/2026-07-25-godot-scene-design.md` §7 的请求分发表比 `main.gd`
 `_wire_requests` 实际落地的处理器多写了几笔，均属可玩性不受影响的表现层打磨：
@@ -88,8 +94,12 @@ UI/按键。`_sync_anchors`（双表示规矩：电平追平 hud/bg）目前的�
 `return`，不清空 `boss_bar`/`spell_l`——若某帧 `hud_player()` 返回空（如未开局态被意外调用），
 boss 条/符卡行会残留上一次刷新的陈旧值而非归零；④ `hud.gd` 的 `banner`（横幅，位于
 `Vector2(120, 200)`，无 `word_wrap`/宽度限制）与右栏 HUD 面板（`x≥424`）之间没有互斥/换行
-处理，长文案（比如更长的符卡名/中文结算文案）视觉上可能压到右栏。四条都不阻塞可玩性，
-**触发点 = 内容与美术期**顺手一并做。
+处理，长文案（比如更长的符卡名/中文结算文案）视觉上可能压到右栏；⑤ `effects.gd`——
+`_Ring._process` 里 `queue_free()` 之后同一帧仍跑到 `queue_redraw()`（该次重绘是 no-op 但
+语义上有点怪）、`dispatcher.gd::drain(arr)` 的 `arr` 参数无类型标注、且 `main.gd` 的 Z 重开
+路径（`_boot(0)`）不清空 `effects` 节点下遗留子节点（重开瞬间前一局还没播完的爆炸环/飘字
+会带着旧世界坐标残留，直到自身计时器跑完才消失）。五条都不阻塞可玩性，**触发点 = 内容与
+美术期**顺手一并做。
 
 ## B. 测试覆盖缺口
 
@@ -215,7 +225,8 @@ threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy �
 真值 `RenderingServer.multimesh_get_visible_instances`，headless dummy renderer 下同样
 实测恒 0（`smoke.gd` 注释"已实验判决，不可测"，现有冒烟改走 `multimesh_get_buffer` 回读
 实数据判别绕开，不断言可见数）。**触发点 = 首个有 GPU/真渲染器的环境**，与 B23 的 UV
-判决同批可做（同样卡在"本机无 GPU/无 X"）。
+判决同批可做（同样卡在"本机无 GPU/无 X"）——合并单见 **B26**（与 B23、DoD 可玩目验三件
+一次做完，别单做一件就散场）。
 
 ### B19. 清弹 builtin——语义空间未定（整局流程刀 spec §8 记档，2026-07-25）
 
@@ -280,6 +291,7 @@ vec2 uv = (cell + vec2(UV.x, 1.0 - UV.y)) / vec2(grid_cols, grid_rows);
 ```
 
 确认后同步在 `docs/render-contract.md` §3 补一条 UV 朝向约定（记录判决结果 + 该行改法）。
+合并单见 **B26**（与 B18、DoD 可玩目验三件一次做完，别单做一件就散场）。
 
 ### B24. 冒烟①`enemy_seen` 判别不辨 boss/杂兵——负控实证（demo 局刀 T6 复审残余缝隙，2026-07-26）
 
@@ -310,6 +322,31 @@ vec2 uv = (cell + vec2(UV.x, 1.0 - UV.y)) / vec2(grid_cols, grid_rows);
 称其为 Handle 用途，不是"当前存活任务"的活句柄——敌死后任务被 owner-gate 清杀，但
 `main_task` 本身不会被清零，读到非零不代表任务还活着；目前全仓也确实没有任何消费者读它，
 只是别在将来加消费者时想当然把它当"活任务槽号"用。
+
+### B26. 首个有 GPU/X 环境的三件套合并单（终审全分支终审新记，2026-07-26）
+
+三条独立记档的债都卡在同一个前提——**本机全程无 GPU/无 X**（`xdpyinfo` 探测失败），
+且**全刀无一次有头运行**（画面从未被人眼看过，含本条判决程序涉及的自机 `Sprite2D`/
+弹幕图元/HUD 排版）——各自记在各自条目里容易各等各忘，合并列一次防止漏项：
+
+① **B23** `layer.gdshader` 图集选格 UV 垂直朝向嫌疑——判决程序：`gen_atlas.gd` 临时
+加一张上下不对称测试格，有头跑 `godot --path godot` 肉眼判"上红下蓝"是否镜像（详见 B23
+条内判决程序全文）。
+
+② **B18** `visible_instances`（`MultiMesh` 可见实例数）不可 headless 断言——判决程序：
+有 GPU/真渲染器后重跑 `godot/smoke`，把当前绕开用的 `multimesh_get_buffer` 判据换回
+`RenderingServer.multimesh_get_visible_instances` 直接断言，确认非 0（详见 B18 条内
+两层不可断言的具体原因）。
+
+③ **DoD 可玩目验**——`CLAUDE.md` Phase 1 之外，本刀（Godot 场景刀 + 本次终审修复波）
+的隐性 DoD 是"可玩 + 可验证"，但**验证目前全靠 headless 冒烟断言，没有一帧被人眼看过**：
+demo 局的图集贴图是否如预期摆放、HUD 排版是否重叠、boss 战节奏是否真的可打（900hp 是
+仓外探针实测数据，见 `godot/ecl/demo/boss_windchime.ecl` 注释，不是本机有头试玩验证的）、
+输入手感是否正常——一概未经目验。判决程序：有 GPU/X 环境后 `godot --path godot`（非
+`--headless`）跑一局 demo，键盘操作到风铃卡结算，肉眼确认贴图/HUD/节奏均正常。
+
+**触发点 = 同一个**：首个有 GPU/真渲染器/X 环境的会话，三件一次做完（不要只做其中一件
+就散场——判决程序共享同一次有头启动成本）。
 
 ## C. 代码整洁（低优先，都是两可）
 
@@ -606,9 +643,9 @@ v1 只跑彩虹风铃卡固定场景。两个自然延伸，各随触发点：`-
 
 `bridge.rs::step_frame` 对每个已注册层无条件 `multimesh_set_buffer` 整块上传（不做脏
 检测/增量），四层容量 `bullets=8192, shots=1024, enemies=256, items=512`（`playfield.gd`
-`CAPS`）× `FLOATS_PER_INSTANCE=12` × 4B/float = 9984×12×4 ≈ **468.75 KB/帧**，60Hz 下
-≈ **27.5 MB/s** 恒定上传带宽（与场上实际实体数无关，哪怕场上空场也全量推满 cap 大小的
-零缓冲）。`docs/bench-baseline.md` 目前完全没有这条账——它记的是 step/快照/校验和曲线，
+`CAPS`）× `FLOATS_PER_INSTANCE=12` × 4B/float = 9984×12×4 = **479232 B = 468 KB 整/帧**，
+60Hz 下 ≈ **27.4 MiB/s** 恒定上传带宽（与场上实际实体数无关，哪怕场上空场也全量推满 cap
+大小的零缓冲）。`docs/bench-baseline.md` 目前完全没有这条账——它记的是 step/快照/校验和曲线，
 不含 M2 渲染链的桥面开销。**触发点 = M2 收口后**（本刀 DoD 是"可玩+可验证"，不含性能
 调优）：`encode_layer`（`frame.rs`）本身已把活槽压到缓冲**前缀**（`iter_alive()` 只推进
 `n`，尾部留空），`multimesh_set_visible_instances(rid, n)` 也已按实际活数设——但

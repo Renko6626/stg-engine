@@ -105,6 +105,12 @@ func _after_step(buttons: int) -> void:
 	dispatcher.drain(bridge.take_requests())
 	hud.refresh(bridge)
 	playfield.update_view(bridge, buttons)
+	# I-1(终审裁定):残机耗尽的最小处置——拦假胜利。life_state==4 = LIFE_GAMEOVER
+	# (stg-core player.rs),hud_player 已暴露该键。复用既有三态与 Z 重开路径,不新增状态;
+	# continue/计分对齐等深度流程留内容期(follow-ups A8)。
+	if state == S.PLAYING and int(bridge.hud_player().get("life_state", 0)) == 4:
+		state = S.STAGE_CLEAR
+		hud.show_banner("GAME OVER  (Z restart)", 3600.0)
 
 func _on_stage_clear() -> void:
 	state = S.STAGE_CLEAR
@@ -148,9 +154,11 @@ func _run_smoke() -> void:
 	# I-1(复审裁定):原四断言(frame/checksum/REQ_BGM/player 在场界)对 demo 内容零判别——
 	# 即使 stage1 被清空、main 只剩 `bgm(1); loop { wait(600); }`,四条也照绿。逐帧扫
 	# LAYER_ENEMIES 缓冲,断言窗口内出现过非默认(非 (0,0))实例位置,证明 stage1 真出过
-	# 杂兵、真的在动。选这条而不是侦听 `REQ_ENEMY_DEATH`(复审给的备选②)——冒烟只按
-	# `BTN_LEFT`,`char0_update_shot` 要 `BTN_SHOT` 才发弹,240 帧窗口内自机打不死杂兵,
-	# ②在当前冒烟输入下不可达。
+	# 杂兵、真的在动。选这条而不是侦听 `REQ_ENEMY_DEATH`(复审给的备选②)——headless 下
+	# `Input.is_action_pressed` 恒 false,`stg_input.mask()` 每帧恒 0,冒烟一个键都不按
+	# (`BTN_LEFT` 是桥级 `crates/stg-godot/smoke/smoke.gd` 自己在 `step_frame` 调用点
+	# 显式传的常量,不是这里),`char0_update_shot` 要 `BTN_SHOT` 才发弹,240 帧窗口内
+	# 自机打不死杂兵,②在当前冒烟输入下不可达。
 	var enemy_seen := false
 	var mm_enemies: MultiMesh = playfield.layer_nodes[WorldBridge.LAYER_ENEMIES].multimesh
 	var waited := 0
@@ -178,6 +186,11 @@ func _run_smoke() -> void:
 	fails += _chk(int(a.get("bgm", -1)) == 2, "mid-start bgm==2, got %s" % str(a.get("bgm")))
 	fails += _chk(int(a.get("bg", -1)) == 1, "mid-start bg==1")
 	fails += _chk(int(a.get("bg_phase", -1)) == 1, "mid-start bg_phase==1")
+	# I-2(终审裁定):补招牌断言——boss_main 是 enemy-owned 任务(A5 乙案),中段开机直跳
+	# boss_battle() 后应立刻喂到 hud_boss/落池,不是只对表锚点四字段。
+	fails += _chk(int(bridge.hud_boss(0).get("active", 0)) == 1, "boss_main 的 boss_set 应已喂到 hud_boss")
+	var eb := RenderingServer.multimesh_get_buffer(playfield.layer_nodes[WorldBridge.LAYER_ENEMIES].multimesh.get_rid())
+	fails += _chk(eb.size() >= 12 and int(eb[8]) == 1, "LAYER_ENEMIES 首实例 custom.x==1(boss sprite,A5 task/sprite 两位真落池)")
 	if fails == 0:
 		print("SMOKE OK")
 	get_tree().quit(0 if fails == 0 else 1)
