@@ -96,6 +96,7 @@ mod stmts;
 mod typed_ast;
 
 pub use crate::lang::type_rules::{BinIntent, CastIntent, UnIntent};
+pub(crate) use typed_ast::const_val;
 pub use typed_ast::{
     CallArg, CallTarget, TypedCall, TypedExpr, TypedExprKind, TypedInfo, TypedStmt, TypedSub,
 };

@@ -24,9 +24,9 @@ pub(super) struct Checker<'p, 't> {
     pub(super) errors: Vec<CompileError>,
     pub(super) cur_sync_calls: Vec<String>,
     pub(super) cur_xform_refs: Vec<String>,
-    /// 绑定的世界表（`None` = 未绑定，跳过一切依赖表的判据）。本刀（颜色轴 T3）只铺管道
-    /// 把表存进来，尚无判据消费它——下一刀（形/色组合判据）起读。
-    #[allow(dead_code)]
+    /// 绑定的世界表（`None` = 未绑定，跳过一切依赖表的判据）。消费者：
+    /// `exprs::check_shape_color`（颜色轴 T4 的形/色三判据，阈值全从 `color_stride`
+    /// 与 `appearances[].valid` 读）。
     pub(crate) table: Option<&'t stg_core::tables::WorldTables>,
 }
 

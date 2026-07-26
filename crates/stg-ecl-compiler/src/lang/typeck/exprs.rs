@@ -4,7 +4,7 @@
 
 use super::checker::Checker;
 use super::scope::LocalScope;
-use super::typed_ast::{CallArg, CallTarget, TypedCall, TypedExpr, TypedExprKind};
+use super::typed_ast::{CallArg, CallTarget, TypedCall, TypedExpr, TypedExprKind, const_val};
 use crate::lang::ast::{Expr, Span, Ty, UnOp, expr_span};
 use crate::lang::builtins::{self, Builtin, ParamKind};
 use crate::lang::type_rules::{CastIntent, UnIntent, binary_result, op_symbol};
@@ -315,7 +315,63 @@ impl<'p, 't> Checker<'p, 't> {
                 },
             }
         }
+        if ok && matches!(b.name, "fire" | "batch") {
+            self.check_shape_color(b.name, &out, args, span);
+        }
         if ok { Some(out) } else { None }
+    }
+
+    /// 形/色两参判据（颜色轴刀 spec §6.3）。**必须在折叠之前对两个参分别施加**：
+    /// 折叠后的 id 无法区分"作者写反了"与"作者就要那个格"——写反的
+    /// `fire(COLOR_BLUE, BULLET_AMULET, …)` 折成 8+112=120，恰是 7 号形的 8 号色，
+    /// 一个完全合法的格，于是静默发出错误弹型（半径也跟着错）。同理**色号必须先于
+    /// 弹型检查**：写反时色号位上装的是弹型值（远大于 stride），先查色号才报得出真凶。
+    ///
+    /// 只在**两参都是编译期常量**且**绑定了表**时施加；变量色跳过，由 syscall 的
+    /// `valid` 判据在运行期兜底（`sys_create_bullet(s_batch)`，先验后建）。
+    /// 一切阈值从 `table.color_stride` 读——引擎里不得出现"每形 16 色"这个数。
+    fn check_shape_color(&mut self, name: &str, out: &[CallArg], args: &[Expr], span: Span) {
+        let Some(table) = self.table else { return };
+        let (Some(shape), Some(color)) = (const_val(&out[0]), const_val(&out[1])) else {
+            return; // 变量参：运行期由 syscall 的 valid 判据兜底
+        };
+        let stride = i32::from(table.color_stride);
+        let shape_span = expr_span(&args[0]).unwrap_or(span);
+        let color_span = expr_span(&args[1]).unwrap_or(span);
+
+        if stride <= 0 {
+            return; // 坏表：validate 的职责，此处不重复报错
+        }
+        if !(0..stride).contains(&color) {
+            self.err(
+                color_span,
+                format!(
+                    "'{name}' 的色号 {color} 越界：当前表每种弹型 {stride} 色，合法范围 0..{}",
+                    stride - 1
+                ),
+            );
+            return;
+        }
+        let shapes = (table.appearances.len() as i32) / stride;
+        if shape < 0 || shape % stride != 0 || shape / stride >= shapes {
+            self.err(
+                shape_span,
+                format!(
+                    "'{name}' 的弹型 {shape} 不是合法弹型：必须是 {stride} 的倍数且小于 {}",
+                    shapes * stride
+                ),
+            );
+            return;
+        }
+        let id = (shape + color) as usize;
+        if !table.appearances[id].valid {
+            self.err(
+                color_span,
+                format!(
+                    "弹型 {shape} 没有 {color} 号颜色（图集空格）——放行会造出有判定但看不见的弹"
+                ),
+            );
+        }
     }
 
     fn resolve_ident_ref(

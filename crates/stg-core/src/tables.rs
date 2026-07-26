@@ -5,8 +5,6 @@
 
 use std::sync::LazyLock;
 
-// `pub use` 保留原有再导出（消费者可能引 `crate::tables::APPEARANCE_*`），且在本模块内可用。
-pub use crate::consts::{APPEARANCE_LARGE, APPEARANCE_MEDIUM, APPEARANCE_SMALL, APPEARANCE_STAR};
 use crate::items::{ITEM_POINT, ITEM_POWER, ITEM_TYPE_COUNT};
 use crate::math::{Angle, Fx};
 use crate::world::MAX_ENTITY_RADIUS;
@@ -312,8 +310,9 @@ impl WorldTables {
         {
             return false;
         }
-        // join 校验（防 FM1）：每个 ② 表符号 id 必须是 appearances 的合法行。v1 全部 ②
-        // 都是 appearance 索引；将来 ② 长出 item 符号时按 tag 分流（见 spec/follow-ups）。
+        // join 校验（防 FM1）：每个 ② 表符号 id 必须是 appearances 的合法行。**② 段自
+        // 颜色轴刀（2026-07-26）起为空**（弹型名归内容包），故本循环当前不执行；机制保留
+        // ——② 段将来重新长出行（如道具类型符号）时自动生效，届时按 tag 分流。
         for c in crate::consts::TABLE_SYMBOLS {
             if (c.value as usize) >= self.appearances.len() {
                 return false;
@@ -887,31 +886,11 @@ mod tests {
         assert!(!bad.validate(), "appearance 半径超上限必须被 validate 拒绝");
     }
 
-    /// join 校验判别腿（FM1）：appearances 长度不覆盖 APPEARANCE_STAR(3) → 拒。
-    #[test]
-    fn validate_rejects_table_symbol_without_appearance_row() {
-        let mut t = build_tables_v0();
-        t.color_stride = 1;
-        t.appearances = Box::new([AppearanceCfg {
-            radius: Fx::from_int(2),
-            sprite: 0,
-            valid: true,
-        }]);
-        assert!(!t.validate(), "② 符号 id 越出 appearances → join 拒（FM1）");
-    }
-
-    /// coverage 断言：② 命名集全落在 appearances 表内（M1 时代"恰覆盖无空洞"随本刀
-    /// 表长成 192 行不再成立；T4 删 ② 段后本断言一并退场）。
-    #[test]
-    fn builtin_appearances_exactly_cover_table_symbols() {
-        for c in crate::consts::TABLE_SYMBOLS {
-            assert!(
-                (c.value as usize) < TABLES_V0.appearances.len(),
-                "② 符号 {} 必须落在 appearances 内",
-                c.name
-            );
-        }
-    }
+    // ② 表符号相关的两条测试（`validate_rejects_table_symbol_without_appearance_row`
+    // 的 FM1 判别腿、`builtin_appearances_exactly_cover_table_symbols` 的 coverage
+    // 断言）随颜色轴刀 T4 清空 ② 段一并退场——`TABLE_SYMBOLS` 现在是空表，两者都退化成
+    // 空断言（前者甚至会因 join 循环不执行而反转成红）。`validate` 里的 join 校验本身
+    // **保留**：机制仍在，② 段将来重新长出行时自动生效。
 
     /// B14 债：角色 hit/graze 半径越界的负向腿（此前只有正向覆盖）。
     #[test]

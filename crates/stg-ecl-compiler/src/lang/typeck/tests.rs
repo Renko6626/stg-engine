@@ -405,7 +405,7 @@ fn cast_angle_to_fx_is_not_whitelisted() {
 
 #[test]
 fn call_with_return_value_not_discarded_is_an_error() {
-    let errors = err("sub main() { fire(0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
+    let errors = err("sub main() { fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
     assert!(
         errors.iter().any(|e| e.msg.contains("未消费")),
         "{errors:?}"
@@ -414,7 +414,7 @@ fn call_with_return_value_not_discarded_is_an_error() {
 
 #[test]
 fn call_with_return_value_discarded_is_ok() {
-    ok("sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
+    ok("sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
 }
 
 #[test]
@@ -821,7 +821,7 @@ fn sync_call_on_async_sub_is_an_error() {
 #[test]
 fn fire_task_ref_with_params_is_an_error() {
     let errors = err("async sub trail(spd: fx) { wait(1); } \
-         sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, trail); }");
+         sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, trail); }");
     assert!(
         errors.iter().any(|e| e.msg.contains("无参 async sub")),
         "{errors:?}"
@@ -831,7 +831,7 @@ fn fire_task_ref_with_params_is_an_error() {
 #[test]
 fn fire_task_ref_on_plain_sub_is_an_error() {
     let errors = err("sub on_hit() { } \
-         sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, on_hit); }");
+         sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, on_hit); }");
     assert!(
         errors
             .iter()
@@ -853,13 +853,13 @@ fn sync_call_records_target_name_deduped() {
 
 #[test]
 fn fire_xf_none_and_task_none_is_ok() {
-    ok("sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
+    ok("sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
 }
 
 #[test]
 fn fire_xf_known_xformdef_is_ok_and_recorded() {
     let ti = ok(
-        "xformdef RING { turn(90deg); } sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, RING, none); }",
+        "xformdef RING { turn(90deg); } sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, RING, none); }",
     );
     let main = ti.subs.iter().find(|s| s.name == "main").unwrap();
     assert_eq!(main.xform_refs, vec!["RING".to_string()]);
@@ -867,7 +867,7 @@ fn fire_xf_known_xformdef_is_ok_and_recorded() {
 
 #[test]
 fn fire_xf_unknown_xformdef_is_an_error() {
-    let errors = err("sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, NOPE, none); }");
+    let errors = err("sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, NOPE, none); }");
     assert!(
         errors.iter().any(|e| e.msg.contains("未知的 xformdef")),
         "{errors:?}"
@@ -877,13 +877,13 @@ fn fire_xf_unknown_xformdef_is_an_error() {
 #[test]
 fn fire_task_known_sub_is_ok() {
     ok(
-        "async sub bullet_task() { } sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, bullet_task); }",
+        "async sub bullet_task() { } sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, bullet_task); }",
     );
 }
 
 #[test]
 fn fire_task_unknown_sub_is_an_error() {
-    let errors = err("sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, nope); }");
+    let errors = err("sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, nope); }");
     assert!(
         errors.iter().any(|e| e.msg.contains("未知的 sub")),
         "{errors:?}"
@@ -892,7 +892,7 @@ fn fire_task_unknown_sub_is_an_error() {
 
 #[test]
 fn fire_xf_non_identifier_expr_is_an_error() {
-    let errors = err("sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, 1, none); }");
+    let errors = err("sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, 1, none); }");
     assert!(
         errors.iter().any(|e| e.msg.contains("标识符")),
         "{errors:?}"

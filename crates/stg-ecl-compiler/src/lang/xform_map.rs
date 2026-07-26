@@ -27,6 +27,10 @@ use stg_core::xform;
 pub(crate) enum XformOp {
     /// (op 字节, 实参个数, 物理槽数)。
     Op(u8, usize, usize),
+    /// (op 字节, 物理槽数)——表层收 **2** 个常量参、**折叠进 `args[0]`** 的 op
+    /// （颜色轴糖：`set_sprite(shape, color)`）。核心侧 `OP_SET_SPRITE` 只读
+    /// `args[0]`——若按 `Op(_, 2, 1)` 直落 `args[1]`，颜色会被无声丢弃，故必须走本变体。
+    OpFold2(u8, usize),
     /// 编号已知但运行期解释器未实现——编译期拒收（见模块文档）。
     Reserved,
 }
@@ -41,7 +45,7 @@ pub(crate) fn lookup(name: &str) -> Option<XformOp> {
         "turn" => Some(Op(xform::OP_TURN, 1, 1)),
         "aim_player" => Some(Op(xform::OP_AIM_PLAYER, 1, 1)),
         "step_angle" => Some(Op(xform::OP_STEP_ANGLE, 2, 2)),
-        "set_sprite" => Some(Op(xform::OP_SET_SPRITE, 1, 1)),
+        "set_sprite" => Some(XformOp::OpFold2(xform::OP_SET_SPRITE, 1)),
         "set_life" => Some(Op(xform::OP_SET_LIFE, 1, 1)),
         "set_ang_vel" => Some(Op(xform::OP_SET_ANG_VEL, 1, 1)),
         "set_accel" => Some(Op(xform::OP_SET_ACCEL, 1, 1)),
@@ -60,7 +64,7 @@ pub(crate) fn physical_len(slots: &[crate::lang::ast::XfSlotLit]) -> usize {
     slots
         .iter()
         .map(|s| match lookup(&s.op_name) {
-            Some(XformOp::Op(_, _, p)) => p,
+            Some(XformOp::Op(_, _, p)) | Some(XformOp::OpFold2(_, p)) => p,
             _ => 1,
         })
         .sum()

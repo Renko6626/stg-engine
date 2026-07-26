@@ -65,7 +65,7 @@ use crate::lang::const_eval;
 use crate::lang::slots::{SlotMap, SubSlots};
 use crate::lang::typeck::{
     BinIntent, CallArg, CallTarget, CastIntent, TypedCall, TypedExpr, TypedExprKind, TypedInfo,
-    TypedStmt, TypedSub, UnIntent,
+    TypedStmt, TypedSub, UnIntent, const_val,
 };
 use crate::{BuilderSubRef, ImageBuilder, SubBuilder};
 use std::collections::{BTreeMap, BTreeSet};
@@ -198,6 +198,45 @@ impl<'p> Gen<'p> {
                         for _ in 1..physical {
                             built.push(XformSlot::default());
                         }
+                    }
+                    // 颜色轴糖：表层两个常量参折叠进 `args[0]`（核心只读 args[0]）。
+                    Some(crate::lang::xform_map::XformOp::OpFold2(op, _physical)) => {
+                        if s.args.len() != 2 {
+                            self.err(
+                                s.span,
+                                format!(
+                                    "xform 操作 '{}' 期待 2 个参数，实际 {}",
+                                    s.op_name,
+                                    s.args.len()
+                                ),
+                            );
+                            built.push(XformSlot::default());
+                            continue;
+                        }
+                        let mut vals = [0i32; 2];
+                        let mut ok = true;
+                        for (i, a) in s.args.iter().enumerate() {
+                            match const_eval::evaluate(a, &self.consts) {
+                                Ok((_ty, v)) => vals[i] = v,
+                                Err(e) => {
+                                    self.err(
+                                        s.span,
+                                        format!("xformdef 槽参数必须是编译期常量：{}", e.msg),
+                                    );
+                                    ok = false;
+                                }
+                            }
+                        }
+                        if !ok {
+                            built.push(XformSlot::default());
+                            continue;
+                        }
+                        built.push(XformSlot {
+                            wait: s.wait,
+                            op,
+                            _pad: 0,
+                            args: [vals[0] + vals[1], 0],
+                        });
                     }
                 }
             }
@@ -585,7 +624,28 @@ impl<'p> Gen<'p> {
         args: &[CallArg],
     ) {
         let discard_first_handle = is_self_bullet_setter(bi.name);
-        for (i, (a, pk)) in args.iter().zip(bi.params.iter()).enumerate() {
+        // 颜色轴糖：表层 (shape, color) 两参 → 字节码单个 appearance 值。折叠掉两位，
+        // 故循环改成索引推进式（`zip(...).enumerate()` 一位一步走不了这个合并）。
+        let folds_shape_color = matches!(bi.name, "fire" | "batch");
+        let mut i = 0usize;
+        while i < args.len() {
+            if folds_shape_color && i == 0 {
+                match (const_val(&args[0]), const_val(&args[1])) {
+                    // 常量对：折成单个字面量——与手写单参字节码逐字节相同（零运行期开销）
+                    (Some(s), Some(c)) => b.push_i(s + c),
+                    _ => {
+                        let (CallArg::Val(se), CallArg::Val(ce)) = (&args[0], &args[1]) else {
+                            unreachable!("typeck 已保证 fire/batch 前两参是 Val")
+                        };
+                        self.gen_expr(b, slots, se);
+                        self.gen_expr(b, slots, ce);
+                        b.add();
+                    }
+                }
+                i = 2;
+                continue;
+            }
+            let (a, pk) = (&args[i], &bi.params[i]);
             match (a, pk) {
                 (CallArg::Val(e), ParamKind::Val(_) | ParamKind::RawVal) => {
                     self.gen_expr(b, slots, e);
@@ -612,6 +672,7 @@ impl<'p> Gen<'p> {
                 },
                 _ => unreachable!("typeck 已保证 CallArg 与 ParamKind 一一对应"),
             }
+            i += 1;
         }
         if bi.is_op {
             // `is_op` 直发路径的 `syscall` 字段实际装的是 VM op 码本身（`lang::builtins`
@@ -660,15 +721,10 @@ struct AnchorComp {
 /// 裸调用的唯一常量实参值（spec §5"只捕获常量参"）：typed AST 的 `ConstRef`（`const`
 /// 引用折叠出的原始值）或 `IntLit`（整型字面量）——`LocalRef`/`Binary`/`Cast`/`Call`…
 /// 等一律视为"变量参"跳过，垫片处（`mark` 落点）是跳进来的落地指令，不可能重新求值
-/// 一个依赖运行期状态的表达式。
+/// 一个依赖运行期状态的表达式。判定本体住 `typeck::const_val`（颜色轴 T4 起与形/色
+/// 判据共用同一份实现），本函数只是"取首参"这层薄壳。
 fn anchor_const_arg(args: &[CallArg]) -> Option<i32> {
-    match args.first()? {
-        CallArg::Val(TypedExpr { kind, .. }) => match kind {
-            TypedExprKind::IntLit(v) | TypedExprKind::ConstRef(v) => Some(*v),
-            _ => None,
-        },
-        CallArg::XformRef(_) | CallArg::SubRef(_) => None,
-    }
+    const_val(args.first()?)
 }
 
 /// mark 补偿扫描（spec §5）：沿 `main` 的**同步调用链顶层线性**展开——顶层语句按源码序
@@ -1075,7 +1131,7 @@ mod tests {
     #[test]
     fn fire_task_script_attaches_and_runs_async_sub_on_new_bullet() {
         let src = "sub main() {\n\
-                     _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, on_bullet);\n\
+                     _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, on_bullet);\n\
                      wait(1000);\n\
                    }\n\
                    async sub on_bullet() {\n\
@@ -1093,7 +1149,7 @@ mod tests {
     fn xformdef_turn_changes_bullet_trajectory_survival() {
         // 无转向：沿 +x 飞出 [-256,256] 边界（200 + 4*15 = 260 > 256）。
         let no_turn = "sub main() {\n\
-                         _ = fire(0, 200fx, 100fx, 4.0fx, 0deg, none, none);\n\
+                         _ = fire(0, 0, 200fx, 100fx, 4.0fx, 0deg, none, none);\n\
                          wait(1000);\n\
                        }";
         let w1 = run(no_turn, 20);
@@ -1107,7 +1163,7 @@ mod tests {
         // y ∈ [-64,512] 远未触边，应仍存活。
         let with_turn = "xformdef RING { turn(90deg); }\n\
                           sub main() {\n\
-                            _ = fire(0, 200fx, 100fx, 4.0fx, 0deg, RING, none);\n\
+                            _ = fire(0, 0, 200fx, 100fx, 4.0fx, 0deg, RING, none);\n\
                             wait(1000);\n\
                           }";
         let w2 = run(with_turn, 20);
@@ -1120,6 +1176,30 @@ mod tests {
         assert_eq!(w2.body.view().diag().task_faults, 0);
     }
 
+    /// 颜色轴糖（xformdef 侧）：`set_sprite(shape, color)` 两参必须折叠进 **`args[0]`**
+    /// ——核心 `OP_SET_SPRITE` 只读 `args[0]`（`world/transform.rs`），若按普通双参 op
+    /// 让颜色落进 `args[1]`，颜色会被无声丢弃、弹变成该形的 0 号色。
+    /// 判别力所在：断言 `sprite == 16 + 3 == 19`，若丢色则是 `16`，若丢形则是 `3`。
+    #[test]
+    fn set_sprite_folds_shape_and_color_into_args0() {
+        let src = "xformdef RECOLOR { set_sprite(16, 3); }\n\
+                   sub main() {\n\
+                     _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, RECOLOR, none);\n\
+                     wait(1000);\n\
+                   }";
+        // 帧序：0=main 出生跳过；1=main 首跑（fire 建弹）；2=相位 4 跑完 wait=0 的槽。
+        let w = run(src, 3);
+        let view = w.body.view();
+        let p = view.bullets();
+        let i = p.iter_alive().next().expect("应有一颗弹");
+        assert_eq!(
+            p.sprite()[i],
+            19,
+            "set_sprite(16, 3) 必须折成单个 id 19（丢色会是 16，丢形会是 3）"
+        );
+        assert_eq!(view.diag().task_faults, 0);
+    }
+
     /// STEP 族 scratch 自动补槽的行为学判别（T3 复审 Important 修法）：
     /// `step_speed` 物理双槽——编译器不补 scratch 时，紧随其后的 `set_life(1)` 会落在
     /// scratch 槽位、被引擎运行期覆写而**永不执行**（弹永生）；补了则 set_life 照常
@@ -1128,7 +1208,7 @@ mod tests {
     fn step_op_auto_scratch_keeps_following_slot_alive() {
         let src = "xformdef S { step_speed(2.0fx, 4); set_life(1); }\n\
                     sub main() {\n\
-                      _ = fire(0, 0fx, 100fx, 0.5fx, 0deg, S, none);\n\
+                      _ = fire(0, 0, 0fx, 100fx, 0.5fx, 0deg, S, none);\n\
                       wait(1000);\n\
                     }";
         let w = run(src, 20);
@@ -1189,7 +1269,7 @@ mod tests {
                     sub main() {\n\
                       spawn child(1);\n\
                       helper(2);\n\
-                      _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, RING, none);\n\
+                      _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, RING, none);\n\
                       var i: int = 0;\n\
                       while i < 3 { i = i + 1; }\n\
                     }";
@@ -1247,7 +1327,7 @@ mod tests {
                      loop {\n\
                        var c: int = global(20);\n\
                        set_global(20, c + 1);\n\
-                       _ = fire(0, 0fx, 0fx, 0.5fx, 0deg, none, none);\n\
+                       _ = fire(0, 0, 0fx, 0fx, 0.5fx, 0deg, none, none);\n\
                        wait(1);\n\
                      }\n\
                    }\n\
@@ -1414,7 +1494,7 @@ mod tests {
     #[test]
     fn xformdef_non_const_arg_is_a_compile_error() {
         let src = "xformdef BAD { turn($frame); }\n\
-                    sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, BAD, none); }";
+                    sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, BAD, none); }";
         let errors = match compile(src, "bad.ecl") {
             Err(e) => e,
             Ok(_) => panic!("期望编译失败（xformdef 参数非常量）"),
@@ -1433,7 +1513,7 @@ mod tests {
         // 收编后 xformdef 槽参数走 const_eval，支持二元算术（原 eval_const_arg 只字面量/一元负）
         let src = "const A: int = 2;\n\
                    xformdef OK { turn(A + 1); }\n\
-                   sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, OK, none); loop { wait(1); } }";
+                   sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, OK, none); loop { wait(1); } }";
         assert!(
             compile(src, "ok.ecl").is_ok(),
             "二元 const 表达式应被 xformdef 槽参数接受"

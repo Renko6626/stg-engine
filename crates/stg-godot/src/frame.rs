@@ -115,6 +115,10 @@ pub fn encode_layer(
 mod tests {
     use super::*;
 
+    // 颜色轴刀(2026-07-26):`fire` 首参拆成 `shape, color` 两参(编译器折叠成一个
+    // appearance 值)。这里写 `fire(0, 1, ...)` = 0 号形第 1 色,折叠后恰是旧的
+    // appearance id `1`——下方 `TABLES_V0.appearances[1]` 的 sprite 断言口径不变。
+    //
     // 机械调整许可②(task-3-brief.md):`fire` builtin 实际签名(builtins.rs)是 7 参
     // `(appearance:Int, x:Fx, y:Fx, speed:Fx, angle:Angle, xf:XformRef, task:SubRef)`——
     // 简报草稿假设的 8 参 `(..., xform_off, xform_cnt, task_script)` 与之不符(xf/task 在
@@ -127,8 +131,8 @@ mod tests {
 sub main() {
     _ = spawn_enemy(-96.0fx, -64.0fx, 100, 0, 0, 0, none);
     _ = drop_item(32.0fx, 48.0fx, 2);
-    _ = fire(1, 10.0fx, 20.0fx, 0.0fx, 0deg, none, none);
-    _ = fire(1, 11.0fx, 21.0fx, 0.0fx, 16384bam, none, none);
+    _ = fire(0, 1, 10.0fx, 20.0fx, 0.0fx, 0deg, none, none);
+    _ = fire(0, 1, 11.0fx, 21.0fx, 0.0fx, 16384bam, none, none);
     loop { wait(60); }
 }
 "#;

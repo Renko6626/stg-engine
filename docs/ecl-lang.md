@@ -50,6 +50,7 @@
 
 ```ecl
 const SPELL_WINDCHIME: int = 1;
+const BULLET_RICE: int = 0; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
 
 xformdef WIND_CHIME { set_speed(2.0fx); @30 turn(90deg); }
 
@@ -65,7 +66,8 @@ async sub windchime_pattern() {
     loop {
         var ways: int = 28 + global(GVAR_RANK) * 2;
         for i in 0..5 {
-            _ = batch(i % 4, $self_x, $self_y, ways, base, 0deg, 1,
+            _ = batch(BULLET_RICE, i % BULLET_COLOR_STRIDE,
+                      $self_x, $self_y, ways, base, 0deg, 1,
                       1.0fx + i as fx * 0.25fx, 0fx);
         }
         base = base + 7deg;
@@ -196,7 +198,8 @@ after:`。正常流程（从头开局，或本次中段启动的落点不是这�
 编译器在编译期解析名称并编码为 `canonical SubId`（运行时 `EclImage` 无字符串表，
 只有 `(SubId, code_entry)` 的扁平元数据）。这意味着：
 - `spawn patrol()` 在编译期解析 `patrol` 到其 `SubId`，存入 `SPAWN` 指令的操作数。
-- `fire(1, $self_x, $self_y, 0fx, 0deg, WIND_CHIME, trail_task)` 同理——`trail_task` 作为
+- `fire(BULLET_RICE, COLOR_RED, $self_x, $self_y, 0fx, 0deg, WIND_CHIME, trail_task)`
+  同理——`trail_task` 作为
   `async sub` 的名称在编译期被解析并编码。
 - **不存在的 sub 名称在编译期即报错**，不存在运行期"名字未找到"的分支。
 
@@ -276,12 +279,16 @@ xformdef 槽参数（编译期常量位置）处都能直接引用，不用再�
 
 | 名字 | 值 | 含义 |
 |---|---:|---|
-| `APPEARANCE_SMALL` | `0` | 弹外观表——小 |
-| `APPEARANCE_MEDIUM` | `1` | 弹外观表——中 |
-| `APPEARANCE_LARGE` | `2` | 弹外观表——大 |
-| `APPEARANCE_STAR` | `3` | 弹外观表——星 |
 | `GVAR_RANK` | `0` | `globals` 系统段内 RANK（难度）槽号，见上节 |
 | `GLOBALS_SYS_SEGMENT` | `16` | `globals` 系统段/自由段分界槽号，见上节 |
+| `REQ_*` | 见 `consts.rs` | 通道 B 引擎保留请求 id（`REQ_STAGE_CLEAR`/`REQ_BGM`/…） |
+| `BULLET_COLOR_STRIDE` | 内建 `16` | **表派生**：当前绑定表的每种弹型色数，见下 |
+
+**弹型名与颜色名不是引擎常量**（旧的 `APPEARANCE_*` 已随颜色轴刀退场）——它们归**内容包**，
+由你自己的 `.ecl` 用 `const` 声明（示例见 `godot/ecl/demo/bullets.ecl`）。同一编译单元
+（= 同一目录）内 `const` 跨文件可见，所以整局脚本只需要在一个文件里声明一次。这样 mod
+作者与内建内容地位对等。写"轮转全部颜色"用 `BULLET_COLOR_STRIDE`，别硬编码 16。
+⚠️ 稀疏弹型（只做了部分色）的其余列是图集空格，盲目轮转全色会被编译期/运行期拒收。
 
 值即引擎侧同名 Rust 常量（脚本侧统一按 `int` 携带：`Fx`/`Angle` 类型的常量会带原始
 raw 值，不是十进制含义值——目前表里的名字都恰好是 `int` 类型，无此坑；新增 `fx`/`angle`
@@ -306,8 +313,8 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 否则会被 `committed_doc_segment_matches_generated` 防漂移测试打回)
 
 <!-- gen:builtins:begin -->
-- `fire(appearance: int, x: fx, y: fx, speed: fx, angle: angle, xf: xform|none, task: sub|none) -> int` — 发一颗弹;appearance 查外观表(越界 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1
-- `batch(appearance: int, x: fx, y: fx, n_angle: int, angle0: angle, angle_step: angle, n_speed: int, speed0: fx, speed_step: fx) -> int` — N-way 批量发环;返实际创建数
+- `fire(shape: int, color: int, x: fx, y: fx, speed: fx, angle: angle, xf: xform|none, task: sub|none) -> int` — 发一颗弹;shape/color 查外观表(越界/空格 编译期或 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1
+- `batch(shape: int, color: int, x: fx, y: fx, n_angle: int, angle0: angle, angle_step: angle, n_speed: int, speed0: fx, speed_step: fx) -> int` — N-way 批量发环;shape/color 同 fire;返实际创建数
 - `spawn_enemy(x: fx, y: fx, hp: int, drop_table: int, score: int, sprite: int, task: sub|none) -> int` — 造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌,敌死任务亡);返敌句柄,失败 -1
 - `enemy_hp(handle: int) -> int` — 查敌当前 hp;死/悬垂/越界句柄返 -1(P4-b;句柄是池 index,槽复用不可辨)——stage 编排等 boss 死用
 - `drop_item(x: fx, y: fx, item_type: int) -> int` — 掉一颗道具(带随机喷发速度,消耗模拟 RNG);返句柄,失败 -1
@@ -504,8 +511,11 @@ xformdef ARC_SHOT {
     set_life(180);
 }
 
+const BULLET_BALL_S: int = 16; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const COLOR_AZURE: int = 7;
+
 sub main() {
-    _ = fire(APPEARANCE_SMALL, 0fx, 0fx, 1.0fx, 0deg, ARC_SHOT, none);
+    _ = fire(BULLET_BALL_S, COLOR_AZURE, 0fx, 0fx, 1.0fx, 0deg, ARC_SHOT, none);
 }
 ```
 

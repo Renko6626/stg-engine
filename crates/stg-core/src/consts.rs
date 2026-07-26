@@ -65,13 +65,12 @@ engine_consts! {
         REQ_BG_PHASE:        u16 as int = 7;
         REQ_SCRIPT_BASE:     u16 as int = 64;
     }
-    table_symbols {
-        //  ② appearance 行名（值 = appearances 索引；join 校验 + FM2 防错序的锚）
-        APPEARANCE_SMALL:  u16 as int = 0;
-        APPEARANCE_MEDIUM: u16 as int = 1;
-        APPEARANCE_LARGE:  u16 as int = 2;
-        APPEARANCE_STAR:   u16 as int = 3;
-    }
+    //  ② 段目前**空**（颜色轴刀 2026-07-26）：弹型名/色名归**内容包**——由各内容包
+    //  自己的 `.ecl` 用 `const` 声明（内建 demo 的一份见 `godot/ecl/demo/bullets.ecl`），
+    //  mod 作者与内建内容地位对等，引擎不再替某一份内容包注册词汇。段本身保留：
+    //  机制（宏分段 + `validate` 的 join 校验）仍在，将来真有"引擎必须知道名字"的表行
+    //  （如道具类型符号）时直接加行即可。
+    table_symbols {}
 }
 
 #[cfg(test)]
@@ -82,16 +81,13 @@ mod tests {
     #[test]
     fn engine_consts_registry_exposes_named_ids() {
         // Rust 侧常量维持 u16 原型
-        assert_eq!(APPEARANCE_STAR, 3u16);
+        assert_eq!(REQ_BGM, 5u16);
         assert_eq!(GVAR_RANK, 0u16);
         assert_eq!(GLOBALS_SYS_SEGMENT, 16u16);
         // 注入列表把它们作为 i32/Int 携带
-        let star = ENGINE_CONSTS
-            .iter()
-            .find(|c| c.name == "APPEARANCE_STAR")
-            .unwrap();
-        assert_eq!(star.ty, EclValueType::Int);
-        assert_eq!(star.value, 3);
+        let bgm = ENGINE_CONSTS.iter().find(|c| c.name == "REQ_BGM").unwrap();
+        assert_eq!(bgm.ty, EclValueType::Int);
+        assert_eq!(bgm.value, 5);
         // 名字唯一
         let n = ENGINE_CONSTS.len();
         let mut names: Vec<&str> = ENGINE_CONSTS.iter().map(|c| c.name).collect();
@@ -106,9 +102,11 @@ mod tests {
         assert!(
             has(ENGINE_STRUCTURAL, "GVAR_RANK") && has(ENGINE_STRUCTURAL, "GLOBALS_SYS_SEGMENT")
         );
-        assert!(has(TABLE_SYMBOLS, "APPEARANCE_SMALL") && has(TABLE_SYMBOLS, "APPEARANCE_STAR"));
+        assert!(
+            TABLE_SYMBOLS.is_empty(),
+            "② 段已清空——弹型名归内容包(颜色轴刀)"
+        );
         assert!(!has(TABLE_SYMBOLS, "GVAR_RANK"), "结构常量不入 ②");
-        assert!(!has(ENGINE_STRUCTURAL, "APPEARANCE_STAR"), "表符号不入 ①");
         // ENGINE_CONSTS = ①⧺② 且注入面不变
         assert_eq!(
             ENGINE_CONSTS.len(),
@@ -121,6 +119,5 @@ mod tests {
                     .any(|e| e.name == c.name && e.value == c.value)
             );
         }
-        assert_eq!(APPEARANCE_STAR, 3u16); // pub const 原型不变
     }
 }
