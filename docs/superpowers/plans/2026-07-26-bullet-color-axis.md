@@ -1380,3 +1380,364 @@ EOF
   T4——因为删掉常量会立刻让 `rainbow.ecl` 编不过，T1 必须自身全绿。
 - **未覆盖的 spec 可选项**：§10「顺带可还 B25」未排任务（spec 明写"由 plan 决定"，
   本计划**不并**，理由：T4 已是本刀最大的原子任务，再塞会让复审面过宽）。
+
+---
+
+### Task 7: `set_sprite` 细化成三个 op——全设 / 只改形 / 只改色
+
+> **本任务是计划外追加**（用户在 T4 收工后提出）。**执行顺序：T7 → T5 → T6**——T6 的文档收口
+> 必须一并覆盖 T7 新增的两个 op。
+>
+> **两条人类裁定，实现时不得偏离**：
+> 1. **不做"跨形状安全"的保守判据**。曾提议"`set_color(c)` 要求 c 在所有弹型上都有图"，被
+>    否决：太激进，会因为图集里两个稀疏弹型就把 12..15 号色在所有弹型上禁掉。**部分设允许
+>    落到空格**，结果是该弹变透明，由作者负责。只保留"值本身非法"的检查。
+> 2. **syscall 对称面本刀不做**（任务弹改自身外观是另一个需求，今天本来就没有）。
+
+**Files:**
+- Modify: `crates/stg-core/src/xform.rs`（两个新 op 常量 + 已知 op 列表 + 号表测试）
+- Modify: `crates/stg-core/src/world/transform.rs`（两个解释臂 + 判别式测试）
+- Modify: `crates/stg-core/src/lib.rs`（`ENGINE_VER` 1 → 2）
+- Modify: `crates/stg-ecl-compiler/src/lang/xform_map.rs`（新变体 + 两个 op 名）
+- Modify: `crates/stg-ecl-compiler/src/lang/slots.rs`（新变体的 match 臂）
+- Modify: `crates/stg-ecl-compiler/src/lang/codegen.rs`（新变体的 staging 臂）
+- Modify: `crates/stg-ecl-compiler/src/lang/atlas.rs`（两个单轴判据）
+- Test: 上述各文件的 `#[cfg(test)] mod tests`
+
+**Interfaces:**
+- Consumes（T1/T3/T4 产出）：`WorldTables::color_stride`；`AppearanceCfg.valid`；
+  `codegen::generate(..., table: Option<&WorldTables>)` 与 `Gen` 的 `self.table` 字段；
+  `lang::atlas::{check_shape_color, ShapeColorError, Blame}`；
+  `lang::xform_map::XformOp::{Op, OpFold2}`；`codegen` 的 `eval_slot_args` / `push_scratch_slots` 助手。
+- Produces：
+  - `stg_core::xform::{OP_SET_SHAPE = 32, OP_SET_COLOR = 33}`
+  - 表层 `set_shape(shape)` / `set_color(color)`（xformdef 内，各 1 参、1 物理槽）
+  - `stg_core::ENGINE_VER == 2`
+
+> 下文引用的行号是 T4 收工时（`b911f05`）的状态，**仅供定位**，以你读到的实际代码为准。
+
+- [ ] **Step 1: 写失败测试——运行期语义（本任务的招牌）**
+
+在 `crates/stg-core/src/world/transform.rs` 的 `mod tests` 里加。**这条是本任务的判别式核心**：
+它必须能区分"只改了该改的那一维"与"整个 sprite 被覆写"。
+
+```rust
+    /// 招牌语义：`SET_COLOR` 保形、`SET_SHAPE` 保色。
+    /// 判别力：若任一 op 退化成"整个 sprite = args[0]"（即 SET_SPRITE 的行为），
+    /// 期望值 41/57 会变成 9/48，本测试立刻红。
+    #[test]
+    fn set_color_preserves_shape_and_set_shape_preserves_color() {
+        const STRIDE: i32 = 16;
+        let mut w = World::new();
+        // 起点：第 2 形第 5 色 = 2*16+5 = 37
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_COLOR, 9, STRIDE),          // 只换色 → 2*16+9 = 41
+                slot(1, OP_SET_SHAPE, 3 * STRIDE, STRIDE), // 只换形 → 3*16+9 = 57
+            ],
+        );
+        w.body.bullets.sprite[i] = (2 * STRIDE + 5) as u16;
+
+        w.body.run_transforms();
+        assert_eq!(w.body.bullets.sprite[i], 41, "SET_COLOR 必须保住形状位");
+
+        w.body.run_transforms();
+        assert_eq!(w.body.bullets.sprite[i], 57, "SET_SHAPE 必须保住颜色位");
+    }
+
+    /// P4-b：坏 stride（手工构造的槽，编译器不会产出）→ 计 contract_viol 且 sprite 不变，
+    /// 不 panic、不除零。
+    #[test]
+    fn partial_sprite_ops_reject_bad_stride() {
+        let mut w = World::new();
+        let i = xf_bullet(&mut w, &[slot(0, OP_SET_COLOR, 9, 0)]);
+        w.body.bullets.sprite[i] = 37;
+        let before = w.body.diag.contract_viol;
+
+        w.body.run_transforms();
+
+        assert_eq!(w.body.bullets.sprite[i], 37, "坏 stride 必须 no-op");
+        assert_eq!(
+            w.body.diag.contract_viol,
+            before + 1,
+            "坏 stride 必须计一次契约违规"
+        );
+    }
+```
+
+> `World::new()` / `xf_bullet` / `slot` 的确切写法**照抄本文件既有测试**（它们已有一套
+> 构造挂变换弹的助手）。`w.body` 的路径同理——以文件里的实际写法为准。
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `cargo test -p stg-core set_color_preserves_shape`
+Expected: 编译失败——`OP_SET_COLOR` / `OP_SET_SHAPE` 不存在。
+
+- [ ] **Step 3: 加两个 op 常量**
+
+`crates/stg-core/src/xform.rs`，紧跟 `OP_SET_LIFE`：
+
+```rust
+pub const OP_SET_SPRITE: u8 = 30;
+pub const OP_SET_LIFE: u8 = 31;
+/// 只换形状、保住颜色位（颜色轴刀 T7）。`args[0]` = 形状基址，`args[1]` = 色轴宽度
+/// （**由编译器从绑定表写入**——引擎不知道"颜色"是什么，只是拿两个操作数做取模）。
+pub const OP_SET_SHAPE: u8 = 32;
+/// 只换颜色、保住形状位（同上，`args[0]` = 色号，`args[1]` = 色轴宽度）。
+pub const OP_SET_COLOR: u8 = 33;
+```
+
+把两个新号加进本文件那张"已实现 op"的判定列表（`OP_SET_SPRITE | OP_SET_LIFE | …` 那处），
+并更新号表断言测试（该文件底部有 `assert_eq!((OP_SET_SPRITE, OP_SET_LIFE), (30, 31));` 一类
+的钉号测试，照同款加一条 `assert_eq!((OP_SET_SHAPE, OP_SET_COLOR), (32, 33));`）。
+
+- [ ] **Step 4: 实现两个解释臂**
+
+`crates/stg-core/src/world/transform.rs`，紧跟 `OP_SET_SPRITE` 那一臂：
+
+```rust
+            // 部分设：把 sprite 拆回 (形, 色) 再只改一维。stride 从槽里来（编译器写入），
+            // 故世界层不需要表、也不认识"颜色"这回事（spec §4.4）。
+            OP_SET_SHAPE => {
+                let stride = slot.args[1];
+                if stride <= 0 {
+                    // P4-b：手工构造的坏槽（编译器不会产出）——确定性 no-op + 计数，不除零
+                    self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+                } else {
+                    let cur = self.bullets.sprite[i] as i32;
+                    self.bullets.sprite[i] = (slot.args[0] + cur % stride) as u16;
+                }
+            }
+            OP_SET_COLOR => {
+                let stride = slot.args[1];
+                if stride <= 0 {
+                    self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+                } else {
+                    let cur = self.bullets.sprite[i] as i32;
+                    self.bullets.sprite[i] = (cur - cur % stride + slot.args[0]) as u16;
+                }
+            }
+```
+
+`self.diag.contract_viol` 的确切写法照本文件/`world.rs` 既有的计数惯例。
+
+- [ ] **Step 5: 跑测试确认通过**
+
+Run: `cargo test -p stg-core -- set_color_preserves_shape partial_sprite_ops_reject_bad_stride`
+Expected: PASS（两条）。
+
+- [ ] **Step 6: bump `ENGINE_VER`**
+
+`crates/stg-core/src/lib.rs:29`：`pub const ENGINE_VER: u32 = 1;` → `= 2;`
+
+理由写进该行上方注释：**op 清单变更**（新增 `OP_SET_SHAPE`/`OP_SET_COLOR`）——按 CLAUDE.md
+「改动前自检清单」第 3 条，改 op 清单须过评审 + bump。`step.rs` 的存档头会自动带上新值，
+其版本不符分支（`step.rs:228`）已有测试覆盖，无需改动。
+
+- [ ] **Step 7: 写编译期判据的失败测试**
+
+在 `crates/stg-ecl-compiler/src/lang/atlas.rs` 的 `mod tests` 加：
+
+```rust
+    /// 单轴判据：只查"值本身合不合法"，**不查空格**（人类裁定：部分设允许落到空格）。
+    #[test]
+    fn single_axis_checks_reject_bad_values_but_allow_blank_landings() {
+        let t = &*stg_core::tables::TABLES_V0;
+
+        // 色号越界 → 拒
+        assert!(check_color_only(t, 99).is_err());
+        assert!(check_color_only(t, -1).is_err());
+        // 合法色号 → 过，**即使它在某些弹型上是空格**（12 号色在心弹/蝶弹上没有图）
+        assert!(check_color_only(t, 12).is_ok(), "空格落点是作者的责任，不是编译错误");
+
+        // 形状基址非法（不是 stride 的倍数 / 越界）→ 拒
+        assert!(check_shape_only(t, 5).is_err());
+        assert!(check_shape_only(t, 12 * 16).is_err());
+        // 合法形状 → 过，**即使它是稀疏弹型**（第 9 形有空格色）
+        assert!(check_shape_only(t, 9 * 16).is_ok(), "稀疏弹型仍可作 set_shape 目标");
+    }
+```
+
+在 `crates/stg-ecl-compiler/src/lang/mod.rs` 的测试模块加端到端腿：
+
+```rust
+    /// xformdef 里的单轴 op：坏值编译期拒、空格落点放行。
+    #[test]
+    fn partial_sprite_ops_reject_bad_values_only() {
+        let bad = compile_err_msgs("xformdef X { set_color(99); } sub main() { wait(1); }");
+        assert!(bad.iter().any(|m| m.contains("色号")), "实际: {bad:?}");
+
+        let bad2 = compile_err_msgs("xformdef X { set_shape(5); } sub main() { wait(1); }");
+        assert!(bad2.iter().any(|m| m.contains("弹型")), "实际: {bad2:?}");
+
+        // 会落到空格的写法必须**编译通过**（裁定：允许，由作者负责）
+        crate::lang::compile(
+            "xformdef X { set_color(12); } sub main() { wait(1); }",
+            "t.ecl",
+        )
+        .expect("部分设落到空格是允许的，不得报编译错误");
+    }
+
+    /// 编译器把绑定表的 stride 写进 args[1]——没有表就无从得知，必须报错而不是猜。
+    #[test]
+    fn partial_sprite_ops_require_a_bound_table() {
+        let errs = crate::lang::compile_with_options(
+            "xformdef X { set_color(3); } sub main() { wait(1); }",
+            "t.ecl",
+            crate::lang::CompileOptions { debug_info: crate::lang::DebugInfo::None },
+            stg_core::consts::ENGINE_CONSTS,
+            None,
+        )
+        .expect_err("未绑定表时 set_color 无法确定色轴宽度，必须报错");
+        assert!(!errs.is_empty());
+    }
+```
+
+> `compile_err_msgs` 是 T4 加的助手，已在该模块存在；`xformdef` 的表层语法与 `wait(1)`
+> 的最小 main 照抄该模块既有测试。
+
+- [ ] **Step 8: 跑测试确认失败**
+
+Run: `cargo test -p stg-ecl-compiler -- partial_sprite_ops single_axis_checks`
+Expected: 编译失败——`check_color_only` / `check_shape_only` 不存在，`set_color` 不是已知 op 名。
+
+- [ ] **Step 9: 实现单轴判据**
+
+`crates/stg-ecl-compiler/src/lang/atlas.rs`——复用既有的 `ShapeColorError` 变体与**逐字相同的
+措辞**（既有测试靠"色号"/"弹型"字样断言）：
+
+```rust
+/// 单轴判据（部分设专用）：只查值本身是否合法，**不查空格**。
+/// 部分设的落点取决于弹当时的另一维（运行期状态），编译期不可知；人类裁定允许落到空格
+/// （结果是该弹变透明，由作者负责），故这里刻意**没有** `valid` 检查。
+pub(crate) fn check_color_only(table: &WorldTables, color: i32) -> Result<(), ShapeColorError> {
+    let stride = i32::from(table.color_stride);
+    if stride <= 0 {
+        return Ok(()); // 坏表：validate 的职责，不在此重复报错
+    }
+    if !(0..stride).contains(&color) {
+        return Err(ShapeColorError::ColorOutOfRange { color, stride });
+    }
+    Ok(())
+}
+
+pub(crate) fn check_shape_only(table: &WorldTables, shape: i32) -> Result<(), ShapeColorError> {
+    let stride = i32::from(table.color_stride);
+    if stride <= 0 {
+        return Ok(());
+    }
+    let shapes = (table.appearances.len() as i32) / stride;
+    if shape < 0 || shape % stride != 0 || shape / stride >= shapes {
+        return Err(ShapeColorError::BadShape { shape, stride, shapes });
+    }
+    Ok(())
+}
+```
+
+> `ShapeColorError` 变体的**确切字段**以 `atlas.rs` 现有定义为准；若既有 `BadShape` 的字段
+> 与上面不同，照既有的填，别改它（`fire`/`batch` 的测试依赖现有措辞）。
+
+- [ ] **Step 10: 表层接线——新的 `XformOp` 变体**
+
+`crates/stg-ecl-compiler/src/lang/xform_map.rs`：
+
+```rust
+pub(crate) enum XformOp {
+    /// (op 字节, 实参个数, 物理槽数)。
+    Op(u8, usize, usize),
+    /// 表层收 2 个常量参、**折叠进 `args[0]`** 的 op（`set_sprite(shape, color)`）。
+    OpFold2(u8, usize),
+    /// 表层收 1 个常量参，**`args[1]` 由编译器写入绑定表的 `color_stride`**
+    /// （`set_shape` / `set_color`）——引擎据此在运行期把 sprite 拆回两维。
+    OpWithStride(u8, usize),
+}
+```
+
+```rust
+        "set_sprite" => Some(XformOp::OpFold2(xform::OP_SET_SPRITE, 1)),
+        "set_shape" => Some(XformOp::OpWithStride(xform::OP_SET_SHAPE, 1)),
+        "set_color" => Some(XformOp::OpWithStride(xform::OP_SET_COLOR, 1)),
+```
+
+`physical_len` 的 match 补臂：`Some(XformOp::OpWithStride(_, p)) => p,`。
+`slots.rs` 那处接受合法 op 的 match 臂把 `OpWithStride(..)` 一并纳入（与 `OpFold2` 同处）。
+
+- [ ] **Step 11: codegen staging 臂**
+
+`crates/stg-ecl-compiler/src/lang/codegen.rs` 的 `gen_xformdef_staging`，在 `OpFold2` 臂之后加：
+
+```rust
+                    Some(crate::lang::xform_map::XformOp::OpWithStride(op, physical)) => {
+                        let Some(vals) = self.eval_slot_args(s, 1) else {
+                            built.push(XformSlot::default());
+                            continue;
+                        };
+                        // stride 必须来自绑定的表——没有表就无从得知，报错而不是猜一个默认值
+                        let Some(table) = self.table else {
+                            self.err(
+                                s.span,
+                                format!(
+                                    "xform 操作 '{}' 需要绑定的外观表才能确定色轴宽度",
+                                    s.op_name
+                                ),
+                            );
+                            built.push(XformSlot::default());
+                            continue;
+                        };
+                        let check = if op == xform::OP_SET_COLOR {
+                            crate::lang::atlas::check_color_only(table, vals[0])
+                        } else {
+                            crate::lang::atlas::check_shape_only(table, vals[0])
+                        };
+                        if let Err(e) = check {
+                            self.err(s.span, e.message(&s.op_name));
+                            built.push(XformSlot::default());
+                            continue;
+                        }
+                        built.push(XformSlot {
+                            wait: s.wait,
+                            op,
+                            _pad: 0,
+                            args: [vals[0], i32::from(table.color_stride)],
+                        });
+                        push_scratch_slots(&mut built, physical);
+                    }
+```
+
+> `e.message(&s.op_name)`、`self.eval_slot_args`、`push_scratch_slots` 的**确切签名以现有
+> 代码为准**（都是 T4 加的）；`xform` 需要在本文件 `use`。
+
+- [ ] **Step 12: 跑测试确认通过**
+
+Run: `cargo test -p stg-ecl-compiler -- partial_sprite_ops single_axis_checks`
+Expected: PASS（四条）。
+
+- [ ] **Step 13: 全绿并提交**
+
+```bash
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p stg-harness -- check godot/ecl/demo
+git add -A crates/
+git commit -m "$(cat <<'EOF'
+feat(xform): set_sprite 细化成三个 op——全设/只改形/只改色
+
+部分设需要运行期把 sprite 拆回 (形,色),而相位 4 拿不到表。做法:编译器把绑定表的
+color_stride 写进槽的 args[1],引擎只做两个操作数的取模——世界层仍然不认识"颜色"
+这回事(spec §4.4),零新增穿线。坏 stride 按 P4-b 计 contract_viol 后 no-op。
+
+人类裁定:部分设**不查空格**。落点取决于弹当时的另一维(运行期状态),编译期不可知;
+曾提议的"跨形状安全"保守判据被否决(太激进,会因两个稀疏弹型就禁掉大片正常用法)。
+落到空格 = 该弹变透明,由作者负责。只保留"值本身非法"的检查。
+
+op 清单变更 → 按 CLAUDE.md 自检清单第 3 条 bump ENGINE_VER 1→2。
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+> 文档（`docs/xform-ops.md` 两行 + `ecl-lang.md` 作者提示 + `follow-ups.md` 记裁定）
+> **不在本任务**——统一归 T6 收口，避免两处写同一段。
