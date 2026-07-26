@@ -308,7 +308,8 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 <!-- gen:builtins:begin -->
 - `fire(appearance: int, x: fx, y: fx, speed: fx, angle: angle, xf: xform|none, task: sub|none) -> int` — 发一颗弹;appearance 查外观表(越界 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1
 - `batch(appearance: int, x: fx, y: fx, n_angle: int, angle0: angle, angle_step: angle, n_speed: int, speed0: fx, speed_step: fx) -> int` — N-way 批量发环;返实际创建数
-- `spawn_enemy(x: fx, y: fx, hp: int, drop_table: int, score: int) -> int` — 造敌;sprite 固定 0、判定 12/16 默认;返敌句柄,失败 -1
+- `spawn_enemy(x: fx, y: fx, hp: int, drop_table: int, score: int, sprite: int, task: sub|none) -> int` — 造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌,敌死任务亡);返敌句柄,失败 -1
+- `enemy_hp(handle: int) -> int` — 查敌当前 hp;死/悬垂/越界句柄返 -1(P4-b;句柄是池 index,槽复用不可辨)——stage 编排等 boss 死用
 - `drop_item(x: fx, y: fx, item_type: int) -> int` — 掉一颗道具(带随机喷发速度,消耗模拟 RNG);返句柄,失败 -1
 - `move_to(dur: int, x: fx, y: fx, easing: int)` — 敌自身(self owner 非 ENEMY → Fault)按 easing 缓动、dur 帧内平移到 (x,y);四参数皆真实压栈(不同于下方弹 setter 族的占位 handle 首参)
 - `boss_set(slot: int, hp_ratio: fx, spell_id: int, timer_frames: int, phase_left: int, active: int)` — 整槽写 boss_ui 公告板(脚本写/UI 读);enemy 字段取自 self owner(非 ENEMY → NULL,不 Fault);符卡 active 期 enemy/spell_id/timer_frames/hp_ratio 由引擎逐帧自动覆写,phase_left 不受影响仍归脚本
@@ -343,6 +344,51 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 > `handle:int` **求值后即丢弃**，setter 恒作用于**当前任务的 owner 弹**（`self` 语义）——
 > 不能借句柄定向操纵别的弹；owner 不是弹的任务调它 → 任务 Fault。想操纵 `fire(...)`
 > 出来的那颗弹，用 xformdef 或 `fire` 的 `task` 参数挂子任务。
+
+## `spawn_enemy` 的 `task` 参与 `enemy_hp`（敌生成与轮询，A5 乙案）
+
+`spawn_enemy` 第 7 参 `task` 与 `fire` 第 7 参**同构**：编译期解析的 async 无参 sub 名，或
+字面量 `none`；非 `none` 时新敌的 owner 三元组落 `(ENEMY, 新敌 index, generation)`，随之
+解锁 owner 门禁——`spell_begin`/`move_to`/`self_*` 系列只在这颗新敌自己的任务里才能过闸
+（旧态下这些调用永远 Fault，纯 `.ecl` 摆不出 boss 正是这条门禁挡的）。`none` 时敌照常建成、
+不派任务，`main_task` 保持 0。
+
+**敌死任务亡，任务亡不影响敌**：owner-liveness gate（相位 2）在敌死后的下一相位清杀整棵
+task 树；反过来，`task` sub 自己 `return`/跑完**不会**让敌自燃（`ENEMY_DYING` 目前只由
+`damage_enemy` 血线路径置位，"主协程返回即自燃"是 ZUN 语义的既定目标但尚未落地为代码，
+见 `docs/follow-ups.md` D9）——`stage` 侧编排敌死请轮询 `enemy_hp`，别指望挂任务的 sub
+退出就等于敌死。`enemy_hp(handle) -> int` 是 STAGE 层等 boss/敌死的标准写法：死亡/悬垂/
+越界句柄统一返 `-1`（P4-b，槽复用后句柄不可辨，不区分"真死"与"槽已挪作他用"）：
+
+```ecl
+async sub boss_main() {
+    wait(60);
+}
+
+sub boss_battle() {
+    var boss: int = spawn_enemy(0.0fx, 96.0fx, 900, 1, 5000, 1, boss_main);
+    var waiting: int = 1;
+    while waiting == 1 {
+        if enemy_hp(boss) < 0 { waiting = 0; }
+        wait(10);
+    }
+}
+
+sub main() {
+    boss_battle();
+}
+```
+
+（`boss_battle` 一段按 `godot/ecl/demo/boss_windchime.ecl` 原文精简改写——真实版本的
+`boss_main` 跑非符+符卡两阶段、`boss_battle` 的等待循环带 75 秒挂死兜底，此处只留轮询
+`enemy_hp` 这条主干；真实关卡编排务必带超时兜底，见该文件注释。）
+
+**boss 血条手喂顺带一句**（`boss_set` 常见惯用法，C13②）：敌自身任务里手算
+`boss_set(0, $self_hp as fx / $self_hp_max as fx, ...)`。`int as fx` 是 `×65536`
+（见上"类型"节），走 `wrapping_mul`——**`$self_hp` 超过 32767 时这个乘法在 i32 里回绕**
+（不 panic，静默产出一个无意义的 `fx`），血条手喂公式因此隐含"敌 hp ≤32767"这条前提；
+真出现更高血量的敌，`hp_ratio` 换个不直接 cast 整段 hp 的算法（比如先各自钳到安全范围
+再除）。
 
 ## 符卡（`spell_begin` / `spell_end` / `spell_timer` / `wait_spell`）
 
@@ -403,6 +449,11 @@ sub main() {
 - **多卡序**：卡切换就是主控 sub 里顺序执行下一组 `spell_begin`/`wait_spell`——两行一卡，
   不需要任何引擎侧"下一张卡"排程；引擎不提供、也不打算提供自动切卡机制（`spell_bound`
   只管单卡模式树的生死，不管卡与卡之间怎么编排，见世界侧机构 spec 的"不做什么"节）。
+- **符卡练习（select 语义）不需要任何新引擎面**：练习是"只打一张，打完即散"而非"跳过前面
+  接着打"，靠 `mark` 垫片在 boss 主控 sub 开头写选卡分派即可——`mark(N) { set_global(槽,
+  值); }` 落进卡序中间，boss 主控读该 globals 槽非零就走单卡分支（`spell_begin`+
+  `wait_spell`+`return`），恒 0 走整战；选卡号随 `start`（`new_game_at` 的中段启动参数）
+  携带，正常整局流程被跳过零污染。槽号须落**自由段（≥16）**，系统段脚本写保护会挡。
 
 字节码层完整规则（syscall 号、越界/坏参数处置、事件/请求 id）见
 [`ecl-ops.md`](ecl-ops.md)"符卡计器"节；世界侧机构设计（结算矩阵、伤害下钳、逐卡血条公式）

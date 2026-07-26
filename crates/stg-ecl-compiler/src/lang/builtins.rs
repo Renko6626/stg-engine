@@ -118,10 +118,29 @@ const BUILTINS: &[Builtin] = &[
         name: "spawn_enemy",
         syscall: syscall::SYS_SPAWN_ENEMY,
         is_op: false,
-        params: &[Val(Fx), Val(Fx), Val(Int), Val(Int), Val(Int)],
+        // A5 乙案（append-only）：旧 5 参前缀不动，尾追 sprite（求值参）、task（`SubRef`，
+        // 同 fire 第 7 参同构）。
+        params: &[
+            Val(Fx),
+            Val(Fx),
+            Val(Int),
+            Val(Int),
+            Val(Int),
+            Val(Int),
+            Sub,
+        ],
         ret: Some(Int),
-        doc: "造敌;sprite 固定 0、判定 12/16 默认;返敌句柄,失败 -1",
-        param_names: &["x", "y", "hp", "drop_table", "score"],
+        doc: "造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌,敌死任务亡);返敌句柄,失败 -1",
+        param_names: &["x", "y", "hp", "drop_table", "score", "sprite", "task"],
+    },
+    Builtin {
+        name: "enemy_hp",
+        syscall: syscall::SYS_ENEMY_HP,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Int),
+        doc: "查敌当前 hp;死/悬垂/越界句柄返 -1(P4-b;句柄是池 index,槽复用不可辨)——stage 编排等 boss 死用",
+        param_names: &["handle"],
     },
     Builtin {
         name: "drop_item",
@@ -478,6 +497,7 @@ mod tests {
             "fire",
             "batch",
             "spawn_enemy",
+            "enemy_hp",
             "drop_item",
             "move_to",
             "boss_set",
@@ -535,6 +555,40 @@ mod tests {
             &[Val(Int), Val(Fx), Val(Fx), Val(Fx), Val(Angle), Xf, Sub]
         );
         assert_eq!(b.syscall, syscall::SYS_CREATE_BULLET);
+        assert!(!b.is_op);
+    }
+
+    /// A5 乙案（task-1 复审 Important-3）：`spawn_enemy` 7 位形状——`sprite` 在第 6 位
+    /// （`Val(Int)`，求值参），`task` 在第 7 位（`Sub`，`SubRef` 同 `fire` 第 7 参同构）；
+    /// 防 params 表两位对调静默错位（沿用 `fire_signature_matches_plan_shape` 先例）。
+    #[test]
+    fn spawn_enemy_signature_matches_plan_shape() {
+        let b = lookup("spawn_enemy").expect("spawn_enemy 应在表中");
+        assert_eq!(
+            b.params,
+            &[
+                Val(Fx),
+                Val(Fx),
+                Val(Int),
+                Val(Int),
+                Val(Int),
+                Val(Int),
+                Sub
+            ],
+            "spawn_enemy 第 6 位应为 sprite:Val(Int)，第 7 位应为 task:SubRef"
+        );
+        assert_eq!(b.ret, Some(Int));
+        assert_eq!(b.syscall, syscall::SYS_SPAWN_ENEMY);
+        assert!(!b.is_op);
+    }
+
+    /// A5 补遗（task-1 复审 Important-3）：`enemy_hp` 单参 `handle:int`，返 `int`。
+    #[test]
+    fn enemy_hp_signature_matches_plan_shape() {
+        let b = lookup("enemy_hp").expect("enemy_hp 应在表中");
+        assert_eq!(b.params, &[Val(Int)]);
+        assert_eq!(b.ret, Some(Int));
+        assert_eq!(b.syscall, syscall::SYS_ENEMY_HP);
         assert!(!b.is_op);
     }
 

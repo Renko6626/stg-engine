@@ -117,8 +117,10 @@ docs/ecl-ops.md                  ECL 字节码层速查（op/syscall/fault 码�
 docs/zun-ecl-v2-reference.md     ZUN ECL V2 指令/变量表本地副本 + 逐条对照（源 Priw8）
 docs/bench-baseline.md           性能基线（step 曲线/快照/校验和账；大改后重跑续表）
 docs/bridge-adaptation-notes.md  外接适配坑记录（每接一个消费者踩的坑；M2 WorldBridge 先读）
+docs/render-contract.md          表现层契约权威（图集网格/stride 12/请求分发/锚点双表示；
+                     场景刀首要读者：美术 + Godot 壳作者）
 editors/vscode/stg-ecl/          VS Code 扩展：高亮/补全/签名/hover，数据源 ecl-meta.json（编辑体验刀）
-.github/workflows/ci.yml         三平台矩阵 + 校验和对拍 + fmt/clippy + 依赖防火墙
+.github/workflows/ci.yml         三平台矩阵 + 校验和对拍 + fmt/clippy + 依赖防火墙 + .ecl 单平台门禁
 crates/
   stg-core/         确定性内核（断层线以下）
     src/math/        定点核：fx/angle/trig/cordic/easing/geom/isqrt/codec
@@ -148,6 +150,9 @@ crates/
                     —— .ecl 源码启动时编译成 EclImage；lib.rs builder = codegen 后端
   stg-harness/      CLI：golden 两段金向量（scenes/rainbow.ecl 符卡）+ bench 基线 + 烘焙表 bake/verify（允许浮点）
   stg-godot/        M2 桥：WorldBridge gdext cdylib（boot/frame/save 纯模块+壳；smoke/ headless 冒烟）
+godot/            真 Godot 工程（场景刀）：场景树/四层 MultiMesh 渲染链/请求分发器/HUD/
+                  demo 局 .ecl（杂兵+风铃卡 boss）；渲染契约见 docs/render-contract.md；
+                  冒烟 godot/smoke/run-smoke.sh
 ```
 
 ## 常用命令
@@ -163,6 +168,8 @@ cargo run -p stg-harness -- check <f.ecl|目录>   # .ecl 只编译不跑,行列
 cargo run -p stg-harness -- gen-ecl-meta         # 改 builtins.rs 后同步元数据/文档两生成 sink
 cargo run -p stg-harness -- serve            # WebSocket 查看器(浏览器玩风铃卡,ssh -L 转发)
 cargo run --release -p stg-harness -- storm      # 恢复重演风暴闸(存档正确性)
+bash crates/stg-godot/smoke/run-smoke.sh     # 桥级冒烟(桥面回归)
+bash godot/smoke/run-smoke.sh                # 真工程冒烟(demo 局两次开机:正常/中段)
 ```
 
 ## Milestone 地图（design_doc.md §11 / §1.3）
@@ -176,14 +183,15 @@ cargo run --release -p stg-harness -- storm      # 恢复重演风暴闸(存档�
   `.ecl` 表层语言 + 编译器（三型/具名函数/静态槽分配），风铃卡狗粮进金向量二号；
   **整局流程刀续**（2026-07-25）多文件 `compile_units`/`mark` 中段启动+自动补偿/
   `Loadout`+`new_game_at`/表现锚点四字段（spec `2026-07-25-game-flow-midstart-design.md`）。
-- **M2（进行中）** `stg-godot` WorldBridge 已落地（2026-07-24，桥刀）；余量 = 真 Godot 工程
-  （场景/MultiMesh 节点/分发器/输入映射）。
+- **M2 ✅**（2026-07-24~26）`stg-godot` WorldBridge（桥刀，2026-07-24）+ 真 Godot 工程竖切
+  （场景刀，2026-07-26：场景树/四层 MultiMesh 渲染链/请求分发器/HUD/demo 局 .ecl/双冒烟）
+  全部落地——headless 可玩可验证一整段 demo 局（杂兵段 → 风铃卡 boss 战 → 挂牌结算）。
 - **M3** 环形快照 + 本地回滚 harness（延迟/输入扰动/校验和风暴）。
 - **M4** `stg-net`（UDP + 会话/重同步）—— **phase 2 起点**。
 - **M5** `stg-py`（PyO3 headless 并行 env）。
 
-> 本仓当前建 Phase 1 三 crate + stg-derive + `stg-godot`（M2 桥半程：cdylib 已通，真 Godot
-> 工程未建）；py/net 到各自 milestone 再加。
+> 本仓当前建 Phase 1 三 crate + stg-derive + `stg-godot` + `godot/`（M2 全落地）；py/net
+> 到各自 milestone 再加。
 
 ## 开发工作流（全流程）
 

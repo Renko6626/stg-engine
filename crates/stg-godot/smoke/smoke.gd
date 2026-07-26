@@ -40,11 +40,44 @@ func _init():
 	if not b.register_layer(b.LAYER_ENEMIES, mm): fail("rl ok path"); return
 
 	var reqs_seen := 0
-	for i in range(120):
+	# B18 余量:hud_spell 判别(active/spell_id=7/bonus>0/frames_left>0)+ fields_info 非空
+	# 至少一帧(符卡清弹 field)。godot_smoke.ecl 的 smoke_boss 符卡挂槽 1(不是 0,避让
+	# main() 顶层手写的 boss_ui 槽 0——见 .ecl 注释,task-4 hud_boss 断言读的就是槽 0),
+	# time_limit=8(远小于原型 3600)——boss hp=8888 全程不受伤,HP 路径的 hp_threshold=0
+	# 永不命中,只有超时路径会在早期几帧内自然结算;结算(settle_one_spell,spell.rs)才
+	# 铺一帧清弹 field(life=1,只活一帧)。头 20 步(远宽于超时点,给 born-frame 调度余量)
+	# 逐帧扫,先摸到 active 期的 hud_spell,再摸到结算那一帧的 field;把这 20 步的总数从
+	# 下方主循环的 120 步预算里扣除(20+100=120),`frame120`/`reqs_seen` 两条既有断言分毫
+	# 不动。
+	var spell_seen := false
+	var bonus_floor_seen := false
+	var field_seen := false
+	for i in range(20):
+		b.step_frame(0)
+		reqs_seen += b.take_requests().size()
+		var s: Dictionary = b.hud_spell(1)
+		if not s.is_empty() and int(s.get("active", 0)) == 1 and int(s.get("spell_id", 0)) == 7 \
+				and int(s.get("bonus_now", 0)) > 0 and int(s.get("frames_left", 0)) > 0:
+			spell_seen = true
+		# 复审裁定:`bonus_now>0` 收紧成衰减公式的真判别式——`bonus_floor = bonus0/10 =
+		# 50000/10 = 5000`(spell_begin 当帧一次整除定格,spell.rs)。取"窗口内出现过 5000"
+		# 而非"与上面 active/frames_left>0 同帧同断言"这个更强形态:`dec_per_frame =
+		# (bonus0-floor)/time_limit = 45000/8 = 5625` 整除无余数,bonus_now 与 frames_left
+		# 每次 settle_spells 同步各减一步,数学上 bonus_now 首次摸到地板 5000 的那一次
+		# settle 调用,恰好也是 frames_left 减到 0 的那一次——`frames_left>0` 在那一读
+		# 恒假,两个条件在同一帧本就互斥,合并写会让这条断言永远假,故拆成独立标志。
+		if not s.is_empty() and int(s.get("bonus_now", 0)) == 5000:
+			bonus_floor_seen = true
+		if b.fields_info().size() > 0:
+			field_seen = true
+	for i in range(100):
 		b.step_frame(0)
 		reqs_seen += b.take_requests().size()
 	if b.frame() != 120: fail("frame120"); return
 	if reqs_seen == 0: fail("通道 B 零请求——emit_req 没到达"); return
+	if not spell_seen: fail("hud_spell 判别(active/spell_id=7/bonus>0/frames_left>0)"); return
+	if not bonus_floor_seen: fail("hud_spell bonus_now 触底=bonus0/10=5000(衰减公式判别)"); return
+	if not field_seen: fail("fields_info 非空(符卡清弹 field 可达)"); return
 
 	# 编码→上传链回读判别(task-4):`register_layer` 在上面的 120 步循环之前就注册了,故
 	# 每一步 `step_frame` 都会编码+上传;godot_smoke.ecl 的敌 `spawn_enemy(0,-160,...)` 全程

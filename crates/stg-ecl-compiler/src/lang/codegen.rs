@@ -1347,6 +1347,68 @@ mod tests {
         assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
+    // ── spawn_enemy task 参（A5 乙案；task-1-brief.md）─────────────────────
+
+    /// `spawn_enemy(...)` 尾追的 `task` 参数（`CallArg::SubRef`）走 `fire`/`spell_begin`
+    /// 同款 codegen 通道（sub 名标识符 / `none`，编译期解析，不参与求值型检查）——钉编译面：
+    /// 标识符/none 两形态都应通过。语义端到端断言在 `stg-core::ecl::syscall` 测试；这里只钉
+    /// "能编译通过"，同 `fire_task_script_attaches_and_runs_async_sub_on_new_bullet` 先例。
+    #[test]
+    fn spawn_enemy_task_param_lowers_like_fire() {
+        let src = "async sub boss_main() {\n\
+                     loop { wait(60); }\n\
+                   }\n\
+                   sub main() {\n\
+                     _ = spawn_enemy(0.0fx, 96.0fx, 100, 1, 500, 3, boss_main);\n\
+                     _ = spawn_enemy(1.0fx, 2.0fx, 10, 0, 0, 0, none);\n\
+                   }";
+        let _image = compile(src, "spawn_enemy_task.ecl")
+            .unwrap_or_else(|e| panic!("7 参 spawn_enemy 应编译通过：{e:?}"));
+    }
+
+    /// `task` 位不收求值表达式——语法上必须是裸标识符 / `none`（同 `fire` 的 xf/task 位、
+    /// `spell_begin` 的 `pattern` 位一脉；typeck 侧判据见 `lang::typeck::tests`）。
+    #[test]
+    fn spawn_enemy_task_param_rejects_value_expr() {
+        let src = "sub main() { _ = spawn_enemy(0.0fx, 0.0fx, 1, 0, 0, 0, 1 + 2); }";
+        assert!(compile(src, "bad.ecl").is_err());
+    }
+
+    /// A5 乙案 e2e（task-1 复审 Important-3 附加）：sprite/task 两位真实端到端连通——
+    /// sprite 落新敌池（判别值 3，防 params 表 sprite/task 两位对调静默错位），task 挂的
+    /// async sub 真实经调度执行（同 `fire_task_script_attaches_and_runs_async_sub_on_new_bullet`
+    /// 先例）。本 crate P1 边界不摸 `TaskPool` 内部字段（见模块文档"观测口"），owner 三元组
+    /// 绑定的核侧断言见 `stg-core::ecl::syscall::tests::spawn_enemy_with_task_binds_owner_and_main_task`。
+    #[test]
+    fn spawn_enemy_sprite_and_task_wire_correctly_end_to_end() {
+        let src = "sub main() {\n\
+                     _ = spawn_enemy(0.0fx, 96.0fx, 100, 1, 500, 3, on_enemy);\n\
+                     wait(1000);\n\
+                   }\n\
+                   async sub on_enemy() {\n\
+                     set_global(20, 1);\n\
+                   }";
+        // 帧序：0=main 出生跳过；1=main 首跑（spawn_enemy 挂任务，born_frame=1）；
+        // 2=挂载任务首跑。
+        let w = run(src, 3);
+        let enemies = w.body.view().enemies();
+        let idx = enemies
+            .iter_alive()
+            .next()
+            .expect("main 首跑后应已造出一只敌");
+        assert_eq!(
+            enemies.sprite()[idx],
+            3,
+            "sprite 位应落到新敌（防 params 表 sprite/task 两位对调错位）"
+        );
+        assert_eq!(
+            w.body.view().globals()[20],
+            1,
+            "task 位挂的 async sub 应真实调度执行"
+        );
+        assert_eq!(w.body.view().diag().task_faults, 0);
+    }
+
     // ── 错误路径：xformdef 参数非编译期常量 ─────────────────────────────
 
     #[test]

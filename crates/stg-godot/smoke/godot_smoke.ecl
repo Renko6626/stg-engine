@@ -1,7 +1,23 @@
 // Godot 桥 headless 全流程冒烟场景(task-4)——数据驱动:出一只敌+循环发弹/发通道B请求，
 // 给 smoke.gd 一个"120 帧窗口里必有实体/必有请求/校验和会变"的最小可验证世界。
+// task-6:B18 余量销账——enemy-owned 符卡可达面(A5:spawn_enemy 第 7 参),给 hud_spell 判别 +
+// fields_info(符卡清弹 field)一条真实可达路径。清弹 field 只在符卡"结算"那一刻铺
+// (settle_one_spell,spell.rs)——boss hp=8888 全程不受伤,hp_threshold=0 的 HP 路径永不
+// 命中,故 time_limit 特意压到 8(远小于原型 3600)让符卡走超时路径在早期几帧内自然结算,
+// smoke.gd 才能在一个短窗口内先摸到 active 期的 hud_spell、再摸到结算铺出的一帧 field。
+// 槽位特意选 1(不是 0):main() 顶层已用 `boss_set(0, ...)` 手写 boss_ui 槽 0(task-4
+// hud_boss 判别的既有前提),符卡 active 期/结算会自动覆写/清零绑定槽的 boss_ui——挂在
+// 同一槽 0 会在这里的符卡早早结算时把那份手写值连锁清零,冲掉后面 task-4 的 hud_boss
+// 断言(读的也是槽 0);两条 B18/B16② 判别面各占一槽,互不干扰。
+async sub smoke_spell_pattern() { loop { wait(60); } }
+async sub smoke_boss() {
+    spell_begin(1, 7, smoke_spell_pattern, 8, 50000, 0, 0);
+    wait_spell();
+}
+
 sub main() {
-    _ = spawn_enemy(0.0fx, -160.0fx, 9999, 0, 100);
+    _ = spawn_enemy(0.0fx, -160.0fx, 9999, 0, 100, 0, none);
+    _ = spawn_enemy(64.0fx, -120.0fx, 8888, 0, 0, 2, smoke_boss);
     // task-7:表现锚点 + 中段启动冒烟——bgm(3) 是 mark(9) 前最近一条 bgm 声明,正常流
     // 一跳跨过垫片(bgm 仍照直写生效=3);start=9 跳入则由 mark 自动补偿注入同一值 3。
     bgm(3);

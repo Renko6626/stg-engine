@@ -125,7 +125,7 @@ mod tests {
     // 与简报原意的"角度 0"/"角度 16384" 数值等价，只是补上语言要求的类型后缀。
     const SRC: &str = r#"
 sub main() {
-    _ = spawn_enemy(-96.0fx, -64.0fx, 100, 0, 0);
+    _ = spawn_enemy(-96.0fx, -64.0fx, 100, 0, 0, 0, none);
     _ = drop_item(32.0fx, 48.0fx, 2);
     _ = fire(1, 10.0fx, 20.0fx, 0.0fx, 0deg, none, none);
     _ = fire(1, 11.0fx, 21.0fx, 0.0fx, 16384bam, none, none);
@@ -171,7 +171,10 @@ sub main() {
         let n = encode_layer(g.world.view(), g.tables, LAYER_ENEMIES, &mut out);
         assert_eq!(n, 1);
         assert_eq!(&out[0..8], &[1.0, -0.0, 0.0, -96.0, 0.0, 1.0, 0.0, -64.0]);
-        assert_eq!(out[8], 0.0, "spawn_enemy sprite 固定 0");
+        assert_eq!(
+            out[8], 0.0,
+            "本调用 spawn_enemy 的 sprite 参传 0（A5 后 sprite 可传参，非恒 0）"
+        );
     }
 
     #[test]

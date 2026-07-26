@@ -53,6 +53,9 @@ pub const SYS_SELF_HP_MAX: u16 = 10;
 /// 无绑定 → `-1`（`wait_spell()` 语法糖的判据，同 `SYS_SELF_HP` 误用降级口径：owner
 /// 非 ENEMY 直接押 -1，不 Fault）。
 pub const SYS_SPELL_TIMER: u16 = 11;
+/// 查敌读口(A5 补遗):活敌返 hp,其余 -1。P4-b:句柄是池 index,悬垂/复用不可辨,
+/// 越界/死槽一律 -1 不 Fault——stage 编排等 boss 死的轮询原语。
+pub const SYS_ENEMY_HP: u16 = 12;
 
 // 2x：写——创建/世界变更
 /// 丙方案 8 参（正序压栈）：`appearance, x, y, speed, angle, xform_off, xform_cnt, task_script`。
@@ -171,6 +174,16 @@ fn sys_spell_timer(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     push(task, frames_left)
 }
 
+/// `SYS_ENEMY_HP`（12；A5 补遗）：1 参 `handle`（池 index，直读，不比对 generation——
+/// 句柄复用不可辨，同 `SYS_SPELL_TIMER`/`SYS_SELF_HP` 的读族误用降级口径，不 Fault）。
+/// 活敌返当前 hp；越界/死槽/负值一律 -1——stage 编排"等 boss 死"的轮询原语。
+fn sys_enemy_hp(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let handle = pop(task)?;
+    let idx = handle as usize;
+    let alive = handle >= 0 && idx < crate::enemy::EnemyPool::CAP && ctx.body.enemies.is_alive(idx);
+    push(task, if alive { ctx.body.enemies.hp[idx] } else { -1 })
+}
+
 /// self owner 必须是 BULLET，否则脚本作者违约 → `Fault`（misuse 策略，见模块文档）。
 fn self_bullet_handle(task: &Task) -> Result<BulletHandle, u8> {
     if task.owner_kind != OWNER_BULLET {
@@ -240,6 +253,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             push(task, hp_max)
         }
         SYS_SPELL_TIMER => sys_spell_timer(task, ctx),
+        SYS_ENEMY_HP => sys_enemy_hp(task, ctx),
         SYS_CREATE_BULLET => sys_create_bullet(task, ctx),
         SYS_CREATE_BULLETS_BATCH => sys_create_bullets_batch(task, ctx),
         SYS_SPAWN_ENEMY => sys_spawn_enemy(task, ctx),
@@ -548,16 +562,32 @@ fn sys_create_bullets_batch(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> 
     push(task, n as i32)
 }
 
-/// 敌人创建（SYS 22；v1 直参，无 appearance 表——见 follow-ups）：5 参逆序弹出。
-/// 半径/受击盒/sprite 用固定默认值（同 `world::test_support::spawn_enemy` 惯例）；
-/// `main_task`/`death_script` 恒 0（敌任务绑定现仅 Rust host API——`spawn_entry`/
-/// `spawn_entry_named` 携 `EclOwner::Enemy`——可达；脚本面缺口见 follow-ups A5）。
+/// 敌人创建（SYS 22；A5 乙案，append-only：旧 5 参前缀不动，尾追 sprite/task）：
+/// 7 参逆序弹出。半径/受击盒用固定默认值（同 `world::test_support::spawn_enemy` 惯例）；
+/// `task` 号先验后建（镜像 `sys_create_bullet` 的 task 路径：坏号/非 0 参 Async → Fault，
+/// 零副作用，敌未建）；`main_task` 在敌句柄产出**之后**回填（任务的 owner 三元组需要敌
+/// index/gen，敌必须先于任务存在）；`death_script` 仍恒 0（脚本面缺口留 follow-ups）。
 fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let task_script = pop(task)?;
+    let sprite = pop(task)?;
     let score = pop(task)?;
     let drop_table = pop(task)?;
     let hp = pop(task)?;
     let y_raw = pop(task)?;
     let x_raw = pop(task)?;
+
+    // task 号先验后建（镜像 sys_create_bullet：坏号 FAULT_BAD_OP，敌未建；Async+零参白名单）。
+    let task_sub: Option<SubId> = if task_script >= 0 {
+        let raw = u16::try_from(task_script).map_err(|_| FAULT_BAD_OP)?;
+        let sub = ctx.ecl.sub_id(raw).ok_or(FAULT_BAD_OP)?;
+        let meta = ctx.ecl.sub_meta(sub).ok_or(FAULT_BAD_OP)?;
+        if meta.kind() != SubKind::Async || ctx.ecl.param_types(sub).is_none_or(|p| !p.is_empty()) {
+            return Err(FAULT_BAD_OP);
+        }
+        Some(sub)
+    } else {
+        None
+    };
 
     let init = EnemyInit {
         x: Fx::from_raw(x_raw),
@@ -579,9 +609,9 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
         invuln: 0,
         hit_flash: 0,
         flags: 0,
-        sprite: 0,
+        sprite: sprite as u16,
         anm_state: 0,
-        main_task: 0,
+        main_task: 0, // 任务 spawn 后回填（敌句柄先于任务存在）
         death_script: 0,
         drop_table: drop_table as u16,
         score: score as u16,
@@ -590,7 +620,24 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     if handle == EnemyHandle::NULL {
         return push(task, -1);
     }
-    push(task, handle.index as i32)
+    push(task, handle.index as i32)?;
+
+    if let Some(sub) = task_sub {
+        // entry 已在上面校验过在册；池满 → 静默计数（P4-a），敌已建、句柄已押，不 Fault。
+        let pc0 = ctx.ecl.sub_meta(sub).expect("已在上面校验过").code_entry();
+        let owner = (OWNER_ENEMY, handle.index, handle.generation);
+        let parent = ctx.self_index + 1;
+        match ctx.tasks.spawn(sub, pc0, owner, parent, ctx.frame) {
+            Some(slot) => {
+                ctx.body.enemies.main_task[handle.index as usize] = slot as u32 + 1;
+            }
+            None => {
+                ctx.body.diag.pool_full[crate::world::POOL_TASK] =
+                    ctx.body.diag.pool_full[crate::world::POOL_TASK].wrapping_add(1);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 道具掉落（SYS 23）：3 参逆序弹出。坏类型 → `drop_item` 自身 P4-b 处置（NULL + BAD_ARGS
@@ -1352,8 +1399,16 @@ mod tests {
     fn sys_spawn_enemy_creates_with_fields() {
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
-        // 正序：x,y,hp,drop_table,score
-        let args = [Fx::from_int(5).raw(), Fx::from_int(6).raw(), 42, 1, 100];
+        // 正序：x,y,hp,drop_table,score,sprite,task(none=-1)（A5 乙案：7 参，尾追 sprite/task）
+        let args = [
+            Fx::from_int(5).raw(),
+            Fx::from_int(6).raw(),
+            42,
+            1,
+            100,
+            0,
+            -1,
+        ];
         assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
         let idx = task.stack[0];
         assert!(idx >= 0);
@@ -1363,6 +1418,234 @@ mod tests {
         assert_eq!(w.body.enemies.hp[i], 42);
         assert_eq!(w.body.enemies.drop_table[i], 1);
         assert_eq!(w.body.enemies.score[i], 100);
+    }
+
+    /// task_script ≥0 挂敌派任务：owner=(ENEMY, 新敌 index/gen)，`main_task` 回填槽号+1。
+    /// sprite 传判别值 5（非默认 0）——S1 纪律：圆心重合式测试对字段映射是瞎的，钉非默认值。
+    #[test]
+    fn spawn_enemy_with_task_binds_owner_and_main_task() {
+        let ecl = test_image(
+            vec![
+                crate::ecl::ops::OP_PUSHI as u32,
+                999,
+                crate::ecl::ops::OP_WAIT as u32,
+            ],
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(0, SubKind::Async, vec![]),
+            ],
+            vec![EntryInit::new("enemy_task", 1)],
+            Some(0),
+        );
+        let mut w = World::new(1);
+        w.body.frame = 3;
+        let mut task = Task::default();
+        // 正序：x,y,hp,drop_table,score,sprite,task_script；sprite=5（判别值），task=1（在册）
+        let args = [
+            Fx::from_int(0).raw(),
+            Fx::from_int(80).raw(),
+            10,
+            0,
+            0,
+            5,
+            1,
+        ];
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
+        let eidx = task.stack[0] as u16;
+        assert_eq!(
+            w.body.enemies.sprite[eidx as usize], 5,
+            "sprite 判别值应落池（S1：非默认判别）"
+        );
+        let egen = w.body.enemies.generation[eidx as usize];
+
+        let child = (0..crate::ecl::task::TASK_CAP)
+            .find(|&i| w.tasks.is_alive(i))
+            .expect("应已派生子任务");
+        assert_eq!(w.tasks.slots[child].owner_kind, OWNER_ENEMY);
+        assert_eq!(w.tasks.slots[child].owner_index, eidx);
+        assert_eq!(w.tasks.slots[child].owner_gen, egen);
+        assert_eq!(w.tasks.slots[child].born_frame, 3);
+        assert_eq!(
+            w.body.enemies.main_task[eidx as usize],
+            child as u32 + 1,
+            "main_task 应回填为任务槽号+1"
+        );
+    }
+
+    /// task_script = -1（none）：敌建成、不派任何任务，`main_task` 保持 0。
+    #[test]
+    fn spawn_enemy_task_none_leaves_main_task_zero() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let args = [
+            Fx::from_int(0).raw(),
+            Fx::from_int(80).raw(),
+            10,
+            0,
+            0,
+            0,
+            -1,
+        ];
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
+        let eidx = task.stack[0];
+        assert!(eidx >= 0);
+        assert_eq!(
+            w.body.enemies.main_task[eidx as usize], 0,
+            "task=none 不应回填 main_task"
+        );
+        assert_eq!(
+            (0..crate::ecl::task::TASK_CAP)
+                .filter(|&i| w.tasks.is_alive(i))
+                .count(),
+            0,
+            "task=none 不应派生任何任务"
+        );
+    }
+
+    /// 坏 task_script 号（不在册）→ Fault，且先验后建：敌不应被创建（零副作用），
+    /// 镜像 `sys_create_bullet_bad_task_script_faults_before_creating`。
+    #[test]
+    fn spawn_enemy_bad_task_script_faults_without_enemy() {
+        let (mut w, ecl) = fresh(); // subs 空——任何脚本号都越界
+        let mut task = Task::default();
+        let args = [
+            Fx::from_int(0).raw(),
+            Fx::from_int(80).raw(),
+            10,
+            0,
+            0,
+            0,
+            9999, // 不在册
+        ];
+        let r = call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP));
+        assert_eq!(w.body.enemies.iter_alive().count(), 0, "先验后建：零副作用");
+    }
+
+    /// 任务池满（P4-a 降级）：敌仍建成、`diag.pool_full[POOL_TASK]` 计数 +1、
+    /// `main_task` 保持 0（挂任务失败不影响敌本身创建成功）。
+    #[test]
+    fn spawn_enemy_task_pool_full_degrades() {
+        let ecl = test_image(
+            vec![
+                crate::ecl::ops::OP_PUSHI as u32,
+                999,
+                crate::ecl::ops::OP_WAIT as u32,
+            ],
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(0, SubKind::Async, vec![]),
+            ],
+            vec![EntryInit::new("enemy_task", 1)],
+            Some(0),
+        );
+        let mut w = World::new(1);
+        // 先灌满任务池（循环 tasks.spawn；owner 值任意，本测试只关心池满信号）。
+        while w
+            .tasks
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .is_some()
+        {}
+        let mut task = Task::default();
+        let args = [
+            Fx::from_int(0).raw(),
+            Fx::from_int(80).raw(),
+            10,
+            0,
+            0,
+            0,
+            1, // 在册但池满
+        ];
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
+        let eidx = task.stack[0];
+        assert!(eidx >= 0, "任务池满不应阻止敌建成");
+        assert_eq!(
+            w.body.diag.pool_full[crate::world::POOL_TASK],
+            1,
+            "任务池满应计一次 P4-a 降级"
+        );
+        assert_eq!(
+            w.body.enemies.main_task[eidx as usize], 0,
+            "main_task 应保持 0（挂任务失败）"
+        );
+    }
+
+    /// e2e：敌绑定的 task 随敌死亡被 owner-liveness gate 静默收走（相位 2 门禁，同
+    /// `sys_create_bullet_task_script_spawns_owner_bound_task_and_dies_with_bullet` 先例）。
+    #[test]
+    fn enemy_owned_task_dies_with_enemy() {
+        let ecl = test_image(
+            vec![
+                crate::ecl::ops::OP_PUSHI as u32,
+                999,
+                crate::ecl::ops::OP_WAIT as u32,
+            ],
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(0, SubKind::Async, vec![]),
+            ],
+            vec![EntryInit::new("enemy_task", 1)],
+            Some(0),
+        );
+        let mut w = World::new(1);
+        w.body.frame = 5;
+        let mut task = Task::default();
+        let args = [
+            Fx::from_int(0).raw(),
+            Fx::from_int(80).raw(),
+            50,
+            0,
+            0,
+            0,
+            1,
+        ];
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
+        let eidx = task.stack[0] as u16;
+        let egen = w.body.enemies.generation[eidx as usize];
+
+        let child = (0..crate::ecl::task::TASK_CAP)
+            .find(|&i| w.tasks.is_alive(i))
+            .expect("应已派生子任务");
+        assert!(w.tasks.is_alive(child), "敌死之前任务应活");
+
+        // free 敌 → 次帧任务被静默回收（owner 门禁，通过完整 step 驱动验证端到端链路）。
+        w.body.enemies.free(EnemyHandle {
+            index: eidx,
+            generation: egen,
+        });
+        let frame = w.body.frame;
+        crate::step::step(
+            &mut w,
+            &TABLES_V0,
+            &ecl,
+            &crate::input::InputFrame::empty(frame),
+        );
+        assert!(!w.tasks.is_alive(child), "owner 敌死后任务应被静默回收");
+        assert_eq!(w.body.diag.task_faults, 0, "owner 死不是 Fault");
+    }
+
+    /// `enemy_hp`（SYS 12）：活敌返当前 hp（判别值 77，非默认）；死敌/越界句柄均返 -1
+    /// （P4-b，不 Fault）。
+    #[test]
+    fn enemy_hp_reads_alive_and_rejects_dead() {
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 77);
+        // `test_support::spawn_enemy` 令 hp==hp_max==77——单独把 hp_max 拉开，逐位命中排除
+        // "读混 hp/hp_max 两个同族字段"的变异（同 `sys_self_hp_max_dispatch_by_owner_kind`
+        // 先例：hp_max=9999 排除读混字段）。
+        w.body.enemies.hp_max[eh.index as usize] = 9999;
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_ENEMY_HP, &[eh.index as i32]).is_ok());
+        assert_eq!(task.stack[0], 77, "活敌返当前 hp（判别值，非 hp_max）");
+
+        w.body.enemies.free(eh);
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ENEMY_HP, &[eh.index as i32]).is_ok());
+        assert_eq!(task.stack[0], -1, "死敌返 -1");
+
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ENEMY_HP, &[9999]).is_ok());
+        assert_eq!(task.stack[0], -1, "越界句柄返 -1（P4-b 不 Fault）");
     }
 
     #[test]
