@@ -12,6 +12,9 @@ sub main() {
     boss_battle();
     bg_phase(0);
     add_score(100000); // 关底 bonus 世界内入账(结算数字在挂牌前定格)
+    // args[0]=1 载荷脚本自定(ecl-lang.md:REQ_STAGE_CLEAR 无引擎登记语义,纯挂牌协议
+    // 常量);main.gd 的 `_on_stage_clear()` 处理器现按 `func(_a): ...` 弃参,壳侧当前
+    // 不读这个值。
     emit_req(REQ_STAGE_CLEAR, 1, 0, 0, 0, 0, 0);
     loop { wait(600); } // 挂牌后驻留
 }

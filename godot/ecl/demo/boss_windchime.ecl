@@ -60,7 +60,9 @@ async sub boss_main() {
 }
 
 sub boss_battle() {
-    var boss: int = spawn_enemy(0.0fx, 96.0fx, 2600, 1, 5000, 1, boss_main);
+    // hp=900(用户裁定,demo 平衡):tier0(≈15dps)专注输出约 70 秒可破卡,「取得」路径
+    // 人工可达——原 2600 在非符 10 秒(自机同期几乎不可能追上耗时)+符卡阶段几乎打不穿。
+    var boss: int = spawn_enemy(0.0fx, 96.0fx, 900, 1, 5000, 1, boss_main);
     // 等 boss 死(enemy_hp<0)——带 75 秒兜底:若敌 OOB 回收纪律不含敌类(敌界放宽,
     // M0-13),超时退场路径下轮询会挂死,兜底保 demo 流程必然推进。
     var t: int = 0;

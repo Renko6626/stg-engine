@@ -138,10 +138,31 @@ func _run_smoke() -> void:
 		get_tree().quit(1)
 		return
 	_smoke_saw_bgm = false
-	dispatcher.register(Dispatcher.REQ_BGM, func(_a): _smoke_saw_bgm = true) # 覆盖注册以侦听
-	var waited := await _wait_frame(240, 480)
+	# 覆盖注册以侦听,链式调回 `_wire_requests` 注册的原 hud 处理器——冒烟不该绕开
+	# `hud.set_bgm_label` 那条真实路径(纯加侦听,不替换行为)。
+	var orig_bgm_handler: Callable = dispatcher.handlers.get(Dispatcher.REQ_BGM, Callable())
+	dispatcher.register(Dispatcher.REQ_BGM, func(a):
+		_smoke_saw_bgm = true
+		if orig_bgm_handler.is_valid():
+			orig_bgm_handler.call(a))
+	# I-1(复审裁定):原四断言(frame/checksum/REQ_BGM/player 在场界)对 demo 内容零判别——
+	# 即使 stage1 被清空、main 只剩 `bgm(1); loop { wait(600); }`,四条也照绿。逐帧扫
+	# LAYER_ENEMIES 缓冲,断言窗口内出现过非默认(非 (0,0))实例位置,证明 stage1 真出过
+	# 杂兵、真的在动。选这条而不是侦听 `REQ_ENEMY_DEATH`(复审给的备选②)——冒烟只按
+	# `BTN_LEFT`,`char0_update_shot` 要 `BTN_SHOT` 才发弹,240 帧窗口内自机打不死杂兵,
+	# ②在当前冒烟输入下不可达。
+	var enemy_seen := false
+	var mm_enemies: MultiMesh = playfield.layer_nodes[WorldBridge.LAYER_ENEMIES].multimesh
+	var waited := 0
+	while bridge.frame() < 240 and waited < 480:
+		await get_tree().physics_frame
+		waited += 1
+		var buf := RenderingServer.multimesh_get_buffer(mm_enemies.get_rid())
+		if buf.size() >= 8 and (absf(buf[3]) > 0.01 or absf(buf[7]) > 0.01): # [ox]=idx3,[oy]=idx7(frame.rs write_instance 布局)
+			enemy_seen = true
 	fails += _chk(bridge.frame() >= 240, "frame>=240, got %d" % bridge.frame())
 	fails += _chk(waited <= 241, "轮次<=目标+1(防每两 tick 一 step 回归),got %d" % waited)
+	fails += _chk(enemy_seen, "LAYER_ENEMIES 缓冲窗口内出现非默认实例(demo 杂兵真的在动)")
 	fails += _chk(bridge.checksum() != 0, "checksum!=0")
 	fails += _chk(_smoke_saw_bgm, "REQ_BGM 应到达分发器")
 	var pp := bridge.player_pos()
