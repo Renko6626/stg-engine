@@ -91,6 +91,18 @@ fn narrow_slot(slot: usize) -> u8 {
     slot as u8
 }
 
+/// 多物理槽 op 的 scratch 补零（`physical - 1` 个空槽）。
+///
+/// STEP 族物理双槽：第二槽是引擎 scratch，表层作者不可见——编译器自动补零槽（不补则
+/// 运行期 scratch 写入会覆写下一条 authored 槽，T3 复审 Important 的修法；区宽已由
+/// slots 趟经 `xform_map::physical_len` 按物理数计）。`Op` 与 `OpFold2` 两个分支都要走
+/// ——`physical_len` 对两者一视同仁地把 `physical` 计进区宽，只有一边补零就会重现那个坑。
+fn push_scratch_slots(built: &mut Vec<XformSlot>, physical: usize) {
+    for _ in 1..physical {
+        built.push(XformSlot::default());
+    }
+}
+
 /// 弹 setter 族名单（模块文档"弹 setter 族 handle:int 首参"）。
 fn is_self_bullet_setter(name: &str) -> bool {
     matches!(
@@ -126,6 +138,10 @@ struct Gen<'p> {
     /// 自己身上，而不是随 `gen_block`/`gen_stmt` 调用链层层穿参——这批字段本就不是
     /// "当前生成到哪个 sub"这种逐帧变化的状态）。
     comp: BTreeMap<i32, AnchorComp>,
+    /// 绑定的世界表（`None` = 未绑定，跳过一切依赖表的判据）——与 `typeck::Checker.table`
+    /// 同款穿线。消费者：`set_sprite(shape, color)` 的图集三判据（`lang::atlas`）；
+    /// xformdef 槽参数恒是编译期常量，故这一路总能判（不像 `fire` 还要先问是不是常量）。
+    table: Option<&'p stg_core::tables::WorldTables>,
     errors: Vec<CompileError>,
 }
 
@@ -137,6 +153,49 @@ impl<'p> Gen<'p> {
             msg,
             src_line: String::new(),
         });
+    }
+
+    /// 一条 xformdef 槽的实参：arity 校验 + 逐参编译期常量折叠。
+    ///
+    /// 出错时已把 `CompileError` 记进 `self.errors`，返回 `None`——调用方补一个默认槽
+    /// 继续收集后续错误即可。`Op` 与 `OpFold2` 两个分支共用本函数：错误路径（span 归属、
+    /// 措辞、恢复方式）只有一份，改一处不会静默分叉出两种行为。
+    fn eval_slot_args(
+        &mut self,
+        s: &crate::lang::ast::XfSlotLit,
+        arity: usize,
+    ) -> Option<[i32; 2]> {
+        debug_assert!(
+            arity <= 2,
+            "xform 槽物理上只有 2 个参数字（`XformSlot.args`），'{}' 声明了 {arity} 个",
+            s.op_name
+        );
+        if s.args.len() != arity {
+            self.err(
+                s.span,
+                format!(
+                    "xform 操作 '{}' 期待 {arity} 个参数，实际 {}",
+                    s.op_name,
+                    s.args.len()
+                ),
+            );
+            return None;
+        }
+        let mut args = [0i32; 2];
+        let mut ok = true;
+        for (i, a) in s.args.iter().enumerate() {
+            match const_eval::evaluate(a, &self.consts) {
+                Ok((_ty, v)) => args[i] = v,
+                Err(e) => {
+                    self.err(
+                        s.span,
+                        format!("xformdef 槽参数必须是编译期常量：{}", e.msg),
+                    );
+                    ok = false;
+                }
+            }
+        }
+        ok.then_some(args)
     }
 
     // ── sub 入口 xformdef staging（模块文档；一次，入口直排，先于 loop 回跳点）───
@@ -156,78 +215,34 @@ impl<'p> Gen<'p> {
                         built.push(XformSlot::default());
                     }
                     Some(crate::lang::xform_map::XformOp::Op(op, arity, physical)) => {
-                        if s.args.len() != arity {
-                            self.err(
-                                s.span,
-                                format!(
-                                    "xform 操作 '{}' 期待 {arity} 个参数，实际 {}",
-                                    s.op_name,
-                                    s.args.len()
-                                ),
-                            );
+                        let Some(args) = self.eval_slot_args(s, arity) else {
                             built.push(XformSlot::default());
                             continue;
-                        }
-                        let mut args = [0i32; 2];
-                        let mut ok = true;
-                        for (i, a) in s.args.iter().enumerate() {
-                            match const_eval::evaluate(a, &self.consts) {
-                                Ok((_ty, v)) => args[i] = v,
-                                Err(e) => {
-                                    self.err(
-                                        s.span,
-                                        format!("xformdef 槽参数必须是编译期常量：{}", e.msg),
-                                    );
-                                    ok = false;
-                                }
-                            }
-                        }
-                        if !ok {
-                            built.push(XformSlot::default());
-                            continue;
-                        }
+                        };
                         built.push(XformSlot {
                             wait: s.wait,
                             op,
                             _pad: 0,
                             args,
                         });
-                        // STEP 族物理双槽：第二槽是引擎 scratch，表层作者不可见——
-                        // 编译器自动补零槽（不补则运行期 scratch 写入覆写下一条 authored
-                        // 槽，T3 复审 Important 的修法；区宽已由 slots 趟按物理数计）。
-                        for _ in 1..physical {
-                            built.push(XformSlot::default());
-                        }
+                        push_scratch_slots(&mut built, physical);
                     }
                     // 颜色轴糖：表层两个常量参折叠进 `args[0]`（核心只读 args[0]）。
-                    Some(crate::lang::xform_map::XformOp::OpFold2(op, _physical)) => {
-                        if s.args.len() != 2 {
-                            self.err(
-                                s.span,
-                                format!(
-                                    "xform 操作 '{}' 期待 2 个参数，实际 {}",
-                                    s.op_name,
-                                    s.args.len()
-                                ),
-                            );
+                    Some(crate::lang::xform_map::XformOp::OpFold2(op, physical)) => {
+                        let Some(vals) = self.eval_slot_args(s, 2) else {
                             built.push(XformSlot::default());
                             continue;
-                        }
-                        let mut vals = [0i32; 2];
-                        let mut ok = true;
-                        for (i, a) in s.args.iter().enumerate() {
-                            match const_eval::evaluate(a, &self.consts) {
-                                Ok((_ty, v)) => vals[i] = v,
-                                Err(e) => {
-                                    self.err(
-                                        s.span,
-                                        format!("xformdef 槽参数必须是编译期常量：{}", e.msg),
-                                    );
-                                    ok = false;
-                                }
-                            }
-                        }
-                        if !ok {
+                        };
+                        // 图集三判据（与 fire/batch 同一份谓词，`lang::atlas`）——xformdef
+                        // 槽参数恒是编译期常量，故这一路无条件判得动。漏掉它，
+                        // `set_sprite(BULLET_HEART, COLOR_WHITE)` 会把弹换成图集空格
+                        // （有判定但看不见），写反两参也会静默换成错误的格。
+                        if let Some(t) = self.table
+                            && let Err(e) = crate::lang::atlas::check_shape_color(
+                                t, &s.op_name, vals[0], vals[1],
+                            )
+                        {
+                            self.err(s.span, e.msg);
                             built.push(XformSlot::default());
                             continue;
                         }
@@ -235,8 +250,12 @@ impl<'p> Gen<'p> {
                             wait: s.wait,
                             op,
                             _pad: 0,
-                            args: [vals[0] + vals[1], 0],
+                            // 未绑定表时判据被跳过，作者可以塞进任意大的数——`wrapping_add`
+                            // 保证编译器不会在 debug 构建里因整数溢出 abort（编译器该以
+                            // 诊断拒绝，不该崩）。绑定表时判据已把两参都钳在表内，不会绕回。
+                            args: [vals[0].wrapping_add(vals[1]), 0],
                         });
+                        push_scratch_slots(&mut built, physical);
                     }
                 }
             }
@@ -626,13 +645,16 @@ impl<'p> Gen<'p> {
         let discard_first_handle = is_self_bullet_setter(bi.name);
         // 颜色轴糖：表层 (shape, color) 两参 → 字节码单个 appearance 值。折叠掉两位，
         // 故循环改成索引推进式（`zip(...).enumerate()` 一位一步走不了这个合并）。
-        let folds_shape_color = matches!(bi.name, "fire" | "batch");
+        let folds_shape_color = builtins::folds_shape_color(bi.name);
         let mut i = 0usize;
         while i < args.len() {
             if folds_shape_color && i == 0 {
                 match (const_val(&args[0]), const_val(&args[1])) {
-                    // 常量对：折成单个字面量——与手写单参字节码逐字节相同（零运行期开销）
-                    (Some(s), Some(c)) => b.push_i(s + c),
+                    // 常量对：折成单个字面量——与手写单参字节码逐字节相同（零运行期开销）。
+                    // `wrapping_add`：未绑定表时判据被跳过（`fire(i32::MAX, 1, …)` 可编），
+                    // 编译器不该因整数溢出在 debug 构建里 abort——诊断拒绝可以，崩不行。
+                    // 绑定表时判据已把两参钳在表内，绕不回来。
+                    (Some(s), Some(c)) => b.push_i(s.wrapping_add(c)),
                     _ => {
                         let (CallArg::Val(se), CallArg::Val(ce)) = (&args[0], &args[1]) else {
                             unreachable!("typeck 已保证 fire/batch 前两参是 Val")
@@ -824,11 +846,17 @@ fn walk_mark_scan<'a>(
 
 /// codegen 趟入口：`TypedInfo`/`SlotMap`/原始 `Program`（xformdef 常量折叠用）→
 /// `EclImage`。所有 sub 先声明再生成；Builder 按名字确定最终 ABI。
+///
+/// `table`（颜色轴 T4 复审修）——绑定的世界表，同 `typeck::check` 的同名参数：`None` =
+/// 未绑定，跳过一切依赖表的判据。本趟唯一消费者是 xformdef `set_sprite(shape, color)`
+/// 的图集三判据（`lang::atlas`）；`fire`/`batch` 的同款判据在 typeck 就已施加过，本趟
+/// 只负责折叠。
 pub fn generate(
     prog: &Program,
     ti: &TypedInfo,
     sm: &SlotMap,
     content_hash: u64,
+    table: Option<&stg_core::tables::WorldTables>,
 ) -> Result<EclImage, Vec<CompileError>> {
     let mut ib = ImageBuilder::new();
     let mut name_to_ref = BTreeMap::new();
@@ -885,6 +913,7 @@ pub fn generate(
         sub_params,
         consts,
         comp,
+        table,
         errors: Vec::new(),
     };
 
@@ -1541,7 +1570,7 @@ mod tests {
             .locals
             .get_mut("x")
             .unwrap() = 999;
-        let _ = generate(&prog, &ti, &sm, 0);
+        let _ = generate(&prog, &ti, &sm, 0, None);
     }
 
     // ── 通道 B `emit_req` 表层端到端 ─────────────────────────────────────

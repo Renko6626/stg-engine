@@ -7,6 +7,7 @@
 //! T3 上升到 `EclImage` 层面钉全管线确定性）。
 
 pub mod ast;
+pub(crate) mod atlas;
 pub mod builtins;
 pub mod codegen;
 mod const_eval;
@@ -132,7 +133,7 @@ pub fn compile_with_options(
             return Err(errors);
         }
     };
-    let image = match codegen::generate(&program, &typed, &slot_map, content_hash) {
+    let image = match codegen::generate(&program, &typed, &slot_map, content_hash, table) {
         Ok(image) => image,
         Err(mut errors) => {
             attach_src_lines(&mut errors, src);
@@ -793,6 +794,105 @@ sub main() {
             "变量色必须发一条运行期加法：{:?}",
             dynamic.code()
         );
+    }
+
+    /// `batch` 也走折叠（不只是 `fire`）——`builtins::folds_shape_color` 是两处共用的
+    /// 单一谓词，但只有真跑一遍才钉得死"codegen 那一侧没把 `batch` 漏掉"：漏掉 =
+    /// 给 9 参 syscall 压 10 个值，整条参数序列错位，且没有任何显眼信号。
+    #[test]
+    fn batch_const_pair_folds_too() {
+        use stg_core::ecl::ops::OP_ADD;
+        let img = compile(
+            "sub main() { _ = batch(16, 3, 0fx, 0fx, 1, 0deg, 0deg, 1, 1fx, 0fx); }",
+            "t.ecl",
+        )
+        .expect("常量对应编译成功");
+        assert!(
+            !opcodes_of(img.code()).contains(&OP_ADD),
+            "batch 的常量对同样应折成单个字面量：{:?}",
+            img.code()
+        );
+        assert!(
+            img.code()
+                .windows(2)
+                .any(|pair| pair == [OP_PUSHI as u32, 19]),
+            "应折成 `PUSHI 19`：{:?}",
+            img.code()
+        );
+    }
+
+    /// 变量色**跳过判据**的真正理由是"不是编译期常量"，不是"值恰好合法"——故拿一个
+    /// **越界**的变量色（99 ≥ stride 16）来判别：必须照样编译通过，把拦截让给运行期
+    /// syscall 的 `valid` 判据（先验后建）。若判据实现哪天顺手把 `LocalRef` 的初值也
+    /// 折出来判，本测试立刻红。
+    #[test]
+    fn out_of_range_variable_color_is_left_to_runtime() {
+        compile(
+            "sub main() { var c: int = 99; _ = fire(16, c, 1fx, 2fx, 3fx, 0deg, none, none); }",
+            "t.ecl",
+        )
+        .expect("变量色越界不该在编译期报错——运行期 syscall 的 valid 判据兜底");
+    }
+
+    // ── 复审必修一：xformdef `set_sprite` 走同一套图集判据 ───────────────────
+    //
+    // 三判据当初只挂在 fire/batch 上，`set_sprite(shape, color)` 漏网——它写的是同一个
+    // 数域，照样能造出"有判定但看不见的弹"，也照样会被写反。判据本体收进 `lang::atlas`
+    // 后两条路共用；下面三条是 xformdef 侧的判别腿（措辞与 fire/batch 侧一致）。
+
+    /// 空格：`set_sprite(144, 12)` = 第 9 形第 12 色（掩码 0x0FFF）——本刀最有价值的闸。
+    #[test]
+    fn set_sprite_blank_atlas_cell_is_compile_error() {
+        let msgs = compile_err_msgs(
+            "xformdef X { set_sprite(144, 12); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+        );
+        assert!(msgs.iter().any(|m| m.contains("空格")), "实际: {msgs:?}");
+    }
+
+    /// 色号越界：`set_sprite(0, 99)`。
+    #[test]
+    fn set_sprite_color_out_of_range_is_compile_error() {
+        let msgs = compile_err_msgs(
+            "xformdef X { set_sprite(0, 99); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+        );
+        assert!(msgs.iter().any(|m| m.contains("色号")), "实际: {msgs:?}");
+        assert!(
+            msgs.iter().any(|m| m.contains("set_sprite")),
+            "报错应点名 set_sprite（而不是某个 fire）：{msgs:?}"
+        );
+    }
+
+    /// **写反**：`set_sprite(COLOR_BLUE, BULLET_AMULET)` = `set_sprite(8, 112)`。两参同型，
+    /// 比 `fire` 更容易写反；折叠值 8+112=120 是合法格，只有"色号先查"抓得住。
+    /// 报错必须落在 xformdef 那一行（第 1 行），不是 `fire` 那行。
+    #[test]
+    fn set_sprite_swapped_shape_and_color_is_caught() {
+        let errs = expect_compile_err(
+            "xformdef X { set_sprite(8, 112); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+            "t.ecl",
+        );
+        let e = errs.first().expect("应有至少一条错误");
+        assert!(
+            e.msg.contains("色号"),
+            "写反必须被色号越界抓住（120 折叠后是合法格）；实际: {}",
+            e.msg
+        );
+        assert_eq!(e.line, 1, "报错应落在 xformdef 槽那一行：{errs:?}");
+        assert!(e.col >= 1);
+    }
+
+    /// 合法的 `set_sprite` 照常通过（防上面三条把整条路堵死的假绿）。
+    #[test]
+    fn set_sprite_valid_cell_compiles() {
+        compile(
+            "xformdef X { set_sprite(16, 3); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+            "t.ecl",
+        )
+        .expect("16+3 是合法格，应编译通过");
     }
 
     /// mod 形态表：7 形 × 8 色。判据必须按**表自己的** stride 走，不是按内建的 16

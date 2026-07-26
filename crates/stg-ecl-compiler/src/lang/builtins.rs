@@ -456,6 +456,19 @@ pub fn lookup(name: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.name == name)
 }
 
+/// 该内建的前两位是不是"弹型 + 颜色"两参糖（颜色轴刀）——**单一权威**。
+///
+/// `lang::typeck` 据此施加图集三判据（`lang::atlas`）、`lang::codegen` 据此把两位折叠成
+/// 单个 appearance 值。两处**必须问同一个谓词**：从任何一边的名单里掉出去都是静默事故
+/// ——typeck 掉了 = 判据不施加（隐形弹重新可造）；codegen 掉了 = 给 8 参 syscall 压 9 个
+/// 值，整条参数序列错位，只有间接信号能发现。
+///
+/// 名单与 [`BUILTINS`] 的参数名表由 `folds_shape_color_matches_the_param_name_table`
+/// 双向钉死（前两位恰名为 `shape`/`color` ⟺ 本谓词为真）。
+pub fn folds_shape_color(name: &str) -> bool {
+    matches!(name, "fire" | "batch")
+}
+
 /// 全量导出（编辑体验刀：`gen-ecl-meta`/VS Code 扩展/文档生成的单一真相源——不得另起
 /// 一张手抄表，见模块文档"与计划核心接口块的一处必要出入"）。源码序即导出序（同 `lookup`
 /// 的线性扫描序），不做任何排序/过滤。
@@ -592,6 +605,25 @@ mod tests {
                 "'{n}' 头两位都必须是 Val(Int)"
             );
         }
+    }
+
+    /// 折叠谓词与参数名表**双向**一致：前两位恰名为 `shape`/`color` ⟺
+    /// [`folds_shape_color`] 为真。防两种漂移——加了两参糖却忘登记谓词（判据不施加、
+    /// codegen 不折叠），或谓词里多写一个名字（给 syscall 多压一个值）。
+    #[test]
+    fn folds_shape_color_matches_the_param_name_table() {
+        for b in all() {
+            let by_names =
+                b.param_names.first() == Some(&"shape") && b.param_names.get(1) == Some(&"color");
+            assert_eq!(
+                folds_shape_color(b.name),
+                by_names,
+                "'{}' 的折叠谓词与参数名表不一致",
+                b.name
+            );
+        }
+        assert!(folds_shape_color("fire") && folds_shape_color("batch"));
+        assert!(!folds_shape_color("spawn_enemy"), "sprite 位不是两参糖");
     }
 
     /// `batch` 的 10 位形状（头两位 shape/color，其余沿用 syscall 既有顺序）。
