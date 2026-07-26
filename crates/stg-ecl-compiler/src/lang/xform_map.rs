@@ -31,6 +31,11 @@ pub(crate) enum XformOp {
     /// （颜色轴糖：`set_sprite(shape, color)`）。核心侧 `OP_SET_SPRITE` 只读
     /// `args[0]`——若按 `Op(_, 2, 1)` 直落 `args[1]`，颜色会被无声丢弃，故必须走本变体。
     OpFold2(u8, usize),
+    /// (op 字节, 物理槽数)——表层收 **1** 个常量参，**`args[1]` 由编译器写入绑定表的
+    /// `color_stride`**（`set_shape`/`set_color`，颜色轴刀 T7 的"部分设"两个 op）。
+    /// 引擎据此在运行期把 sprite 拆回两维——世界层本身不需要表、也不认识"颜色"这回事
+    /// （spec §4.4）。没有绑定表时无从得知 stride，codegen 必须报错而不是猜一个默认值。
+    OpWithStride(u8, usize),
     /// 编号已知但运行期解释器未实现——编译期拒收（见模块文档）。
     Reserved,
 }
@@ -46,6 +51,8 @@ pub(crate) fn lookup(name: &str) -> Option<XformOp> {
         "aim_player" => Some(Op(xform::OP_AIM_PLAYER, 1, 1)),
         "step_angle" => Some(Op(xform::OP_STEP_ANGLE, 2, 2)),
         "set_sprite" => Some(XformOp::OpFold2(xform::OP_SET_SPRITE, 1)),
+        "set_shape" => Some(XformOp::OpWithStride(xform::OP_SET_SHAPE, 1)),
+        "set_color" => Some(XformOp::OpWithStride(xform::OP_SET_COLOR, 1)),
         "set_life" => Some(Op(xform::OP_SET_LIFE, 1, 1)),
         "set_ang_vel" => Some(Op(xform::OP_SET_ANG_VEL, 1, 1)),
         "set_accel" => Some(Op(xform::OP_SET_ACCEL, 1, 1)),
@@ -64,7 +71,9 @@ pub(crate) fn physical_len(slots: &[crate::lang::ast::XfSlotLit]) -> usize {
     slots
         .iter()
         .map(|s| match lookup(&s.op_name) {
-            Some(XformOp::Op(_, _, p)) | Some(XformOp::OpFold2(_, p)) => p,
+            Some(XformOp::Op(_, _, p))
+            | Some(XformOp::OpFold2(_, p))
+            | Some(XformOp::OpWithStride(_, p)) => p,
             _ => 1,
         })
         .sum()

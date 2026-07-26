@@ -71,6 +71,7 @@ use crate::{BuilderSubRef, ImageBuilder, SubBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 use stg_core::ecl::image::{EclImage, EclValueType, ImageBuildError, SubKind};
 use stg_core::ecl::syscall;
+use stg_core::xform;
 use stg_core::xform::XformSlot;
 
 // xformdef 操作名映射表已上移 `lang::xform_map`（slots 趟与本趟共用的单一权威，含物理
@@ -254,6 +255,44 @@ impl<'p> Gen<'p> {
                             // 保证编译器不会在 debug 构建里因整数溢出 abort（编译器该以
                             // 诊断拒绝，不该崩）。绑定表时判据已把两参都钳在表内，不会绕回。
                             args: [vals[0].wrapping_add(vals[1]), 0],
+                        });
+                        push_scratch_slots(&mut built, physical);
+                    }
+                    // 部分设（颜色轴刀 T7）：表层收 1 个常量参，`args[1]` 由本趟写入绑定表的
+                    // `color_stride`——引擎只做两个操作数的取模，不需要认识"颜色"这回事。
+                    // 单轴判据只查值本身合法，**不查空格**（人类裁定，见 `lang::atlas` 文档）。
+                    Some(crate::lang::xform_map::XformOp::OpWithStride(op, physical)) => {
+                        let Some(vals) = self.eval_slot_args(s, 1) else {
+                            built.push(XformSlot::default());
+                            continue;
+                        };
+                        // stride 必须来自绑定的表——没有表就无从得知，报错而不是猜一个默认值
+                        let Some(table) = self.table else {
+                            self.err(
+                                s.span,
+                                format!(
+                                    "xform 操作 '{}' 需要绑定的外观表才能确定色轴宽度",
+                                    s.op_name
+                                ),
+                            );
+                            built.push(XformSlot::default());
+                            continue;
+                        };
+                        let check = if op == xform::OP_SET_COLOR {
+                            crate::lang::atlas::check_color_only(table, vals[0])
+                        } else {
+                            crate::lang::atlas::check_shape_only(table, vals[0])
+                        };
+                        if let Err(e) = check {
+                            self.err(s.span, e.msg);
+                            built.push(XformSlot::default());
+                            continue;
+                        }
+                        built.push(XformSlot {
+                            wait: s.wait,
+                            op,
+                            _pad: 0,
+                            args: [vals[0], i32::from(table.color_stride)],
                         });
                         push_scratch_slots(&mut built, physical);
                     }

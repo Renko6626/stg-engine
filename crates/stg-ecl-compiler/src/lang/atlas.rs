@@ -87,6 +87,46 @@ pub(crate) fn check_shape_color(
     Ok(())
 }
 
+/// 单轴判据（部分设专用，颜色轴刀 T7）：只查色号本身是否合法，**不查空格**。
+/// 部分设的落点取决于弹当时的另一维（运行期状态），编译期不可知；人类裁定允许落到空格
+/// （结果是该弹变透明，由作者负责），故这里刻意**没有** `valid` 检查——同 `check_shape_only`。
+pub(crate) fn check_color_only(table: &WorldTables, color: i32) -> Result<(), ShapeColorError> {
+    let stride = i32::from(table.color_stride);
+    if stride <= 0 {
+        return Ok(()); // 坏表：validate 的职责，此处不重复报错
+    }
+    if !(0..stride).contains(&color) {
+        return Err(ShapeColorError {
+            blame: Blame::Color,
+            msg: format!(
+                "色号 {color} 越界：当前表每种弹型 {stride} 色，合法范围 0..{}",
+                stride - 1
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// 单轴判据（部分设专用）：只查形状基址本身是否合法（stride 的倍数且落在表内），
+/// **不查空格**——见 [`check_color_only`] 文档同一条人类裁定。
+pub(crate) fn check_shape_only(table: &WorldTables, shape: i32) -> Result<(), ShapeColorError> {
+    let stride = i32::from(table.color_stride);
+    if stride <= 0 {
+        return Ok(());
+    }
+    let shapes = (table.appearances.len() as i32) / stride;
+    if shape < 0 || shape % stride != 0 || shape / stride >= shapes {
+        return Err(ShapeColorError {
+            blame: Blame::Shape,
+            msg: format!(
+                "弹型 {shape} 不是合法弹型：必须是 {stride} 的倍数且小于 {}",
+                shapes * stride
+            ),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +173,29 @@ mod tests {
         let mut t = stg_core::tables::build_tables_v0();
         t.color_stride = 0;
         assert_eq!(check_shape_color(&t, "fire", 999, 999), Ok(()));
+    }
+
+    /// 单轴判据：只查"值本身合不合法"，**不查空格**（人类裁定：部分设允许落到空格）。
+    #[test]
+    fn single_axis_checks_reject_bad_values_but_allow_blank_landings() {
+        let t = &*stg_core::tables::TABLES_V0;
+
+        // 色号越界 → 拒
+        assert!(check_color_only(t, 99).is_err());
+        assert!(check_color_only(t, -1).is_err());
+        // 合法色号 → 过，**即使它在某些弹型上是空格**（12 号色在心弹/蝶弹上没有图）
+        assert!(
+            check_color_only(t, 12).is_ok(),
+            "空格落点是作者的责任，不是编译错误"
+        );
+
+        // 形状基址非法（不是 stride 的倍数 / 越界）→ 拒
+        assert!(check_shape_only(t, 5).is_err());
+        assert!(check_shape_only(t, 12 * 16).is_err());
+        // 合法形状 → 过，**即使它是稀疏弹型**（第 9 形有空格色）
+        assert!(
+            check_shape_only(t, 9 * 16).is_ok(),
+            "稀疏弹型仍可作 set_shape 目标"
+        );
     }
 }

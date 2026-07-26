@@ -24,6 +24,11 @@ pub const OP_AIM_PLAYER: u8 = 22;
 pub const OP_STEP_ANGLE: u8 = 23; // M0-11b
 pub const OP_SET_SPRITE: u8 = 30;
 pub const OP_SET_LIFE: u8 = 31;
+/// 只换形状、保住颜色位（颜色轴刀 T7）。`args[0]` = 形状基址，`args[1]` = 色轴宽度
+/// （**由编译器从绑定表写入**——引擎不知道"颜色"是什么，只是拿两个操作数做取模）。
+pub const OP_SET_SHAPE: u8 = 32;
+/// 只换颜色、保住形状位（同上，`args[0]` = 色号，`args[1]` = 色轴宽度）。
+pub const OP_SET_COLOR: u8 = 33;
 pub const OP_SET_ANG_VEL: u8 = 40;
 pub const OP_SET_ACCEL: u8 = 41;
 pub const OP_SET_GRAVITY: u8 = 42;
@@ -46,6 +51,8 @@ pub(crate) const fn op_implemented(op: u8) -> bool {
             | OP_AIM_PLAYER
             | OP_SET_SPRITE
             | OP_SET_LIFE
+            | OP_SET_SHAPE
+            | OP_SET_COLOR
             | OP_SET_ANG_VEL
             | OP_SET_ACCEL
             | OP_SET_GRAVITY
@@ -201,6 +208,7 @@ mod tests {
             (20, 21, 22, 23)
         );
         assert_eq!((OP_SET_SPRITE, OP_SET_LIFE), (30, 31));
+        assert_eq!((OP_SET_SHAPE, OP_SET_COLOR), (32, 33));
         assert_eq!(
             (OP_SET_ANG_VEL, OP_SET_ACCEL, OP_SET_GRAVITY, OP_STOP_FX),
             (40, 41, 42, 43)
@@ -209,8 +217,9 @@ mod tests {
         assert_eq!(OP_SPAWN_PATTERN, 60);
     }
 
-    /// 有效性按表查而非比大小：11a+11b(WAIT_SIGNAL/STEP_SPEED/STEP_ANGLE/BOUNCE_ARM) 已实现集
-    /// 恰为 17 个；未实现/垃圾值一律 false；ARITY 全 u8 域可索引（终审 M-A#4 的脆弱性就此拆除）。
+    /// 有效性按表查而非比大小：11a+11b(WAIT_SIGNAL/STEP_SPEED/STEP_ANGLE/BOUNCE_ARM) +
+    /// 颜色轴刀 T7(OP_SET_SHAPE/OP_SET_COLOR) 已实现集恰为 19 个；未实现/垃圾值一律 false；
+    /// ARITY 全 u8 域可索引（终审 M-A#4 的脆弱性就此拆除）。
     #[test]
     fn op_implemented_table_and_arity_full_domain() {
         let implemented = [
@@ -224,6 +233,8 @@ mod tests {
             OP_STEP_ANGLE,
             OP_SET_SPRITE,
             OP_SET_LIFE,
+            OP_SET_SHAPE,
+            OP_SET_COLOR,
             OP_SET_ANG_VEL,
             OP_SET_ACCEL,
             OP_SET_GRAVITY,

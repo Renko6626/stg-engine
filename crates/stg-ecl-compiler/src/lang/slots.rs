@@ -327,7 +327,8 @@ pub fn allocate(prog: &Program, ti: &TypedInfo) -> Result<SlotMap, Vec<CompileEr
                     }
                     Some(
                         crate::lang::xform_map::XformOp::Op(..)
-                        | crate::lang::xform_map::XformOp::OpFold2(..),
+                        | crate::lang::xform_map::XformOp::OpFold2(..)
+                        | crate::lang::xform_map::XformOp::OpWithStride(..),
                     ) => {}
                 }
             }

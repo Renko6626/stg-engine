@@ -895,6 +895,54 @@ sub main() {
         .expect("16+3 是合法格，应编译通过");
     }
 
+    // ── 颜色轴刀 T7：`set_shape`/`set_color` 部分设——单轴判据 + 无表报错 ─────────
+    //
+    // xformdef 只在被某个 sub 的 `fire(...)` 引用后才会走 codegen staging（`gen_xformdef_staging`
+    // 按 `sub.xform_refs` 遍历，未被引用的 xformdef 是死代码，slots 趟只查过 op 名合法性，
+    // 不下潜到参数）——下面三条都跟 `set_sprite_*` 系列一样，在 `main` 里补一条 `fire`
+    // 引用把 X 从死代码里捞出来，判据才真正跑得到。
+
+    /// xformdef 里的单轴 op：坏值编译期拒、空格落点放行。
+    #[test]
+    fn partial_sprite_ops_reject_bad_values_only() {
+        let bad = compile_err_msgs(
+            "xformdef X { set_color(99); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+        );
+        assert!(bad.iter().any(|m| m.contains("色号")), "实际: {bad:?}");
+
+        let bad2 = compile_err_msgs(
+            "xformdef X { set_shape(5); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+        );
+        assert!(bad2.iter().any(|m| m.contains("弹型")), "实际: {bad2:?}");
+
+        // 会落到空格的写法必须**编译通过**（裁定：允许，由作者负责）
+        compile(
+            "xformdef X { set_color(12); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+            "t.ecl",
+        )
+        .expect("部分设落到空格是允许的，不得报编译错误");
+    }
+
+    /// 编译器把绑定表的 stride 写进 args[1]——没有表就无从得知，必须报错而不是猜。
+    #[test]
+    fn partial_sprite_ops_require_a_bound_table() {
+        let errs = compile_with_options(
+            "xformdef X { set_color(3); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+            "t.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::None,
+            },
+            stg_core::consts::ENGINE_CONSTS,
+            None,
+        )
+        .expect_err("未绑定表时 set_color 无法确定色轴宽度，必须报错");
+        assert!(!errs.is_empty());
+    }
+
     /// mod 形态表：7 形 × 8 色。判据必须按**表自己的** stride 走，不是按内建的 16
     /// （引擎里不许出现"每形 16 色"这个数）。
     #[test]
