@@ -7,6 +7,7 @@
 //! T3 上升到 `EclImage` 层面钉全管线确定性）。
 
 pub mod ast;
+pub(crate) mod atlas;
 pub mod builtins;
 pub mod codegen;
 mod const_eval;
@@ -43,6 +44,11 @@ pub struct CompileOptions {
 ///
 /// `.image` 在 `DebugInfo::None` 与 `Full` 模式下**逐字节相同**（确定性契约：
 /// 调试信息不参与运行时行为）。`.debug` 为 `Some` 当且仅当 `debug_info == Full`。
+///
+/// `derive(Debug)`：`EclImage`/`EclDebugSymbols` 均已 derive `Debug`（stg-core 侧，非本刀
+/// 引入），这里补上纯粹是为了让 `compile_with_options` 的失败路径断言能用
+/// `.expect_err(...)`（颜色轴 T3 的"未绑定表不注入"测试），不涉及 `stg-core` 唯一触碰面。
+#[derive(Debug)]
 pub struct CompiledEcl {
     pub image: EclImage,
     pub debug: Option<EclDebugSymbols>,
@@ -78,22 +84,42 @@ pub fn parse(src: &str, _file: &str) -> Result<Program, Vec<CompileError>> {
 /// 判型命名空间；脚本不得重声明同名 const。[`compile`] 默认注入 `stg_core::consts::ENGINE_CONSTS`，
 /// 调用方也可传 `&[]` 隔离（如本模块的调试侧载测试，测的是调试信息而非常量注入）。
 ///
-/// `content_hash`（C1 Task 4）原样盖入产出 `EclImage.content_hash`——本函数不解释它、不校验
-/// 它来自哪张表，只透传给 `codegen::generate`；语义焊点在 [`compile_for_table`]（外部裸调用
-/// 本函数的测试各自决定传什么，通常调试侧载测试传 `0` 表示"未绑定任何表"）。
+/// `table`（颜色轴 T3，取代此前的裸 `content_hash: u64` 参）——`Some(t)` 时
+/// `t.content_hash` 盖入产出 `EclImage.content_hash`，且额外注入表派生脚本常量
+/// `BULLET_COLOR_STRIDE`（`int`，值 = `t.color_stride`——名字是引擎级词汇，值来自绑定的
+/// 那张表，mod 表换成别的 stride 时脚本 `i % BULLET_COLOR_STRIDE` 自动正确）；`None` 时
+/// `content_hash` 取 `0`（"未绑定任何表"）且**不注入** `BULLET_COLOR_STRIDE`——脚本引用它
+/// 会得到"未知标识符"错误，而不是一个撒谎的默认值，这条不对称是有意的。`table` 本体也
+/// 原样存进判型阶段的 `Checker`（见 `typeck::check`），供后续依赖表内容的判据使用。
+/// 语义焊点在 [`compile_for_table`]。
 pub fn compile_with_options(
     src: &str,
     file: &str,
     options: CompileOptions,
     engine_consts: &[stg_core::consts::EngineConst],
-    content_hash: u64,
+    table: Option<&stg_core::tables::WorldTables>,
 ) -> Result<CompiledEcl, Vec<CompileError>> {
+    let content_hash = table.map_or(0, |t| t.content_hash);
+    // 表派生常量：名字是引擎级词汇（结构），值来自绑定的那张表（内容）。
+    // 未绑定表时不注入——脚本引用它会得到"未知标识符"，而不是一个撒谎的默认值。
+    let mut consts: Vec<stg_core::consts::EngineConst> = engine_consts
+        .iter()
+        .map(|c| stg_core::consts::EngineConst::new(c.name, c.ty, c.value))
+        .collect();
+    if let Some(t) = table {
+        consts.push(stg_core::consts::EngineConst::new(
+            "BULLET_COLOR_STRIDE",
+            stg_core::ecl::image::EclValueType::Int,
+            i32::from(t.color_stride),
+        ));
+    }
+
     let program = parse(src, file)?;
     if let Err(mut errors) = entryck::check(&program) {
         attach_src_lines(&mut errors, src);
         return Err(errors);
     }
-    let typed = match typeck::check(&program, engine_consts) {
+    let typed = match typeck::check(&program, &consts, table) {
         Ok(t) => t,
         Err(mut errors) => {
             attach_src_lines(&mut errors, src);
@@ -107,7 +133,7 @@ pub fn compile_with_options(
             return Err(errors);
         }
     };
-    let image = match codegen::generate(&program, &typed, &slot_map, content_hash) {
+    let image = match codegen::generate(&program, &typed, &slot_map, content_hash, table) {
         Ok(image) => image,
         Err(mut errors) => {
             attach_src_lines(&mut errors, src);
@@ -124,8 +150,9 @@ pub fn compile_with_options(
     Ok(CompiledEcl { image, debug })
 }
 
-/// 为指定表编译：注入引擎常量（①②）+ 盖 `table.content_hash` 进 `EclImage`（coherence 焊点）。
-/// v1 只取 `table.content_hash`（①② 常量仍来自 `consts::ENGINE_CONSTS`）；乙案将来从表读符号。
+/// 为指定表编译：注入引擎常量（①②）+ 表派生常量 `BULLET_COLOR_STRIDE` + 盖
+/// `table.content_hash` 进 `EclImage`（coherence 焊点）。①② 常量仍来自
+/// `consts::ENGINE_CONSTS`；乙案将来从表读符号。
 pub fn compile_for_table(
     src: &str,
     file: &str,
@@ -138,7 +165,7 @@ pub fn compile_for_table(
             debug_info: DebugInfo::None,
         },
         stg_core::consts::ENGINE_CONSTS,
-        table.content_hash,
+        Some(table),
     )
     .map(|ce| ce.image)
 }
@@ -146,7 +173,7 @@ pub fn compile_for_table(
 /// 便利包装：绑定内建默认表 `TABLES_V0`。签名不变（既有调用方零改）。
 ///
 /// 等价于 `compile_for_table(src, file, &stg_core::tables::TABLES_V0)`——内部默认注入引擎
-/// 常量注册表（C14 Task 3），脚本自动获得引擎命名常量（如 `APPEARANCE_STAR`）而无需任何调用方
+/// 常量注册表（C14 Task 3），脚本自动获得引擎命名常量（如 `GVAR_RANK`）而无需任何调用方
 /// 改动，并把 `TABLES_V0.content_hash`（LIVE）盖入产出的 `EclImage`（C1 coherence 焊点）。
 ///
 /// 见 [`compile_with_options`] / [`compile_for_table`] 的完整文档。
@@ -174,15 +201,38 @@ mod tests {
     use stg_core::ecl::image::SubKind;
     use stg_core::ecl::ops::OP_PUSHI;
 
-    /// `compile()` 失败路径断言助手——`EclImage`（`compile` 的 `Ok` 类型）不 derive
-    /// `Debug`（**有意**：stg-core 唯一触碰面钉死在 T3 Commit A，见 plan Self-Review
-    /// "stg-core 唯一触碰 = T3-A"，Commit B 不得为了测试方便回头给 `EclImage` 加 derive），
-    /// 故不能直接 `.unwrap_err()`（它要求 `Ok` 类型也 `Debug`）——手写 `match` 绕开。
+    /// `compile()` 失败路径断言助手（手写 `match`，报错文案带上源码）。
     fn expect_compile_err(src: &str, file: &str) -> Vec<CompileError> {
         match compile(src, file) {
             Err(errors) => errors,
             Ok(_) => panic!("期望编译失败，源码：\n{src}"),
         }
+    }
+
+    /// 同上，只取错误正文（形/色三判据的断言口径：按措辞关键词判别哪一条判据开了火）。
+    fn compile_err_msgs(src: &str) -> Vec<String> {
+        expect_compile_err(src, "t.ecl")
+            .into_iter()
+            .map(|e| e.msg)
+            .collect()
+    }
+
+    /// 按 `ecl::ops::ARITY` 逐指令走一遍字节流，返回**出现过的 opcode 序列**。
+    ///
+    /// 不能用 `code().contains(&(OP_X as u32))` 裸扫字——操作数与 opcode 同住一个 `u32`
+    /// 流，`SYS_CREATE_BULLET == 20 == OP_ADD` 就是现成的假阳性（`OP_SYS 20` 的操作数字
+    /// 会被误当成一条 `OP_ADD`）。只对**单 sub** 源码可靠（多 sub 时字节流仍是线性拼接，
+    /// 但本文件用到它的测试都只有一个 `main`）。
+    fn opcodes_of(code: &[u32]) -> Vec<u8> {
+        use stg_core::ecl::ops::ARITY;
+        let mut out = Vec::new();
+        let mut i = 0usize;
+        while i < code.len() {
+            let op = code[i] as u8;
+            out.push(op);
+            i += 1 + ARITY[op as usize] as usize;
+        }
+        out
     }
 
     /// `parse`：贯通 lex→parse，成功路径产出预期形状的 `Program`。
@@ -210,28 +260,31 @@ mod tests {
     }
 
     /// C14（引擎常量注入）端到端覆盖，编译器 crate 自己的一份：脚本引用注入的引擎常量
-    /// （`APPEARANCE_STAR`）经 `TypedExprKind::ConstRef` 求值路径（见 `codegen.rs`）折叠为
+    /// （`REQ_BGM`）经 `TypedExprKind::ConstRef` 求值路径（见 `codegen.rs`）折叠为
     /// 字面量 `PUSHI <value>`——`EclImage` 运行时不认识"常量名"，只认识落地的字面值。
     /// 走真实 `compile()` 入口（默认注入 `stg_core::consts::ENGINE_CONSTS`，不是像调试侧载
     /// 测试那样传 `&[]` 隔离），押运"注入表确实喂到 codegen"这条完整链路（此前只有
     /// `stg-harness` 的 rainbow 金向量间接覆盖，本测试补上编译器 crate 内的直接断言）。
+    ///
+    /// 样本从 `APPEARANCE_STAR` 换成 `REQ_BGM`：颜色轴刀 T4 清空了 ② 段（弹型名归内容
+    /// 包），注入表里只剩 ① 结构常量。
     #[test]
     fn injected_engine_const_folds_to_bytecode_literal() {
-        let src = "sub main() { var a: int = APPEARANCE_STAR; loop { wait(1); } }";
+        let src = "sub main() { var a: int = REQ_BGM; loop { wait(1); } }";
         let image = compile(src, "smoke.ecl").expect("应编译成功");
-        let expected = stg_core::consts::APPEARANCE_STAR as u32;
+        let expected = stg_core::consts::REQ_BGM as u32;
         assert!(
             image
                 .code()
                 .windows(2)
                 .any(|pair| pair == [OP_PUSHI as u32, expected]),
-            "APPEARANCE_STAR(={expected}) 应折叠为 PUSHI 字面量，code={:?}",
+            "REQ_BGM(={expected}) 应折叠为 PUSHI 字面量，code={:?}",
             image.code()
         );
     }
 
     /// 编译器确定性（全管线级别，plan 明文钉死）：同源码两次 `compile` 必须产出逐字节相同
-    /// 的 `code`/`subs`（`EclImage` 未 derive `PartialEq`，逐字段比较即可）。
+    /// 的镜像（`EclImage` derive 了 `PartialEq`，整体比较即可）。
     #[test]
     fn compiling_same_source_twice_yields_identical_image() {
         let src = "const R: int = 1;\n\
@@ -330,7 +383,7 @@ mod tests {
                 debug_info: DebugInfo::None,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let full = compile_with_options(
@@ -340,7 +393,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         assert_eq!(none.image, full.image);
@@ -359,7 +412,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let debug = out.debug.unwrap();
@@ -622,5 +675,407 @@ sub main() {
             &[OP_PUSHI as u32, 60, stg_core::ecl::ops::OP_WAIT as u32],
             "if 块内的 bgm(77) 不该参与顶层线性扫描，落点不应有任何注入指令：{code:?}"
         );
+    }
+
+    // ── 颜色轴 T4：形/色两参糖 + 编译期三判据 ──────────────────────────────
+    //
+    // 三条判据的**施加顺序**是契约的一部分（色号 → 弹型 → 空格），理由见
+    // `swapped_shape_and_color_is_caught_by_stride_check` 的文档：折叠之后的 id 无法
+    // 区分"作者写反了"和"作者就要那一格"。
+
+    /// 判据①：色号越界。
+    #[test]
+    fn color_out_of_range_is_compile_error() {
+        let msgs =
+            compile_err_msgs("sub main() { _ = fire(0, 99, 0fx, 0fx, 0fx, 0deg, none, none); }");
+        assert!(msgs.iter().any(|m| m.contains("色号")), "实际: {msgs:?}");
+    }
+
+    /// 判据②：弹型不是 stride 的倍数。
+    #[test]
+    fn shape_not_on_stride_boundary_is_compile_error() {
+        let msgs =
+            compile_err_msgs("sub main() { _ = fire(5, 0, 0fx, 0fx, 0fx, 0deg, none, none); }");
+        assert!(msgs.iter().any(|m| m.contains("弹型")), "实际: {msgs:?}");
+    }
+
+    /// 判据③：图集空格——本刀最有价值的一道闸（隐形弹）。
+    #[test]
+    fn blank_atlas_cell_is_compile_error() {
+        // 第 9 形（掩码 0x0FFF）第 12 色 = 空格
+        let msgs =
+            compile_err_msgs("sub main() { _ = fire(144, 12, 0fx, 0fx, 0fx, 0deg, none, none); }");
+        assert!(msgs.iter().any(|m| m.contains("空格")), "实际: {msgs:?}");
+    }
+
+    /// **形/色写反**：`fire(COLOR_BLUE, BULLET_AMULET, …)` = `fire(8, 112, …)`，折叠后
+    /// `8 + 112 = 120` 恰是第 7 形的第 8 色——一个**完全合法**的格。折叠后查 id 的实现
+    /// 会放行它（静默发出错误弹型，半径也跟着错）；只有"先分别校验两参、且色号先于
+    /// 弹型"才抓得住。本测试专门钉死实现顺序，别把它优化掉。
+    #[test]
+    fn swapped_shape_and_color_is_caught_by_stride_check() {
+        // 前提自检：折叠值确实落在一个合法格上，否则本测试没有判别力。
+        let folded = &stg_core::tables::TABLES_V0.appearances[(8 + 112) as usize];
+        assert!(folded.valid, "前提：8+112=120 必须是合法格");
+
+        let msgs =
+            compile_err_msgs("sub main() { _ = fire(8, 112, 0fx, 0fx, 0fx, 0deg, none, none); }");
+        assert!(
+            msgs.iter().any(|m| m.contains("色号")),
+            "写反必须被色号越界抓住（120 折叠后是合法格，查 id 抓不到）；实际: {msgs:?}"
+        );
+    }
+
+    /// `batch` 与 `fire` 同一套判据（别只改一边）。
+    #[test]
+    fn batch_shares_the_same_shape_color_checks() {
+        let msgs = compile_err_msgs(
+            "sub main() { _ = batch(144, 12, 0fx, 0fx, 1, 0deg, 0deg, 1, 0fx, 0fx); }",
+        );
+        assert!(msgs.iter().any(|m| m.contains("空格")), "实际: {msgs:?}");
+    }
+
+    /// DoD 1（前腿）：**常量对折叠出的字节码 ≡ 整数字面量对折叠出的字节码**——`const`
+    /// 引用路径（`ConstRef`）与字面量路径（`IntLit`）必须走同一个折叠分支，产出逐字段
+    /// 相同的 `EclImage`（两者绑定同一张 `TABLES_V0`，`content_hash` 也相同）。
+    #[test]
+    fn const_pair_folds_like_integer_literal_pair() {
+        let via_consts = compile(
+            "const BULLET_BALL_S: int = 16;\n\
+             const COLOR_CHARTREUSE: int = 3;\n\
+             sub main() { _ = fire(BULLET_BALL_S, COLOR_CHARTREUSE, 1fx, 2fx, 3fx, 0deg, none, none); }",
+            "t.ecl",
+        )
+        .expect("常量对应编译成功");
+        let via_literals = compile(
+            "sub main() { _ = fire(16, 3, 1fx, 2fx, 3fx, 0deg, none, none); }",
+            "t.ecl",
+        )
+        .expect("字面量对应编译成功");
+        assert_eq!(
+            via_consts, via_literals,
+            "const 折叠路径与字面量路径必须产出同一份镜像"
+        );
+    }
+
+    /// DoD 1（后腿）：**常量对零运行期开销**——两参都是编译期常量时字节码里不该有
+    /// `OP_ADD`（折成单个 `PUSHI`）；色参换成运行期变量才发一条加法。
+    #[test]
+    fn const_shape_color_pair_emits_no_add_but_variable_color_does() {
+        use stg_core::ecl::ops::OP_ADD;
+
+        let folded = compile(
+            "sub main() { _ = fire(16, 3, 1fx, 2fx, 3fx, 0deg, none, none); }",
+            "t.ecl",
+        )
+        .expect("常量对应编译成功");
+        assert!(
+            !opcodes_of(folded.code()).contains(&OP_ADD),
+            "常量对必须折成单个字面量，不发加法：{:?}",
+            folded.code()
+        );
+        // 折叠出的字面量确实是 16+3=19（不是"恰好没发加法但也没折对"）。
+        assert!(
+            folded
+                .code()
+                .windows(2)
+                .any(|pair| pair == [OP_PUSHI as u32, 19]),
+            "应折成 `PUSHI 19`：{:?}",
+            folded.code()
+        );
+
+        let dynamic = compile(
+            "sub main() { var c: int = 3; _ = fire(16, c, 1fx, 2fx, 3fx, 0deg, none, none); }",
+            "t.ecl",
+        )
+        .expect("变量色应编译成功（判据只对编译期常量对施加）");
+        assert!(
+            opcodes_of(dynamic.code()).contains(&OP_ADD),
+            "变量色必须发一条运行期加法：{:?}",
+            dynamic.code()
+        );
+    }
+
+    /// `batch` 也走折叠（不只是 `fire`）——`builtins::folds_shape_color` 是两处共用的
+    /// 单一谓词，但只有真跑一遍才钉得死"codegen 那一侧没把 `batch` 漏掉"：漏掉 =
+    /// 给 9 参 syscall 压 10 个值，整条参数序列错位，且没有任何显眼信号。
+    #[test]
+    fn batch_const_pair_folds_too() {
+        use stg_core::ecl::ops::OP_ADD;
+        let img = compile(
+            "sub main() { _ = batch(16, 3, 0fx, 0fx, 1, 0deg, 0deg, 1, 1fx, 0fx); }",
+            "t.ecl",
+        )
+        .expect("常量对应编译成功");
+        assert!(
+            !opcodes_of(img.code()).contains(&OP_ADD),
+            "batch 的常量对同样应折成单个字面量：{:?}",
+            img.code()
+        );
+        assert!(
+            img.code()
+                .windows(2)
+                .any(|pair| pair == [OP_PUSHI as u32, 19]),
+            "应折成 `PUSHI 19`：{:?}",
+            img.code()
+        );
+    }
+
+    /// 变量色**跳过判据**的真正理由是"不是编译期常量"，不是"值恰好合法"——故拿一个
+    /// **越界**的变量色（99 ≥ stride 16）来判别：必须照样编译通过，把拦截让给运行期
+    /// syscall 的 `valid` 判据（先验后建）。若判据实现哪天顺手把 `LocalRef` 的初值也
+    /// 折出来判，本测试立刻红。
+    #[test]
+    fn out_of_range_variable_color_is_left_to_runtime() {
+        compile(
+            "sub main() { var c: int = 99; _ = fire(16, c, 1fx, 2fx, 3fx, 0deg, none, none); }",
+            "t.ecl",
+        )
+        .expect("变量色越界不该在编译期报错——运行期 syscall 的 valid 判据兜底");
+    }
+
+    // ── 复审必修一：xformdef `set_sprite` 走同一套图集判据 ───────────────────
+    //
+    // 三判据当初只挂在 fire/batch 上，`set_sprite(shape, color)` 漏网——它写的是同一个
+    // 数域，照样能造出"有判定但看不见的弹"，也照样会被写反。判据本体收进 `lang::atlas`
+    // 后两条路共用；下面三条是 xformdef 侧的判别腿（措辞与 fire/batch 侧一致）。
+
+    /// 空格：`set_sprite(144, 12)` = 第 9 形第 12 色（掩码 0x0FFF）——本刀最有价值的闸。
+    #[test]
+    fn set_sprite_blank_atlas_cell_is_compile_error() {
+        let msgs = compile_err_msgs(
+            "xformdef X { set_sprite(144, 12); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+        );
+        assert!(msgs.iter().any(|m| m.contains("空格")), "实际: {msgs:?}");
+    }
+
+    /// 色号越界：`set_sprite(0, 99)`。
+    #[test]
+    fn set_sprite_color_out_of_range_is_compile_error() {
+        let msgs = compile_err_msgs(
+            "xformdef X { set_sprite(0, 99); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+        );
+        assert!(msgs.iter().any(|m| m.contains("色号")), "实际: {msgs:?}");
+        assert!(
+            msgs.iter().any(|m| m.contains("set_sprite")),
+            "报错应点名 set_sprite（而不是某个 fire）：{msgs:?}"
+        );
+    }
+
+    /// **写反**：`set_sprite(COLOR_BLUE, BULLET_AMULET)` = `set_sprite(8, 112)`。两参同型，
+    /// 比 `fire` 更容易写反；折叠值 8+112=120 是合法格，只有"色号先查"抓得住。
+    /// 报错必须落在 xformdef 那一行（第 1 行），不是 `fire` 那行。
+    #[test]
+    fn set_sprite_swapped_shape_and_color_is_caught() {
+        let errs = expect_compile_err(
+            "xformdef X { set_sprite(8, 112); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+            "t.ecl",
+        );
+        let e = errs.first().expect("应有至少一条错误");
+        assert!(
+            e.msg.contains("色号"),
+            "写反必须被色号越界抓住（120 折叠后是合法格）；实际: {}",
+            e.msg
+        );
+        assert_eq!(e.line, 1, "报错应落在 xformdef 槽那一行：{errs:?}");
+        assert!(e.col >= 1);
+    }
+
+    /// 合法的 `set_sprite` 照常通过（防上面三条把整条路堵死的假绿）。
+    #[test]
+    fn set_sprite_valid_cell_compiles() {
+        compile(
+            "xformdef X { set_sprite(16, 3); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+            "t.ecl",
+        )
+        .expect("16+3 是合法格，应编译通过");
+    }
+
+    // ── 颜色轴刀 T7：`set_shape`/`set_color` 部分设——单轴判据 + 无表报错 ─────────
+    //
+    // xformdef 只在被某个 sub 的 `fire(...)` 引用后才会走 codegen staging（`gen_xformdef_staging`
+    // 按 `sub.xform_refs` 遍历，未被引用的 xformdef 是死代码，slots 趟只查过 op 名合法性，
+    // 不下潜到参数）——下面三条都跟 `set_sprite_*` 系列一样，在 `main` 里补一条 `fire`
+    // 引用把 X 从死代码里捞出来，判据才真正跑得到。
+
+    /// xformdef 里的单轴 op：坏值编译期拒、空格落点放行。
+    #[test]
+    fn partial_sprite_ops_reject_bad_values_only() {
+        let bad = compile_err_msgs(
+            "xformdef X { set_color(99); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+        );
+        assert!(bad.iter().any(|m| m.contains("色号")), "实际: {bad:?}");
+
+        let bad2 = compile_err_msgs(
+            "xformdef X { set_shape(5); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+        );
+        assert!(bad2.iter().any(|m| m.contains("弹型")), "实际: {bad2:?}");
+
+        // 会落到空格的写法必须**编译通过**（裁定：允许，由作者负责）
+        compile(
+            "xformdef X { set_color(12); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+            "t.ecl",
+        )
+        .expect("部分设落到空格是允许的，不得报编译错误");
+    }
+
+    /// 编译器把绑定表的 stride 写进 args[1]——没有表就无从得知，必须报错而不是猜。
+    #[test]
+    fn partial_sprite_ops_require_a_bound_table() {
+        let errs = compile_with_options(
+            "xformdef X { set_color(3); }\n\
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+            "t.ecl",
+            CompileOptions {
+                debug_info: DebugInfo::None,
+            },
+            stg_core::consts::ENGINE_CONSTS,
+            None,
+        )
+        .expect_err("未绑定表时 set_color 无法确定色轴宽度，必须报错");
+        // 复审 M-4：只断言"有错误"抓不住"把'未绑表'改成别的硬错误"这类语义变更——
+        // 补断言措辞确实点名"色轴宽度"（codegen.rs 的 OpWithStride 分支报错原文），
+        // 而不是碰巧因为别的理由报错。
+        assert!(
+            errs.iter().any(|e| e.msg.contains("色轴宽度")),
+            "应点名'色轴宽度'：{errs:?}"
+        );
+    }
+
+    // ── 终审必修 I-1：一张非 16 宽的表串起全部四个 stride 消费者 ───────────────
+    //
+    // 现有测试全在 `TABLES_V0`（stride=16）上跑：`bound_table_injects_color_stride_const`
+    // （`typeck/tests.rs`）只断言"能编译"、从不断言值；两条
+    // `*_threads_bound_table_stride_into_args1_end_to_end`（`codegen.rs`）虽名为"穿线判别"，
+    // 但表是 16 宽，硬编码 16 与读表不可区分；此前唯一的 mod 形态表测试
+    // （`mod_shaped_table_drives_checks_by_its_own_stride`，已并入本模块）只走 `fire`，
+    // 不碰 `codegen.rs` `OpWithStride` 分支的穿线点。终审在隔离 worktree 里把
+    // `lang/mod.rs` 注入常量的值、`lang/codegen.rs` `OpWithStride` 写 `args[1]` 两处分别
+    // 换成字面量 `16`，`cargo test --workspace` 两次都绿——这个模块补的就是这份判别力：
+    // 一张 **8 宽**表（与 16 处处可辨，不是它的因数变体）串起"引擎里读 `color_stride` 的
+    // 地方"已知的全部四个消费点，任何一点悄悄换成字面量 `16` 都应该让本模块至少一条测试
+    // 变红；将来再长出第五个消费点、忘了接线，也该在这里补第五条，而不是另开一个模块。
+    mod mod_table_drives_every_stride_consumer {
+        use super::*;
+
+        /// 7 形 × 8 色的 mod 形态表：全表满色（`valid = true` 全铺），`color_stride = 8`。
+        fn mod_table() -> stg_core::tables::WorldTables {
+            let mut t = stg_core::tables::build_tables_v0();
+            t.color_stride = 8;
+            let rows: Vec<stg_core::tables::AppearanceCfg> = (0..7 * 8)
+                .map(|i| stg_core::tables::AppearanceCfg {
+                    radius: stg_core::math::Fx::from_int(4),
+                    sprite: i as u16, // identity
+                    valid: true,
+                })
+                .collect();
+            t.appearances = rows.into_boxed_slice();
+            t.content_hash = 0; // 未参与本模块任何测试
+            t
+        }
+
+        /// 消费者①（终审变异点 `lang/mod.rs:113`）：`compile_with_options` 注入的
+        /// `BULLET_COLOR_STRIDE` 常量值必须来自**这张表自己的** stride（8），不是硬编码
+        /// 的 16。若该行被换成字面量 16，脚本引用 `BULLET_COLOR_STRIDE` 折出来的字节码会
+        /// 是 `PUSHI 16`，本断言找不到 `PUSHI 8` 而红。
+        #[test]
+        fn injected_constant_reads_stride_from_the_table_not_16() {
+            let t = mod_table();
+            let img = compile_for_table(
+                "sub main() { var w: int = BULLET_COLOR_STRIDE; _ = w; }",
+                "t.ecl",
+                &t,
+            )
+            .expect("绑定 8 宽表应能编译");
+            assert!(
+                img.code()
+                    .windows(2)
+                    .any(|pair| pair == [OP_PUSHI as u32, 8]),
+                "BULLET_COLOR_STRIDE 应折成该表自己的 stride=8，不是硬编码 16：{:?}",
+                img.code()
+            );
+        }
+
+        /// 消费者②：`fire` 的形/色三判据（`lang::atlas::check_shape_color`）必须按表自己
+        /// 的 stride 走。色号 8 在 8 色表越界（在内建 16 色表合法）；弹型 8（=1×8）在 8
+        /// 色表合法（若误按 16 走会被判"不是 16 的倍数"而报错）——两个方向都验，防
+        /// "只挡该挡的"这种单向假绿。
+        #[test]
+        fn fire_checks_go_by_the_tables_own_stride_not_16() {
+            let t = mod_table();
+            let e = compile_for_table(
+                "sub main() { _ = fire(0, 8, 0fx, 0fx, 0fx, 0deg, none, none); }",
+                "t.ecl",
+                &t,
+            )
+            .expect_err("8 色表里色号 8 必须越界");
+            assert!(e.iter().any(|x| x.msg.contains("色号")), "实际: {e:?}");
+
+            compile_for_table(
+                "sub main() { _ = fire(8, 1, 0fx, 0fx, 0fx, 0deg, none, none); }",
+                "t.ecl",
+                &t,
+            )
+            .expect("8 色表里弹型 8 是第 1 形，必须合法");
+        }
+
+        /// 消费者③：`batch` 与 `fire` 共用同一套判据（`builtins::folds_shape_color`），但
+        /// 此前从没有一条 mod 表测试盯过 `batch` 这一侧——补上，同一对判别输入。
+        #[test]
+        fn batch_checks_go_by_the_tables_own_stride_not_16() {
+            let t = mod_table();
+            let e = compile_for_table(
+                "sub main() { _ = batch(0, 8, 0fx, 0fx, 1, 0deg, 0deg, 1, 0fx, 0fx); }",
+                "t.ecl",
+                &t,
+            )
+            .expect_err("8 色表里色号 8 必须越界");
+            assert!(e.iter().any(|x| x.msg.contains("色号")), "实际: {e:?}");
+
+            compile_for_table(
+                "sub main() { _ = batch(8, 1, 0fx, 0fx, 1, 0deg, 0deg, 1, 0fx, 0fx); }",
+                "t.ecl",
+                &t,
+            )
+            .expect("8 色表里弹型 8 是第 1 形，必须合法");
+        }
+
+        /// 消费者④（终审变异点 `lang/codegen.rs:316`）：`OpWithStride`（`set_shape`/
+        /// `set_color`）写进 `args[1]` 的值必须是绑定表自己的 stride——跑真 `World`：
+        /// `fire(8, 2, …)` 折叠出初始 sprite = 8+2=10（第 1 形第 2 色，8 色表下合法）；
+        /// `set_color(5)` 只应改色 → `(10 - 10%8) + 5 = 13`。若 `args[1]` 被写死成 16，
+        /// `10 % 16 == 10`，运行期会算成 `(10 - 10) + 5 = 5`（两者可辨：13 ≠ 5）。
+        #[test]
+        fn opwithstride_threads_the_tables_own_stride_into_args1_end_to_end() {
+            let t = mod_table();
+            let src = "xformdef X { set_color(5); }\n\
+                       sub main() {\n\
+                         _ = fire(8, 2, 0fx, 0fx, 0fx, 0deg, X, none);\n\
+                         wait(1000);\n\
+                       }";
+            let img = compile_for_table(src, "t.ecl", &t).expect("应编译成功");
+            let mut w = stg_core::step::World::new(1);
+            w.start_main(&img).expect("main 应能派生");
+            for f in 0..3 {
+                stg_core::step::step(&mut w, &t, &img, &stg_core::input::InputFrame::empty(f));
+            }
+            let view = w.body.view();
+            let p = view.bullets();
+            let i = p.iter_alive().next().expect("应有一颗弹");
+            assert_eq!(
+                p.sprite()[i],
+                13,
+                "set_color(5) 应按表自己的 stride=8 只改色 → (10-10%8)+5=13\
+                 （stride 若被写死成 16 会是 5，不会是 13）"
+            );
+            assert_eq!(view.diag().task_faults, 0);
+        }
     }
 }

@@ -11,15 +11,15 @@ fn prog(src: &str) -> Program {
 }
 
 fn ok(src: &str) -> TypedInfo {
-    check(&prog(src), &[]).unwrap_or_else(|e| panic!("判型失败：{e:?}\n源码：\n{src}"))
+    check(&prog(src), &[], None).unwrap_or_else(|e| panic!("判型失败：{e:?}\n源码：\n{src}"))
 }
 
 fn err(src: &str) -> Vec<CompileError> {
-    check(&prog(src), &[]).expect_err(&format!("期望判型失败，源码：\n{src}"))
+    check(&prog(src), &[], None).expect_err(&format!("期望判型失败，源码：\n{src}"))
 }
 
 fn check_with(src: &str, engine: &[EngineConst]) -> Result<TypedInfo, Vec<CompileError>> {
-    check(&prog(src), engine)
+    check(&prog(src), engine, None)
 }
 
 // ── C14 Task 3：引擎常量预填注入 ─────────────────────────────────────────────
@@ -405,7 +405,7 @@ fn cast_angle_to_fx_is_not_whitelisted() {
 
 #[test]
 fn call_with_return_value_not_discarded_is_an_error() {
-    let errors = err("sub main() { fire(0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
+    let errors = err("sub main() { fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
     assert!(
         errors.iter().any(|e| e.msg.contains("未消费")),
         "{errors:?}"
@@ -414,7 +414,7 @@ fn call_with_return_value_not_discarded_is_an_error() {
 
 #[test]
 fn call_with_return_value_discarded_is_ok() {
-    ok("sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
+    ok("sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
 }
 
 #[test]
@@ -821,7 +821,7 @@ fn sync_call_on_async_sub_is_an_error() {
 #[test]
 fn fire_task_ref_with_params_is_an_error() {
     let errors = err("async sub trail(spd: fx) { wait(1); } \
-         sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, trail); }");
+         sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, trail); }");
     assert!(
         errors.iter().any(|e| e.msg.contains("无参 async sub")),
         "{errors:?}"
@@ -831,7 +831,7 @@ fn fire_task_ref_with_params_is_an_error() {
 #[test]
 fn fire_task_ref_on_plain_sub_is_an_error() {
     let errors = err("sub on_hit() { } \
-         sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, on_hit); }");
+         sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, on_hit); }");
     assert!(
         errors
             .iter()
@@ -853,13 +853,13 @@ fn sync_call_records_target_name_deduped() {
 
 #[test]
 fn fire_xf_none_and_task_none_is_ok() {
-    ok("sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
+    ok("sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, none); }");
 }
 
 #[test]
 fn fire_xf_known_xformdef_is_ok_and_recorded() {
     let ti = ok(
-        "xformdef RING { turn(90deg); } sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, RING, none); }",
+        "xformdef RING { turn(90deg); } sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, RING, none); }",
     );
     let main = ti.subs.iter().find(|s| s.name == "main").unwrap();
     assert_eq!(main.xform_refs, vec!["RING".to_string()]);
@@ -867,7 +867,7 @@ fn fire_xf_known_xformdef_is_ok_and_recorded() {
 
 #[test]
 fn fire_xf_unknown_xformdef_is_an_error() {
-    let errors = err("sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, NOPE, none); }");
+    let errors = err("sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, NOPE, none); }");
     assert!(
         errors.iter().any(|e| e.msg.contains("未知的 xformdef")),
         "{errors:?}"
@@ -877,13 +877,13 @@ fn fire_xf_unknown_xformdef_is_an_error() {
 #[test]
 fn fire_task_known_sub_is_ok() {
     ok(
-        "async sub bullet_task() { } sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, bullet_task); }",
+        "async sub bullet_task() { } sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, bullet_task); }",
     );
 }
 
 #[test]
 fn fire_task_unknown_sub_is_an_error() {
-    let errors = err("sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, nope); }");
+    let errors = err("sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, nope); }");
     assert!(
         errors.iter().any(|e| e.msg.contains("未知的 sub")),
         "{errors:?}"
@@ -892,7 +892,7 @@ fn fire_task_unknown_sub_is_an_error() {
 
 #[test]
 fn fire_xf_non_identifier_expr_is_an_error() {
-    let errors = err("sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, 1, none); }");
+    let errors = err("sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, 1, none); }");
     assert!(
         errors.iter().any(|e| e.msg.contains("标识符")),
         "{errors:?}"
@@ -1033,5 +1033,46 @@ fn emit_req_rawval_accepts_all_three_types_id_stays_int() {
     assert!(
         errs.iter().any(|e| e.msg.contains("第 1 个参数期待")),
         "id 位传 fx 应报参数类型错：{errs:?}"
+    );
+}
+
+// ── 颜色轴（T3）：表派生常量 `BULLET_COLOR_STRIDE` ────────────────────────────
+//
+// 名字是引擎级词汇（结构），值来自绑定的那张表（内容）；不对称拍板：绑定表时注入，
+// 未绑定表（`None`）时不注入——脚本引用它应得到"未知标识符"，而不是一个撒谎的
+// 默认值（本节走完整 `compile`/`compile_with_options` 管线，不是裸 `typeck::check`，
+// 故用 `crate::lang::` 完整路径，不复用本文件顶部只喂 `typeck::check` 的 `ok`/`err`
+// 辅助函数）。
+
+/// 绑定表时注入表派生常量 `BULLET_COLOR_STRIDE`（值来自表，不是引擎硬编码）。
+#[test]
+fn bound_table_injects_color_stride_const() {
+    let src = "sub main() { var w: int = BULLET_COLOR_STRIDE; _ = w; }";
+    let img = crate::lang::compile(src, "t.ecl").expect("绑定内建表应能引用 stride 常量");
+    let _ = img;
+}
+
+/// 未绑定表（table = None）时不注入——脚本引用它应报"未定义的变量"，
+/// 而不是悄悄拿到某个默认值。
+#[test]
+fn unbound_table_does_not_inject_color_stride() {
+    let src = "sub main() { var w: int = BULLET_COLOR_STRIDE; _ = w; }";
+    let errs = crate::lang::compile_with_options(
+        src,
+        "t.ecl",
+        crate::lang::CompileOptions {
+            debug_info: crate::lang::DebugInfo::None,
+        },
+        stg_core::consts::ENGINE_CONSTS,
+        None,
+    )
+    .expect_err("未绑定表不得注入 stride 常量");
+    // 复审 M-4：只断言"有错误"抓不住"把'未绑表'改成别的硬错误"这类语义变更——
+    // 补断言错误内容确实是"未定义标识符"（`BULLET_COLOR_STRIDE` 没被注入进常量表，
+    // 落到与任何未声明变量同样的判型路径），而不是碰巧因为别的理由报错。
+    assert!(
+        errs.iter()
+            .any(|e| e.msg.contains("未定义") && e.msg.contains("BULLET_COLOR_STRIDE")),
+        "应报'未定义'且点名 BULLET_COLOR_STRIDE：{errs:?}"
     );
 }

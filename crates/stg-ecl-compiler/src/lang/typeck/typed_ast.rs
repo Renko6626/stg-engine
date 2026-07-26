@@ -150,3 +150,16 @@ pub struct TypedInfo {
     /// 折叠后的常量：名 / 声明型 / 原始值（源码序）。
     pub consts: Vec<(String, Ty, i32)>,
 }
+
+/// 一个已判型实参的编译期常量值（`IntLit` 或 `const` 折叠出的 `ConstRef`）；
+/// `LocalRef`/`Binary`/`Cast`/`Call` 等运行期表达式一律 `None`。
+/// 形/色判据与 mark 锚点扫描共用（DRY：`codegen::anchor_const_arg` 即调本函数）。
+pub(crate) fn const_val(a: &CallArg) -> Option<i32> {
+    match a {
+        CallArg::Val(TypedExpr { kind, .. }) => match kind {
+            TypedExprKind::IntLit(v) | TypedExprKind::ConstRef(v) => Some(*v),
+            _ => None,
+        },
+        CallArg::XformRef(_) | CallArg::SubRef(_) => None,
+    }
+}

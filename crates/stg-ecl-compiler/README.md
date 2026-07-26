@@ -91,8 +91,13 @@ codegen 降低模板等）。`src/lib.rs` 的 `ImageBuilder`/`SubBuilder` 是 M1
 `compile(src, file)` 返回纯运行时镜像 `EclImage`（字节码 + 入口表 + 内容哈希）。
 调试信息**永不出现在运行时镜像中**——`EclImage` 在有无调试信息时逐字节完全相同。
 
-`compile_with_options(src, file, CompileOptions { debug_info: DebugInfo::Full })`
-返回 `CompiledEcl { image, debug: Some(EclDebugSymbols) }`——结果是两件分离的产物：
+`compile_with_options(src, file, CompileOptions { debug_info: DebugInfo::Full },
+stg_core::consts::ENGINE_CONSTS, Some(&stg_core::tables::TABLES_V0))`
+返回 `CompiledEcl { image, debug: Some(EclDebugSymbols) }`——结果是两件分离的产物
+（第四参 `engine_consts` 是脚本可见引擎常量注入表，第五参 `table: Option<&WorldTables>`
+是颜色轴刀 T3 加的表绑定——`Some(t)` 时把 `t.content_hash` 盖进产出镜像并注入表派生常量
+`BULLET_COLOR_STRIDE`，`None` 时不绑表、也不注入它；`compile`/`compile_for_table` 是
+围绕它的两层薄封装，见 [`docs/ecl-lang.md`](../../docs/ecl-lang.md)"引擎常量"节）：
 - `.image`：与 `compile` 输出逐字节相同的运行时镜像（可传入 `step` / `step_with_director`）。
 - `.debug`：可选的调试符号侧载（`EclDebugSymbols`），包含 sub 名称/参数名/PC 区间/
   源码定位（文件/行/列）——**不参与确定性计算**，仅用于开发期诊断、反汇编、PC → 源码映射。`EclImage` 本身不会因调试信息的开启或关闭产生任何字节差异，这一属性在编译期测试中被断言押运。

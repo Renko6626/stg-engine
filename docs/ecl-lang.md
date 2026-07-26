@@ -50,6 +50,7 @@
 
 ```ecl
 const SPELL_WINDCHIME: int = 1;
+const BULLET_RICE: int = 0; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
 
 xformdef WIND_CHIME { set_speed(2.0fx); @30 turn(90deg); }
 
@@ -65,7 +66,8 @@ async sub windchime_pattern() {
     loop {
         var ways: int = 28 + global(GVAR_RANK) * 2;
         for i in 0..5 {
-            _ = batch(i % 4, $self_x, $self_y, ways, base, 0deg, 1,
+            _ = batch(BULLET_RICE, i % BULLET_COLOR_STRIDE,
+                      $self_x, $self_y, ways, base, 0deg, 1,
                       1.0fx + i as fx * 0.25fx, 0fx);
         }
         base = base + 7deg;
@@ -196,7 +198,8 @@ after:`。正常流程（从头开局，或本次中段启动的落点不是这�
 编译器在编译期解析名称并编码为 `canonical SubId`（运行时 `EclImage` 无字符串表，
 只有 `(SubId, code_entry)` 的扁平元数据）。这意味着：
 - `spawn patrol()` 在编译期解析 `patrol` 到其 `SubId`，存入 `SPAWN` 指令的操作数。
-- `fire(1, $self_x, $self_y, 0fx, 0deg, WIND_CHIME, trail_task)` 同理——`trail_task` 作为
+- `fire(BULLET_RICE, COLOR_RED, $self_x, $self_y, 0fx, 0deg, WIND_CHIME, trail_task)`
+  同理——`trail_task` 作为
   `async sub` 的名称在编译期被解析并编码。
 - **不存在的 sub 名称在编译期即报错**，不存在运行期"名字未找到"的分支。
 
@@ -276,12 +279,16 @@ xformdef 槽参数（编译期常量位置）处都能直接引用，不用再�
 
 | 名字 | 值 | 含义 |
 |---|---:|---|
-| `APPEARANCE_SMALL` | `0` | 弹外观表——小 |
-| `APPEARANCE_MEDIUM` | `1` | 弹外观表——中 |
-| `APPEARANCE_LARGE` | `2` | 弹外观表——大 |
-| `APPEARANCE_STAR` | `3` | 弹外观表——星 |
 | `GVAR_RANK` | `0` | `globals` 系统段内 RANK（难度）槽号，见上节 |
 | `GLOBALS_SYS_SEGMENT` | `16` | `globals` 系统段/自由段分界槽号，见上节 |
+| `REQ_*` | 见 `consts.rs` | 通道 B 引擎保留请求 id（`REQ_STAGE_CLEAR`/`REQ_BGM`/…） |
+| `BULLET_COLOR_STRIDE` | 内建 `16` | **表派生**：当前绑定表的每种弹型色数，见下 |
+
+**弹型名与颜色名不是引擎常量**（旧的 `APPEARANCE_*` 已随颜色轴刀退场）——它们归**内容包**，
+由你自己的 `.ecl` 用 `const` 声明（示例见 `godot/ecl/demo/bullets.ecl`）。同一编译单元
+（= 同一目录）内 `const` 跨文件可见，所以整局脚本只需要在一个文件里声明一次。这样 mod
+作者与内建内容地位对等。写"轮转全部颜色"用 `BULLET_COLOR_STRIDE`，别硬编码 16。
+⚠️ 稀疏弹型（只做了部分色）的其余列是图集空格，盲目轮转全色会被编译期/运行期拒收。
 
 值即引擎侧同名 Rust 常量（脚本侧统一按 `int` 携带：`Fx`/`Angle` 类型的常量会带原始
 raw 值，不是十进制含义值——目前表里的名字都恰好是 `int` 类型，无此坑；新增 `fx`/`angle`
@@ -306,8 +313,8 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 否则会被 `committed_doc_segment_matches_generated` 防漂移测试打回)
 
 <!-- gen:builtins:begin -->
-- `fire(appearance: int, x: fx, y: fx, speed: fx, angle: angle, xf: xform|none, task: sub|none) -> int` — 发一颗弹;appearance 查外观表(越界 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1
-- `batch(appearance: int, x: fx, y: fx, n_angle: int, angle0: angle, angle_step: angle, n_speed: int, speed0: fx, speed_step: fx) -> int` — N-way 批量发环;返实际创建数
+- `fire(shape: int, color: int, x: fx, y: fx, speed: fx, angle: angle, xf: xform|none, task: sub|none) -> int` — 发一颗弹;shape/color 查外观表(越界/空格 编译期或 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1
+- `batch(shape: int, color: int, x: fx, y: fx, n_angle: int, angle0: angle, angle_step: angle, n_speed: int, speed0: fx, speed_step: fx) -> int` — N-way 批量发环;shape/color 同 fire;返实际创建数
 - `spawn_enemy(x: fx, y: fx, hp: int, drop_table: int, score: int, sprite: int, task: sub|none) -> int` — 造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌,敌死任务亡);返敌句柄,失败 -1
 - `enemy_hp(handle: int) -> int` — 查敌当前 hp;死/悬垂/越界句柄返 -1(P4-b;句柄是池 index,槽复用不可辨)——stage 编排等 boss 死用
 - `drop_item(x: fx, y: fx, item_type: int) -> int` — 掉一颗道具(带随机喷发速度,消耗模拟 RNG);返句柄,失败 -1
@@ -504,8 +511,11 @@ xformdef ARC_SHOT {
     set_life(180);
 }
 
+const BULLET_BALL_S: int = 16; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const COLOR_AZURE: int = 7;
+
 sub main() {
-    _ = fire(APPEARANCE_SMALL, 0fx, 0fx, 1.0fx, 0deg, ARC_SHOT, none);
+    _ = fire(BULLET_BALL_S, COLOR_AZURE, 0fx, 0fx, 1.0fx, 0deg, ARC_SHOT, none);
 }
 ```
 
@@ -514,6 +524,53 @@ sub main() {
 - **STEP 族（`step_speed`/`step_angle`）物理占 2 槽**——scratch 由编译器自动补，作者按 1 条写；
   物理槽总数 ≤16。`loop`/`end` 不开放（复杂控制流写任务弹；尾部零填充天然 END）。
 - 被 `fire(..., NAME, ...)` 引用才占 locals 空间（3 字/物理槽，算进引用它的 sub 的容量账）。
+
+### 部分设三兄弟：`set_sprite` / `set_shape` / `set_color`
+
+外观值 = `形 × color_stride + 色`（identity：表索引 ≡ 图集格号 ≡ 池 `sprite` 值，见
+[`render-contract.md`](render-contract.md) §3）。三个 xform op 都改弹当前的外观值，区别
+在改哪一维：
+
+- `set_sprite(形, 色)`——**全设**，两维一起换（`fire`/`batch` 内部折叠出的 op 就是它）。
+- `set_shape(形)`——**只换形状**，保住当前色位不动。
+- `set_color(色)`——**只换颜色**，保住当前形位不动。
+
+```ecl
+xformdef SWAP_LOOK {
+    set_color(COLOR_BLUE);        // 保形：不管当前是什么形，只把颜色换成蓝
+    @10 set_shape(BULLET_BALL_L); // 保色：不管当前是什么色，只把形状换成大玉
+}
+
+const BULLET_BALL_M: int = 32; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const BULLET_BALL_L: int = 48;
+const COLOR_BLUE: int = 8;
+
+sub main() {
+    _ = fire(BULLET_BALL_M, COLOR_BLUE, 0fx, 0fx, 1.0fx, 0deg, SWAP_LOOK, none);
+    wait(60);
+}
+```
+
+⚠️ **部分设不查空格——这是设计允许的行为，不是漏洞，复审别把它当 bug 修回去**：
+`set_shape`/`set_color` 编译期只查"值本身合不合法"（色号落在 `[0, BULLET_COLOR_STRIDE)`、
+形状基址是 stride 的整倍数且落在表范围内），**不查"这个形+色组合在图集里是不是空格"**。
+原因是部分设只改一维，落点还取决于弹**当时的另一维**——这是运行期状态（可能来自 `fire`
+给的初始外观，也可能来自之前执行过的另一次部分设），编译期看不到那个值，做不了跨维校验。
+曾提议一条"跨形状安全"判据（`set_color(c)` 要求 `c` 在图集里所有弹型上都有图）被**人类
+裁定否决**：图集里只要存在一两个稀疏弹型（内建 demo 词表的 `BULLET_HEART`/
+`BULLET_BUTTERFLY`，第 12..15 色是空格），这条判据就会把 12..15 号色在**所有**弹型上
+一起禁掉，代价远大于收益。**结论**：落到空格 = 该弹变透明，这是设计允许的降级路径，
+由作者自己负责别把部分设用在会撞空的组合上；运行期也**不**替你兜底——部分设的两个解释臂
+只护 stride 合法性（防除零/溢出），不查 `valid`，撞空格既不报错也不 Fault，弹会悄悄变
+透明地继续飞。想要"越界就出错"的效果，只有 `fire`/`batch`/`set_sprite` 的两参全设才有
+这道闸（`set_sprite` 编译期走同一份 `check_shape_color`，含 `valid` 检查——见
+`set_sprite_blank_atlas_cell_is_compile_error` 单测）。
+
+⚠️ **稀疏弹型不能盲目轮转全色**：只做了部分色的弹型（如上面的心弹/蝶弹），
+`for i in 0..BULLET_COLOR_STRIDE { ... }` 这类轮转写法在色号跑到空格区间时，`fire`/
+`batch` 会在编译期/运行期被拒收（两参全设查 `valid`）；换成部分设则不会报错，只会让弹
+在那几帧变透明。两种后果都不是作者通常想要的——轮转全色的写法只对满色弹型安全，稀疏
+弹型要么显式列出可用色，要么整体避开轮转写法。
 
 ## debug 循环（改代码 → check → 再改）
 

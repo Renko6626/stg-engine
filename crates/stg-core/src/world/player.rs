@@ -406,6 +406,7 @@ mod tests {
             item_cfg: TABLES_V0.item_cfg,
             drop_tables: TABLES_V0.drop_tables.clone(),
             item_gravity: TABLES_V0.item_gravity,
+            color_stride: TABLES_V0.color_stride,
             appearances: TABLES_V0.appearances.clone(),
         };
         t.characters[0].shot.sets[0] = [Box::new(UNFOCUSED_1WAY), Box::new(FOCUSED_2WAY)];

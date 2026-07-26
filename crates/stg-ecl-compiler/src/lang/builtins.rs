@@ -78,18 +78,29 @@ const BUILTINS: &[Builtin] = &[
         name: "fire",
         syscall: syscall::SYS_CREATE_BULLET,
         is_op: false,
-        // 丙方案 8 参 syscall 的表层化：xf/task 两位标识符参数收窄成 (off,cnt)/script，
-        // T3 codegen 时机负责展开——本表只钉表层可见的 7 位。
-        params: &[Val(Int), Val(Fx), Val(Fx), Val(Fx), Val(Angle), Xf, Sub],
+        // 丙方案 8 参 syscall 的表层化：xf/task 两位标识符参数收窄成 (off,cnt)/script；
+        // shape/color 两位反向——表层两参、codegen 折叠成单个 appearance 值（颜色轴刀）。
+        params: &[
+            Val(Int),
+            Val(Int),
+            Val(Fx),
+            Val(Fx),
+            Val(Fx),
+            Val(Angle),
+            Xf,
+            Sub,
+        ],
         ret: Some(Int),
-        doc: "发一颗弹;appearance 查外观表(越界 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1",
-        param_names: &["appearance", "x", "y", "speed", "angle", "xf", "task"],
+        doc: "发一颗弹;shape/color 查外观表(越界/空格 编译期或 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1",
+        param_names: &["shape", "color", "x", "y", "speed", "angle", "xf", "task"],
     },
     Builtin {
         name: "batch",
         syscall: syscall::SYS_CREATE_BULLETS_BATCH,
         is_op: false,
+        // 首位同 `fire`：表层 shape/color 两参，codegen 折叠成单个 appearance 值。
         params: &[
+            Val(Int),
             Val(Int),
             Val(Fx),
             Val(Fx),
@@ -101,9 +112,10 @@ const BUILTINS: &[Builtin] = &[
             Val(Fx),
         ],
         ret: Some(Int),
-        doc: "N-way 批量发环;返实际创建数",
+        doc: "N-way 批量发环;shape/color 同 fire;返实际创建数",
         param_names: &[
-            "appearance",
+            "shape",
+            "color",
             "x",
             "y",
             "n_angle",
@@ -444,6 +456,19 @@ pub fn lookup(name: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.name == name)
 }
 
+/// 该内建的前两位是不是"弹型 + 颜色"两参糖（颜色轴刀）——**单一权威**。
+///
+/// `lang::typeck` 据此施加图集三判据（`lang::atlas`）、`lang::codegen` 据此把两位折叠成
+/// 单个 appearance 值。两处**必须问同一个谓词**：从任何一边的名单里掉出去都是静默事故
+/// ——typeck 掉了 = 判据不施加（隐形弹重新可造）；codegen 掉了 = 给 8 参 syscall 压 9 个
+/// 值，整条参数序列错位，只有间接信号能发现。
+///
+/// 名单与 [`BUILTINS`] 的参数名表由 `folds_shape_color_matches_the_param_name_table`
+/// 双向钉死（前两位恰名为 `shape`/`color` ⟺ 本谓词为真）。
+pub fn folds_shape_color(name: &str) -> bool {
+    matches!(name, "fire" | "batch")
+}
+
 /// 全量导出（编辑体验刀：`gen-ecl-meta`/VS Code 扩展/文档生成的单一真相源——不得另起
 /// 一张手抄表，见模块文档"与计划核心接口块的一处必要出入"）。源码序即导出序（同 `lookup`
 /// 的线性扫描序），不做任何排序/过滤。
@@ -552,9 +577,76 @@ mod tests {
         assert_eq!(b.ret, Some(Int));
         assert_eq!(
             b.params,
-            &[Val(Int), Val(Fx), Val(Fx), Val(Fx), Val(Angle), Xf, Sub]
+            &[
+                Val(Int),
+                Val(Int),
+                Val(Fx),
+                Val(Fx),
+                Val(Fx),
+                Val(Angle),
+                Xf,
+                Sub
+            ]
         );
         assert_eq!(b.syscall, syscall::SYS_CREATE_BULLET);
+        assert!(!b.is_op);
+    }
+
+    /// 颜色轴刀：`fire`/`batch` 头两位是 `shape`/`color`（**顺序**是契约——两位同为
+    /// `Val(Int)`，对调不会有任何判型报错，只会静默发错弹型；同 `spawn_enemy` 先例）。
+    #[test]
+    fn fire_and_batch_lead_with_shape_then_color() {
+        for n in ["fire", "batch"] {
+            let b = lookup(n).unwrap();
+            assert_eq!(b.param_names[0], "shape", "'{n}' 第 1 位");
+            assert_eq!(b.param_names[1], "color", "'{n}' 第 2 位");
+            assert!(
+                matches!(b.params[0], Val(Int)) && matches!(b.params[1], Val(Int)),
+                "'{n}' 头两位都必须是 Val(Int)"
+            );
+        }
+    }
+
+    /// 折叠谓词与参数名表**双向**一致：前两位恰名为 `shape`/`color` ⟺
+    /// [`folds_shape_color`] 为真。防两种漂移——加了两参糖却忘登记谓词（判据不施加、
+    /// codegen 不折叠），或谓词里多写一个名字（给 syscall 多压一个值）。
+    #[test]
+    fn folds_shape_color_matches_the_param_name_table() {
+        for b in all() {
+            let by_names =
+                b.param_names.first() == Some(&"shape") && b.param_names.get(1) == Some(&"color");
+            assert_eq!(
+                folds_shape_color(b.name),
+                by_names,
+                "'{}' 的折叠谓词与参数名表不一致",
+                b.name
+            );
+        }
+        assert!(folds_shape_color("fire") && folds_shape_color("batch"));
+        assert!(!folds_shape_color("spawn_enemy"), "sprite 位不是两参糖");
+    }
+
+    /// `batch` 的 10 位形状（头两位 shape/color，其余沿用 syscall 既有顺序）。
+    #[test]
+    fn batch_signature_matches_plan_shape() {
+        let b = lookup("batch").unwrap();
+        assert_eq!(
+            b.params,
+            &[
+                Val(Int),
+                Val(Int),
+                Val(Fx),
+                Val(Fx),
+                Val(Int),
+                Val(Angle),
+                Val(Angle),
+                Val(Int),
+                Val(Fx),
+                Val(Fx)
+            ]
+        );
+        assert_eq!(b.ret, Some(Int));
+        assert_eq!(b.syscall, syscall::SYS_CREATE_BULLETS_BATCH);
         assert!(!b.is_op);
     }
 

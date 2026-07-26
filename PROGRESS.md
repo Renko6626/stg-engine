@@ -6,13 +6,14 @@
 
 ## 现在（2026-07-26）
 
-- **位置**：**M2 收口**——Godot 场景刀七任务全部落地（A5 乙案 `spawn_enemy`+`enemy_hp` 解锁
-  enemy-owned 任务/渲染契约收口/真 Godot 工程竖切/demo 局杂兵+风铃卡 boss/双冒烟桥级+真工程级）。
-  `stg-godot`（桥）+ `godot/`（真工程）合计 = M2 全部落地；金向量全程逐位零平移（证据归 git 历史）。
+- **位置**：**弹幕颜色轴刀收口**——弹型×颜色二维图集（12×16 整齐矩形/identity/空格掩码）+
+  ECL 两参糖（`fire`/`batch` 编译器折叠、字节码零改）+ 编译期三判据（先分别校验再折叠，
+  防写反）+ 部分设两新 op（`set_shape`/`set_color`，`ENGINE_VER` 1→2）+ `color_stride`
+  进表、词表归内容包（mod 对等）。M2（Godot 场景刀）之后第一把内容刀；金向量因 sprite
+  重排 + 新增 op 两次平移（判别式护行为，非行为回归）。
 - **在飞**：无。
-- **下一阶段候选**：**弹幕颜色轴刀**（设计已拍板待实施，spec
-  `docs/superpowers/specs/2026-07-26-bullet-color-axis-design.md`）/ M3 环形快照回滚 /
-  `stg-py` RL 线 / 背景刀（follow-ups A4）/ 内容美术期（A9）。
+- **下一阶段候选**：M3 环形快照回滚 / `stg-py` RL 线 / 背景刀（follow-ups A4）/
+  内容美术期（A9）。
 - **待办**：细目见 [`docs/follow-ups.md`](docs/follow-ups.md)（**B23/B18/DoD 目验三件套须首个
   GPU/有头环境才能做**）。
 
@@ -20,6 +21,7 @@
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-26 | **弹幕颜色轴刀** | 弹型×颜色二维图集(表长成 12×16 整齐矩形/identity/空格掩码)+ECL 两参糖(编译器折叠,字节码零改)+编译期三判据(先分别校验再折叠,防写反)+color_stride 进表与词表归内容包(mod 对等)+部分设两新 op(OP_SET_SHAPE/OP_SET_COLOR,只改一维,stride 编译期从表写入槽,ENGINE_VER 1→2)+图集 16×12 占位上下不对称;金向量因 sprite 重排整体平移 |
 | 2026-07-26 | **Godot 场景刀** | A5 乙案 `spawn_enemy` 7 参+`enemy_hp`/渲染契约收口/真 Godot 工程竖切(场景树/四层 MultiMesh/请求分发器/HUD)/demo 局(杂兵+风铃卡 boss)/双冒烟(桥级+真工程级);M2 全落地;金向量全程逐位零平移(证据归 git 历史) |
 | 2026-07-25 | 前置债务刀 | boss_ui 结算清扫(B16②)+D6 四字段收口(49 处迁移)+register_layer 换 buffer 判据+冒烟大扩(B18 可达面)+D8 乙案+新 A5(enemy-owned 任务语言缺口=场景刀设计输入) |
 | 2026-07-25 | 文档整理 | CLAUDE.md 结构树/命令/里程碑追新 + follow-ups 对账(销 B17 顺手补两断言/C17 归位 C 组/A3·B18 追注 new_game_at·anchors 现实) + D10 杂项行记锚点四字段 + ecl-lang check 目录用法 |

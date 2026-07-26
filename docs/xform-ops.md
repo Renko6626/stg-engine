@@ -29,8 +29,10 @@
 | 21 | `TURN` | Δangle (BAM，可负) | — | 1 | 相对转向 | ✅ |
 | 22 | `AIM_PLAYER` | Δangle (BAM) | — | 1 | 瞄最近可瞄自机 + 偏移（可瞄 = 非 ABSENT 非 GAMEOVER；无可瞄自机 → 静默 no-op） | ✅ |
 | 23 | `STEP_ANGLE` | target (BAM) | 同上 | **2** | 限时缓动到目标角（最短弧） | ✅ M0-11b |
-| 30 | `SET_SPRITE` | sprite id | — | 1 | 换贴图 | ✅ |
+| 30 | `SET_SPRITE` | sprite id | — | 1 | 换贴图（表层写 `set_sprite(弹型, 颜色)`，编译期折叠进 args[0]） | ✅ |
 | 31 | `SET_LIFE` | 寿命帧 | — | 1 | 重设寿命（"到时自爆"惯用法） | ✅ |
+| 32 | `SET_SHAPE` | 形状基址 | 色轴宽度 stride（编译器写入） | 1 | 只换形状、保住颜色位（部分设，表层 `set_shape(形)`） | ✅ |
+| 33 | `SET_COLOR` | 色号 | 色轴宽度 stride（编译器写入） | 1 | 只换颜色、保住形状位（部分设，表层 `set_color(色)`） | ✅ |
 | 40 | `SET_ANG_VEL` | ω (BAM/帧, i16 语义) | — | 1 | 开 `POLAR_FX`（清 CART）——旋转弹 | ✅ |
 | 41 | `SET_ACCEL` | a (Fx raw/帧²) | — | 1 | 沿向加速，开 `POLAR_FX`（清 CART） | ✅ |
 | 42 | `SET_GRAVITY` | ax (Fx raw/帧²) | ay (Fx raw/帧²) | 1 | 笛卡尔加速，开 `CART_FX`（清 POLAR）——重力/漂移 | ✅ |
@@ -66,6 +68,12 @@
 - **STEP 发射帧不 tick + 精确终值**：`STEP_SPEED`/`STEP_ANGLE` 发射当帧只初始化 scratch（起点值
   + active 位），不推进插值，从下一帧起才 tick；终帧（`elapsed == frames`）写精确目标值，不吃
   插值舍入；`LOOP` 重访 STEP 视同重新发射，自动从当前值重新武装 scratch。
+- **部分设（`SET_SHAPE`/`SET_COLOR`）的 stride 为什么住 `args[1]`**：两个 op 要把 `sprite`
+  拆回 `(形, 色)` 只改一维，但相位 4（`run_transforms`）拿不到 `WorldTables`——世界层不
+  认识"颜色"这回事（P1：world 无知）。做法是编译器在 codegen 时把绑定表的 `color_stride`
+  一并写进槽的 `args[1]`，引擎侧只对两个裸整数做取模/整除拆分，零新增穿线；坏 stride
+  （`<=0`，只有手工构造的镜像才会出现，编译器自己不产出）按 P4-b 计 `contract_viol` 后
+  no-op，算术上用 `wrapping_add` 防近 `i32::MAX` 溢出 panic。
 
 ## 示例（金向量实况，`stg-harness/src/main.rs`）
 

@@ -5,8 +5,6 @@
 
 use std::sync::LazyLock;
 
-// `pub use` 保留原有再导出（消费者可能引 `crate::tables::APPEARANCE_*`），且在本模块内可用。
-pub use crate::consts::{APPEARANCE_LARGE, APPEARANCE_MEDIUM, APPEARANCE_SMALL, APPEARANCE_STAR};
 use crate::items::{ITEM_POINT, ITEM_POWER, ITEM_TYPE_COUNT};
 use crate::math::{Angle, Fx};
 use crate::world::MAX_ENTITY_RADIUS;
@@ -25,7 +23,10 @@ pub struct WorldTables {
     pub item_cfg: [ItemTypeCfg; ITEM_TYPE_COUNT],
     pub drop_tables: Box<[DropTable]>,
     pub item_gravity: Fx,
-    /// 弹外观表（索引 = appearance id）。
+    /// 每种弹型占的连续色数（= 图集列数）。内建 = 16；mod 表自定义。
+    /// **引擎不得硬编码这个数**——一切形/色判据从这里读（spec §2 硬约束一）。
+    pub color_stride: u16,
+    /// 弹外观表（索引 = appearance id = 图集格号 = 池 sprite 值，identity）。
     pub appearances: Box<[AppearanceCfg]>,
 }
 
@@ -33,6 +34,9 @@ pub struct WorldTables {
 pub struct AppearanceCfg {
     pub radius: Fx,
     pub sprite: u16,
+    /// 该格图集里是否真有图。`false` = 空格：创建被拒（P4-b Fault），
+    /// **不是**"半径为 0 的弹"——空格行照样带本形状的半径，见 spec §4.3。
+    pub valid: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,27 +205,28 @@ pub fn build_tables_v0() -> WorldTables {
         ],
     };
 
-    // appearances 按 `②` const 下标赋值（防 FM2：const 即下标，结构上无法错序）。
-    let mut appearances = [AppearanceCfg {
-        radius: Fx::ZERO,
-        sprite: 0,
-    }; 4];
-    appearances[APPEARANCE_SMALL as usize] = AppearanceCfg {
-        radius: Fx::from_int(3),
-        sprite: 0,
-    };
-    appearances[APPEARANCE_MEDIUM as usize] = AppearanceCfg {
-        radius: Fx::from_int(4),
-        sprite: 1,
-    };
-    appearances[APPEARANCE_LARGE as usize] = AppearanceCfg {
-        radius: Fx::from_int(6),
-        sprite: 2,
-    };
-    appearances[APPEARANCE_STAR as usize] = AppearanceCfg {
-        radius: Fx::from_int(8),
-        sprite: 3,
-    };
+    // ── 内建内容包的弹型数据（**不是引擎结构常量**：mod 表自带自己的一份）──────
+    // 12 形 × 16 色的整齐矩形。稀疏弹型（HEART/BUTTERFLY）仍占满 16 列，
+    // 用不到的列由掩码标成空格，寻址因此保持 `形 × stride + 色`（spec §5.2）。
+    const BUILTIN_COLOR_STRIDE: u16 = 16;
+    const SHAPE_RADIUS: [i32; 12] = [3, 3, 4, 6, 4, 4, 3, 5, 8, 6, 6, 4];
+    //  第 9/10 形（HEART/BUTTERFLY）只做了低 12 色，高 4 色留空格
+    const SHAPE_COLOR_MASK: [u16; 12] = [
+        0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0FFF, 0x0FFF,
+        0xFFFF,
+    ];
+
+    let stride = BUILTIN_COLOR_STRIDE as usize;
+    let mut appearances = Vec::with_capacity(SHAPE_RADIUS.len() * stride);
+    for (shape, &r) in SHAPE_RADIUS.iter().enumerate() {
+        for color in 0..stride {
+            appearances.push(AppearanceCfg {
+                radius: Fx::from_int(r),
+                sprite: (shape * stride + color) as u16, // identity
+                valid: SHAPE_COLOR_MASK[shape] >> color & 1 == 1,
+            });
+        }
+    }
 
     let drop_tables: Box<[DropTable]> = Box::new([
         Box::new([]) as DropTable,
@@ -241,7 +246,8 @@ pub fn build_tables_v0() -> WorldTables {
         item_cfg: ITEM_CFG_V0,
         drop_tables,
         item_gravity: ITEM_GRAVITY_V0,
-        appearances: Box::new(appearances),
+        color_stride: BUILTIN_COLOR_STRIDE,
+        appearances: appearances.into_boxed_slice(),
     }
 }
 
@@ -256,6 +262,22 @@ impl WorldTables {
     /// `option` 号 `<=` 该档子机数、`drop_tables` 条目类型合法、角色判定/擦弹半径同域、
     /// appearance 表逐行半径同域（M1 T3）。
     pub fn validate(&self) -> bool {
+        // 颜色轴：表必须是 `形数 × color_stride` 的整齐矩形
+        let stride = self.color_stride as usize;
+        if stride == 0
+            || self.appearances.is_empty()
+            || !self.appearances.len().is_multiple_of(stride)
+        {
+            return false;
+        }
+        // 每形第 0 色必须有图——内容包词表里的弹型名恒指向可用格（spec §5）
+        if self
+            .appearances
+            .chunks_exact(stride)
+            .any(|shape_row| !shape_row[0].valid)
+        {
+            return false;
+        }
         if !self.appearances.iter().all(|a| radius_in_range(a.radius)) {
             return false;
         }
@@ -288,8 +310,9 @@ impl WorldTables {
         {
             return false;
         }
-        // join 校验（防 FM1）：每个 ② 表符号 id 必须是 appearances 的合法行。v1 全部 ②
-        // 都是 appearance 索引；将来 ② 长出 item 符号时按 tag 分流（见 spec/follow-ups）。
+        // join 校验（防 FM1）：每个 ② 表符号 id 必须是 appearances 的合法行。**② 段自
+        // 颜色轴刀（2026-07-26）起为空**（弹型名归内容包），故本循环当前不执行；机制保留
+        // ——② 段将来重新长出行（如道具类型符号）时自动生效，届时按 tag 分流。
         for c in crate::consts::TABLE_SYMBOLS {
             if (c.value as usize) >= self.appearances.len() {
                 return false;
@@ -382,7 +405,7 @@ fn read_shooter(r: &mut Reader) -> Result<Shooter, TableLoadError> {
 
 /// 头 16B：magic(4) + version(2) + reserved(2) + content_hash(8)。body = 其后全部字节。
 const TABLE_MAGIC: &[u8; 4] = b"STGT";
-const TABLE_VERSION: u16 = 2;
+const TABLE_VERSION: u16 = 3;
 const TABLE_HEADER: usize = 16;
 
 impl WorldTables {
@@ -396,10 +419,12 @@ impl WorldTables {
         out.extend_from_slice(&0u64.to_le_bytes()); // content_hash 占位（偏移 8..16）
 
         out.extend_from_slice(&self.item_gravity.raw().to_le_bytes());
+        out.extend_from_slice(&self.color_stride.to_le_bytes());
         out.extend_from_slice(&(self.appearances.len() as u32).to_le_bytes());
         for a in self.appearances.iter() {
             out.extend_from_slice(&a.radius.raw().to_le_bytes());
             out.extend_from_slice(&a.sprite.to_le_bytes());
+            out.push(u8::from(a.valid));
         }
         out.extend_from_slice(&(self.item_cfg.len() as u32).to_le_bytes());
         for it in self.item_cfg.iter() {
@@ -476,6 +501,7 @@ impl WorldTables {
             p: TABLE_HEADER,
         };
         let item_gravity = r.fx()?;
+        let color_stride = r.u16()?;
 
         let na = r.u32()? as usize;
         let mut appearances = Vec::with_capacity(na);
@@ -483,6 +509,7 @@ impl WorldTables {
             appearances.push(AppearanceCfg {
                 radius: r.fx()?,
                 sprite: r.u16()?,
+                valid: r.u8()? != 0,
             });
         }
 
@@ -569,6 +596,7 @@ impl WorldTables {
             item_cfg,
             drop_tables: drops.into_boxed_slice(),
             item_gravity,
+            color_stride,
             appearances: appearances.into_boxed_slice(),
         };
         if !t.validate() {
@@ -754,68 +782,115 @@ mod tests {
         }
     }
 
-    /// appearance 表 v0 形状（M1 T3）：恰 4 行，半径 3/4/6/8px 递增，sprite 逐行不同。
+    /// 内建 appearance 表 = 12 形 × 16 色的整齐矩形（identity + 同形同半径 + 空格掩码）。
+    /// 判别力：对调 `SHAPE_RADIUS` 中两个**不同**的值必须让本测试变红。
     #[test]
-    fn appearances_v0_shape() {
-        assert_eq!(TABLES_V0.appearances.len(), 4);
-        let radii: Vec<i32> = TABLES_V0
+    fn appearances_v0_is_12x16_grid() {
+        let t = &*TABLES_V0;
+        assert_eq!(t.color_stride, 16, "内建内容包图集 16 列");
+        assert_eq!(t.appearances.len(), 12 * 16);
+
+        // identity：表索引 ≡ 图集格号 ≡ 池 sprite 值
+        for (i, a) in t.appearances.iter().enumerate() {
+            assert_eq!(
+                a.sprite as usize, i,
+                "第 {i} 行 sprite 必须等于行号（identity）"
+            );
+        }
+
+        // 逐形半径钉死（判别腿：SHAPE_RADIUS 错序即红）
+        let expect = [3, 3, 4, 6, 4, 4, 3, 5, 8, 6, 6, 4];
+        for (shape, &r) in expect.iter().enumerate() {
+            for color in 0..16usize {
+                assert_eq!(
+                    t.appearances[shape * 16 + color].radius,
+                    Fx::from_int(r),
+                    "形 {shape} 色 {color} 半径应为 {r}px（同形 16 行必然同半径）"
+                );
+            }
+        }
+
+        // 空格掩码：HEART(9)/BUTTERFLY(10) 高 4 色为空格，其余全有图
+        for shape in 0..12usize {
+            for color in 0..16usize {
+                let want = !matches!(shape, 9 | 10) || color < 12;
+                assert_eq!(
+                    t.appearances[shape * 16 + color].valid,
+                    want,
+                    "形 {shape} 色 {color} 的 valid 与掩码不符"
+                );
+            }
+        }
+    }
+
+    /// validate 新三条：stride 非零 / 行数是 stride 整数倍 / 每形第 0 色必须有图。
+    #[test]
+    fn validate_rejects_bad_color_grid() {
+        // ① stride 为 0
+        let mut bad = build_tables_v0();
+        bad.color_stride = 0;
+        assert!(!bad.validate(), "color_stride = 0 必须被拒");
+
+        // ② 行数不是 stride 的整数倍（矩形被破坏）
+        let mut ragged = build_tables_v0();
+        let mut rows = ragged.appearances.to_vec();
+        rows.pop();
+        ragged.appearances = rows.into_boxed_slice();
+        assert!(!ragged.validate(), "行数非 stride 整数倍必须被拒");
+
+        // ③ 某形第 0 色是空格（形状名会指向不可用格）
+        let mut hole = build_tables_v0();
+        let mut rows = hole.appearances.to_vec();
+        rows[2 * 16].valid = false; // 第 2 形第 0 色
+        hole.appearances = rows.into_boxed_slice();
+        assert!(!hole.validate(), "某形第 0 色为空格必须被拒");
+
+        // 判别力反证：原表必须通过
+        assert!(build_tables_v0().validate(), "内建表本身必须过 validate");
+    }
+
+    /// 规范字节往返必须带上 `color_stride` 与逐行 `valid`（防"新字段没进格式"）。
+    #[test]
+    fn bytes_roundtrip_carries_stride_and_valid() {
+        let t = build_tables_v0();
+        let back = WorldTables::from_bytes(&t.to_bytes()).expect("往返必须成功");
+        assert_eq!(back.color_stride, t.color_stride);
+        assert_eq!(back.appearances.len(), t.appearances.len());
+        for (i, (a, b)) in t
             .appearances
             .iter()
-            .map(|a| a.radius.raw())
-            .collect();
-        assert_eq!(
-            radii,
-            vec![
-                Fx::from_int(3).raw(),
-                Fx::from_int(4).raw(),
-                Fx::from_int(6).raw(),
-                Fx::from_int(8).raw(),
-            ],
-            "半径递增 3/4/6/8px"
+            .zip(back.appearances.iter())
+            .enumerate()
+        {
+            assert_eq!(a.valid, b.valid, "第 {i} 行 valid 未往返");
+            assert_eq!(a.sprite, b.sprite, "第 {i} 行 sprite 未往返");
+            assert_eq!(a.radius, b.radius, "第 {i} 行 radius 未往返");
+        }
+        // 空格行确实存在（否则本测试对 valid 无判别力）
+        assert!(
+            back.appearances.iter().any(|a| !a.valid),
+            "内建表必须含空格行"
         );
-        let sprites: Vec<u16> = TABLES_V0.appearances.iter().map(|a| a.sprite).collect();
-        assert_eq!(sprites, vec![0, 1, 2, 3], "sprite 逐行不同");
-        assert_eq!(APPEARANCE_SMALL, 0);
-        assert_eq!(APPEARANCE_MEDIUM, 1);
-        assert_eq!(APPEARANCE_LARGE, 2);
-        assert_eq!(APPEARANCE_STAR, 3);
     }
 
     /// appearance 表 validate 判别腿：半径超上限的坏行必须被拒绝。
     #[test]
     fn validate_rejects_bad_appearance_radius() {
         let mut bad = build_tables_v0();
+        bad.color_stride = 1; // 单行矩形，不让颜色轴矩形检查抢先拦截
         bad.appearances = Box::new([AppearanceCfg {
             radius: Fx::from_int(2000), // 超 MAX_ENTITY_RADIUS(1024)
             sprite: 0,
+            valid: true,
         }]);
         assert!(!bad.validate(), "appearance 半径超上限必须被 validate 拒绝");
     }
 
-    /// join 校验判别腿（FM1）：appearances 长度不覆盖 APPEARANCE_STAR(3) → 拒。
-    #[test]
-    fn validate_rejects_table_symbol_without_appearance_row() {
-        let mut t = build_tables_v0();
-        t.appearances = Box::new([AppearanceCfg {
-            radius: Fx::from_int(3),
-            sprite: 0,
-        }]); // len 1
-        assert!(!t.validate(), "② 符号 id 越出 appearances → join 拒（FM1）");
-    }
-
-    /// coverage 断言：内建 appearances 恰覆盖 ② 命名集（无空洞/无缺失）。
-    #[test]
-    fn builtin_appearances_exactly_cover_table_symbols() {
-        use crate::consts::TABLE_SYMBOLS;
-        assert_eq!(
-            TABLES_V0.appearances.len(),
-            TABLE_SYMBOLS.len(),
-            "内建 appearances 恰覆盖 ② 命名集（无空洞/无缺失）"
-        );
-        for c in TABLE_SYMBOLS {
-            assert!((c.value as usize) < TABLES_V0.appearances.len());
-        }
-    }
+    // ② 表符号相关的两条测试（`validate_rejects_table_symbol_without_appearance_row`
+    // 的 FM1 判别腿、`builtin_appearances_exactly_cover_table_symbols` 的 coverage
+    // 断言）随颜色轴刀 T4 清空 ② 段一并退场——`TABLE_SYMBOLS` 现在是空表，两者都退化成
+    // 空断言（前者甚至会因 join 循环不执行而反转成红）。`validate` 里的 join 校验本身
+    // **保留**：机制仍在，② 段将来重新长出行时自动生效。
 
     /// B14 债：角色 hit/graze 半径越界的负向腿（此前只有正向覆盖）。
     #[test]
@@ -902,6 +977,7 @@ mod tests {
         use crate::checksum::Fnv1a64;
         let mut body = Vec::new();
         body.extend_from_slice(&Fx::ZERO.raw().to_le_bytes()); // item_gravity
+        body.extend_from_slice(&0u16.to_le_bytes()); // color_stride 0
         body.extend_from_slice(&0u32.to_le_bytes()); // appearances count 0
         body.extend_from_slice(&3u32.to_le_bytes()); // item_cfg count 3 (!= 5)
         let mut buf = Vec::new();

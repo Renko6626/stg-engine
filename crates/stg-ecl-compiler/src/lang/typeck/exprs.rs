@@ -4,8 +4,9 @@
 
 use super::checker::Checker;
 use super::scope::LocalScope;
-use super::typed_ast::{CallArg, CallTarget, TypedCall, TypedExpr, TypedExprKind};
+use super::typed_ast::{CallArg, CallTarget, TypedCall, TypedExpr, TypedExprKind, const_val};
 use crate::lang::ast::{Expr, Span, Ty, UnOp, expr_span};
+use crate::lang::atlas;
 use crate::lang::builtins::{self, Builtin, ParamKind};
 use crate::lang::type_rules::{CastIntent, UnIntent, binary_result, op_symbol};
 
@@ -14,7 +15,7 @@ enum RefKind {
     Sub,
 }
 
-impl<'p> Checker<'p> {
+impl<'p, 't> Checker<'p, 't> {
     pub(super) fn type_expr(&mut self, e: &Expr, locals: &LocalScope) -> Option<TypedExpr> {
         match e {
             Expr::IntLit(v) => Some(TypedExpr {
@@ -315,7 +316,30 @@ impl<'p> Checker<'p> {
                 },
             }
         }
+        if ok && builtins::folds_shape_color(b.name) {
+            self.check_shape_color(b.name, &out, args, span);
+        }
         if ok { Some(out) } else { None }
+    }
+
+    /// 形/色两参判据的 typeck 侧接线——判据本体住 `lang::atlas`（xformdef 的
+    /// `set_sprite` 走同一份，见该模块文档；顺序"色号 → 弹型 → 空格"是契约）。
+    ///
+    /// 本层只负责两件事：① **只在两参都是编译期常量、且绑定了表时**才问判据（变量色
+    /// 跳过，由 syscall 的 `valid` 判据在运行期兜底——`sys_create_bullet(s_batch)` 先验
+    /// 后建）；② 把否决按 [`atlas::Blame`] 挂到出错那一位的 span 上。
+    fn check_shape_color(&mut self, name: &str, out: &[CallArg], args: &[Expr], span: Span) {
+        let Some(table) = self.table else { return };
+        let (Some(shape), Some(color)) = (const_val(&out[0]), const_val(&out[1])) else {
+            return; // 变量参：运行期由 syscall 的 valid 判据兜底
+        };
+        if let Err(e) = atlas::check_shape_color(table, name, shape, color) {
+            let blamed = match e.blame {
+                atlas::Blame::Shape => &args[0],
+                atlas::Blame::Color => &args[1],
+            };
+            self.err(expr_span(blamed).unwrap_or(span), e.msg);
+        }
     }
 
     fn resolve_ident_ref(

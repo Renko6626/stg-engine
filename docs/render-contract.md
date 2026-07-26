@@ -15,7 +15,7 @@ bullets 层带旋转（basis=角度），其余层单位 basis。压实前缀 + 
 
 | 层 | 文件 | cell | 网格 | id 源 |
 |---|---|---|---|---|
-| bullets | assets/bullets.png | 32×32 | 8×1 | tables appearances[].sprite（现 0..3） |
+| bullets | assets/bullets.png | 32×32 | 16×12 | tables appearances[].sprite（identity：id 即格号） |
 | shots   | assets/shots.png   | 32×32 | 4×1 | shottype 表 sprite |
 | enemies | assets/enemies.png | 64×64 | 4×1 | spawn_enemy sprite 参（A5 起脚本自给） |
 | items   | assets/items.png   | 32×32 | 8×1 | tables item_cfg[].sprite |
@@ -25,19 +25,32 @@ sprite 号 = 格号（行优先）；越界号 mod 回卷。QuadMesh 尺寸 = ce
 换真美术：只换 PNG（同网格），契约与代码零改动；要变网格，改本表 + playfield.gd 常量即可。
 
 **UV 垂直朝向存疑，待 GPU 判决**（`docs/follow-ups.md` B23）：`layer.gdshader` 图集选格是否
-上下镜像贴图尚未在真渲染器上验证（本机无 GPU/无 X）；判决前占位图元（圆/菱形/方块等）全
-上下对称，无观感差异，不阻塞本刀。换上下不对称的真美术前必须先跑 B23 的判决程序。
+上下镜像贴图尚未在真渲染器上验证（本机无 GPU/无 X）；占位图元已改为上下明暗渐变，有头
+启动可一眼判别（判决程序见 follow-ups B23/B26）。换上下不对称的真美术前必须先跑 B23 的
+判决程序。
 
 占位图集"再生成对拍"验证（`gen_atlas.gd` 重跑、`md5sum` 比对生成产物与 commit 版本逐位相同）
 需要本机装有真 Godot 二进制才能跑（`--headless --path godot --script res://tools/gen_atlas.gd`；
 不是 GPU 问题，纯粹是 CI 镜像不装 Godot 可执行文件），CI 不可跑，只能本机手工核对。
 
+**bullets 层的二维布局（颜色轴刀，2026-07-26）**：`sprite 号 = 弹型 × color_stride + 颜色`，
+其中 `color_stride` 是 `WorldTables` 的字段（内建 = 16），**不是引擎常量**——mod 表可自定义
+列数。表索引 ≡ 图集格号 ≡ 池 `sprite` 值（identity），故 `set_sprite` 与 `fire` 写的是同一个
+数域。稀疏弹型（内建表如 `BULLET_HEART`/`BULLET_BUTTERFLY`，只做了低 12 色）仍占满一整行，
+用不到的列是**空格**：表里 `valid = false`，
+创建时被拒（编译期报错 / 运行期 Fault），绝不会造出"有判定但看不见"的弹。
+网格常量仍住 `playfield.gd`（进表是未来 mod 加载刀的事）。
+
 **sprite 号截断/回卷语义（跨层唯一权威）**：syscall 侧 `sprite` 参在入池前做
 `sprite as u16` 截断——只取低 16 位，脚本传入的越界值（负数或 > 65535）在核心层就已经静默
 折叠成某个 `u16`，池内 `sprite` 字段本身即为 `u16`（`enemy.rs`/`bullets.rs` 等同款）。核心层
 **不**对 sprite 号做"是否落在本层图集网格内"的语义校验——那是表现层的职责边界。渲染侧拿到
-这个 `u16` 后，按各层网格总格数（bullets/shots/items = 8，enemies = 4）取模回卷得到最终格号
-（`cell_index = sprite % cols`），越界号因此总能落到某个合法格、绝不越界访问图集像素，但视觉
+这个 `u16` 后，按各层网格总格数（bullets = 192〔16×12，颜色轴刀起多行〕，shots = 4，
+items = 8，enemies = 4）取模回卷得到最终格号（`layer.gdshader::vertex()`：
+`s = sprite % (grid_cols*grid_rows)`，再拆 `col = s % grid_cols`/`row = s / grid_cols`
+定位格子——单行层里 `grid_cols == 总格数`，两步模运算恰好重合，故此前的措辞
+`cell_index = sprite % cols` 只对单行层成立；bullets 变多行后不再重合，写全两步才准确），
+越界号因此总能落到某个合法格、绝不越界访问图集像素，但视觉
 上会与低号格"撞车"（这是刻意的表现层容错，不是 bug）——脚本作者应把 sprite 号控制在网格范围
 内，回卷只是兜底、不是可依赖的取号策略。
 

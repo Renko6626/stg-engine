@@ -325,7 +325,11 @@ pub fn allocate(prog: &Program, ti: &TypedInfo) -> Result<SlotMap, Vec<CompileEr
                             ),
                         ));
                     }
-                    Some(crate::lang::xform_map::XformOp::Op(..)) => {}
+                    Some(
+                        crate::lang::xform_map::XformOp::Op(..)
+                        | crate::lang::xform_map::XformOp::OpFold2(..)
+                        | crate::lang::xform_map::XformOp::OpWithStride(..),
+                    ) => {}
                 }
             }
             (
@@ -529,7 +533,8 @@ mod tests {
 
     fn build(src: &str) -> (Program, TypedInfo) {
         let prog = parse_program(src, "t.ecl").unwrap_or_else(|e| panic!("解析失败：{e:?}\n{src}"));
-        let ti = typeck::check(&prog, &[]).unwrap_or_else(|e| panic!("判型失败：{e:?}\n{src}"));
+        let ti =
+            typeck::check(&prog, &[], None).unwrap_or_else(|e| panic!("判型失败：{e:?}\n{src}"));
         (prog, ti)
     }
 
@@ -604,7 +609,7 @@ mod tests {
     fn fire_task_ref_also_reroots_to_base_zero() {
         let sm = ok("async sub on_hit() { var y: int = 1; } \
              sub main() { var x0:int=0; var x1:int=0; var x2:int=0; var x3:int=0; \
-                          _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, none, on_hit); }");
+                          _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, none, on_hit); }");
         assert!(sm.subs["main"].width >= 4);
         assert_eq!(sm.subs["on_hit"].base, 0);
     }
@@ -722,7 +727,7 @@ mod tests {
     #[test]
     fn referenced_xformdef_is_allocated_after_vars_with_3x_alignment() {
         let sm = ok("xformdef RING { turn(90deg); set_ang_vel(128); } \
-             sub main() { var x: int = 1; _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, RING, none); }");
+             sub main() { var x: int = 1; _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, RING, none); }");
         let main = &sm.subs["main"];
         assert_eq!(main.locals["x"], 0, "变量先占槽");
         let (off, cnt) = main.xform_regions["RING"];
@@ -765,7 +770,7 @@ mod tests {
     #[test]
     fn step_op_counts_two_physical_slots_in_region_width() {
         let sm = ok("xformdef S { step_speed(2.0fx, 4); turn(90deg); } \
-             sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, S, none); }");
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, S, none); }");
         let main = &sm.subs["main"];
         let (_off, cnt) = main.xform_regions["S"];
         assert_eq!(cnt, 3, "step_speed 物理 2 槽 + turn 1 槽");
@@ -781,7 +786,7 @@ mod tests {
     fn unknown_xform_op_name_errors_in_slots_pass() {
         let errors = err_of(
             "xformdef S { frobnicate(1); } \
-             sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, S, none); }",
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, S, none); }",
         );
         assert!(
             errors.iter().any(|e| e.msg.contains("未知的 xform 操作名")),
@@ -797,7 +802,7 @@ mod tests {
     fn spawn_pattern_is_rejected_as_reserved_not_unknown() {
         let errors = err_of(
             "xformdef S { spawn_pattern(1, 0deg); } \
-             sub main() { _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, S, none); }",
+             sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, S, none); }",
         );
         assert!(
             errors.iter().any(|e| e.msg.contains("预留")),
@@ -812,7 +817,7 @@ mod tests {
             xf_body.push_str("turn(1deg); ");
         }
         let src = format!(
-            "xformdef BIG {{ {xf_body} }} sub main() {{ _ = fire(0, 0fx, 0fx, 1.0fx, 0deg, BIG, none); }}"
+            "xformdef BIG {{ {xf_body} }} sub main() {{ _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, BIG, none); }}"
         );
         let errors = err_of(&src);
         assert!(
@@ -830,7 +835,7 @@ mod tests {
              async sub timer_ui(spell: int) { var t: int = 600; } \
              sub main() { spawn patrol(); spawn timer_ui(1); \
                           var base: angle = 0deg; \
-                          _ = fire(0, 0fx, 0fx, 1.0fx, base, RING, none); }");
+                          _ = fire(0, 0, 0fx, 0fx, 1.0fx, base, RING, none); }");
         for name in ["patrol", "timer_ui", "main"] {
             assert!(sm.subs.contains_key(name), "缺少 sub '{name}' 的槽分配");
         }

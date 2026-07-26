@@ -15,13 +15,15 @@
 // 附带修复一处 builder 版文档点名的摩擦：弹幕原点改用 `$self_x`/`$self_y`（boss 自身
 // 位置，运行期读取）——boss 被 `patrol()` 巡游左右移动时弹幕原点跟着走，不再钉死在出生点。
 //
-// follow-ups C14 去魔数（本刀兑现）：风铃摆 TURN 环固定发一种外观，`fire(1, ...)` 换成
-// 注入引擎常量 `fire(APPEARANCE_MEDIUM, ...)`——纯改书写不改值（折叠回同一字面量 1），
-// 金向量校验和不变。`APPEARANCE_SMALL/MEDIUM/LARGE/STAR`/`GVAR_RANK`/`GLOBALS_SYS_SEGMENT`
-// 现由 stg-core `engine_consts!` 注册表统一注入 `.ecl` 命名空间（见 docs/ecl-lang.md
-// "引擎常量"节）；`for i in 0..5` 里的 `i % 4` 是有意轮转全表，非单指某个 appearance，
-// 不换。环密度算式直接引用注入常量 `global(GVAR_RANK)`，不再手写 `RANK_SLOT` 镜像
-// 同一个槽号——C14 闭环，无剩余手写镜像。
+// follow-ups C14 去魔数：`GVAR_RANK`/`GLOBALS_SYS_SEGMENT` 等**引擎结构常量**由 stg-core
+// `engine_consts!` 注册表统一注入 `.ecl` 命名空间（见 docs/ecl-lang.md "引擎常量"节）；
+// 环密度算式直接引用 `global(GVAR_RANK)`，不再手写 `RANK_SLOT` 镜像同一个槽号。
+//
+// 颜色轴刀（2026-07-26）：`fire`/`batch` 首参拆成**弹型 + 颜色**两参，编译器折叠成一个
+// appearance 值。弹型名/色名**不再是引擎常量**（旧 `APPEARANCE_*` 已退场）——它们归内容
+// 包，由脚本自己的 `const` 提供，故本文件（单文件编译单元）在顶部自带一小段词表前奏；
+// 整局多文件脚本把词表单独放一个文件即可（见 `godot/ecl/demo/bullets.ecl`）。
+// 引擎只注入一个**表派生**常量 `BULLET_COLOR_STRIDE`（= 当前绑定表的每形色数，内建 16）。
 //
 // 符卡机构狗粮化（spec 2026-07-24 §6，本刀兑现）：`timer_ui`（手写轮询计时 + boss_set
 // 记账）整个删除——符卡记账（计时/衰减/超时判定/boss_ui 喂送）收归引擎 `SpellState`
@@ -34,6 +36,18 @@
 // `bonus0=100000`（衰减地板已在 begin 时定格，600 帧内不结算，本局观察不到分数变化，
 // 数值本身只是给脚本一个非零示例）。`SPELL_WINDCHIME` 是脚本侧 `const`（卡 id 归脚本/
 // 关卡资产，引擎不注册，见 spec §5）。
+
+// 内容包词表（本文件用到的几行；完整一份见 godot/ecl/demo/bullets.ecl）
+// 复审 I-2：五环彩虹的形轴也轮转（见 windchime_pattern 内 shape 判据），四个形都是
+// 满色形（掩码 0xFFFF，色轴要走满 BULLET_COLOR_STRIDE 色，稀疏形会撞空格），半径
+// 分别是 3/4/6/8（tables.rs::SHAPE_RADIUS[0,2,3,8]）——复原病态诊断场景旧有的
+// r² ∈ {9,16,36,64} 状态面宽度（本刀改两参糖前是 batch(i % 4, …) 轮转整张 4 行表，
+// 收窄到只剩一个形/一种半径会让金向量能暴露的跨平台数值分歧面变窄）。
+const BULLET_RICE: int = 0;     // 米弹——满色形，r=3
+const BULLET_BALL_M: int = 32;  // 中玉——满色形，r=4
+const BULLET_BALL_L: int = 48;  // 大玉——满色形，r=6
+const BULLET_STAR: int = 128;   // 星弹——满色形，r=8
+const COLOR_CYAN: int = 6;
 
 const SPELL_WINDCHIME: int = 1;
 
@@ -62,16 +76,25 @@ async sub windchime_pattern() {
         var astep: angle = step_i as angle;
 
         for i in 0..5 {
-            var appearance: int = i % 4; // 外观表只有 4 项（SMALL/MEDIUM/LARGE/STAR），循环
+            // 彩虹环：**形**与**颜色**两轴都轮转（复审 I-2）。形轴按 i % 4 循环四个满色
+            // 形，复原半径谱 {3,4,6,8}；色轴照旧逐环轮转（新体系下语义比旧的"轮转外观
+            // 表"更贴）。四个形都取满色（掩码 0xFFFF），色轴才能安全轮转全部
+            // BULLET_COLOR_STRIDE 色——稀疏形（HEART/BUTTERFLY 高 4 色是图集空格）不能
+            // 这么轮，会撞空格 Fault。
+            var shape: int = BULLET_RICE;
+            if i % 4 == 1 { shape = BULLET_BALL_M; }
+            else if i % 4 == 2 { shape = BULLET_BALL_L; }
+            else if i % 4 == 3 { shape = BULLET_STAR; }
+            var color: int = i % BULLET_COLOR_STRIDE;
             var speed: fx = 1.0fx + i as fx * 0.25fx; // 环序越大越快
-            _ = batch(appearance, $self_x, $self_y, ways, base, astep, 1, speed, 0fx);
+            _ = batch(shape, color, $self_x, $self_y, ways, base, astep, 1, speed, 0fx);
         }
 
         // 隔轮追加一圈风铃摆 TURN 环（16-way，xformdef 引用）。
         if volley % 2 == 0 {
             for k in 0..16 {
                 var ka: angle = (k * 4096) as angle;
-                _ = fire(APPEARANCE_MEDIUM, $self_x, $self_y, 0fx, ka, WIND_CHIME, none);
+                _ = fire(BULLET_BALL_M, COLOR_CYAN, $self_x, $self_y, 0fx, ka, WIND_CHIME, none);
             }
         }
 

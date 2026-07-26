@@ -2168,8 +2168,9 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            1,
-            "bump 必须是有意识决定(评审 + 改本测试)"
+            2,
+            "bump 必须是有意识决定(评审 + 改本测试)——1→2：颜色轴刀 T7 新增 \
+             OP_SET_SHAPE/OP_SET_COLOR"
         );
     }
 

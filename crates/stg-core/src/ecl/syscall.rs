@@ -402,6 +402,11 @@ fn sys_create_bullet(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let Some(cfg) = ctx.tables.appearances.get(appearance as usize) else {
         return Err(FAULT_BAD_OP);
     };
+    // 空格格（图集该格没有图）→ 拒。放行会造出"有判定但画面上什么都没有"的隐形弹，
+    // 而金向量/冒烟都抓不到它（校验和不关心贴图内容）。先验后建：此处尚未写世界。
+    if !cfg.valid {
+        return Err(FAULT_BAD_OP);
+    }
 
     // xform 区间越界（LOCALS 边界）→ Fault；内容层面的坏 xform（>16 槽/未知 op/...）留给
     // `create_bullet_with_xform` 自己的 P4-b 处置（NULL + BAD_ARGS，见下方"押 -1"分支）。
@@ -526,6 +531,11 @@ fn sys_create_bullets_batch(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> 
     let Some(cfg) = ctx.tables.appearances.get(appearance as usize) else {
         return Err(FAULT_BAD_OP);
     };
+    // 空格格（图集该格没有图）→ 拒。放行会造出"有判定但画面上什么都没有"的隐形弹，
+    // 而金向量/冒烟都抓不到它（校验和不关心贴图内容）。先验后建：此处尚未写世界。
+    if !cfg.valid {
+        return Err(FAULT_BAD_OP);
+    }
 
     let init = BulletInit {
         x: Fx::from_raw(x_raw),
@@ -878,7 +888,15 @@ mod tests {
     use crate::ecl::image::{EclImage, EntryInit, SubInit, SubKind, test_image};
     use crate::ecl::task::{OWNER_ENEMY, OWNER_STAGE, Task};
     use crate::step::World;
-    use crate::tables::{APPEARANCE_LARGE, APPEARANCE_MEDIUM, APPEARANCE_SMALL, TABLES_V0};
+    use crate::tables::TABLES_V0;
+
+    // 外观表行号（颜色轴刀 T4 起 ② 段清空、旧的 `APPEARANCE_*` 引擎常量退场——弹型名
+    // 归内容包的 `.ecl` const，引擎侧测试直接写行号）。id = 弹型 × color_stride(16) + 色号：
+    // 0 = 0 号形第 0 色，1 = 0 号形第 1 色，2 = 0 号形第 2 色。三者只用于"随便挑一个
+    // 合法格"，与具体形/色语义无关。
+    const ROW_A: i32 = 0;
+    const ROW_B: i32 = 1;
+    const ROW_C: i32 = 2;
 
     /// 派发测试助手：把 `args`（脚本**声明顺序**，正序）压栈，直连 `dispatch`（不经
     /// `OP_SYS`/`exec`——聚焦 syscall 语义本身，`OP_SYS` 派发链路已由 `vm.rs` 测试覆盖）。
@@ -1173,7 +1191,7 @@ mod tests {
         let mut task = Task::default();
         // 正序：appearance,x,y,speed,angle,xform_off,xform_cnt,task_script
         let args = [
-            APPEARANCE_MEDIUM as i32,
+            ROW_B,
             Fx::from_int(10).raw(),
             Fx::from_int(-20).raw(),
             Fx::from_int(3).raw(),
@@ -1190,7 +1208,7 @@ mod tests {
         assert_eq!(w.body.bullets.y[i], Fx::from_int(-20));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(3));
         assert_eq!(w.body.bullets.angle[i], Angle::QUARTER);
-        let cfg = &TABLES_V0.appearances[APPEARANCE_MEDIUM as usize];
+        let cfg = &TABLES_V0.appearances[ROW_B as usize];
         assert_eq!(
             w.body.bullets.radius[i], cfg.radius,
             "appearance 半径逐位命中"
@@ -1221,6 +1239,27 @@ mod tests {
         );
     }
 
+    /// 空格 appearance（图集该格没有图）→ Fault，且**弹未被创建**（先验后建）。
+    /// 这是"隐形弹"（有判定无图像）的运行期闸；编译期同款判据见 lang::typeck。
+    #[test]
+    fn sys_create_bullet_blank_cell_faults_without_creating() {
+        const BLANK: i32 = 9 * 16 + 12; // 第 9 形（掩码 0x0FFF）的第一个空格
+        assert!(
+            !TABLES_V0.appearances[BLANK as usize].valid,
+            "前提：{BLANK} 必须是空格行，否则本测试无判别力"
+        );
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let args = [BLANK, 0, 0, 0, 0, 0, 0, -1];
+        let r = call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP), "空格 appearance 必须 Fault");
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            0,
+            "Fault 时不得留下半成品弹（先验后建）"
+        );
+    }
+
     /// xform 区间引用解包逐位：locals 手填 3 词槽（word0=(wait<<16)|(op<<8)，word1/2=args），
     /// 创建后段内容与手搭 `XformSlot` 逐位相等。
     #[test]
@@ -1233,13 +1272,7 @@ mod tests {
         task.locals[off + 1] = Fx::from_int(2).raw();
         task.locals[off + 2] = 0;
         let args = [
-            APPEARANCE_SMALL as i32,
-            0,
-            0,
-            0,
-            0,
-            off as i32,
-            1, // xform_cnt=1
+            ROW_A, 0, 0, 0, 0, off as i32, 1, // xform_cnt=1
             -1,
         ];
         assert!(call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args).is_ok());
@@ -1261,12 +1294,7 @@ mod tests {
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
         let args = [
-            APPEARANCE_SMALL as i32,
-            0,
-            0,
-            0,
-            0,
-            60, // off
+            ROW_A, 0, 0, 0, 0, 60, // off
             2,  // cnt：60+2*3=66 > LOCALS(64)
             -1,
         ];
@@ -1280,7 +1308,7 @@ mod tests {
     fn sys_create_bullet_bad_task_script_faults_before_creating() {
         let (mut w, ecl) = fresh(); // subs 空——任何脚本号都越界
         let mut task = Task::default();
-        let args = [APPEARANCE_SMALL as i32, 0, 0, 0, 0, 0, 0, 0]; // task_script=0 越界
+        let args = [ROW_A, 0, 0, 0, 0, 0, 0, 0]; // task_script=0 越界
         let r = call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args);
         assert_eq!(r, Err(FAULT_BAD_OP));
         assert_eq!(w.body.bullets.iter_alive().count(), 0, "先查后建：零副作用");
@@ -1314,7 +1342,7 @@ mod tests {
             });
         }
         let mut task = Task::default();
-        let args = [APPEARANCE_SMALL as i32, 0, 0, 0, 0, 0, 0, -1];
+        let args = [ROW_A, 0, 0, 0, 0, 0, 0, -1];
         assert!(call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args).is_ok());
         assert_eq!(task.stack[0], -1, "池满押 -1");
     }
@@ -1339,7 +1367,7 @@ mod tests {
         let mut w = World::new(1);
         w.body.frame = 5;
         let mut task = Task::default();
-        let args = [APPEARANCE_SMALL as i32, 0, 0, 0, 0, 0, 0, 1]; // task_script=1（在册）
+        let args = [ROW_A, 0, 0, 0, 0, 0, 0, 1]; // task_script=1（在册）
         assert!(call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args).is_ok());
         let bidx = task.stack[0] as u16;
         let bgen = w.body.bullets.generation[bidx as usize];
@@ -1375,7 +1403,7 @@ mod tests {
         let mut task = Task::default();
         // 正序：appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step
         let args = [
-            APPEARANCE_LARGE as i32,
+            ROW_C,
             0,
             Fx::from_int(100).raw(),
             8,
@@ -1388,11 +1416,33 @@ mod tests {
         assert!(call(&mut w, &ecl, &mut task, SYS_CREATE_BULLETS_BATCH, &args).is_ok());
         assert_eq!(task.stack[0], 8, "8-way 环实发 8");
         assert_eq!(w.body.bullets.iter_alive().count(), 8);
-        let cfg = &TABLES_V0.appearances[APPEARANCE_LARGE as usize];
+        let cfg = &TABLES_V0.appearances[ROW_C as usize];
         for i in 0..8 {
             assert_eq!(w.body.bullets.radius[i], cfg.radius);
             assert_eq!(w.body.bullets.sprite[i], cfg.sprite);
         }
+    }
+
+    /// 批量入口同款（两族同构，别只补一边）：空格 appearance → Fault，且**弹未被创建**
+    /// （先验后建）；编译期同款判据见 lang::typeck。
+    #[test]
+    fn sys_create_bullets_batch_blank_cell_faults_without_creating() {
+        const BLANK: i32 = 9 * 16 + 12; // 第 9 形（掩码 0x0FFF）的第一个空格
+        assert!(
+            !TABLES_V0.appearances[BLANK as usize].valid,
+            "前提：{BLANK} 必须是空格行，否则本测试无判别力"
+        );
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        // 正序：appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step
+        let args = [BLANK, 0, 0, 4, 0, 4096, 1, Fx::from_int(1).raw(), 0];
+        let r = call(&mut w, &ecl, &mut task, SYS_CREATE_BULLETS_BATCH, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP), "空格 appearance 必须 Fault");
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            0,
+            "Fault 时不得留下半成品弹（先验后建）"
+        );
     }
 
     #[test]

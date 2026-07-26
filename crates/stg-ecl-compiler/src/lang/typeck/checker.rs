@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 用户重新声明过"。
 pub(super) const RESERVED_SUGAR_NAMES: &[&str] = &["wait_spell", "mark"];
 
-pub(super) struct Checker<'p> {
+pub(super) struct Checker<'p, 't> {
     pub(super) subs: BTreeMap<String, &'p SubDef>,
     pub(super) xformdefs: BTreeSet<String>,
     pub(super) consts: BTreeMap<String, (Ty, i32)>,
@@ -24,9 +24,13 @@ pub(super) struct Checker<'p> {
     pub(super) errors: Vec<CompileError>,
     pub(super) cur_sync_calls: Vec<String>,
     pub(super) cur_xform_refs: Vec<String>,
+    /// 绑定的世界表（`None` = 未绑定，跳过一切依赖表的判据）。消费者：
+    /// `exprs::check_shape_color`（颜色轴 T4 的形/色三判据，阈值全从 `color_stride`
+    /// 与 `appearances[].valid` 读）。
+    pub(super) table: Option<&'t stg_core::tables::WorldTables>,
 }
 
-impl<'p> Checker<'p> {
+impl<'p, 't> Checker<'p, 't> {
     pub(super) fn err(&mut self, span: Span, msg: String) {
         self.errors.push(CompileError {
             line: span.line,
