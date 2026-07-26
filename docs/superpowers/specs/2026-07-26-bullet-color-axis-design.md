@@ -206,7 +206,22 @@ mod 表换成 8 色也自动正确，无需脚本改一个字。
 `SPRING` / `CYAN` / `AZURE` / `BLUE` / `VIOLET` / `MAGENTA` / `ROSE` / `WHITE` / `GRAY` /
 `BLACK` / `GOLD`(15)。
 
-### 5.2 占位期故意留空格（机制要有靶子）
+### 5.2 稀疏弹型（8 色 / 4 色）用掩码表达，不压紧
+
+真实图集里确有只做了 8 色或 4 色的弹型。**它们仍占满一整行 `color_stride` 列，用不到的列
+留空**——寻址因此保持整齐矩形（`形状 × stride + 颜色`），identity 表得以保住，不需要"每形
+基址 + 每形色数"的两级查表。代价只是图集里几块空白像素。
+
+**摆位纪律：稀疏弹型的颜色必须落在语义正确的列，不得压紧到 0..n。** 例：一个只有红/绿/蓝/白
+四色的弹型，掩码取 `0b0001_0001_0001_0001`（列 0/4/8/12），而不是 `0b0000_0000_0000_1111`
+（列 0-3）。理由：色号语义跨弹型一致是本设计的前提（`COLOR_BLUE` 在哪种弹上都得是蓝的）；
+压紧会让 `COLOR_ORANGE` 在这个弹型上实际画出绿色，色名开始撒谎，而引擎无从察觉。
+
+**由此产生的作者约束**（写进 `docs/ecl-lang.md`）：稀疏弹型**不能盲目轮转全色**——
+`for i in 0..BULLET_COLOR_STRIDE { fire(SPARSE_SHAPE, i, …) }` 会在空格列上 Fault。轮转写法
+只对满色弹型安全；稀疏弹型要么显式列出可用色，要么用满色弹型做彩虹环。
+
+### 5.3 占位期故意留空格（机制要有靶子）
 
 `SHAPE_COLOR_MASK` 占位值：十形全 `0xFFFF`，**`BULLET_HEART` 与 `BULLET_BUTTERFLY` 取
 `0x0FFF`（高 4 色为空格）**。
@@ -363,7 +378,8 @@ syscall 代码里。**列为可选尾款**，由 plan 决定是否并刀——�
   `ecl/syscall.rs`（两处测试）、`stg-godot/src/frame.rs`（一处测试）。
 - **重烘焙** `tables_v0.bin` + 金向量重 bless + 双冒烟重跑。
 - **文档**：`render-contract.md` §3、`ecl-lang.md`（引擎常量节要说明"弹型/色名归内容包"、
-  `BULLET_COLOR_STRIDE` 是表派生常量）、`xform-ops.md`（`set_sprite` 行改两参）、
+  `BULLET_COLOR_STRIDE` 是表派生常量、**稀疏弹型不能盲目轮转全色**见 §5.2）、
+  `xform-ops.md`（`set_sprite` 行改两参）、
   `PROGRESS.md`（史加一行）、`follow-ups.md`（B23 追注占位图集已上下不对称；C11 追注
   "表已带 `color_stride`，乙案符号段仍开放"）。
 

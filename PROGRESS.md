@@ -10,7 +10,9 @@
   enemy-owned 任务/渲染契约收口/真 Godot 工程竖切/demo 局杂兵+风铃卡 boss/双冒烟桥级+真工程级）。
   `stg-godot`（桥）+ `godot/`（真工程）合计 = M2 全部落地；金向量全程逐位零平移（证据归 git 历史）。
 - **在飞**：无。
-- **下一阶段候选**：M3 环形快照回滚 / `stg-py` RL 线 / 背景刀（follow-ups A4）/ 内容美术期（A9）。
+- **下一阶段候选**：**弹幕颜色轴刀**（设计已拍板待实施，spec
+  `docs/superpowers/specs/2026-07-26-bullet-color-axis-design.md`）/ M3 环形快照回滚 /
+  `stg-py` RL 线 / 背景刀（follow-ups A4）/ 内容美术期（A9）。
 - **待办**：细目见 [`docs/follow-ups.md`](docs/follow-ups.md)（**B23/B18/DoD 目验三件套须首个
   GPU/有头环境才能做**）。
 
