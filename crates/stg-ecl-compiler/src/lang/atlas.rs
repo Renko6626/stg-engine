@@ -1,11 +1,17 @@
 //! 图集坐标（弹型 × 颜色）的编译期判据——**typeck 与 codegen 共用的单一权威**。
 //!
-//! 三个入口写的是同一个数域（`id = 弹型 × color_stride + 色号`，表索引 ≡ 图集格号 ≡ 池
+//! 五个入口写的是同一个数域（`id = 弹型 × color_stride + 色号`，表索引 ≡ 图集格号 ≡ 池
 //! `sprite` 值，identity）：
 //! - `fire(shape, color, …)` / `batch(shape, color, …)`——判据在 `lang::typeck::exprs`
 //!   （实参可能是运行期表达式，只对编译期常量对施加）；
 //! - xformdef 的 `set_sprite(shape, color)`——判据在 `lang::codegen` 的 `OpFold2` staging
-//!   （xformdef 槽参数**恒是**编译期常量，故这一路总能判）。
+//!   （xformdef 槽参数**恒是**编译期常量，故这一路总能判）；
+//! - xformdef 的 `set_shape(shape)` / `set_color(color)`（颜色轴刀 T7 的"部分设"）——判据
+//!   在 `lang::codegen` 的 `OpWithStride` staging，走本模块的 [`check_shape_only`] /
+//!   [`check_color_only`]。**这两个是全模块唯一不查空格的入口**——部分设的落点取决于弹
+//!   当时的另一维（运行期状态），编译期不可知；人类裁定允许落到空格（结果是该弹变透明，
+//!   由作者负责），故这两条只查"值本身合不合法"（色号越界 / 形状基址非法），故意没有
+//!   `valid` 检查。
 //!
 //! 三条判据当初只挂在 `fire`/`batch` 上，`set_sprite` 漏网——它照样能造出 spec 点名要挡的
 //! "有判定但看不见的弹"（`set_sprite(BULLET_HEART, COLOR_WHITE)` = 144+12 是图集空格），

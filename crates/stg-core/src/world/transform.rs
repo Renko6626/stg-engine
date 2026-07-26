@@ -108,6 +108,14 @@ impl WorldBody {
             OP_SET_SPRITE => self.bullets.sprite[i] = slot.args[0] as u16,
             // 部分设：把 sprite 拆回 (形, 色) 再只改一维。stride 从槽里来（编译器写入），
             // 故世界层不需要表、也不认识"颜色"这回事（spec §4.4）。
+            //
+            // `args[0]` 用 `wrapping_add`（不是裸 `+`）：与 codegen 侧 `OpFold2` 折叠处的
+            // `wrapping_add` 同源理由——`args[0]` 来自伪造/旧版/M4 对端镜像时可以是任意
+            // i32，前门敞开（`xform_args_valid`——create 期护栏——只查 op 是否已实现 /
+            // STEP 扩展槽 / easing id / LOOP target，不查 op 32/33 的 args 取值；本刀让
+            // 32/33 进了 `op_implemented`，任何非本编译器产出的镜像都能把这条路走通）。
+            // P4-b 要求坏参数确定性降级不 panic；裸 `+` 在 dev profile
+            // （workspace `Cargo.toml` 开着 `overflow-checks=true`）下会因溢出 panic。
             OP_SET_SHAPE => {
                 let stride = slot.args[1];
                 if stride <= 0 {
@@ -115,7 +123,7 @@ impl WorldBody {
                     self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
                 } else {
                     let cur = self.bullets.sprite[i] as i32;
-                    self.bullets.sprite[i] = (slot.args[0] + cur % stride) as u16;
+                    self.bullets.sprite[i] = slot.args[0].wrapping_add(cur % stride) as u16;
                 }
             }
             OP_SET_COLOR => {
@@ -124,7 +132,7 @@ impl WorldBody {
                     self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
                 } else {
                     let cur = self.bullets.sprite[i] as i32;
-                    self.bullets.sprite[i] = (cur - cur % stride + slot.args[0]) as u16;
+                    self.bullets.sprite[i] = (cur - cur % stride).wrapping_add(slot.args[0]) as u16;
                 }
             }
             OP_SET_LIFE => self.bullets.life[i] = slot.args[0] as u16,
@@ -799,10 +807,24 @@ mod tests {
 
     /// P4-b：坏 stride（手工构造的槽，编译器不会产出）→ 计 contract_viol 且 sprite 不变，
     /// 不 panic、不除零。
+    ///
+    /// **判别力（复审 Minor 3 修法）**：坏 stride 必须是 **no-op**，不是"终止序列"——
+    /// 若把 `OP_SET_SHAPE`/`OP_SET_COLOR` 两个解释臂整个删掉，op 会落进 `fire_op` 底部的
+    /// 未知 op 兜底，那里同样"计 contract_viol + 不改 sprite"，本测试若只看这两点会照样
+    /// 绿，抓不住"两个解释臂被删"这种回归。区别在于：未知 op 兜底会**终止序列**
+    /// （`xform_next` 跳到哨兵 16），而本刀的坏 stride 分支只是那一槽 no-op、序列照常往下
+    /// 走。挂一条真 op（`OP_SET_LIFE`）在坏 stride 槽后面，断言它照常执行，把这个可观测
+    /// 差异钉死。
     #[test]
     fn partial_sprite_ops_reject_bad_stride() {
         let mut w = crate::step::World::new(1);
-        let i = xf_bullet(&mut w, &[slot(0, OP_SET_COLOR, 9, 0)]);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_COLOR, 9, 0), // 坏 stride：no-op + 计数，不终止序列
+                slot(0, OP_SET_LIFE, 1, 0),  // 判别力：终止序列的话这一条永不执行
+            ],
+        );
         w.body.bullets.sprite[i] = 37;
         let before = w.body.diag.contract_viol;
 
@@ -817,6 +839,48 @@ mod tests {
             w.body.diag.contract_viol,
             before + 1,
             "坏 stride 必须计一次契约违规"
+        );
+        assert_eq!(
+            w.body.bullets.life[i], 1,
+            "坏 stride 是 no-op 不是终止——序列必须继续执行后续 op\
+             （未实现 op 的兜底会终止序列，若两臂被整个删掉这里会读到初始寿命而不是 1）"
+        );
+    }
+
+    /// P4-b 破口判别式（复审必修二）：`args[0]` 接近 `i32::MAX` 的伪造槽（编译器不会产出
+    /// ——前门在 `xform_args_valid`：create 期护栏只查 op 是否已实现 / STEP 扩展槽 /
+    /// easing id / LOOP target，不查 op 32/33 的 args 取值；本刀让 32/33 进了
+    /// `op_implemented`，任何非本编译器产出的镜像——手拼 / 旧版 / M4 对端——都能把这条路
+    /// 走通）。裸 `+` 在 dev profile（workspace `Cargo.toml` 开着 `overflow-checks=true`）
+    /// 下会因溢出 panic；`wrapping_add` 必须保证：不 panic + sprite 落在某个逐位确定的
+    /// 截断值 + 序列照常继续（挂在后面的 `OP_SET_LIFE` 必须照常执行）。
+    #[test]
+    fn partial_sprite_ops_wrap_instead_of_panicking_on_near_max_args() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_COLOR, i32::MAX, 16),
+                slot(0, OP_SET_LIFE, 1, 0), // 判别力：panic 或提前终止的话这一条读不到 1
+            ],
+        );
+        w.body.bullets.sprite[i] = 37; // 2*16+5：cur - cur%stride = 32
+
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = crate::world::PH_XFORM;
+        }
+        w.body.run_transforms(); // 不 panic 即达标（这是本测试存在的第一理由）
+
+        // 32i32.wrapping_add(i32::MAX) 的位模式是 0x8000_001F；`as u16` 截断到低 16 位
+        // = 0x001F = 31——手算值，不是照抄实现表达式，真正独立验证"确定"而非"不崩就行"。
+        assert_eq!(
+            w.body.bullets.sprite[i], 31,
+            "wrapping 后必须落在逐位确定的截断值，不是 panic 也不是未定义行为"
+        );
+        assert_eq!(
+            w.body.bullets.life[i], 1,
+            "坏参数确定性降级，不得终止序列——后续 op 必须照常执行"
         );
     }
 

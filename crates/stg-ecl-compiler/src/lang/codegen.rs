@@ -278,10 +278,31 @@ impl<'p> Gen<'p> {
                             built.push(XformSlot::default());
                             continue;
                         };
+                        // 显式按 op 身份分派（复审 Minor 5 修法）：**不用 `else` 兜底**——
+                        // `xform_map` 模块文档点过 `spawn_pattern` 落 `_` 兜底安静失效那颗
+                        // 雷，本刀目前只有两个 `OpWithStride` 成员，但将来再加一个会静默
+                        // 拿到形状判据（错判据比拒收更糟：编译通过但语义错）。两道保险：
+                        // debug 就地断言炸出来，release 退化成一条明确的编译错误（不是
+                        // 猜一个判据）。
                         let check = if op == xform::OP_SET_COLOR {
                             crate::lang::atlas::check_color_only(table, vals[0])
-                        } else {
+                        } else if op == xform::OP_SET_SHAPE {
                             crate::lang::atlas::check_shape_only(table, vals[0])
+                        } else {
+                            debug_assert!(
+                                false,
+                                "OpWithStride 新成员 op={op} ('{}') 未接判据分派——\
+                                 补一支显式分支，别让它静默套用错误判据",
+                                s.op_name
+                            );
+                            Err(crate::lang::atlas::ShapeColorError {
+                                blame: crate::lang::atlas::Blame::Shape,
+                                msg: format!(
+                                    "编译器内部错误：xform 操作 '{}' 的单轴判据未接线\
+                                     （op={op}）",
+                                    s.op_name
+                                ),
+                            })
                         };
                         if let Err(e) = check {
                             self.err(s.span, e.msg);
@@ -1264,6 +1285,58 @@ mod tests {
             p.sprite()[i],
             19,
             "set_sprite(16, 3) 必须折成单个 id 19（丢色会是 16，丢形会是 3）"
+        );
+        assert_eq!(view.diag().task_faults, 0);
+    }
+
+    /// 部分设（颜色轴刀 T7）端到端穿线判别（复审必修一修法）：`gen_xformdef_staging` 的
+    /// `OpWithStride` 分支把**绑定表**的 `color_stride` 写进 `args[1]`（`codegen.rs`
+    /// `args: [vals[0], i32::from(table.color_stride)]` 那一行）——这是整个方案的枢纽，
+    /// 但此前只有引擎侧单测（手搓槽、stride 是测试自己写的字面量）和编译器侧"编译过/
+    /// 报错含某字样"两头断开的测试，从没有一条测试真正跑真实 `.ecl` 源码、编译、跑真
+    /// `World`、断言产出的槽让 sprite 落在正确值上。若 `:295` 那一行被改成
+    /// `args: [vals[0], 0]`（stride 丢失）或写反两参，此前**全部**测试仍绿，而真实
+    /// `set_color`/`set_shape` 会在运行期静默 no-op（stride<=0 分支）——正是 CLAUDE.md
+    /// 点名"金向量守不住、只能靠单测"的行为回归。
+    ///
+    /// `fire(32, 5, …)` 折叠出的初始 sprite = 32+5 = 37（第 2 形第 5 色）；
+    /// `set_color(9)` 只应改色 → 2×16+9 = 41（stride 丢失/为 0 会停在 37）。
+    #[test]
+    fn set_color_op_threads_bound_table_stride_into_args1_end_to_end() {
+        let src = "xformdef X { set_color(9); }\n\
+                   sub main() {\n\
+                     _ = fire(32, 5, 0fx, 0fx, 0fx, 0deg, X, none);\n\
+                     wait(1000);\n\
+                   }";
+        let w = run(src, 3);
+        let view = w.body.view();
+        let p = view.bullets();
+        let i = p.iter_alive().next().expect("应有一颗弹");
+        assert_eq!(
+            p.sprite()[i],
+            41,
+            "set_color(9) 只应改色 → 2*16+9=41（stride 丢失/为 0 会停在 37，不会是 41）"
+        );
+        assert_eq!(view.diag().task_faults, 0);
+    }
+
+    /// 同上，`set_shape` 一侧（两个新 op 各补一条，别只补一边）。
+    /// `set_shape(48)` 只应改形 → 48 + (37%16=5) = 53（stride 丢失/为 0 会停在 37）。
+    #[test]
+    fn set_shape_op_threads_bound_table_stride_into_args1_end_to_end() {
+        let src = "xformdef X { set_shape(48); }\n\
+                   sub main() {\n\
+                     _ = fire(32, 5, 0fx, 0fx, 0fx, 0deg, X, none);\n\
+                     wait(1000);\n\
+                   }";
+        let w = run(src, 3);
+        let view = w.body.view();
+        let p = view.bullets();
+        let i = p.iter_alive().next().expect("应有一颗弹");
+        assert_eq!(
+            p.sprite()[i],
+            53,
+            "set_shape(48) 只应改形 → 48+(37%16)=53（stride 丢失/为 0 会停在 37，不会是 53）"
         );
         assert_eq!(view.diag().task_faults, 0);
     }
