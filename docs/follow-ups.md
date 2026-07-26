@@ -7,10 +7,13 @@
 > **维护规矩**：解决一条就删一条（别留"已完成"的墓碑，git log 才是历史）。新增的复审 follow-up
 > 往这里写，别只写账本。**写之前先核实**——本清单每条都经过代码核对，不是复述当年的复审原文。
 >
-> 最后核实：2026-07-25（前置债务刀收口：新增 A5——脚本面无法产生 enemy-owned 任务，Godot
-> 场景刀设计输入；销 B16②（boss_ui 结算清扫）/D6（外部写口收口完成，知会句挪入 D7 尾注）/
-> D8（hits 溢出蓝图口径经评审改判，见 `stg-world-design.md` 乙案）；C17 销②③（`save_state`
-> 对称化/`hud_boss` 统一读口）；B18 改写为余量）
+> 最后核实：2026-07-26（Godot 场景刀收口：A5 整条销——乙案 `spawn_enemy` task 参/`enemy_hp`
+> 已落地，练习模式定式移一句进 `docs/ecl-lang.md`；B18 收窄为独苗（`visible_instances`）；
+> B22 销（两处 smoke 脚本已对称修复）；B23 补全另两对实测 UV 配对；B16①③④ 复核触发点仍未到，
+> 措辞刷新；新记 A6-A9/B24-B25/D9/F4——场景刀本刀发现的债：`.ecl` 导出 PCK 过滤坑/宿主读档口
+> 缺失/GAME_OVER 三态裁定/演出打磨小件四包（以上四条 A 组）、冒烟 `enemy_seen` 判别盲区/
+> `spawn_enemy`&`fire` task 号三拒绝支路零测试（以上两条 B 组）、敌"主协程返回即自燃"承诺
+> 未落地为代码（D9）、逐帧全缓冲上传性能账未记（F4））
 
 ---
 
@@ -43,30 +46,50 @@ start_main` 三步——"唯一正典入口"的防分歧保证对该路径有洞
 读档/中段启动后历史丢失也能重建；变长 boss 段 = 段尾无限 loop、phase 切换破环）。详见
 `docs/superpowers/specs/2026-07-25-game-flow-midstart-design.md` §7。
 
-### A5. enemy-owned 任务语言面缺口——纯 .ecl 摆不出 boss/符卡（前置债务刀新记，2026-07-25；Godot 场景刀设计输入）
+### A6. `.ecl` 是非 Godot 原生资源扩展名——导出 PCK 须显式 `include_filter`（场景刀 T7 记档，2026-07-26）
 
-脚本面无法产生 enemy-owned 任务——`spell_begin`（`syscall.rs:714` `self_enemy_handle` 门禁）/
-`move_enemy_to`/弹 setter 族全被 OWNER 校验挡死，而语言无任何 builtin 能造 enemy-owned 任务
-（`spawn` 继承父 owner；金向量 boss 是 harness 用 Rust `start_main_with_owner(&image,
-EclOwner::Enemy(boss))` 手摆的冻结遗产）。**后果：纯 .ecl 走正典 boot 摆不出 boss/符卡/符卡
-清弹 field。触发点 = Godot 场景刀设计期必须先裁**，它决定场景刀的 boss 关卡怎么写。
+`godot/ecl/demo/*.ecl`、`crates/stg-godot/smoke/*.ecl` 对 Godot 编辑器/导出器而言是未注册
+资源类型的普通文本文件；`_boot` 早前的内置源回退分支已在 T6 删除（demo 目录已实存，静默
+降级判为雷），现在纯靠 `DirAccess.open("res://ecl/demo")` 读磁盘文件，读不到就是硬失败（`push_error` +
+`return false`），没有任何兜底。本刀只跑 headless/编辑器内路径，从未真正导出过 PCK——
+Godot 默认导出规则按已注册资源类型 + 场景引用链收集文件，`.ecl` 两头都不占，大概率被
+默认导出规则漏掉。**触发点 = 第一次做 `godot --export` 打包**：导出预设（`export_presets.cfg`）
+必须给 `res://ecl/` 显式加 `include_filter`（如 `*.ecl`），否则打出的包在真机上找不到关卡
+脚本，且是那种"编辑器里/命令行 `--path` 跑正常，导出包一运行就崩"的隐蔽失败模式。
 
-**初裁（2026-07-25，用户拍板方向）**：收敛为**乙案单干**——`spawn_enemy` 长 `task` 参
-（与 `fire` 第 7 参 identifier-or-none 同构），顺便给 `EnemyPool.main_task` 预留字段通电；
-甲案 `spawn_for(enemy, sub)`（给活敌事后挂任务）判 YAGNI 不做：boss 阶段编排归 boss_main
-自身顺序推进（`wait_spell` 分节），符卡模式任务归 `spell_begin` 卡绑定（`spell_bound+epoch`
-随卡生死），helper 归 `spawn` 恒继承（ENEMY 树随根生死——恒继承由"限制"翻转为"设计"），
-外部导演干预走 globals/信号轮询（P5 口径）。真需求出现再加甲，纯增量零兼容债。
-场景刀 spec 落地时按此写实施形态即可。
+### A7. 宿主读档口未建——`main.gd` 无 `load_state` 路径（场景刀 T7 记档，2026-07-26）
 
-**连带定式（2026-07-25 同日续裁）——符卡练习模式不需要任何新引擎面**：练习是 select
-语义（只打一张，打完即散）而非 resume 语义，引擎跳 boss 任务 ip 在语义上就是错的
-（会继续打后面的卡）。定式 = `mark` 垫片写选卡变量 + boss_main 开头分派：
-`mark(4102) { set_global(GVAR_PRACTICE, 2); }` 落进 boss 段，`boss_main` 读
-`GVAR_PRACTICE` 非零则单卡分支（`spell_begin`+`wait_spell`+return），恒 0 走整战。
-选卡由 `start` 单整数携带（回放身份零新字段），正常流被 JMP 跨过零污染；ZUN 原作
-符卡练习同构（boss ECL 内查 practice 标志）。注意 `GVAR_PRACTICE` 须落**槽 ≥16**
-（M1.5 系统段 0-15 脚本写保护）。
+`bridge.rs` 的 `load_state`/`save_state` 桥面口子（C17）已就位，但 `main.gd` 从未调用
+`load_state`——本刀只有 `new_game_at`（含中段启动）一条开局路径，没有"读一份存档继续"的
+UI/按键。`_sync_anchors`（双表示规矩：电平追平 hud/bg）目前的唯一调用点是 `_boot` 之后，
+职责被 `new_game_at` 路径顺手覆盖了（新开局本就要对表一次）；它真正**不可替代**的场合是
+`load_state` 成功之后——读档不像开局，没有 `bgm`/`bg`/`bg_phase` 声明式脚本语句重新跑一遍，
+必须靠 `_sync_anchors` 读 `anchors()` 把 HUD/背景电平拉回存档那一帧的状态。**触发点 = 宿主
+侧真正要做"继续游戏"/存档菜单时**，届时 `_sync_anchors` 直接复用，缺的只是调用点与 UI。
+
+### A8. `GAME_OVER` 态——spec 四态，实施三态（场景刀 T7 记档，2026-07-26）
+
+`docs/superpowers/specs/2026-07-25-godot-scene-design.md` §6 写的状态机是
+`PLAYING / PAUSED / STAGE_CLEAR / GAME_OVER` 四态；`main.gd` 的 `enum S` 只落地了前三个，
+`GAME_OVER` 未实现（历次任务复审均未把它升级为阻塞项，等同裁定"本刀不做"）。直接后果：
+**残机耗尽（`life_state` 打光）宿主侧无任何处理**——`world/player.rs` 的生死状态机本身
+按既有设计正常演化（`LIFE_DEATHWINDOW`→...），只是没有一条 GDScript 路径去侦测"耗尽"
+并切状态/给玩家反馈；demo 局本身也没有把残机耗尽设计进平衡（boss hp 已按人工可达调过）。
+**触发点 = 真实内容期需要"打光残机就算输"这条规则被实际感受到时**（含 practice 模式外的
+正常整局关卡）。
+
+### A9. 演出打磨小件四包——spec 写了、实施未接（场景刀 T7 记档，2026-07-26）
+
+`docs/superpowers/specs/2026-07-25-godot-scene-design.md` §7 的请求分发表比 `main.gd`
+`_wire_requests` 实际落地的处理器多写了几笔，均属可玩性不受影响的表现层打磨：
+① `REQ_SPELL_RESULT`——spec 写"取得/失败横幅 + bonus 飘字"，`main.gd` 只有横幅，没有
+`effects.gd` 式的 bonus 数字飘字；② `REQ_BGM`——spec 写"HUD 曲名标签 + 日志（无音频资产）"，
+`main.gd` 只更新了标签，没有日志行；③ `hud.gd::refresh` 的 `p.is_empty()` 早退分支只
+`return`，不清空 `boss_bar`/`spell_l`——若某帧 `hud_player()` 返回空（如未开局态被意外调用），
+boss 条/符卡行会残留上一次刷新的陈旧值而非归零；④ `hud.gd` 的 `banner`（横幅，位于
+`Vector2(120, 200)`，无 `word_wrap`/宽度限制）与右栏 HUD 面板（`x≥424`）之间没有互斥/换行
+处理，长文案（比如更长的符卡名/中文结算文案）视觉上可能压到右栏。四条都不阻塞可玩性，
+**触发点 = 内容与美术期**顺手一并做。
 
 ## B. 测试覆盖缺口
 
@@ -175,14 +198,24 @@ syscall——被符卡机构溶解后从"符卡前置"降为独立小件（bonus
 `hp_break` 的三路 OR 中 ENEMY_DYING 一路对 threshold≥0 实为死码（=0 冗余、>0 被下钳挡）,仅
 threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy 死亡路径"的防御,记档非债。
 
+**场景刀复核（2026-07-26）**：①③④触发点均未到——demo 局收卡（风铃卡）走系统默认结算，未写
+任何"无擦弹"一类花式收卡条件；符卡衰减曲线仍是 v1 线性，demo 内容量级未觉得"嫌糙"到需要
+升级 ZUN 分段；④本非债、性质不变。三条措辞与代码现状一致，未改动。
+
 ---
 
-### B18. 四个 HUD 读口 + `register_layer` 拒绝路径仅编译级/静态背书（桥刀终审分诊，2026-07-24）
+### B18. `visible_instances`（`MultiMesh` 可见实例数）不可 headless 断言，须真渲染器（桥刀终审分诊，2026-07-24；场景刀收窄为独苗，2026-07-26）
 
-`hud_spell`/`fields_info` 非默认判别断言被 A5 阻塞（`spell_begin` 不可达 → field 唯一
-生产路径同不可达）；`visible_instances` dummy renderer 恒 0 不可 headless 断言——三项触发点
-= A5 解锁后/场景刀真渲染。其余（四读口其二/`register_layer` 三路/编码上传链回读/
-`LAYER_SHOTS` 判别）已于 2026-07-25 前置债务刀清账。
+`hud_spell`/`fields_info` 两项判别断言已由场景刀 T6（`crates/stg-godot/smoke/smoke.gd`/
+`godot_smoke.ecl` 新增的 `smoke_spell_pattern`/`smoke_boss`）补齐，`register_layer`/编码
+上传链回读/`LAYER_SHOTS` 判别已于 2026-07-25 前置债务刀清账——本条收窄为独苗。**两层都
+不可断言**：①`MultiMesh` 资源对象自身的 `visible_instance_count` 字段是客户端本地缓存，
+桥面走 `RenderingServer.multimesh_set_visible_instances` 直写服务端从不经资源 setter，
+该字段永远停在 `playfield.gd::_make_layer` 播种的初值（0），读它必错；②退一步走服务端
+真值 `RenderingServer.multimesh_get_visible_instances`，headless dummy renderer 下同样
+实测恒 0（`smoke.gd` 注释"已实验判决，不可测"，现有冒烟改走 `multimesh_get_buffer` 回读
+实数据判别绕开，不断言可见数）。**触发点 = 首个有 GPU/真渲染器的环境**，与 B23 的 UV
+判决同批可做（同样卡在"本机无 GPU/无 X"）。
 
 ### B19. 清弹 builtin——语义空间未定（整局流程刀 spec §8 记档，2026-07-25）
 
@@ -218,22 +251,11 @@ mark(2);`（`sub common() { bgm(9); }`）。`visited` 在第一次遇到 `common
 方向**：把 `visited` 的粒度从"全局只访问一次"收紧为"按调用点/调用路径重扫"，让同一 sub
 在不同调用点各自贡献一次"最新值"快照——真实脚本出现这种写法、或想让补偿更贴近直觉时再做。
 
-### B22. `run-smoke.sh` 冒烟失败时吞掉全部诊断输出（前置债务刀终审实测，2026-07-25）
-
-`crates/stg-godot/smoke/run-smoke.sh` 开 `set -euo pipefail`，第 8 行 `out=$("$GODOT_BIN"
-… --script res://smoke.gd 2>&1)`：`smoke.gd` 的 `fail()` 走 `quit(1)`，godot 退 1 →
-命令替换非零 → `set -e` **当场中止脚本**，第 9 行 `echo "$out"` 根本不执行。结果是
-**冒烟绿时看得见全部日志、冒烟红时一个字都看不到**（终审跑变异实验时实测：手工直调 godot
-才看到 `SMOKE FAIL: mm oy`）——正确性工具在最需要它说话的时候哑火，与 B14 的"假绿脚枪"
-互为镜像。前置债务刀把冒烟断言从 ~10 条扩到 ~25 条后，这条的代价随之放大（场景刀会频繁
-撞红）。修法一行：`out=$(… ) || rc=$?`（或 `set +e` 包住）后再 `echo "$out"`，最后按
-`rc`/`grep -q "SMOKE OK"` 判定。**触发点 = 下一次动 smoke 脚本时顺手**（非阻塞：本刀所有
-冒烟断言均已由终审独立跑红/跑绿实证过）。
-
 ### B23. `layer.gdshader` 图集选格 UV 垂直朝向嫌疑——占位图元对称，暂不可判（渲染链刀 T4 复审 Important，2026-07-26）
 
-审阅者本机（无 GPU/无 X）用 `QuadMesh(32,32).get_mesh_arrays()` 静态读出顶点/UV 配对：
-`v=(16,-16) uv=(1,1)` 与 `v=(16,16) uv=(1,0)`（Godot 2D 里 y 向下，顶点 y=+16 是屏幕下方）。
+审阅者本机（无 GPU/无 X）用 `QuadMesh(32,32).get_mesh_arrays()` 静态读出顶点/UV 配对（四对
+全部实测，非外推）：`v=(16,-16) uv=(1,1)` / `v=(16,16) uv=(1,0)` / `v=(-16,-16) uv=(0,1)` /
+`v=(-16,16) uv=(0,0)`（Godot 2D 里 y 向下，顶点 y=+16 是屏幕下方）。
 若这组配对在真渲染管线里如实生效，`layer.gdshader::fragment()` 的
 `uv = (cell + UV) / vec2(grid_cols, grid_rows)` 会把每个格**上下镜像**贴到 quad 上——
 UV.y=0（贴图该格顶行）贴到 quad 下沿（y=+16），UV.y=1（该格底行）贴到 quad 上沿（y=-16）。
@@ -258,6 +280,36 @@ vec2 uv = (cell + vec2(UV.x, 1.0 - UV.y)) / vec2(grid_cols, grid_rows);
 ```
 
 确认后同步在 `docs/render-contract.md` §3 补一条 UV 朝向约定（记录判决结果 + 该行改法）。
+
+### B24. 冒烟①`enemy_seen` 判别不辨 boss/杂兵——负控实证（demo 局刀 T6 复审残余缝隙，2026-07-26）
+
+`main.gd::_run_smoke` 的 `enemy_seen` 断言（逐帧扫 `LAYER_ENEMIES` 缓冲找非默认实例位置）
+证明"敌真的在动"，但不区分动的是 `stage1` 杂兵还是 boss——**负控制实测**：临时把
+`main.ecl` 整段替换成 `sub main() { bgm(1); loop { wait(600); } }`（不调 `stage1()`/
+`boss_battle()`，即"main 只剩 bgm+loop"）会被真实抓到（`SMOKE FAIL`）；但若只清空
+`stage1()` 内部逻辑（`zako_dive` 全删）而保留 `main` 的调用序，`boss_battle()` 几乎立即
+执行，boss 出生点 `y=96.0` 本身就让 `enemy_seen` 命中，判别面被 boss "顶包"，这类更典型
+的"只删杂兵波次"回归**不会**被当前断言捕获（换个说法：只要 `boss_battle` 仍在 240 帧窗口
+内被摸到，`enemy_seen` 就不关心杂兵段死活了）。修法方向：加一条按坐标排除 boss 的判据
+（如 `|ox|>40`——demo boss 固定 `x=0` 出生，杂兵三波在场界左右两侧出生/俯冲）或改按
+敌实例数量（杂兵波次期望瞬时敌数 >1，boss 单敌）判别。**触发点 = 下次真要收紧这条冒烟
+断言，或者杂兵/boss 内容有实质变化时**（权衡：复杂度 vs 真实手误极少"连节奏一起清空"，
+当前不算阻塞）。
+
+### B25. `spawn_enemy`/`fire` 的 task 号三条拒绝支路合计零测试（场景刀 T1/demo 局刀实现附带发现，2026-07-26）
+
+`sys_spawn_enemy`（`ecl/syscall.rs`）与 `sys_create_bullet`（backs `fire`）的 task 参校验
+都是同一套三段先验后建：①`task_script` 超出 `u16` 范围（`u16::try_from` 失败）；②号不在册
+（`sub_id` 查无）；③在册但不是零参 `Async`（`kind() != SubKind::Async` 或有参数）——全部
+`FAULT_BAD_OP`。现状每个函数**只有②有直接测试**
+（`spawn_enemy_bad_task_script_faults_without_enemy`/
+`sys_create_bullet_bad_task_script_faults_before_creating`），①③零覆盖，`spawn_enemy`
+与 `fire` 两族完全同构地留了同一个缺口（"与 fire 先例一致"——不是 `spawn_enemy` 独有的
+新债，是抄了既有代码路径连带抄了既有测试盲区）。P4-b 是宪法级不变量，按纪律该补齐。
+**顺带记一句设计口径**：`EnemyPool.main_task` 是**只写不读**的记账字段（`stg-world-design.md`
+称其为 Handle 用途，不是"当前存活任务"的活句柄——敌死后任务被 owner-gate 清杀，但
+`main_task` 本身不会被清零，读到非零不代表任务还活着；目前全仓也确实没有任何消费者读它，
+只是别在将来加消费者时想当然把它当"活任务槽号"用。
 
 ## C. 代码整洁（低优先，都是两可）
 
@@ -478,6 +530,19 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 仍可外部构造空池——但 `tasks` 字段已封,无注入路径,终审 2026-07-23 判无动作必要,记此防将来
 误判为漏网。）
 
+### D9. "敌主协程返回即自燃"——设计承诺代码查无实现（场景刀 T7 探查，2026-07-26）
+
+`world.rs:106` 与 `world/cleanup.rs:6` 的注释均写"M1 起敌人主协程返回即自燃——ZUN ECL
+语义"（`ENEMY_OOB_MARGIN` 只是防泄漏的大边界兜底，回收"主导"本该靠这条纪律），
+`stg-world-design.md` 也有同句。全仓 `grep ENEMY_DYING`：唯一置位点是
+`world/settle.rs::hp_break`（伤害血线路径）——**没有任何代码路径在 ECL 任务（尤其
+`main_task` 绑定的敌主任务）自然 `return`/结束时把 owner 敌标记 `ENEMY_DYING`**。这条
+"任务亡→敌燃"的承诺（注意方向，与既有的"敌死→任务被 owner-gate 清杀"是相反方向、两者都
+该成立但现在只有后者是真的）从 M1 起就只停留在注释里。demo 局的杂兵（`stage1.ecl`
+`zako_dive`）目前靠退场目标 `y=760`（超过 `FIELD_HEIGHT+ENEMY_OOB_MARGIN=704` 的回收线）
+让越界回收兜底顶上，是第一个真实撞上这条空缺的消费者——如果不特意把退场终点设过界，
+`zako_dive` 任务 `wait(600)` 结束后敌会**留在场上不消失**。**触发点 = 下一次编排"敌任务
+跑完就该退场"的内容且不方便靠越界收尾时**（比如原地驻守型敌、场内消失型敌）。
 
 ---
 
@@ -536,3 +601,17 @@ v1 只跑彩虹风铃卡固定场景。两个自然延伸，各随触发点：`-
 （触发 = .ecl 创作流真开动——写卡即看，编译错误回显进页面）；回放文件播放/逐帧步进
 （触发 = M3 回放调试，线格式 v1 直接可复用为 dump 格式）。多客户端/TLS/断线续联不做
 （测试工具本分）。
+
+### F4. 逐帧全缓冲上传账未记（场景刀 T7 记档，2026-07-26）
+
+`bridge.rs::step_frame` 对每个已注册层无条件 `multimesh_set_buffer` 整块上传（不做脏
+检测/增量），四层容量 `bullets=8192, shots=1024, enemies=256, items=512`（`playfield.gd`
+`CAPS`）× `FLOATS_PER_INSTANCE=12` × 4B/float = 9984×12×4 ≈ **468.75 KB/帧**，60Hz 下
+≈ **27.5 MB/s** 恒定上传带宽（与场上实际实体数无关，哪怕场上空场也全量推满 cap 大小的
+零缓冲）。`docs/bench-baseline.md` 目前完全没有这条账——它记的是 step/快照/校验和曲线，
+不含 M2 渲染链的桥面开销。**触发点 = M2 收口后**（本刀 DoD 是"可玩+可验证"，不含性能
+调优）：`encode_layer`（`frame.rs`）本身已把活槽压到缓冲**前缀**（`iter_alive()` 只推进
+`n`，尾部留空），`multimesh_set_visible_instances(rid, n)` 也已按实际活数设——但
+`multimesh_set_buffer` 上传的仍是**整个 `cap` 长度**的 `Vec`（含 `n` 之后全是零/陈旧的
+尾部），带宽账按 `cap` 算而非按 `n` 算。真到了要优化的时候，方向是按 `n*FLOATS_PER_INSTANCE`
+切片上传（只送前缀）或脏检测（层内容与上一帧逐位相同则跳过 `set_buffer`）。
