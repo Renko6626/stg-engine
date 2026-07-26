@@ -4,27 +4,26 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-07-25）
+## 现在（2026-07-26）
 
-- **位置**：**前置债清账**——场景刀会直接踩到的债本刀清完：boss_ui 结算清扫（B16②）+ D6
-  四字段收口（49 处直读迁移）+ `register_layer` 换 buffer 判据 + 冒烟大扩（B18 可达面）+
-  D8 蓝图口径乙案落笔（`stg-world-design.md` 追认计数式降级，废止 debug panic 例外）；
-  同刀新记 **follow-ups A5**——脚本面无法产生 enemy-owned 任务（`spell_begin`/
-  `move_enemy_to`/弹 setter 族全被 OWNER 校验挡死，语言无 builtin 能造，金向量 boss 是
-  harness Rust 手摆的冻结遗产），纯 .ecl 走正典 boot 摆不出 boss/符卡/符卡清弹 field——
-  **场景刀设计期须先裁 A5**（语言级 builtin 扩口方案）才能写 boss 关卡。
+- **位置**：**M2 收口**——Godot 场景刀七任务全部落地：A5 乙案（`spawn_enemy` 追 `task` 参
+  + `enemy_hp` 读口）解锁 enemy-owned 任务，纯 .ecl 终于摆得出 boss/符卡；渲染契约收口
+  （图集网格/stride 12/请求分发/锚点双表示）+ 真 Godot 工程竖切（场景树/四层 MultiMesh
+  渲染链/请求分发器/HUD/结算挂牌）+ demo 局（`godot/ecl/demo` 杂兵段 → 风铃卡 boss 战 →
+  挂牌结算三文件）+ 双冒烟（桥级 `crates/stg-godot/smoke` + 真工程级 `godot/smoke`）。
+  金向量全程逐位零平移。`stg-godot`（桥）+ `godot/`（真工程）合计 = M2 全部落地。
 - **在飞**：无。
-- **下一阶段候选**：Godot 场景刀（真工程/`.tscn`/`MultiMesh`/请求分发器，**开工前先裁
-  follow-ups A5**）/ RL 线 `stg-py`（PyO3 headless env）/ 背景刀（follow-ups A4，STD 式
-  mini-VM，锚点契约已钉死）。
-- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（**A5 置顶**——enemy-owned 任务
-  语言面缺口，场景刀设计输入；B16②/D6/D8 已清账销条，C17 销②③；B18 收窄为余量；
-  B14/B15/B19-B21/C 组/D 组其余未动）。
+- **下一阶段候选**：M3 环形快照 + 本地回滚 harness / RL 线 `stg-py`（PyO3 headless env）/
+  背景刀（follow-ups A4，STD 式 mini-VM，锚点契约已钉死）/ 内容与美术期（真美术换占位图集、
+  演出打磨小件，follow-ups A9）。
+- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（本刀销 A5/B22，B18 收窄为独苗，
+  新记 A6-A9/B24-B25/D9/F4；**B23 的 UV 判决须首个 GPU/有头环境才能做**，B18 独苗同批）。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-26 | **Godot 场景刀** | A5 乙案 `spawn_enemy` 7 参+`enemy_hp`/渲染契约收口/真 Godot 工程竖切(场景树/四层 MultiMesh/请求分发器/HUD)/demo 局(杂兵+风铃卡 boss)/双冒烟(桥级+真工程级);M2 全落地;金向量全程逐位零平移(`golden-base.txt` 为证) |
 | 2026-07-25 | 前置债务刀 | boss_ui 结算清扫(B16②)+D6 四字段收口(49 处迁移)+register_layer 换 buffer 判据+冒烟大扩(B18 可达面)+D8 乙案+新 A5(enemy-owned 任务语言缺口=场景刀设计输入) |
 | 2026-07-25 | 文档整理 | CLAUDE.md 结构树/命令/里程碑追新 + follow-ups 对账(销 B17 顺手补两断言/C17 归位 C 组/A3·B18 追注 new_game_at·anchors 现实) + D10 杂项行记锚点四字段 + ecl-lang check 目录用法 |
 | 2026-07-25 | **整局流程刀** | 方案A拍板(整局一World一镜像)+compile_units多文件+mark中段启动(垫片/标记表/自动补偿)+Loadout/new_game_at+表现锚点四字段(bgm/bg/bg_phase声明式)+转场挂牌协议;金向量因锚点字段整体平移(判别式护行为) |

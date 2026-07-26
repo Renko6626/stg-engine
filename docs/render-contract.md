@@ -37,7 +37,7 @@ sprite 号 = 格号（行优先）；越界号 mod 回卷。QuadMesh 尺寸 = ce
 上会与低号格"撞车"（这是刻意的表现层容错，不是 bug）——脚本作者应把 sprite 号控制在网格范围
 内，回卷只是兜底、不是可依赖的取号策略。
 
-## 4. 请求分发（引擎保留段 1..=63，现分配 1..7）
+## 4. 请求分发（引擎保留段 1..=63，现分配 1..=7）
 
 表：`reqs.rs` 模块文档为准（id/args 逐位）；GDScript 侧 `dispatcher.gd` 本地常量镜像。
 64+ 脚本段：内容包经 `dispatcher.register(id, callable)` 自注册。

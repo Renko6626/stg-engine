@@ -6,7 +6,8 @@
 >
 > 首批条目来自 **WS 查看器刀**(2026-07-23,通道 A/B 的第一个真实交互消费者,harness `serve`)。
 > 第二批条目来自 **M2 stg-godot 桥刀**(2026-07-24,gdext 宿主 + Rust↔ECL↔GDScript 三层
-> 对接的第一个真实消费者)。
+> 对接的第一个真实消费者)。第三批条目来自 **Godot 场景刀**(2026-07-26,`godot/` 真工程——
+> 场景树/渲染链/请求分发/HUD/demo 局,第一个跑完整可玩闭环的消费者)。
 
 ## 网络/传输层
 
@@ -147,6 +148,62 @@ task:SubRef)`——常见的踩坑设想是 8 参(把 `xf`/`task` 拆成"偏移+
 (`0deg`/`16384bam`),不挂变换/子任务时两个标识符位填字面量 `none, none`——生成/审阅胶水
 `.ecl` 时对照 `crates/stg-ecl-compiler/src/lang/builtins.rs` 的真实签名表,比凭空写参数列表
 可靠。
+
+## 真 Godot 工程(场景刀,2026-07-26;第三批消费者——`godot/` 真工程 + demo 局)
+
+### G8. `physics_frame` 信号在 `_physics_process` 之前触发——数信号次数≠数 step 次数
+
+冒烟等帧最初设想"数 `await get_tree().physics_frame` 触发几次就等于 `step_frame` 调了几次"
+——实测(Godot 4.6.3)`physics_frame` 信号在每 tick 的 `_physics_process`(`step_frame` 调用点)
+**之前**触发,数信号次数会比真实 step 次数差一帧,不代表"每两 tick 一 step"这类回归会被
+正确捕捉。**对下一次接入的含义**:等帧断言一律轮询实际读口(本仓是 `bridge.frame()`)而非
+数信号触发次数;轮次上限给目标值的合理余量防死等,同时另加一条"实际轮次 ≤ 目标+1"断言,
+防止宽松的上限把"每两 tick 一 step"这类节奏回归悄悄放过(`main.gd::_wait_frame` 现成参考)。
+
+### G9. `MultiMesh.visible_instance_count`(资源字段)与 `RenderingServer.multimesh_get_visible_instances`(服务端真值)双双不可 headless 断言
+
+桥面固定走 `RenderingServer.multimesh_set_visible_instances(rid, n)` 直写服务端,从不经
+`MultiMesh` 资源对象自身的 setter——资源侧 `visible_instance_count` 字段因此永远停在
+`playfield.gd::_make_layer` 播种的初值(0),这是纯粹的客户端/服务端字段分裂,与渲染后端
+无关,真机同样成立。退一步改走服务端真值 `RenderingServer.multimesh_get_visible_instances`,
+headless dummy renderer 下**同样实测恒 0**(与 G1/register_layer 那条"仅 `set_buffer` 后
+`get_buffer` 完整往返"是两回事,可见数这条指标 headless 下彻底不可读)。**对下一次接入的
+含义**:可见数判据只能靠有 GPU/有头环境验证;headless 冒烟改走 `multimesh_get_buffer` 回读
+实际写入的实例数据(位置/旋转/自定义位)做判别,不断言可见数,见 `docs/follow-ups.md` B18。
+
+### G10. headless dummy renderer 只跑完整 shader 前端——编译错抓得到,数据通路问题抓不到
+
+`layer.gdshader`(`canvas_item`,读 `INSTANCE_CUSTOM.x` 选图集格)在 dummy renderer 下三轮
+冒烟稳定零 shader 编译错误/`push_error`——但这只证明**语法**过了 GLSL 前端(词法/类型检查/
+uniform 声明等),不证明**运行期数据通路**(`INSTANCE_CUSTOM` 实际取值→UV 采样→像素输出)
+正确,因为 dummy renderer 根本不做光栅化。`docs/follow-ups.md` B23(UV 垂直朝向镜像嫌疑)
+正是这一类问题的实例——CPU 侧 `QuadMesh.get_mesh_arrays()` 能读顶点/UV 静态配对,但配对
+在真管线里是否如实生效(NDC/视口变换等中间环节可能已抵消)必须真渲染器出图才能判。
+**对下一次接入的含义**:shader 冒烟绿只代表"没写错语法",数据通路/视觉正确性类问题一律
+留给首个有 GPU/X 环境判决,别把"编译期零报错"读成"运行期零问题"。
+
+### G11. `DirAccess.open` 对不存在的目录静默返回 `null`,不打任何 stderr
+
+`main.gd::_boot` 用 `DirAccess.open("res://ecl/demo")` 读关卡目录——指向不存在路径时该调用
+**不产生任何引擎侧警告/错误输出**,只是返回值为 `null`,与部分资源加载 API(如
+`ResourceLoader.load` 失败会自己打 error)的行为不对称。**对下一次接入的含义**:任何用
+`DirAccess`/`FileAccess` 读外部内容(关卡包/mod/存档目录)的宿主代码,必须自己判 `null` 并
+主动 `push_error`,不能指望引擎替你发现路径写错这类低级问题——静默失败会一路传导到更远
+处才炸(比如"目录读到但文件列表为空"这类更难定位的次生故障)。
+
+### G12. `SubViewportContainer.stretch=true` 若被放进布局容器,会连带改写内部 `SubViewport` 的尺寸
+
+`Playfield`(`extends SubViewportContainer`,`stretch=true`)内部 `SubViewport` 固定
+384×448、世界根 `Node2D@(192,0)`——这组尺寸/偏移是渲染契约的坐标系基准(§6)。若这个容器
+被塞进任何会重新分配子节点尺寸的布局容器(`VBoxContainer`/`HBoxContainer`/带
+`size_flags_*` 拉伸的 `Container` 等),布局系统会覆写 `SubViewportContainer` 自身尺寸,
+`stretch=true` 又会把这个被覆写的尺寸继续传给内部 `SubViewport`——最终 384×448 这个基准
+悄悄跑掉,`world_root` 的坐标系跟着整体错位,而这类问题在编辑器里往往不报错,只是画面对不上。
+本工程现状**未踩中**(`Playfield` 直接 `add_child` 在 `Main`——一个裸 `Node`,不是布局
+`Container`;右栏 HUD 走独立的 `Hud extends CanvasLayer`,`CanvasLayer` 子节点用绝对定位、
+天然不参与任何父级的 `Container` 布局流程,两边都绕开了这个坑)。**对下一次接入的含义**:
+以后若要加菜单/选关等需要把 `Playfield` 摆进某个自适应布局的场景,想清楚这条尺寸传导链;
+纯 HUD 类叠加层继续走 `CanvasLayer` 绝对定位是更省心的默认选择。
 
 ## 杂项
 
