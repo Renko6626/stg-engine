@@ -402,6 +402,11 @@ fn sys_create_bullet(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let Some(cfg) = ctx.tables.appearances.get(appearance as usize) else {
         return Err(FAULT_BAD_OP);
     };
+    // 空格格（图集该格没有图）→ 拒。放行会造出"有判定但画面上什么都没有"的隐形弹，
+    // 而金向量/冒烟都抓不到它（校验和不关心贴图内容）。先验后建：此处尚未写世界。
+    if !cfg.valid {
+        return Err(FAULT_BAD_OP);
+    }
 
     // xform 区间越界（LOCALS 边界）→ Fault；内容层面的坏 xform（>16 槽/未知 op/...）留给
     // `create_bullet_with_xform` 自己的 P4-b 处置（NULL + BAD_ARGS，见下方"押 -1"分支）。
@@ -526,6 +531,11 @@ fn sys_create_bullets_batch(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> 
     let Some(cfg) = ctx.tables.appearances.get(appearance as usize) else {
         return Err(FAULT_BAD_OP);
     };
+    // 空格格（图集该格没有图）→ 拒。放行会造出"有判定但画面上什么都没有"的隐形弹，
+    // 而金向量/冒烟都抓不到它（校验和不关心贴图内容）。先验后建：此处尚未写世界。
+    if !cfg.valid {
+        return Err(FAULT_BAD_OP);
+    }
 
     let init = BulletInit {
         x: Fx::from_raw(x_raw),
@@ -1221,6 +1231,27 @@ mod tests {
         );
     }
 
+    /// 空格 appearance（图集该格没有图）→ Fault，且**弹未被创建**（先验后建）。
+    /// 这是"隐形弹"（有判定无图像）的运行期闸；编译期同款判据见 lang::typeck。
+    #[test]
+    fn sys_create_bullet_blank_cell_faults_without_creating() {
+        const BLANK: i32 = 9 * 16 + 12; // 第 9 形（掩码 0x0FFF）的第一个空格
+        assert!(
+            !TABLES_V0.appearances[BLANK as usize].valid,
+            "前提：{BLANK} 必须是空格行，否则本测试无判别力"
+        );
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let args = [BLANK, 0, 0, 0, 0, 0, 0, -1];
+        let r = call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP), "空格 appearance 必须 Fault");
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            0,
+            "Fault 时不得留下半成品弹（先验后建）"
+        );
+    }
+
     /// xform 区间引用解包逐位：locals 手填 3 词槽（word0=(wait<<16)|(op<<8)，word1/2=args），
     /// 创建后段内容与手搭 `XformSlot` 逐位相等。
     #[test]
@@ -1393,6 +1424,28 @@ mod tests {
             assert_eq!(w.body.bullets.radius[i], cfg.radius);
             assert_eq!(w.body.bullets.sprite[i], cfg.sprite);
         }
+    }
+
+    /// 批量入口同款（两族同构，别只补一边）：空格 appearance → Fault，且**弹未被创建**
+    /// （先验后建）；编译期同款判据见 lang::typeck。
+    #[test]
+    fn sys_create_bullets_batch_blank_cell_faults_without_creating() {
+        const BLANK: i32 = 9 * 16 + 12; // 第 9 形（掩码 0x0FFF）的第一个空格
+        assert!(
+            !TABLES_V0.appearances[BLANK as usize].valid,
+            "前提：{BLANK} 必须是空格行，否则本测试无判别力"
+        );
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        // 正序：appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step
+        let args = [BLANK, 0, 0, 4, 0, 4096, 1, Fx::from_int(1).raw(), 0];
+        let r = call(&mut w, &ecl, &mut task, SYS_CREATE_BULLETS_BATCH, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP), "空格 appearance 必须 Fault");
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            0,
+            "Fault 时不得留下半成品弹（先验后建）"
+        );
     }
 
     #[test]
