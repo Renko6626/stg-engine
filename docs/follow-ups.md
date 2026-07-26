@@ -18,6 +18,15 @@
 > 终审全分支修复波追记（2026-07-26）：A8 措辞刷新（残机耗尽最小处置已落地，深度流程降级
 > 待办）；A9 补第⑤件（effects.gd 三处）；F4 数值订正（468.75KB→468KB整=479232B）；新记
 > **B26**（B18/B23/DoD 可玩目验三件套合并单，均卡在"首个有 GPU/X 环境"）。
+>
+> 弹幕颜色轴刀收口追记（2026-07-26）：B23/B26①追注占位图集已改上下不对称（判决程序不变，
+> 只是不必再临时加测试格）；C11 追注 `color_stride` 已进表、乙案符号段仍开放；C14 追注
+> `APPEARANCE_*` 系 ② 段符号已随本刀退场（`APPEARANCE_MEDIUM`/`APPEARANCE_STAR=3` 两处
+> 历史举例订正为当前状态），注入面现为"①⧺②(空)⧺表派生 `BULLET_COLOR_STRIDE`"；新记
+> **B27**（`OP_SET_SHAPE` 缺近 `i32::MAX` 溢出判别式测试，与 `OP_SET_COLOR` 不对称）、
+> **C22**（`tables.rs::validate` 的 ② join 校验循环随 ② 段清空而空转，机制保留但非活防护）、
+> **D10**（部分设运行期不查 `valid`，编译期空格闸只覆盖 `.ecl` 源码路径，直接构造
+> `XformSlot` 的未来消费者不受保护）。
 
 ---
 
@@ -262,7 +271,7 @@ mark(2);`（`sub common() { bgm(9); }`）。`visited` 在第一次遇到 `common
 方向**：把 `visited` 的粒度从"全局只访问一次"收紧为"按调用点/调用路径重扫"，让同一 sub
 在不同调用点各自贡献一次"最新值"快照——真实脚本出现这种写法、或想让补偿更贴近直觉时再做。
 
-### B23. `layer.gdshader` 图集选格 UV 垂直朝向嫌疑——占位图元对称，暂不可判（渲染链刀 T4 复审 Important，2026-07-26）
+### B23. `layer.gdshader` 图集选格 UV 垂直朝向嫌疑——占位图元对称，暂不可判（渲染链刀 T4 复审 Important，2026-07-26；颜色轴刀 T6 追注占位图元已改非对称，2026-07-26）
 
 审阅者本机（无 GPU/无 X）用 `QuadMesh(32,32).get_mesh_arrays()` 静态读出顶点/UV 配对（四对
 全部实测，非外推）：`v=(16,-16) uv=(1,1)` / `v=(16,16) uv=(1,0)` / `v=(-16,-16) uv=(0,1)` /
@@ -292,6 +301,12 @@ vec2 uv = (cell + vec2(UV.x, 1.0 - UV.y)) / vec2(grid_cols, grid_rows);
 
 确认后同步在 `docs/render-contract.md` §3 补一条 UV 朝向约定（记录判决结果 + 该行改法）。
 合并单见 **B26**（与 B18、DoD 可玩目验三件一次做完，别单做一件就散场）。
+
+**追注（颜色轴刀 T6，2026-07-26）**：占位图集已从"全上下对称图元"改为上下明暗渐变
+（`gen_atlas.gd::_disc_shaded`，颜色轴刀 T5，2026-07-26）——上面"当前占位图集…无法用现有
+占位资源判别"那句因此已是**历史状态**：现在首个有头启动（`godot --path godot`）即可直接
+肉眼判别该层是否镜像，不必再按下方"判决程序"临时加测试格。判决程序与候选修法本身不变
+（仍是同一行 `layer.gdshader` 改法），只是判别用的图元已经不需要专门再造了。
 
 ### B24. 冒烟①`enemy_seen` 判别不辨 boss/杂兵——负控实证（demo 局刀 T6 复审残余缝隙，2026-07-26）
 
@@ -331,7 +346,9 @@ vec2 uv = (cell + vec2(UV.x, 1.0 - UV.y)) / vec2(grid_cols, grid_rows);
 
 ① **B23** `layer.gdshader` 图集选格 UV 垂直朝向嫌疑——判决程序：`gen_atlas.gd` 临时
 加一张上下不对称测试格，有头跑 `godot --path godot` 肉眼判"上红下蓝"是否镜像（详见 B23
-条内判决程序全文）。
+条内判决程序全文）。**追注（颜色轴刀，2026-07-26）**：占位图集本身已经上下不对称
+（`_disc_shaded`，颜色轴刀 T5），首个有头启动即可直接肉眼判别、不必再临时加测试格；
+判决程序其余步骤（对照 `layer.gdshader` 候选改法）不变。
 
 ② **B18** `visible_instances`（`MultiMesh` 可见实例数）不可 headless 断言——判决程序：
 有 GPU/真渲染器后重跑 `godot/smoke`，把当前绕开用的 `multimesh_get_buffer` 判据换回
@@ -347,6 +364,19 @@ demo 局的图集贴图是否如预期摆放、HUD 排版是否重叠、boss 战
 
 **触发点 = 同一个**：首个有 GPU/真渲染器/X 环境的会话，三件一次做完（不要只做其中一件
 就散场——判决程序共享同一次有头启动成本）。
+
+### B27. `OP_SET_SHAPE` 缺近 `i32::MAX` 溢出判别式测试——与 `OP_SET_COLOR` 覆盖不对称（颜色轴刀 T7 复审修复轮遗留，2026-07-26）
+
+T7 复审修复轮把 `OP_SET_SHAPE`/`OP_SET_COLOR` 两臂的裸 `+` 都改成了 `wrapping_add`
+（`world/transform.rs`，见该刀"必修二"）——**实现本身对称**，两臂都不会在 `args[0]` 接近
+`i32::MAX` 时 panic。但补的判别式测试
+`partial_sprite_ops_wrap_instead_of_panicking_on_near_max_args` 只构造了 `OP_SET_COLOR`
+的近溢出槽，`OP_SET_SHAPE` 没有同款腿——如果将来有人把 `OP_SET_SHAPE` 的 `wrapping_add`
+误改回裸 `+`，现有测试套件抓不到，得等到某个真实脚本凑巧撞上大数值才会在别处炸出来。
+**修法**：照抄该测试的模式给 `OP_SET_SHAPE` 补一条对称腿（`args[0] = i32::MAX` 的
+`OP_SET_SHAPE` 槽，手算 `wrapping_add` 后的截断值，断言不 panic + 值落在预期位 + 序列不
+终止）。**触发点 = 下次改动 `world/transform.rs` 的 `fire_op` 或该文件近溢出测试组时**
+顺手补，不必单独开工。
 
 ## C. 代码整洁（低优先，都是两可）
 
@@ -443,7 +473,11 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
   （harness 同款，`compile_for_table`）；镜像字节格式**不冻结**，离线分发/加载等 modding
   需求真出现再定——过早冻结 = 白背一份格式兼容债。
 - **乙案**——表自带 `[(name,id)]` 符号段，让非 Rust/mod 作者自定义外观词表，v1 仍用
-  `consts.rs` 里手写的 ② 符号名字。
+  `consts.rs` 里手写的 ② 符号名字。**追注（颜色轴刀，2026-07-26）**：表已带 `color_stride`
+  字段（`WorldTables.color_stride`），乙案的**符号段**本身仍未落地——`consts.rs` 的 ②
+  段现已清空，弹型名/色名改由内容包自己的 `.ecl` 用 `const` 声明（见 C14、
+  `docs/ecl-lang.md`"引擎常量"节），mod 作者靠这条路径已经能给外观取名，乙案不是
+  "唯一出路"了；乙案真落地后，这条 `const` 声明的路径可以退位给表自带的机读符号段。
 - **文本 DSL** 给表本身当作者格式——v1 仍是 Rust 里建 + 烘焙字节，无文本源。
 - 多角色 / 多道具类型表（v1 固定 `characters` 长度 1、`item_cfg` 长度 `ITEM_TYPE_COUNT`）。
 
@@ -485,7 +519,12 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 `fire(1, ...)` → `fire(APPEARANCE_MEDIUM, ...)`（`var appearance = i % 4` 那类有意轮转
 全表的写法保留不换）；校验和不变（纯换书写不换值，两次 golden 对拍 + 编辑前后对拍均逐位
 相同）。详见 `docs/ecl-lang.md`"引擎常量"节、
-`docs/superpowers/specs/2026-07-21-ecl-const-injection-design.md`。
+`docs/superpowers/specs/2026-07-21-ecl-const-injection-design.md`。**追注（颜色轴刀，
+2026-07-26）**：`APPEARANCE_MEDIUM` 一类 ② 段符号已随颜色轴刀退场——`fire`/`batch`
+现收两参（`shape`/`color`），`rainbow.ecl` 已改写成 `fire(BULLET_BALL_M, COLOR_CYAN, ...)`
+这类调用，`BULLET_BALL_M`/`COLOR_CYAN` 是脚本自己用 `const` 声明的内容包词汇，不再是
+Rust 侧注入的引擎常量；上面这句"去魔数示范"描述的是它当时（2026-07-21）的写法，读到本条
+时若查 `consts.rs` 找不到 `APPEARANCE_MEDIUM`，不是回归，是这条追注记录的迁移。
 
 **coherence 不变量**（本刀记档，留 C11 焊死）：注入的引擎常量在字节码里落为**字面量值**
 （非名字），故存在一条语义前提——**同一份常量来源必须同时喂"编译期注入"与"运行期查表"**。
@@ -495,7 +534,13 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 **C11 表文件加载落地后风险浮现**：若注入常量取自表 A、却拿表 B 跑，appearance id 可能
 错位且**三平台一致地错**——金向量闸门只抓跨平台分歧、抓不了这种"一致地错"（见 CLAUDE.md
 "金向量闸门的能力边界"）。Spec 2 拍板令 `EclImage`/`WorldTables` 记录各自的 `content_hash`，
-运行期比对拦截。
+运行期比对拦截。**追注（颜色轴刀，2026-07-26）**：`APPEARANCE_STAR=3` 这个举例已过期——
+② 段现是空切片，`consts.rs` 里不再有任何 appearance 符号。同一条 coherence 责任现由
+表派生常量 `BULLET_COLOR_STRIDE` 承担（`compile_with_options` 里 `i32::from(t.color_stride)`
+直接从绑定的 `WorldTables` 读值），注入面因此变成"①（结构常量）⧺②（表符号词汇，现空）
+⧺ 表派生一项"；`BULLET_COLOR_STRIDE` 比旧例子更强——它的值直接来自同一个 `WorldTables`
+实例本身，不是"同一个宏调用"这种结构性巧合，`content_hash` coherence 守卫覆盖的正是
+这条穿线关系换表就换值。
 
 **C11 已焊死**（2026-07-21）：`compile_for_table` 把绑定的 `WorldTables.content_hash` 盖进
 编译产物 `EclImage.content_hash`；`start_main` 拿它与 `World.tables_hash` 比对，不符即拒绝
@@ -528,6 +573,19 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 `docs/pool-memory-layout.md` 弹池汇总行按 19 字段全 4B 估（~625KB），实际近半字段 u8/u16，
 精确 ≈433KB（虚高 ~30%；四热字段各 32KB 的 L1 论证不受影响）；`stg-world-design.md` D5
 "~64B/敌 16KB" 实为 ~74B/敌 ≈18.5KB（`enemy.rs` 模块注释已自行改口 ~70B）。重算续表即可。
+
+### C22. `tables.rs::validate` 的 ② join 校验循环现空转、无测试覆盖（颜色轴刀 T4 清空 ② 段的残余，2026-07-26）
+
+`WorldTables::validate()` 里 `for c in crate::consts::TABLE_SYMBOLS { if (c.value as usize)
+>= self.appearances.len() { return false; } }`（`tables.rs:316-320`）是 C14 记的那道
+"② 表符号必须落在 appearances 合法行内"的 FM1 防线；颜色轴刀把 `consts.rs` 的 ② 段清空
+（弹型名归内容包，见 C14/C11 追注）后，`TABLE_SYMBOLS` 是空切片，这个循环体永远不执行——
+机制还在，但当前不是一条活防护。原有两条覆盖它的测试
+（`validate_rejects_table_symbol_without_appearance_row`/
+`builtin_appearances_exactly_cover_table_symbols`）已随 ② 段清空一并删除（`tables.rs`
+`mod tests` 里留了说明注释）。复审判定**保留循环本身可接受**——② 段将来重新长出行（如
+道具类型符号）时机制自动生效，删掉它反而是白扔一次未来要重写的代码——但记档防止将来
+复审者看到"零覆盖的校验逻辑"误判为遗留 bug 想删掉它。
 
 ---
 
@@ -580,6 +638,22 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 让越界回收兜底顶上，是第一个真实撞上这条空缺的消费者——如果不特意把退场终点设过界，
 `zako_dive` 任务 `wait(600)` 结束后敌会**留在场上不消失**。**触发点 = 下一次编排"敌任务
 跑完就该退场"的内容且不方便靠越界收尾时**（比如原地驻守型敌、场内消失型敌）。
+
+### D10. 部分设运行期只护 stride、不查 `valid`——编译期空格闸只覆盖 `.ecl` 源码路径（颜色轴刀 T6 记档，2026-07-26）
+
+`OP_SET_SPRITE`/`OP_SET_SHAPE`/`OP_SET_COLOR`（`world/transform.rs::fire_op`）三个解释臂
+只做一条运行期护栏——stride/参数是否会导致除零或溢出（P4-b：坏参数计 `contract_viol` 后
+no-op；算术上 `wrapping_add` 防近 `i32::MAX` panic）——**从不索引
+`WorldTables.appearances[..].valid`**。空格闸（拒收"落到图集空格的组合"）只活在编译器
+前端（`lang::atlas::{check_shape_color, check_shape_only, check_color_only}`，挂在
+`lang::codegen` 的 `OpFold2`/`OpWithStride` staging 阶段）。这对 `.ecl` 源码路径足够——
+一切 `fire`/`batch`/`set_sprite`/`set_shape`/`set_color` 调用都先过这条编译期闸——但
+**任何绕开 `lang::compile` 直接构造/反序列化 `XformSlot` 的路径都不受这条闸保护**。目前
+全仓没有这样的路径（唯一产出 `XformSlot` 的是编译器 codegen 与手写测试助手），所以不是
+活漏洞，只是"编译期闸的覆盖面比看起来窄"这条事实需要记档，防止将来有人以为空格在任何
+路径下都造不出来。**触发点 = 出现直接构造/反序列化 `XformSlot` 的消费者时**（候选：
+mod 提供的二进制 xform 段格式、M4 rollback 对端镜像重放）——届时需要在运行期臂补一条
+`valid` 校验，或明确记录"信任构造方已经过编译期闸"这条前提由谁来担保。
 
 ---
 

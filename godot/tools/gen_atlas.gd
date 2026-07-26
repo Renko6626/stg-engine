@@ -9,6 +9,9 @@ const PALETTE := [
 
 # 12 形 × 16 色(值源 crates/stg-core/src/tables.rs build_tables_v0 的
 # SHAPE_RADIUS / SHAPE_COLOR_MASK;两边必须同源,改一边要改另一边)
+# 注意:下面 SHAPE_RADIUS 是 tables.rs 那组值(世界坐标判定半径,单位 px)的 ×2——
+# 32px 格子里画得清楚的"显示半径"与"世界判定半径"是两个独立的量,只要求同步改、
+# 不要求数值相等;照抄 tables.rs 新数值时记得再乘 2,否则占位观感会悄悄跟真判定脱节。
 const SHAPE_RADIUS := [6.0, 6.0, 8.0, 12.0, 8.0, 8.0, 6.0, 10.0, 14.0, 12.0, 12.0, 8.0]
 const SHAPE_COLOR_MASK := [
 	0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF,

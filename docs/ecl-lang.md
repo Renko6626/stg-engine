@@ -525,6 +525,51 @@ sub main() {
   物理槽总数 ≤16。`loop`/`end` 不开放（复杂控制流写任务弹；尾部零填充天然 END）。
 - 被 `fire(..., NAME, ...)` 引用才占 locals 空间（3 字/物理槽，算进引用它的 sub 的容量账）。
 
+### 部分设三兄弟：`set_sprite` / `set_shape` / `set_color`
+
+外观值 = `形 × color_stride + 色`（identity：表索引 ≡ 图集格号 ≡ 池 `sprite` 值，见
+[`render-contract.md`](render-contract.md) §3）。三个 xform op 都改弹当前的外观值，区别
+在改哪一维：
+
+- `set_sprite(形, 色)`——**全设**，两维一起换（`fire`/`batch` 内部折叠出的 op 就是它）。
+- `set_shape(形)`——**只换形状**，保住当前色位不动。
+- `set_color(色)`——**只换颜色**，保住当前形位不动。
+
+```ecl
+xformdef SWAP_LOOK {
+    set_color(COLOR_BLUE);        // 保形：不管当前是什么形，只把颜色换成蓝
+    @10 set_shape(BULLET_BALL_L); // 保色：不管当前是什么色，只把形状换成大玉
+}
+
+const BULLET_BALL_M: int = 32; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const BULLET_BALL_L: int = 48;
+const COLOR_BLUE: int = 8;
+
+sub main() {
+    _ = fire(BULLET_BALL_M, COLOR_BLUE, 0fx, 0fx, 1.0fx, 0deg, SWAP_LOOK, none);
+    wait(60);
+}
+```
+
+⚠️ **部分设不查空格——这是设计允许的行为，不是漏洞，复审别把它当 bug 修回去**：
+`set_shape`/`set_color` 编译期只查"值本身合不合法"（色号落在 `[0, BULLET_COLOR_STRIDE)`、
+形状基址是 stride 的整倍数且落在表范围内），**不查"这个形+色组合在图集里是不是空格"**。
+原因是部分设只改一维，落点还取决于弹**当时的另一维**——这是运行期状态（可能来自 `fire`
+给的初始外观，也可能来自之前执行过的另一次部分设），编译期看不到那个值，做不了跨维校验。
+曾提议一条"跨形状安全"判据（`set_color(c)` 要求 `c` 在图集里所有弹型上都有图）被**人类
+裁定否决**：图集里只要存在一两个稀疏弹型（内建 demo 词表的 `BULLET_HEART`/
+`BULLET_BUTTERFLY`，第 12..15 色是空格），这条判据就会把 12..15 号色在**所有**弹型上
+一起禁掉，代价远大于收益。**结论**：落到空格 = 该弹变透明，这是设计允许的降级路径，
+由作者自己负责别把部分设用在会撞空的组合上；运行期也**不**替你兜底——部分设的两个解释臂
+只护 stride 合法性（防除零/溢出），不查 `valid`，撞空格既不报错也不 Fault，弹会悄悄变
+透明地继续飞。想要"越界就出错"的效果，只有 `fire`/`batch` 的两参全设才有这道闸。
+
+⚠️ **稀疏弹型不能盲目轮转全色**：只做了部分色的弹型（如上面的心弹/蝶弹），
+`for i in 0..BULLET_COLOR_STRIDE { ... }` 这类轮转写法在色号跑到空格区间时，`fire`/
+`batch` 会在编译期/运行期被拒收（两参全设查 `valid`）；换成部分设则不会报错，只会让弹
+在那几帧变透明。两种后果都不是作者通常想要的——轮转全色的写法只对满色弹型安全，稀疏
+弹型要么显式列出可用色，要么整体避开轮转写法。
+
 ## debug 循环（改代码 → check → 再改）
 
 写/改 `.ecl` 脚本的最短反馈环，人 / coding agent / CI 共用：
