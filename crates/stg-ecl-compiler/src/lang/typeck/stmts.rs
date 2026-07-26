@@ -6,7 +6,7 @@ use super::scope::LocalScope;
 use super::typed_ast::{CallTarget, TypedCall, TypedExpr, TypedExprKind, TypedStmt, TypedSub};
 use crate::lang::ast::{Block, Expr, Span, Stmt, SubDef, Ty, expr_span};
 
-impl<'p> Checker<'p> {
+impl<'p, 't> Checker<'p, 't> {
     fn check_expr_stmt(
         &mut self,
         expr: &Expr,

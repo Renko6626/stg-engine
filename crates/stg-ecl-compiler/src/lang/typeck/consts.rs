@@ -8,7 +8,7 @@ use super::checker::Checker;
 use crate::lang::ast::ConstDef;
 use crate::lang::const_eval::{self, ConstEvalError};
 
-impl<'p> Checker<'p> {
+impl<'p, 't> Checker<'p, 't> {
     /// 常量折叠：委托 `lang::const_eval` 唯一求值器，把其错误转本趟诊断（保留既有文案）。
     pub(super) fn fold_const(
         &mut self,
@@ -32,7 +32,7 @@ impl<'p> Checker<'p> {
     }
 }
 
-impl<'p> Checker<'p> {
+impl<'p, 't> Checker<'p, 't> {
     pub(super) fn check_const_def(&mut self, cdef: &ConstDef) {
         if self.check_not_reserved_sugar_name(cdef.span, &cdef.name) {
             return;

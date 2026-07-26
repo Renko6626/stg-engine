@@ -106,9 +106,15 @@ pub use typed_ast::{
 /// 在处理脚本 `const` **之前**预填进 `c.consts`/`c.engine_const_names`，等效于"第 1 行前
 /// 声明的 const"：脚本 const 重名会撞进 `check_const_def` 的引擎重名分支。末尾 `TypedInfo.consts`
 /// 会把它们一并收进去——供 codegen 的 xformdef 槽参数求值器引用。
+///
+/// `table`（颜色轴 T3）——绑定的世界表，原样存进 `Checker.table`；`None` = 未绑定，跳过
+/// 一切依赖表的判据（当前仅存，尚无判据消费；供 T4 的形/色组合判据使用）。调用方注入的
+/// `BULLET_COLOR_STRIDE` 等表派生常量走 `engine_consts`，不经此参——`table` 只用于判型阶段
+/// 直接查表的判据，不是常量注入的通道。
 pub fn check(
     prog: &Program,
     engine_consts: &[EngineConst],
+    table: Option<&stg_core::tables::WorldTables>,
 ) -> Result<TypedInfo, Vec<CompileError>> {
     let mut c = Checker {
         subs: BTreeMap::new(),
@@ -118,6 +124,7 @@ pub fn check(
         errors: Vec::new(),
         cur_sync_calls: Vec::new(),
         cur_xform_refs: Vec::new(),
+        table,
     };
 
     for ec in engine_consts {

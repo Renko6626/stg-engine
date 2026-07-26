@@ -43,6 +43,11 @@ pub struct CompileOptions {
 ///
 /// `.image` 在 `DebugInfo::None` 与 `Full` 模式下**逐字节相同**（确定性契约：
 /// 调试信息不参与运行时行为）。`.debug` 为 `Some` 当且仅当 `debug_info == Full`。
+///
+/// `derive(Debug)`：`EclImage`/`EclDebugSymbols` 均已 derive `Debug`（stg-core 侧，非本刀
+/// 引入），这里补上纯粹是为了让 `compile_with_options` 的失败路径断言能用
+/// `.expect_err(...)`（颜色轴 T3 的"未绑定表不注入"测试），不涉及 `stg-core` 唯一触碰面。
+#[derive(Debug)]
 pub struct CompiledEcl {
     pub image: EclImage,
     pub debug: Option<EclDebugSymbols>,
@@ -78,22 +83,42 @@ pub fn parse(src: &str, _file: &str) -> Result<Program, Vec<CompileError>> {
 /// 判型命名空间；脚本不得重声明同名 const。[`compile`] 默认注入 `stg_core::consts::ENGINE_CONSTS`，
 /// 调用方也可传 `&[]` 隔离（如本模块的调试侧载测试，测的是调试信息而非常量注入）。
 ///
-/// `content_hash`（C1 Task 4）原样盖入产出 `EclImage.content_hash`——本函数不解释它、不校验
-/// 它来自哪张表，只透传给 `codegen::generate`；语义焊点在 [`compile_for_table`]（外部裸调用
-/// 本函数的测试各自决定传什么，通常调试侧载测试传 `0` 表示"未绑定任何表"）。
+/// `table`（颜色轴 T3，取代此前的裸 `content_hash: u64` 参）——`Some(t)` 时
+/// `t.content_hash` 盖入产出 `EclImage.content_hash`，且额外注入表派生脚本常量
+/// `BULLET_COLOR_STRIDE`（`int`，值 = `t.color_stride`——名字是引擎级词汇，值来自绑定的
+/// 那张表，mod 表换成别的 stride 时脚本 `i % BULLET_COLOR_STRIDE` 自动正确）；`None` 时
+/// `content_hash` 取 `0`（"未绑定任何表"）且**不注入** `BULLET_COLOR_STRIDE`——脚本引用它
+/// 会得到"未知标识符"错误，而不是一个撒谎的默认值，这条不对称是有意的。`table` 本体也
+/// 原样存进判型阶段的 `Checker`（见 `typeck::check`），供后续依赖表内容的判据使用。
+/// 语义焊点在 [`compile_for_table`]。
 pub fn compile_with_options(
     src: &str,
     file: &str,
     options: CompileOptions,
     engine_consts: &[stg_core::consts::EngineConst],
-    content_hash: u64,
+    table: Option<&stg_core::tables::WorldTables>,
 ) -> Result<CompiledEcl, Vec<CompileError>> {
+    let content_hash = table.map_or(0, |t| t.content_hash);
+    // 表派生常量：名字是引擎级词汇（结构），值来自绑定的那张表（内容）。
+    // 未绑定表时不注入——脚本引用它会得到"未知标识符"，而不是一个撒谎的默认值。
+    let mut consts: Vec<stg_core::consts::EngineConst> = engine_consts
+        .iter()
+        .map(|c| stg_core::consts::EngineConst::new(c.name, c.ty, c.value))
+        .collect();
+    if let Some(t) = table {
+        consts.push(stg_core::consts::EngineConst::new(
+            "BULLET_COLOR_STRIDE",
+            stg_core::ecl::image::EclValueType::Int,
+            i32::from(t.color_stride),
+        ));
+    }
+
     let program = parse(src, file)?;
     if let Err(mut errors) = entryck::check(&program) {
         attach_src_lines(&mut errors, src);
         return Err(errors);
     }
-    let typed = match typeck::check(&program, engine_consts) {
+    let typed = match typeck::check(&program, &consts, table) {
         Ok(t) => t,
         Err(mut errors) => {
             attach_src_lines(&mut errors, src);
@@ -124,8 +149,9 @@ pub fn compile_with_options(
     Ok(CompiledEcl { image, debug })
 }
 
-/// 为指定表编译：注入引擎常量（①②）+ 盖 `table.content_hash` 进 `EclImage`（coherence 焊点）。
-/// v1 只取 `table.content_hash`（①② 常量仍来自 `consts::ENGINE_CONSTS`）；乙案将来从表读符号。
+/// 为指定表编译：注入引擎常量（①②）+ 表派生常量 `BULLET_COLOR_STRIDE` + 盖
+/// `table.content_hash` 进 `EclImage`（coherence 焊点）。①② 常量仍来自
+/// `consts::ENGINE_CONSTS`；乙案将来从表读符号。
 pub fn compile_for_table(
     src: &str,
     file: &str,
@@ -138,7 +164,7 @@ pub fn compile_for_table(
             debug_info: DebugInfo::None,
         },
         stg_core::consts::ENGINE_CONSTS,
-        table.content_hash,
+        Some(table),
     )
     .map(|ce| ce.image)
 }
@@ -330,7 +356,7 @@ mod tests {
                 debug_info: DebugInfo::None,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let full = compile_with_options(
@@ -340,7 +366,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         assert_eq!(none.image, full.image);
@@ -359,7 +385,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let debug = out.debug.unwrap();

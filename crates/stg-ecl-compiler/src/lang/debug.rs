@@ -275,7 +275,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         assert!(out.debug.is_some());
@@ -294,7 +294,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let dbg = out.debug.unwrap();
@@ -313,7 +313,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let dbg = out.debug.unwrap();
@@ -332,7 +332,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let dbg = out.debug.unwrap();
@@ -351,7 +351,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let dbg = out.debug.unwrap();
@@ -371,7 +371,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let dbg = out.debug.unwrap();
@@ -389,7 +389,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let dbg = out.debug.unwrap();
@@ -423,7 +423,7 @@ mod tests {
                 debug_info: DebugInfo::Full,
             },
             &[],
-            0,
+            None,
         )
         .unwrap();
         let dbg = out.debug.unwrap();

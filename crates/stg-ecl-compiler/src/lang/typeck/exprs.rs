@@ -14,7 +14,7 @@ enum RefKind {
     Sub,
 }
 
-impl<'p> Checker<'p> {
+impl<'p, 't> Checker<'p, 't> {
     pub(super) fn type_expr(&mut self, e: &Expr, locals: &LocalScope) -> Option<TypedExpr> {
         match e {
             Expr::IntLit(v) => Some(TypedExpr {

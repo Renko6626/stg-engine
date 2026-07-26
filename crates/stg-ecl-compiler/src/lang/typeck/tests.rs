@@ -11,15 +11,15 @@ fn prog(src: &str) -> Program {
 }
 
 fn ok(src: &str) -> TypedInfo {
-    check(&prog(src), &[]).unwrap_or_else(|e| panic!("判型失败：{e:?}\n源码：\n{src}"))
+    check(&prog(src), &[], None).unwrap_or_else(|e| panic!("判型失败：{e:?}\n源码：\n{src}"))
 }
 
 fn err(src: &str) -> Vec<CompileError> {
-    check(&prog(src), &[]).expect_err(&format!("期望判型失败，源码：\n{src}"))
+    check(&prog(src), &[], None).expect_err(&format!("期望判型失败，源码：\n{src}"))
 }
 
 fn check_with(src: &str, engine: &[EngineConst]) -> Result<TypedInfo, Vec<CompileError>> {
-    check(&prog(src), engine)
+    check(&prog(src), engine, None)
 }
 
 // ── C14 Task 3：引擎常量预填注入 ─────────────────────────────────────────────
@@ -1034,4 +1034,38 @@ fn emit_req_rawval_accepts_all_three_types_id_stays_int() {
         errs.iter().any(|e| e.msg.contains("第 1 个参数期待")),
         "id 位传 fx 应报参数类型错：{errs:?}"
     );
+}
+
+// ── 颜色轴（T3）：表派生常量 `BULLET_COLOR_STRIDE` ────────────────────────────
+//
+// 名字是引擎级词汇（结构），值来自绑定的那张表（内容）；不对称拍板：绑定表时注入，
+// 未绑定表（`None`）时不注入——脚本引用它应得到"未知标识符"，而不是一个撒谎的
+// 默认值（本节走完整 `compile`/`compile_with_options` 管线，不是裸 `typeck::check`，
+// 故用 `crate::lang::` 完整路径，不复用本文件顶部只喂 `typeck::check` 的 `ok`/`err`
+// 辅助函数）。
+
+/// 绑定表时注入表派生常量 `BULLET_COLOR_STRIDE`（值来自表，不是引擎硬编码）。
+#[test]
+fn bound_table_injects_color_stride_const() {
+    let src = "sub main() { var w: int = BULLET_COLOR_STRIDE; _ = w; }";
+    let img = crate::lang::compile(src, "t.ecl").expect("绑定内建表应能引用 stride 常量");
+    let _ = img;
+}
+
+/// 未绑定表（table = None）时不注入——脚本引用它应报"未知标识符"，
+/// 而不是悄悄拿到某个默认值。
+#[test]
+fn unbound_table_does_not_inject_color_stride() {
+    let src = "sub main() { var w: int = BULLET_COLOR_STRIDE; _ = w; }";
+    let errs = crate::lang::compile_with_options(
+        src,
+        "t.ecl",
+        crate::lang::CompileOptions {
+            debug_info: crate::lang::DebugInfo::None,
+        },
+        stg_core::consts::ENGINE_CONSTS,
+        None,
+    )
+    .expect_err("未绑定表不得注入 stride 常量");
+    assert!(!errs.is_empty());
 }
