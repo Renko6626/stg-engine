@@ -940,40 +940,142 @@ sub main() {
             None,
         )
         .expect_err("未绑定表时 set_color 无法确定色轴宽度，必须报错");
-        assert!(!errs.is_empty());
+        // 复审 M-4：只断言"有错误"抓不住"把'未绑表'改成别的硬错误"这类语义变更——
+        // 补断言措辞确实点名"色轴宽度"（codegen.rs 的 OpWithStride 分支报错原文），
+        // 而不是碰巧因为别的理由报错。
+        assert!(
+            errs.iter().any(|e| e.msg.contains("色轴宽度")),
+            "应点名'色轴宽度'：{errs:?}"
+        );
     }
 
-    /// mod 形态表：7 形 × 8 色。判据必须按**表自己的** stride 走，不是按内建的 16
-    /// （引擎里不许出现"每形 16 色"这个数）。
-    #[test]
-    fn mod_shaped_table_drives_checks_by_its_own_stride() {
-        let mut t = stg_core::tables::build_tables_v0();
-        t.color_stride = 8;
-        let rows: Vec<stg_core::tables::AppearanceCfg> = (0..7 * 8)
-            .map(|i| stg_core::tables::AppearanceCfg {
-                radius: stg_core::math::Fx::from_int(4),
-                sprite: i as u16,
-                valid: true,
-            })
-            .collect();
-        t.appearances = rows.into_boxed_slice();
-        t.content_hash = 0; // 未参与本测试
+    // ── 终审必修 I-1：一张非 16 宽的表串起全部四个 stride 消费者 ───────────────
+    //
+    // 现有测试全在 `TABLES_V0`（stride=16）上跑：`bound_table_injects_color_stride_const`
+    // （`typeck/tests.rs`）只断言"能编译"、从不断言值；两条
+    // `*_threads_bound_table_stride_into_args1_end_to_end`（`codegen.rs`）虽名为"穿线判别"，
+    // 但表是 16 宽，硬编码 16 与读表不可区分；此前唯一的 mod 形态表测试
+    // （`mod_shaped_table_drives_checks_by_its_own_stride`，已并入本模块）只走 `fire`，
+    // 不碰 `codegen.rs` `OpWithStride` 分支的穿线点。终审在隔离 worktree 里把
+    // `lang/mod.rs` 注入常量的值、`lang/codegen.rs` `OpWithStride` 写 `args[1]` 两处分别
+    // 换成字面量 `16`，`cargo test --workspace` 两次都绿——这个模块补的就是这份判别力：
+    // 一张 **8 宽**表（与 16 处处可辨，不是它的因数变体）串起"引擎里读 `color_stride` 的
+    // 地方"已知的全部四个消费点，任何一点悄悄换成字面量 `16` 都应该让本模块至少一条测试
+    // 变红；将来再长出第五个消费点、忘了接线，也该在这里补第五条，而不是另开一个模块。
+    mod mod_table_drives_every_stride_consumer {
+        use super::*;
 
-        // 色号 9 在 8 色表里越界（在内建 16 色表里合法——判别力所在）
-        let e = compile_for_table(
-            "sub main() { _ = fire(0, 9, 0fx, 0fx, 0fx, 0deg, none, none); }",
-            "t.ecl",
-            &t,
-        )
-        .expect_err("8 色表里色号 9 必须越界");
-        assert!(e.iter().any(|x| x.msg.contains("色号")), "实际: {e:?}");
+        /// 7 形 × 8 色的 mod 形态表：全表满色（`valid = true` 全铺），`color_stride = 8`。
+        fn mod_table() -> stg_core::tables::WorldTables {
+            let mut t = stg_core::tables::build_tables_v0();
+            t.color_stride = 8;
+            let rows: Vec<stg_core::tables::AppearanceCfg> = (0..7 * 8)
+                .map(|i| stg_core::tables::AppearanceCfg {
+                    radius: stg_core::math::Fx::from_int(4),
+                    sprite: i as u16, // identity
+                    valid: true,
+                })
+                .collect();
+            t.appearances = rows.into_boxed_slice();
+            t.content_hash = 0; // 未参与本模块任何测试
+            t
+        }
 
-        // 弹型 8（= 1 × stride）在 8 色表里合法
-        compile_for_table(
-            "sub main() { _ = fire(8, 1, 0fx, 0fx, 0fx, 0deg, none, none); }",
-            "t.ecl",
-            &t,
-        )
-        .expect("8 色表里弹型 8 是第 1 形，必须合法");
+        /// 消费者①（终审变异点 `lang/mod.rs:113`）：`compile_with_options` 注入的
+        /// `BULLET_COLOR_STRIDE` 常量值必须来自**这张表自己的** stride（8），不是硬编码
+        /// 的 16。若该行被换成字面量 16，脚本引用 `BULLET_COLOR_STRIDE` 折出来的字节码会
+        /// 是 `PUSHI 16`，本断言找不到 `PUSHI 8` 而红。
+        #[test]
+        fn injected_constant_reads_stride_from_the_table_not_16() {
+            let t = mod_table();
+            let img = compile_for_table(
+                "sub main() { var w: int = BULLET_COLOR_STRIDE; _ = w; }",
+                "t.ecl",
+                &t,
+            )
+            .expect("绑定 8 宽表应能编译");
+            assert!(
+                img.code()
+                    .windows(2)
+                    .any(|pair| pair == [OP_PUSHI as u32, 8]),
+                "BULLET_COLOR_STRIDE 应折成该表自己的 stride=8，不是硬编码 16：{:?}",
+                img.code()
+            );
+        }
+
+        /// 消费者②：`fire` 的形/色三判据（`lang::atlas::check_shape_color`）必须按表自己
+        /// 的 stride 走。色号 8 在 8 色表越界（在内建 16 色表合法）；弹型 8（=1×8）在 8
+        /// 色表合法（若误按 16 走会被判"不是 16 的倍数"而报错）——两个方向都验，防
+        /// "只挡该挡的"这种单向假绿。
+        #[test]
+        fn fire_checks_go_by_the_tables_own_stride_not_16() {
+            let t = mod_table();
+            let e = compile_for_table(
+                "sub main() { _ = fire(0, 8, 0fx, 0fx, 0fx, 0deg, none, none); }",
+                "t.ecl",
+                &t,
+            )
+            .expect_err("8 色表里色号 8 必须越界");
+            assert!(e.iter().any(|x| x.msg.contains("色号")), "实际: {e:?}");
+
+            compile_for_table(
+                "sub main() { _ = fire(8, 1, 0fx, 0fx, 0fx, 0deg, none, none); }",
+                "t.ecl",
+                &t,
+            )
+            .expect("8 色表里弹型 8 是第 1 形，必须合法");
+        }
+
+        /// 消费者③：`batch` 与 `fire` 共用同一套判据（`builtins::folds_shape_color`），但
+        /// 此前从没有一条 mod 表测试盯过 `batch` 这一侧——补上，同一对判别输入。
+        #[test]
+        fn batch_checks_go_by_the_tables_own_stride_not_16() {
+            let t = mod_table();
+            let e = compile_for_table(
+                "sub main() { _ = batch(0, 8, 0fx, 0fx, 1, 0deg, 0deg, 1, 0fx, 0fx); }",
+                "t.ecl",
+                &t,
+            )
+            .expect_err("8 色表里色号 8 必须越界");
+            assert!(e.iter().any(|x| x.msg.contains("色号")), "实际: {e:?}");
+
+            compile_for_table(
+                "sub main() { _ = batch(8, 1, 0fx, 0fx, 1, 0deg, 0deg, 1, 0fx, 0fx); }",
+                "t.ecl",
+                &t,
+            )
+            .expect("8 色表里弹型 8 是第 1 形，必须合法");
+        }
+
+        /// 消费者④（终审变异点 `lang/codegen.rs:316`）：`OpWithStride`（`set_shape`/
+        /// `set_color`）写进 `args[1]` 的值必须是绑定表自己的 stride——跑真 `World`：
+        /// `fire(8, 2, …)` 折叠出初始 sprite = 8+2=10（第 1 形第 2 色，8 色表下合法）；
+        /// `set_color(5)` 只应改色 → `(10 - 10%8) + 5 = 13`。若 `args[1]` 被写死成 16，
+        /// `10 % 16 == 10`，运行期会算成 `(10 - 10) + 5 = 5`（两者可辨：13 ≠ 5）。
+        #[test]
+        fn opwithstride_threads_the_tables_own_stride_into_args1_end_to_end() {
+            let t = mod_table();
+            let src = "xformdef X { set_color(5); }\n\
+                       sub main() {\n\
+                         _ = fire(8, 2, 0fx, 0fx, 0fx, 0deg, X, none);\n\
+                         wait(1000);\n\
+                       }";
+            let img = compile_for_table(src, "t.ecl", &t).expect("应编译成功");
+            let mut w = stg_core::step::World::new(1);
+            w.start_main(&img).expect("main 应能派生");
+            for f in 0..3 {
+                stg_core::step::step(&mut w, &t, &img, &stg_core::input::InputFrame::empty(f));
+            }
+            let view = w.body.view();
+            let p = view.bullets();
+            let i = p.iter_alive().next().expect("应有一颗弹");
+            assert_eq!(
+                p.sprite()[i],
+                13,
+                "set_color(5) 应按表自己的 stride=8 只改色 → (10-10%8)+5=13\
+                 （stride 若被写死成 16 会是 5，不会是 13）"
+            );
+            assert_eq!(view.diag().task_faults, 0);
+        }
     }
 }

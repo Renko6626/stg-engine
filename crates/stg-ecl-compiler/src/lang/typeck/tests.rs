@@ -1052,7 +1052,7 @@ fn bound_table_injects_color_stride_const() {
     let _ = img;
 }
 
-/// 未绑定表（table = None）时不注入——脚本引用它应报"未知标识符"，
+/// 未绑定表（table = None）时不注入——脚本引用它应报"未定义的变量"，
 /// 而不是悄悄拿到某个默认值。
 #[test]
 fn unbound_table_does_not_inject_color_stride() {
@@ -1067,5 +1067,12 @@ fn unbound_table_does_not_inject_color_stride() {
         None,
     )
     .expect_err("未绑定表不得注入 stride 常量");
-    assert!(!errs.is_empty());
+    // 复审 M-4：只断言"有错误"抓不住"把'未绑表'改成别的硬错误"这类语义变更——
+    // 补断言错误内容确实是"未定义标识符"（`BULLET_COLOR_STRIDE` 没被注入进常量表，
+    // 落到与任何未声明变量同样的判型路径），而不是碰巧因为别的理由报错。
+    assert!(
+        errs.iter()
+            .any(|e| e.msg.contains("未定义") && e.msg.contains("BULLET_COLOR_STRIDE")),
+        "应报'未定义'且点名 BULLET_COLOR_STRIDE：{errs:?}"
+    );
 }

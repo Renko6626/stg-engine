@@ -145,6 +145,14 @@ for shape in 0..12 {
 
 代价只是表字节：192 行 × 7B ≈ 1.3KB（全表约 840B → 约 2.1KB）。不值一提。
 
+**追记（T7，spec 之后的人类追加，2026-07-26）**：T7 给 `set_shape`/`set_color` 两个部分设
+在世界层各加了一个 op（`OP_SET_SHAPE`/`OP_SET_COLOR`，`world/transform.rs`），运行期确实
+拿 stride 把 sprite 拆回 `(形, 色)` 再只改一维——字面上正是本节否决的"拆位"。区别在于
+stride **不是引擎认识的常量**，而是编译器从绑定表读出、随槽数据（`args[1]`）传进来的
+参数，核心自己不持有表、不在创建热路径（`SYS_CREATE_BULLET`）拆位，只在这两个显式
+op 触发时才做一次取模/减法。上面第 2 条论据因此收窄为：**核心不持有表、创建路径仍是
+一次索引**；"完全不认识颜色"不再对这两个 op 成立，细节见 `docs/xform-ops.md`。
+
 ### 4.5 序列化与校验
 
 `to_bytes` / `from_bytes` 加 `color_stride`（2B）与逐行 `valid`（1B）。`content_hash` 必然

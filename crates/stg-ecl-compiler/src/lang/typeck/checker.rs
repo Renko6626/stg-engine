@@ -27,7 +27,7 @@ pub(super) struct Checker<'p, 't> {
     /// 绑定的世界表（`None` = 未绑定，跳过一切依赖表的判据）。消费者：
     /// `exprs::check_shape_color`（颜色轴 T4 的形/色三判据，阈值全从 `color_stride`
     /// 与 `appearances[].valid` 读）。
-    pub(crate) table: Option<&'t stg_core::tables::WorldTables>,
+    pub(super) table: Option<&'t stg_core::tables::WorldTables>,
 }
 
 impl<'p, 't> Checker<'p, 't> {

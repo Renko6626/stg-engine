@@ -96,8 +96,10 @@ fn narrow_slot(slot: usize) -> u8 {
 ///
 /// STEP 族物理双槽：第二槽是引擎 scratch，表层作者不可见——编译器自动补零槽（不补则
 /// 运行期 scratch 写入会覆写下一条 authored 槽，T3 复审 Important 的修法；区宽已由
-/// slots 趟经 `xform_map::physical_len` 按物理数计）。`Op` 与 `OpFold2` 两个分支都要走
-/// ——`physical_len` 对两者一视同仁地把 `physical` 计进区宽，只有一边补零就会重现那个坑。
+/// slots 趟经 `xform_map::physical_len` 按物理数计）。`Op`/`OpFold2`/`OpWithStride`
+/// 三个分支（T7 之后的调用点，见下方 `gen_xformdef_staging` 的三处 `push_scratch_slots`
+/// 调用）都要走——`physical_len` 对三者一视同仁地把 `physical` 计进区宽，漏补任何一边
+/// 就会重现那个坑。
 fn push_scratch_slots(built: &mut Vec<XformSlot>, physical: usize) {
     for _ in 1..physical {
         built.push(XformSlot::default());
