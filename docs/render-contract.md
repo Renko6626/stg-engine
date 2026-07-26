@@ -36,7 +36,8 @@ sprite 号 = 格号（行优先）；越界号 mod 回卷。QuadMesh 尺寸 = ce
 **bullets 层的二维布局（颜色轴刀，2026-07-26）**：`sprite 号 = 弹型 × color_stride + 颜色`，
 其中 `color_stride` 是 `WorldTables` 的字段（内建 = 16），**不是引擎常量**——mod 表可自定义
 列数。表索引 ≡ 图集格号 ≡ 池 `sprite` 值（identity），故 `set_sprite` 与 `fire` 写的是同一个
-数域。稀疏弹型（只做了 8 色/4 色）仍占满一整行，用不到的列是**空格**：表里 `valid = false`，
+数域。稀疏弹型（内建表如 `BULLET_HEART`/`BULLET_BUTTERFLY`，只做了低 12 色）仍占满一整行，
+用不到的列是**空格**：表里 `valid = false`，
 创建时被拒（编译期报错 / 运行期 Fault），绝不会造出"有判定但看不见"的弹。
 网格常量仍住 `playfield.gd`（进表是未来 mod 加载刀的事）。
 
