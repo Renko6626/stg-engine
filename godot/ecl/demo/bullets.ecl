@@ -1,33 +1,46 @@
 // demo 内容包的弹型/颜色词表——**引擎不注册这些名字**（mod 作者用自己的一份，
-// 地位对等；见 spec §5）。值 = 形号 × BULLET_COLOR_STRIDE / 色序号。
-// 图集布局见 docs/render-contract.md §3；空格见下方注释。
+// 地位对等；见 spec §5）。值 = 行号 × BULLET_COLOR_STRIDE / 列号。
+//
+// 图集：`godot/assets/bullets.png`（16 列 × 12 行 × 16px），由
+// `godot/tools/slice_bullet_sheet.gd` 从弹片切出；行序即下表顺序。
+// 半径住 `crates/stg-core/src/tables.rs` 的 SHAPE_RADIUS，改那里不用改这里。
+//
+// 12 行全满 16 色（切图工具逐格实测），**本图集没有空格**——所以任何一行都可以
+// 安全地轮转全色（`i % BULLET_COLOR_STRIDE`）。将来若补入有缺色的弹型，
+// 记得在 tables.rs 的掩码里标空格，并遵守"缺色留空、不压紧"的摆位纪律（spec §5.2）。
 
-const BULLET_RICE: int = 0;        // 米弹   r=3
-const BULLET_BALL_S: int = 16;     // 小玉   r=3
-const BULLET_BALL_M: int = 32;     // 中玉   r=4
-const BULLET_BALL_L: int = 48;     // 大玉   r=6
-const BULLET_SCALE: int = 64;      // 鳞弹   r=4
-const BULLET_KUNAI: int = 80;      // 苦无   r=4
-const BULLET_SHARD: int = 96;      // 碎片   r=3
-const BULLET_AMULET: int = 112;    // 札     r=5
-const BULLET_STAR: int = 128;      // 星弹   r=8
-const BULLET_HEART: int = 144;     // 心弹   r=6  ← 只做了低 12 色,高 4 色是空格
-const BULLET_BUTTERFLY: int = 160; // 蝶弹   r=6  ← 同上
-const BULLET_DROP: int = 176;      // 水滴   r=4
+// ── 弹型（行）────────────────────────────────────────────────────────────
+// 不带 BULLET_ 前缀：本表自己就有一个叫 `bullet` 的弹型，`BULLET_BULLET` 太丑。
+const LASER: int = 0;        // 激光条（竖条纹，接成一束激光用）  判定 r=3
+const ARROWHEAD: int = 16;   // 箭头                              r=4
+const OUTLINE: int = 32;     // 环（中空圆）                      r=4
+const BALL: int = 48;        // 玉（实心圆）                      r=5
+const RICE: int = 64;        // 米弹（细长粒）                    r=2
+const KUNAI: int = 80;       // 苦无                              r=3
+const SHARD: int = 96;       // 碎片（细菱）                      r=2
+const AMULET: int = 112;     // 札                                r=5
+const BULLET: int = 128;     // 弹丸（胶囊形）                    r=3
+const BACTERIA: int = 144;   // 菌形（带暗心的椭圆）              r=3
+const STAR: int = 160;       // 星                                r=4
+const LASERHEAD: int = 176;  // 激光头（激光束端头的圆帽）        r=5
 
-const COLOR_RED: int = 0;
-const COLOR_ORANGE: int = 1;
-const COLOR_YELLOW: int = 2;
-const COLOR_CHARTREUSE: int = 3;
-const COLOR_GREEN: int = 4;
-const COLOR_SPRING: int = 5;
-const COLOR_CYAN: int = 6;
-const COLOR_AZURE: int = 7;
-const COLOR_BLUE: int = 8;
-const COLOR_VIOLET: int = 9;
-const COLOR_MAGENTA: int = 10;
-const COLOR_ROSE: int = 11;
-const COLOR_WHITE: int = 12;       // ← HEART/BUTTERFLY 从这里开始是空格
-const COLOR_GRAY: int = 13;
-const COLOR_BLACK: int = 14;
-const COLOR_GOLD: int = 15;
+// ── 颜色（列）────────────────────────────────────────────────────────────
+// 原作是「暗/亮成对」的排法：1/2 红、3/4 品红、5/6 蓝、7/8 青、9/10 绿各为一对
+// （前暗后亮）；11..14 是黄绿→黄→橙的色相梯度；两端 0/15 是灰与白。
+// 名字按逐列实测色相取，改名只需改本文件。
+const COLOR_GRAY: int = 0;
+const COLOR_RED_DARK: int = 1;
+const COLOR_RED: int = 2;
+const COLOR_MAGENTA_DARK: int = 3;
+const COLOR_MAGENTA: int = 4;
+const COLOR_BLUE_DARK: int = 5;
+const COLOR_BLUE: int = 6;
+const COLOR_CYAN_DARK: int = 7;
+const COLOR_CYAN: int = 8;
+const COLOR_GREEN_DARK: int = 9;
+const COLOR_GREEN: int = 10;
+const COLOR_LIME: int = 11;
+const COLOR_YELLOW_GREEN: int = 12;
+const COLOR_YELLOW: int = 13;
+const COLOR_ORANGE: int = 14;
+const COLOR_WHITE: int = 15;

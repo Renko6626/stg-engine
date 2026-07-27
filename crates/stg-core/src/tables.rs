@@ -206,15 +206,21 @@ pub fn build_tables_v0() -> WorldTables {
     };
 
     // ── 内建内容包的弹型数据（**不是引擎结构常量**：mod 表自带自己的一份）──────
-    // 12 形 × 16 色的整齐矩形。稀疏弹型（HEART/BUTTERFLY）仍占满 16 列，
-    // 用不到的列由掩码标成空格，寻址因此保持 `形 × stride + 色`（spec §5.2）。
+    // 12 形 × 16 色的整齐矩形，行序 = 图集行序，与三处同源：
+    //   godot/assets/bullets.png（由 tools/slice_bullet_sheet.gd 从弹片切出）
+    //   godot/ecl/demo/bullets.ecl（内容包词表：LASER/ARROWHEAD/…/LASERHEAD）
+    //   docs/render-contract.md §3
+    //
+    // 半径是**世界判定半径**，与贴图占多少像素是两个独立的量：下表按切图工具实测的
+    // 逐行不透明包围盒定档（窄边 9px 的细弹给 2-3，占满 16px 的圆/星给 4-5），
+    // 整体沿用东方"判定明显小于观感"的口径。这是玩法旋钮，随手感调，改它不影响图集。
     const BUILTIN_COLOR_STRIDE: u16 = 16;
-    const SHAPE_RADIUS: [i32; 12] = [3, 3, 4, 6, 4, 4, 3, 5, 8, 6, 6, 4];
-    //  第 9/10 形（HEART/BUTTERFLY）只做了低 12 色，高 4 色留空格
-    const SHAPE_COLOR_MASK: [u16; 12] = [
-        0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0FFF, 0x0FFF,
-        0xFFFF,
-    ];
+    //                                   laser arrow outln ball rice kuna shrd amlt bllt bact star lhead
+    const SHAPE_RADIUS: [i32; 12] = [3, 4, 4, 5, 2, 3, 2, 5, 3, 3, 4, 5];
+    //  12 行全满 16 色（切图工具逐格实测，掩码恒 0xFFFF）——本图集没有空格。
+    //  空格机制本身仍在（`valid` 字段 + 编译期/运行期两道闸），只是内建表用不上它；
+    //  它的判别式测试改挂在合成表上，见 tables.rs / syscall.rs / lang 各处的空格测试。
+    const SHAPE_COLOR_MASK: [u16; 12] = [0xFFFF; 12];
 
     let stride = BUILTIN_COLOR_STRIDE as usize;
     let mut appearances = Vec::with_capacity(SHAPE_RADIUS.len() * stride);
@@ -798,8 +804,10 @@ mod tests {
             );
         }
 
-        // 逐形半径钉死（判别腿：SHAPE_RADIUS 错序即红）
-        let expect = [3, 3, 4, 6, 4, 4, 3, 5, 8, 6, 6, 4];
+        // 逐形半径钉死（判别腿：SHAPE_RADIUS 错序即红）。
+        // 行序 = 图集行序：laser/arrowhead/outline/ball/rice/kunai/shard/amulet/
+        //                  bullet/bacteria/star/laserhead
+        let expect = [3, 4, 4, 5, 2, 3, 2, 5, 3, 3, 4, 5];
         for (shape, &r) in expect.iter().enumerate() {
             for color in 0..16usize {
                 assert_eq!(
@@ -810,17 +818,14 @@ mod tests {
             }
         }
 
-        // 空格掩码：HEART(9)/BUTTERFLY(10) 高 4 色为空格，其余全有图
-        for shape in 0..12usize {
-            for color in 0..16usize {
-                let want = !matches!(shape, 9 | 10) || color < 12;
-                assert_eq!(
-                    t.appearances[shape * 16 + color].valid,
-                    want,
-                    "形 {shape} 色 {color} 的 valid 与掩码不符"
-                );
-            }
-        }
+        // 本图集 12 行全满 16 色（切图工具逐格实测），无空格。
+        // 空格机制本身的判别式测试挂在**合成表**上（见本模块
+        // `blank_cell_survives_bytes_roundtrip` 与 `ecl::syscall` / `lang` 各处），
+        // 不靠内建表提供靶子——数据要如实反映美术。
+        assert!(
+            t.appearances.iter().all(|a| a.valid),
+            "当前图集没有空格格；若换了有缺色的美术，请连同 SHAPE_COLOR_MASK 一起更新本断言"
+        );
     }
 
     /// validate 新三条：stride 非零 / 行数是 stride 整数倍 / 每形第 0 色必须有图。
@@ -866,10 +871,25 @@ mod tests {
             assert_eq!(a.sprite, b.sprite, "第 {i} 行 sprite 未往返");
             assert_eq!(a.radius, b.radius, "第 {i} 行 radius 未往返");
         }
-        // 空格行确实存在（否则本测试对 valid 无判别力）
+        // 上面那趟只证明"全 true 原样往返"——对 `valid` 几乎没有判别力（当前图集
+        // 12 行全满，无空格）。补一趟**合成空格表**：把某一格标成空格再往返，
+        // 断言它没有在序列化里被悄悄抹平成 true。判别力所在：若 `to_bytes`/
+        // `from_bytes` 漏掉 valid 字段，这一条立刻红，而上面那趟仍会绿。
+        let mut holed = build_tables_v0();
+        let mut rows = holed.appearances.to_vec();
+        let hole = 3 * 16 + 7; // 任取一格（第 3 形第 7 色）
+        rows[hole].valid = false;
+        holed.appearances = rows.into_boxed_slice();
+
+        let back2 = WorldTables::from_bytes(&holed.to_bytes()).expect("合成空格表往返必须成功");
         assert!(
-            back.appearances.iter().any(|a| !a.valid),
-            "内建表必须含空格行"
+            !back2.appearances[hole].valid,
+            "空格标记未往返（被抹成 true）"
+        );
+        assert_eq!(
+            back2.appearances.iter().filter(|a| !a.valid).count(),
+            1,
+            "只应有这一格是空格——多出来说明往返把别的格也弄坏了"
         );
     }
 

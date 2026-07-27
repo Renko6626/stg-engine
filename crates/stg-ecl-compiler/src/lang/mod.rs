@@ -210,6 +210,26 @@ mod tests {
     }
 
     /// 同上，只取错误正文（形/色三判据的断言口径：按措辞关键词判别哪一条判据开了火）。
+    /// 内建图集(真美术)没有空格——空格类端到端测试挂在合成表上（见 atlas.rs 同款注释）。
+    /// `HOLED_SHAPE`/`HOLED_COLOR` = 被挖空那一格的两个坐标。
+    const HOLED_SHAPE: i32 = 3 * 16;
+    const HOLED_COLOR: i32 = 7;
+    fn holed_table() -> stg_core::tables::WorldTables {
+        let mut t = stg_core::tables::build_tables_v0();
+        let mut rows = t.appearances.to_vec();
+        rows[(HOLED_SHAPE + HOLED_COLOR) as usize].valid = false;
+        t.appearances = rows.into_boxed_slice();
+        t
+    }
+
+    fn compile_err_msgs_for(src: &str, t: &stg_core::tables::WorldTables) -> Vec<String> {
+        compile_for_table(src, "t.ecl", t)
+            .expect_err("应当编译失败")
+            .into_iter()
+            .map(|e| e.msg)
+            .collect()
+    }
+
     fn compile_err_msgs(src: &str) -> Vec<String> {
         expect_compile_err(src, "t.ecl")
             .into_iter()
@@ -702,9 +722,16 @@ sub main() {
     /// 判据③：图集空格——本刀最有价值的一道闸（隐形弹）。
     #[test]
     fn blank_atlas_cell_is_compile_error() {
-        // 第 9 形（掩码 0x0FFF）第 12 色 = 空格
-        let msgs =
-            compile_err_msgs("sub main() { _ = fire(144, 12, 0fx, 0fx, 0fx, 0deg, none, none); }");
+        // 判别前提：同一格在内建表里合法（编得过），只有合成表里是空格
+        compile(
+            "sub main() { _ = fire(48, 7, 0fx, 0fx, 0fx, 0deg, none, none); }",
+            "t.ecl",
+        )
+        .expect("内建表里这一格是合法的");
+        let msgs = compile_err_msgs_for(
+            "sub main() { _ = fire(48, 7, 0fx, 0fx, 0fx, 0deg, none, none); }",
+            &holed_table(),
+        );
         assert!(msgs.iter().any(|m| m.contains("空格")), "实际: {msgs:?}");
     }
 
@@ -729,8 +756,9 @@ sub main() {
     /// `batch` 与 `fire` 同一套判据（别只改一边）。
     #[test]
     fn batch_shares_the_same_shape_color_checks() {
-        let msgs = compile_err_msgs(
-            "sub main() { _ = batch(144, 12, 0fx, 0fx, 1, 0deg, 0deg, 1, 0fx, 0fx); }",
+        let msgs = compile_err_msgs_for(
+            "sub main() { _ = batch(48, 7, 0fx, 0fx, 1, 0deg, 0deg, 1, 0fx, 0fx); }",
+            &holed_table(),
         );
         assert!(msgs.iter().any(|m| m.contains("空格")), "实际: {msgs:?}");
     }
@@ -843,9 +871,10 @@ sub main() {
     /// 空格：`set_sprite(144, 12)` = 第 9 形第 12 色（掩码 0x0FFF）——本刀最有价值的闸。
     #[test]
     fn set_sprite_blank_atlas_cell_is_compile_error() {
-        let msgs = compile_err_msgs(
-            "xformdef X { set_sprite(144, 12); }\n\
+        let msgs = compile_err_msgs_for(
+            "xformdef X { set_sprite(48, 7); }\n\
              sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, X, none); }",
+            &holed_table(),
         );
         assert!(msgs.iter().any(|m| m.contains("空格")), "实际: {msgs:?}");
     }

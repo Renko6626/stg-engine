@@ -8,7 +8,7 @@ async sub zako_dive() {
     move_to(90, $self_x, 140.0fx, 2);
     wait(90);
     for i in 0..3 {
-        _ = fire(BULLET_BALL_S, COLOR_AZURE, $self_x, $self_y, 1.8fx, aim_player(), none, none);
+        _ = fire(OUTLINE, COLOR_CYAN_DARK, $self_x, $self_y, 1.8fx, aim_player(), none, none);
         wait(25);
     }
     move_to(150, $self_x, 760.0fx, 1);

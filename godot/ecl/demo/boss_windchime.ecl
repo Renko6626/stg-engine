@@ -24,16 +24,16 @@ async sub windchime_pattern() {
         var step_i: int = 65536 / ways;
         var astep: angle = step_i as angle;
         for i in 0..5 {
-            // 弹型钉死、颜色逐环轮转。BULLET_RICE 是满色形,轮转全色安全;稀疏形
+            // 弹型钉死、颜色逐环轮转。RICE 是满色形,轮转全色安全;稀疏形
             // (HEART/BUTTERFLY 高 4 色是图集空格)不能这么轮。
             var color: int = i % BULLET_COLOR_STRIDE;
             var speed: fx = 1.0fx + i as fx * 0.25fx;
-            _ = batch(BULLET_RICE, color, $self_x, $self_y, ways, base, astep, 1, speed, 0fx);
+            _ = batch(RICE, color, $self_x, $self_y, ways, base, astep, 1, speed, 0fx);
         }
         if volley % 2 == 0 {
             for k in 0..16 {
                 var ka: angle = (k * 4096) as angle;
-                _ = fire(BULLET_BALL_M, COLOR_CYAN, $self_x, $self_y, 0fx, ka, WIND_CHIME, none);
+                _ = fire(BALL, COLOR_CYAN, $self_x, $self_y, 0fx, ka, WIND_CHIME, none);
             }
         }
         base = base + 7deg;
@@ -48,9 +48,9 @@ async sub boss_main() {
     var t: int = 0;
     while t < 600 {
         boss_set(0, $self_hp as fx / $self_hp_max as fx, 0, 0, 2, 1);
-        _ = fire(BULLET_BALL_S, COLOR_ROSE, $self_x, $self_y, 2.0fx, aim_player(), none, none);
-        _ = fire(BULLET_BALL_S, COLOR_ROSE, $self_x, $self_y, 2.0fx, aim_player() + 12deg, none, none);
-        _ = fire(BULLET_BALL_S, COLOR_ROSE, $self_x, $self_y, 2.0fx, aim_player() - 12deg, none, none);
+        _ = fire(OUTLINE, COLOR_MAGENTA, $self_x, $self_y, 2.0fx, aim_player(), none, none);
+        _ = fire(OUTLINE, COLOR_MAGENTA, $self_x, $self_y, 2.0fx, aim_player() + 12deg, none, none);
+        _ = fire(OUTLINE, COLOR_MAGENTA, $self_x, $self_y, 2.0fx, aim_player() - 12deg, none, none);
         wait(20);
         t = t + 20;
     }

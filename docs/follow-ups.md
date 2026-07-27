@@ -521,8 +521,9 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 相同）。详见 `docs/ecl-lang.md`"引擎常量"节、
 `docs/superpowers/specs/2026-07-21-ecl-const-injection-design.md`。**追注（颜色轴刀，
 2026-07-26）**：`APPEARANCE_MEDIUM` 一类 ② 段符号已随颜色轴刀退场——`fire`/`batch`
-现收两参（`shape`/`color`），`rainbow.ecl` 已改写成 `fire(BULLET_BALL_M, COLOR_CYAN, ...)`
-这类调用，`BULLET_BALL_M`/`COLOR_CYAN` 是脚本自己用 `const` 声明的内容包词汇，不再是
+现收两参（`shape`/`color`），`rainbow.ecl` 已改写成 `fire(OUTLINE, COLOR_CYAN, ...)`
+这类调用，`OUTLINE`/`COLOR_CYAN` 是脚本自己用 `const` 声明的内容包词汇（真美术接入后
+词表已换成 LASER/ARROWHEAD/OUTLINE/BALL/… 十二行，见 `godot/ecl/demo/bullets.ecl`），不再是
 Rust 侧注入的引擎常量；上面这句"去魔数示范"描述的是它当时（2026-07-21）的写法，读到本条
 时若查 `consts.rs` 找不到 `APPEARANCE_MEDIUM`，不是回归，是这条追注记录的迁移。
 
