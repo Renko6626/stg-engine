@@ -25,27 +25,26 @@ const STAR: int = 160;       // 星                                r=4
 const LASERHEAD: int = 176;  // 激光头（激光束端头的圆帽）        r=5
 
 // ── 颜色（列）────────────────────────────────────────────────────────────
-// 逐列实测（色相/明度）后的实际结构，**不是**整齐的"暗/亮成对"：
-//   真正的暗/亮对只有三组：1/2 红、7/8 青、9/10 绿（同色相、后者更亮）。
-//   3/4 是**色相差**（291°/303°），明度几乎相同——所以不叫 MAGENTA_DARK/MAGENTA。
-//   5/6 色相与明度同时变（249°/233°），是靛→蓝。
-//   11..14 是一条色相梯度：黄绿 95° → 73° → 黄 60° → 橙 41°，不是明暗对。
-//   两端 0/15 是灰与白。
-// 注：本图集的色序与 Danmakufu 默认弹片（RED=1/ORANGE=2/YELLOW=3… 彩虹递增）**不同**，
-// 那套常量不能按索引套过来。名字按实测色相取，改名只需改本文件。
-const COLOR_GRAY: int = 0;
-const COLOR_RED_DARK: int = 1;    // 0°  暗
-const COLOR_RED: int = 2;         // 0°  亮
-const COLOR_PURPLE: int = 3;      // 291°
-const COLOR_MAGENTA: int = 4;     // 303°
-const COLOR_INDIGO: int = 5;      // 249°
-const COLOR_BLUE: int = 6;        // 233°
-const COLOR_CYAN_DARK: int = 7;   // 182° 暗
-const COLOR_CYAN: int = 8;        // 184° 亮
-const COLOR_GREEN_DARK: int = 9;  // 142° 暗
-const COLOR_GREEN: int = 10;      // 146° 亮
-const COLOR_CHARTREUSE: int = 11; //  95°
-const COLOR_YELLOW_GREEN: int = 12; // 73°
-const COLOR_YELLOW: int = 13;     //  60°
-const COLOR_ORANGE: int = 14;     //  41°
+// 结构（全 12 行中位色相实测）：灰 → 五组**暗/亮对**（红·品红·蓝·青·绿，同色相、
+// 后者更亮，色相差 ≤3°）→ 四级暖色梯度（黄绿 91° → 65° → 黄 60° → 橙 40°，是色相
+// 差不是明暗对）→ 白。名字取标准 CSS/X11 色名。
+//
+// 已知特例：kunai 行（第 5 行）的第 15 格带红味，不是白——单格特例，不影响色名口径。
+// 注：本图集色序与 Danmakufu 默认弹片（RED=1/ORANGE=2/YELLOW=3… 彩虹递增）**不同**，
+// 那套社区常量不能按索引套过来。改名只需改本文件。
+const COLOR_GRAY: int = 0;            // (164,164,164) 无彩
+const COLOR_DARK_RED: int = 1;        // 0°   暗
+const COLOR_RED: int = 2;             // 0°   亮
+const COLOR_DARK_MAGENTA: int = 3;    // 299° 暗
+const COLOR_MAGENTA: int = 4;         // 300° 亮
+const COLOR_DARK_BLUE: int = 5;       // 240° 暗
+const COLOR_BLUE: int = 6;            // 238° 亮
+const COLOR_DARK_CYAN: int = 7;       // 186° 暗
+const COLOR_CYAN: int = 8;            // 185° 亮
+const COLOR_DARK_GREEN: int = 9;      // 141° 暗
+const COLOR_GREEN: int = 10;          // 144° 亮
+const COLOR_CHARTREUSE: int = 11;     //  91°
+const COLOR_YELLOW_GREEN: int = 12;   //  65°
+const COLOR_YELLOW: int = 13;         //  60°
+const COLOR_ORANGE: int = 14;         //  40°
 const COLOR_WHITE: int = 15;
