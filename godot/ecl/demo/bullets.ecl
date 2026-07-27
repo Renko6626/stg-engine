@@ -25,7 +25,7 @@ const STAR: int = 160;       // 星                                r=4
 const LASERHEAD: int = 176;  // 激光头（激光束端头的圆帽）        r=5
 
 // ── 颜色（列）────────────────────────────────────────────────────────────
-// 结构（全 12 行中位色相实测）：灰 → 五组**暗/亮对**（红·品红·蓝·青·绿，同色相、
+// 结构（全 12 行中位色相实测）：灰 → 五组**暗/亮对**（红·粉·蓝·青·绿，同色相、
 // 后者更亮，色相差 ≤3°）→ 四级暖色梯度（黄绿 91° → 65° → 黄 60° → 橙 40°，是色相
 // 差不是明暗对）→ 白。名字取标准 CSS/X11 色名。
 //
@@ -35,8 +35,8 @@ const LASERHEAD: int = 176;  // 激光头（激光束端头的圆帽）        r
 const COLOR_GRAY: int = 0;            // (164,164,164) 无彩
 const COLOR_DARK_RED: int = 1;        // 0°   暗
 const COLOR_RED: int = 2;             // 0°   亮
-const COLOR_DARK_MAGENTA: int = 3;    // 299° 暗
-const COLOR_MAGENTA: int = 4;         // 300° 亮
+const COLOR_DARK_PINK: int = 3;       // 299° 暗
+const COLOR_PINK: int = 4;            // 300° 亮
 const COLOR_DARK_BLUE: int = 5;       // 240° 暗
 const COLOR_BLUE: int = 6;            // 238° 亮
 const COLOR_DARK_CYAN: int = 7;       // 186° 暗

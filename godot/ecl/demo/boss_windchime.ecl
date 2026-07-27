@@ -48,9 +48,9 @@ async sub boss_main() {
     var t: int = 0;
     while t < 600 {
         boss_set(0, $self_hp as fx / $self_hp_max as fx, 0, 0, 2, 1);
-        _ = fire(OUTLINE, COLOR_MAGENTA, $self_x, $self_y, 2.0fx, aim_player(), none, none);
-        _ = fire(OUTLINE, COLOR_MAGENTA, $self_x, $self_y, 2.0fx, aim_player() + 12deg, none, none);
-        _ = fire(OUTLINE, COLOR_MAGENTA, $self_x, $self_y, 2.0fx, aim_player() - 12deg, none, none);
+        _ = fire(OUTLINE, COLOR_PINK, $self_x, $self_y, 2.0fx, aim_player(), none, none);
+        _ = fire(OUTLINE, COLOR_PINK, $self_x, $self_y, 2.0fx, aim_player() + 12deg, none, none);
+        _ = fire(OUTLINE, COLOR_PINK, $self_x, $self_y, 2.0fx, aim_player() - 12deg, none, none);
         wait(20);
         t = t + 20;
     }
