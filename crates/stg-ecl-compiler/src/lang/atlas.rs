@@ -142,6 +142,17 @@ mod tests {
         check_shape_color(&TABLES_V0, "fire", shape, color).expect_err("应被判据否决")
     }
 
+    /// 内建图集(真美术)12 行全满 16 色、**没有空格**——空格判据的靶子由本合成表提供
+    /// (只把某一格标成空格,其余与内建表逐位相同)。数据如实反映美术,不为测试造假。
+    const HOLE: i32 = 3 * 16 + 7;
+    fn holed_table() -> stg_core::tables::WorldTables {
+        let mut t = stg_core::tables::build_tables_v0();
+        let mut rows = t.appearances.to_vec();
+        rows[HOLE as usize].valid = false;
+        t.appearances = rows.into_boxed_slice();
+        t
+    }
+
     #[test]
     fn accepts_a_valid_cell() {
         assert_eq!(check_shape_color(&TABLES_V0, "fire", 16, 3), Ok(()));
@@ -168,7 +179,10 @@ mod tests {
 
     #[test]
     fn blank_atlas_cell_is_rejected() {
-        let e = err_of(144, 12); // 第 9 形（掩码 0x0FFF）第 12 色
+        let t = holed_table();
+        // 判别前提：同一格在内建表里是合法的，只有合成表里才是空格
+        assert!(check_shape_color(&TABLES_V0, "fire", HOLE - 7, 7).is_ok());
+        let e = check_shape_color(&t, "fire", HOLE - 7, 7).expect_err("空格必须被判据否决");
         assert_eq!(e.blame, Blame::Color);
         assert!(e.msg.contains("空格"), "实际: {}", e.msg);
     }

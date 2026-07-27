@@ -907,6 +907,19 @@ mod tests {
         no: u16,
         args: &[i32],
     ) -> Result<(), u8> {
+        call_with_tables(w, ecl, task, no, args, &TABLES_V0)
+    }
+
+    /// 绑定**指定表**的 `call`——空格判据一类"内建表提供不了靶子"的测试用它挂合成表
+    /// （当前图集 12 行全满 16 色，没有空格；数据如实反映美术，不为测试在内建表里造假）。
+    fn call_with_tables(
+        w: &mut World,
+        ecl: &EclImage,
+        task: &mut Task,
+        no: u16,
+        args: &[i32],
+        tables: &crate::tables::WorldTables,
+    ) -> Result<(), u8> {
         for &a in args {
             task.stack[task.sp as usize] = a;
             task.sp += 1;
@@ -919,11 +932,20 @@ mod tests {
             tasks: &mut w.tasks,
             ecl,
             body: &mut w.body,
-            tables: &TABLES_V0,
+            tables,
             self_index: 0,
             frame,
         };
         dispatch(no, task, &mut ctx)
+    }
+
+    /// 合成一张"某格是空格"的表（其余与内建表逐位相同）。
+    fn tables_with_hole(hole: usize) -> crate::tables::WorldTables {
+        let mut t = crate::tables::build_tables_v0();
+        let mut rows = t.appearances.to_vec();
+        rows[hole].valid = false;
+        t.appearances = rows.into_boxed_slice();
+        t
     }
 
     fn fresh() -> (Box<World>, EclImage) {
@@ -1243,15 +1265,16 @@ mod tests {
     /// 这是"隐形弹"（有判定无图像）的运行期闸；编译期同款判据见 lang::typeck。
     #[test]
     fn sys_create_bullet_blank_cell_faults_without_creating() {
-        const BLANK: i32 = 9 * 16 + 12; // 第 9 形（掩码 0x0FFF）的第一个空格
+        const BLANK: i32 = 3 * 16 + 7; // 合成表里挖的那一格
+        let holed = tables_with_hole(BLANK as usize);
         assert!(
-            !TABLES_V0.appearances[BLANK as usize].valid,
-            "前提：{BLANK} 必须是空格行，否则本测试无判别力"
+            !holed.appearances[BLANK as usize].valid && TABLES_V0.appearances[BLANK as usize].valid,
+            "前提：{BLANK} 在合成表里是空格、在内建表里不是——否则本测试无判别力"
         );
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
         let args = [BLANK, 0, 0, 0, 0, 0, 0, -1];
-        let r = call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args);
+        let r = call_with_tables(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args, &holed);
         assert_eq!(r, Err(FAULT_BAD_OP), "空格 appearance 必须 Fault");
         assert_eq!(
             w.body.bullets.iter_alive().count(),
@@ -1427,16 +1450,20 @@ mod tests {
     /// （先验后建）；编译期同款判据见 lang::typeck。
     #[test]
     fn sys_create_bullets_batch_blank_cell_faults_without_creating() {
-        const BLANK: i32 = 9 * 16 + 12; // 第 9 形（掩码 0x0FFF）的第一个空格
-        assert!(
-            !TABLES_V0.appearances[BLANK as usize].valid,
-            "前提：{BLANK} 必须是空格行，否则本测试无判别力"
-        );
+        const BLANK: i32 = 3 * 16 + 7; // 同上,合成表
+        let holed = tables_with_hole(BLANK as usize);
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
         // 正序：appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step
         let args = [BLANK, 0, 0, 4, 0, 4096, 1, Fx::from_int(1).raw(), 0];
-        let r = call(&mut w, &ecl, &mut task, SYS_CREATE_BULLETS_BATCH, &args);
+        let r = call_with_tables(
+            &mut w,
+            &ecl,
+            &mut task,
+            SYS_CREATE_BULLETS_BATCH,
+            &args,
+            &holed,
+        );
         assert_eq!(r, Err(FAULT_BAD_OP), "空格 appearance 必须 Fault");
         assert_eq!(
             w.body.bullets.iter_alive().count(),

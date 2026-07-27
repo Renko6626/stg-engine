@@ -50,7 +50,7 @@
 
 ```ecl
 const SPELL_WINDCHIME: int = 1;
-const BULLET_RICE: int = 0; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const RICE: int = 64; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
 
 xformdef WIND_CHIME { set_speed(2.0fx); @30 turn(90deg); }
 
@@ -66,7 +66,7 @@ async sub windchime_pattern() {
     loop {
         var ways: int = 28 + global(GVAR_RANK) * 2;
         for i in 0..5 {
-            _ = batch(BULLET_RICE, i % BULLET_COLOR_STRIDE,
+            _ = batch(RICE, i % BULLET_COLOR_STRIDE,
                       $self_x, $self_y, ways, base, 0deg, 1,
                       1.0fx + i as fx * 0.25fx, 0fx);
         }
@@ -198,7 +198,7 @@ after:`。正常流程（从头开局，或本次中段启动的落点不是这�
 编译器在编译期解析名称并编码为 `canonical SubId`（运行时 `EclImage` 无字符串表，
 只有 `(SubId, code_entry)` 的扁平元数据）。这意味着：
 - `spawn patrol()` 在编译期解析 `patrol` 到其 `SubId`，存入 `SPAWN` 指令的操作数。
-- `fire(BULLET_RICE, COLOR_RED, $self_x, $self_y, 0fx, 0deg, WIND_CHIME, trail_task)`
+- `fire(RICE, COLOR_RED, $self_x, $self_y, 0fx, 0deg, WIND_CHIME, trail_task)`
   同理——`trail_task` 作为
   `async sub` 的名称在编译期被解析并编码。
 - **不存在的 sub 名称在编译期即报错**，不存在运行期"名字未找到"的分支。
@@ -511,11 +511,11 @@ xformdef ARC_SHOT {
     set_life(180);
 }
 
-const BULLET_BALL_S: int = 16; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
-const COLOR_AZURE: int = 7;
+const BALL: int = 48; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const COLOR_CYAN: int = 7;
 
 sub main() {
-    _ = fire(BULLET_BALL_S, COLOR_AZURE, 0fx, 0fx, 1.0fx, 0deg, ARC_SHOT, none);
+    _ = fire(BALL, COLOR_CYAN, 0fx, 0fx, 1.0fx, 0deg, ARC_SHOT, none);
 }
 ```
 
@@ -538,15 +538,15 @@ sub main() {
 ```ecl
 xformdef SWAP_LOOK {
     set_color(COLOR_BLUE);        // 保形：不管当前是什么形，只把颜色换成蓝
-    @10 set_shape(BULLET_BALL_L); // 保色：不管当前是什么色，只把形状换成大玉
+    @10 set_shape(BALL); // 保色：不管当前是什么色，只把形状换成大玉
 }
 
-const BULLET_BALL_M: int = 32; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
-const BULLET_BALL_L: int = 48;
+const OUTLINE: int = 32; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const BALL: int = 48;
 const COLOR_BLUE: int = 8;
 
 sub main() {
-    _ = fire(BULLET_BALL_M, COLOR_BLUE, 0fx, 0fx, 1.0fx, 0deg, SWAP_LOOK, none);
+    _ = fire(OUTLINE, COLOR_BLUE, 0fx, 0fx, 1.0fx, 0deg, SWAP_LOOK, none);
     wait(60);
 }
 ```
@@ -557,9 +557,9 @@ sub main() {
 原因是部分设只改一维，落点还取决于弹**当时的另一维**——这是运行期状态（可能来自 `fire`
 给的初始外观，也可能来自之前执行过的另一次部分设），编译期看不到那个值，做不了跨维校验。
 曾提议一条"跨形状安全"判据（`set_color(c)` 要求 `c` 在图集里所有弹型上都有图）被**人类
-裁定否决**：图集里只要存在一两个稀疏弹型（内建 demo 词表的 `BULLET_HEART`/
-`BULLET_BUTTERFLY`，第 12..15 色是空格），这条判据就会把 12..15 号色在**所有**弹型上
-一起禁掉，代价远大于收益。**结论**：落到空格 = 该弹变透明，这是设计允许的降级路径，
+裁定否决**：图集里只要存在一两个稀疏弹型（某行缺几个色），这条判据就会把那几号色在
+**所有**弹型上一起禁掉，代价远大于收益。（当前内建图集 12 行全满 16 色、没有空格，
+但这条裁定是针对机制的，不随某一版美术变化。）**结论**：落到空格 = 该弹变透明，这是设计允许的降级路径，
 由作者自己负责别把部分设用在会撞空的组合上；运行期也**不**替你兜底——部分设的两个解释臂
 只护 stride 合法性（防除零/溢出），不查 `valid`，撞空格既不报错也不 Fault，弹会悄悄变
 透明地继续飞。想要"越界就出错"的效果，只有 `fire`/`batch`/`set_sprite` 的两参全设才有

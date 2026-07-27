@@ -38,16 +38,15 @@
 // 关卡资产，引擎不注册，见 spec §5）。
 
 // 内容包词表（本文件用到的几行；完整一份见 godot/ecl/demo/bullets.ecl）
-// 复审 I-2：五环彩虹的形轴也轮转（见 windchime_pattern 内 shape 判据），四个形都是
-// 满色形（掩码 0xFFFF，色轴要走满 BULLET_COLOR_STRIDE 色，稀疏形会撞空格），半径
-// 分别是 3/4/6/8（tables.rs::SHAPE_RADIUS[0,2,3,8]）——复原病态诊断场景旧有的
-// r² ∈ {9,16,36,64} 状态面宽度（本刀改两参糖前是 batch(i % 4, …) 轮转整张 4 行表，
-// 收窄到只剩一个形/一种半径会让金向量能暴露的跨平台数值分歧面变窄）。
-const BULLET_RICE: int = 0;     // 米弹——满色形，r=3
-const BULLET_BALL_M: int = 32;  // 中玉——满色形，r=4
-const BULLET_BALL_L: int = 48;  // 大玉——满色形，r=6
-const BULLET_STAR: int = 128;   // 星弹——满色形，r=8
-const COLOR_CYAN: int = 6;
+// 复审 I-2：五环彩虹的形轴也轮转（见 windchime_pattern 内 shape 判据），**四个形的
+// 判定半径两两不同**（2/3/4/5，见 tables.rs::SHAPE_RADIUS）——金向量是病态诊断场景，
+// 价值在扫过的状态面宽度；碰撞走平方距离比较，半径谱收窄会让能暴露的跨平台数值
+// 分歧面跟着变窄。本图集 12 行全满 16 色，色轴走满 BULLET_COLOR_STRIDE 都安全。
+const RICE: int = 64;      // 米弹——r=2
+const LASER: int = 0;      // 激光条——r=3
+const OUTLINE: int = 32;   // 环——r=4
+const BALL: int = 48;      // 玉——r=5
+const COLOR_CYAN: int = 8;
 
 const SPELL_WINDCHIME: int = 1;
 
@@ -76,15 +75,14 @@ async sub windchime_pattern() {
         var astep: angle = step_i as angle;
 
         for i in 0..5 {
-            // 彩虹环：**形**与**颜色**两轴都轮转（复审 I-2）。形轴按 i % 4 循环四个满色
-            // 形，复原半径谱 {3,4,6,8}；色轴照旧逐环轮转（新体系下语义比旧的"轮转外观
-            // 表"更贴）。四个形都取满色（掩码 0xFFFF），色轴才能安全轮转全部
-            // BULLET_COLOR_STRIDE 色——稀疏形（HEART/BUTTERFLY 高 4 色是图集空格）不能
-            // 这么轮，会撞空格 Fault。
-            var shape: int = BULLET_RICE;
-            if i % 4 == 1 { shape = BULLET_BALL_M; }
-            else if i % 4 == 2 { shape = BULLET_BALL_L; }
-            else if i % 4 == 3 { shape = BULLET_STAR; }
+            // 彩虹环：**形**与**颜色**两轴都轮转（复审 I-2）。形轴按 i % 4 循环四个
+            // 判定半径两两不同的形（2/3/4/5），撑开碰撞的 r² 谱；色轴照旧逐环轮转。
+            // 本图集 12 行全满 16 色，色轴走满 BULLET_COLOR_STRIDE 安全；若将来补入
+            // 有缺色的弹型，别拿它当轮转对象——会撞空格 Fault。
+            var shape: int = RICE;
+            if i % 4 == 1 { shape = OUTLINE; }
+            else if i % 4 == 2 { shape = BALL; }
+            else if i % 4 == 3 { shape = LASER; }
             var color: int = i % BULLET_COLOR_STRIDE;
             var speed: fx = 1.0fx + i as fx * 0.25fx; // 环序越大越快
             _ = batch(shape, color, $self_x, $self_y, ways, base, astep, 1, speed, 0fx);
@@ -94,7 +92,7 @@ async sub windchime_pattern() {
         if volley % 2 == 0 {
             for k in 0..16 {
                 var ka: angle = (k * 4096) as angle;
-                _ = fire(BULLET_BALL_M, COLOR_CYAN, $self_x, $self_y, 0fx, ka, WIND_CHIME, none);
+                _ = fire(OUTLINE, COLOR_CYAN, $self_x, $self_y, 0fx, ka, WIND_CHIME, none);
             }
         }
 

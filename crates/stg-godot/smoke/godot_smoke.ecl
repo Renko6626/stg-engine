@@ -11,8 +11,8 @@
 // 断言(读的也是槽 0);两条 B18/B16② 判别面各占一槽,互不干扰。
 // 颜色轴刀:弹型名/色名归内容包,不是引擎常量——单文件编译单元自带词表前奏
 // (完整一份见 godot/ecl/demo/bullets.ecl)。
-const BULLET_BALL_M: int = 32;
-const COLOR_CYAN: int = 6;
+const BALL: int = 48;
+const COLOR_CYAN: int = 8;
 
 async sub smoke_spell_pattern() { loop { wait(60); } }
 async sub smoke_boss() {
@@ -35,7 +35,7 @@ sub main() {
     boss_set(0, 1.0fx, 7, 3600, 2, 1);
     mark(9);
     loop {
-        _ = fire(BULLET_BALL_M, COLOR_CYAN, 0.0fx, -160.0fx, 1.5fx, 0deg, none, none);
+        _ = fire(BALL, COLOR_CYAN, 0.0fx, -160.0fx, 1.5fx, 0deg, none, none);
         emit_req(64, 1, 2, 3, 4, 5, 6);
         wait(30);
     }

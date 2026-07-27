@@ -15,7 +15,7 @@ bullets 层带旋转（basis=角度），其余层单位 basis。压实前缀 + 
 
 | 层 | 文件 | cell | 网格 | id 源 |
 |---|---|---|---|---|
-| bullets | assets/bullets.png | 32×32 | 16×12 | tables appearances[].sprite（identity：id 即格号） |
+| bullets | assets/bullets.png | 16×16 | 16×12 | tables appearances[].sprite（identity：id 即格号） |
 | shots   | assets/shots.png   | 32×32 | 4×1 | shottype 表 sprite |
 | enemies | assets/enemies.png | 64×64 | 4×1 | spawn_enemy sprite 参（A5 起脚本自给） |
 | items   | assets/items.png   | 32×32 | 8×1 | tables item_cfg[].sprite |
@@ -36,10 +36,16 @@ sprite 号 = 格号（行优先）；越界号 mod 回卷。QuadMesh 尺寸 = ce
 **bullets 层的二维布局（颜色轴刀，2026-07-26）**：`sprite 号 = 弹型 × color_stride + 颜色`，
 其中 `color_stride` 是 `WorldTables` 的字段（内建 = 16），**不是引擎常量**——mod 表可自定义
 列数。表索引 ≡ 图集格号 ≡ 池 `sprite` 值（identity），故 `set_sprite` 与 `fire` 写的是同一个
-数域。稀疏弹型（内建表如 `BULLET_HEART`/`BULLET_BUTTERFLY`，只做了低 12 色）仍占满一整行，
-用不到的列是**空格**：表里 `valid = false`，
-创建时被拒（编译期报错 / 运行期 Fault），绝不会造出"有判定但看不见"的弹。
+数域。**当前内建图集（真美术，12 行全满 16 色）没有空格**；稀疏弹型（某行只做了部分颜色）
+仍要占满一整行、用不到的列留成**空格**：表里 `valid = false`，创建时被拒（编译期报错 /
+运行期 Fault），绝不会造出"有判定但看不见"的弹。摆位纪律：缺色留空、**不压紧**，
+否则色号语义跨行不一致，色名会撒谎。
 网格常量仍住 `playfield.gd`（进表是未来 mod 加载刀的事）。
+
+**弹层图集的来源**：`godot/assets/bullets.png` 由 `godot/tools/slice_bullet_sheet.gd`
+从弹片切出（不再由 `gen_atlas.gd` 生成占位——那个脚本已移除弹层，否则一跑就覆盖真美术）。
+cell 取 16 是因为原作弹片本就是 16×16 网格，切割零留白；**若将来补入 32×32 的大玉一类，
+整张图要改按 32 排、小图元居中留白（1:1 不缩放），并同步 `playfield.gd` 的 `CELLS[0]`。**
 
 **sprite 号截断/回卷语义（跨层唯一权威）**：syscall 侧 `sprite` 参在入池前做
 `sprite as u16` 截断——只取低 16 位，脚本传入的越界值（负数或 > 65535）在核心层就已经静默
