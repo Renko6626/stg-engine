@@ -103,6 +103,26 @@ func _init():
 	if b.checksum() != c150: fail("恢复重演 ≠ 未离开(确定性破)"); return
 	if b.hud_player().get("lives", -1) < 0: fail("hud_player"); return
 
+	# frame_events 读口(通道 A 批量事实出口):按住射击键推进,自机弹飞上去打中
+	# godot_smoke.ecl 那只 hp=9999 的敌(x=0,与自机同一列),应观察到 EVT_SHOT_HIT_ENEMY。
+	# 这条不是形状断言——它要求读口真的把 core 侧的事件流透出来,且字段齐全。
+	const EVT_SHOT_HIT_ENEMY := 9
+	# 先把自机送回中列:上面 load_state 之后又按了 30 帧 BTN_LEFT,自机此刻在 x≈-135,
+	# 不在靶敌(x=0)那一列上。左右速度与钳制对称,故同样 30 帧 BTN_RIGHT 正好回到 x≈0。
+	for i in range(30): b.step_frame(WorldBridge.BTN_RIGHT)
+	var saw_hit := false
+	var bad_shape := false
+	for i in range(180):
+		b.step_frame(WorldBridge.BTN_SHOT)
+		for ev in b.frame_events():
+			for k in ["kind", "x", "y", "a_index", "a_gen", "data0", "data1"]:
+				if not ev.has(k): bad_shape = true
+			if int(ev.get("kind", 0)) == EVT_SHOT_HIT_ENEMY:
+				saw_hit = true
+				if int(ev.get("data0", 0)) <= 0: fail("命中事件 data0(damage) 应 >0"); return
+	if bad_shape: fail("frame_events 条目字段不全"); return
+	if not saw_hit: fail("按住射击 180 帧应观察到 EVT_SHOT_HIT_ENEMY"); return
+
 	# hud_boss 判别(task-4):godot_smoke.ecl 在 mark(9) 之前顶层直写
 	# `boss_set(0, 1.0fx, 7, 3600, 2, 1);`——正常路径(本 game,start=0 隐式)会直接执行到它
 	# (main 首次真正运行是第 2 次 step_frame,frame==1 那一次,详见下方 anchors 推导),此后

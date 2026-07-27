@@ -17,6 +17,24 @@ func explosion(pos: Vector2, score: int) -> void:
 		tw.parallel().tween_property(l, "modulate:a", 0.0, 0.6)
 		tw.tween_callback(l.queue_free)
 
+## 自机弹命中火花:小、快、量大——比 explosion 的环轻一个量级(命中每帧可达数十)。
+func hit_spark(pos: Vector2) -> void:
+	var e := _Spark.new()
+	e.position = pos
+	add_child(e)
+
+class _Spark extends Node2D:
+	var t := 0.0
+	func _process(dt: float) -> void:
+		t += dt * 9.0        # ~0.11s 生命,比爆炸环(0.33s)短
+		if t >= 1.0:
+			queue_free()
+			return
+		queue_redraw()
+	func _draw() -> void:
+		var r := 2.0 + t * 6.0
+		draw_arc(Vector2.ZERO, r, 0, TAU, 10, Color(1.0, 1.0, 0.85, 1.0 - t), 1.5)
+
 class _Ring extends Node2D:
 	var t := 0.0
 	func _process(dt: float) -> void:

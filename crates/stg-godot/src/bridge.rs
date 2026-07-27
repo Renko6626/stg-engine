@@ -356,6 +356,35 @@ impl WorldBridge {
         arr
     }
 
+    /// 本帧世界大事记（通道 A 的批量事实出口）。每条：
+    /// `kind`（`stg_core::events::EVT_*`）/ `x`,`y`（世界坐标，已转浮点）/
+    /// `a_index`,`a_gen`（相关实体句柄）/ `data0`,`data1`（逐 kind 约定，见 `events.rs`）。
+    ///
+    /// **生命周期**：帧内缓冲，下一次 `step` 的 `begin` 清空——必须在两次 step 之间取走。
+    /// 与通道 B 的 `take_requests` 是**不同的东西**：请求是脚本/引擎主动发的离散演出指令
+    /// （引擎保留 1..=63），事件是世界每帧产出的**事实流**（敌死 / 自机死 / 消弹 / 拾取 /
+    /// 符卡宣言收卡失败 / 任务 fault / 自机弹命中）。表现层要"跟着世界发生的事做反应"
+    /// （火花、音效、伤害数字）走这条。
+    #[func]
+    fn frame_events(&self) -> Array<VarDictionary> {
+        let mut arr = Array::new();
+        let Some(g) = self.game.as_ref() else {
+            return arr;
+        };
+        for ev in g.world.frame_events() {
+            let mut d = VarDictionary::new();
+            d.set("kind", ev.kind as i64);
+            d.set("x", ev.x.raw() as f64 / 65536.0);
+            d.set("y", ev.y.raw() as f64 / 65536.0);
+            d.set("a_index", ev.a_index as i64);
+            d.set("a_gen", ev.a_gen as i64);
+            d.set("data0", ev.data[0] as i64);
+            d.set("data1", ev.data[1] as i64);
+            arr.push(&d);
+        }
+        arr
+    }
+
     #[func]
     fn ping(&self) -> i64 {
         42

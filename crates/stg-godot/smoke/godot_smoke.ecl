@@ -23,6 +23,10 @@ async sub smoke_boss() {
 sub main() {
     _ = spawn_enemy(0.0fx, -160.0fx, 9999, 0, 100, 0, none);
     _ = spawn_enemy(64.0fx, -120.0fx, 8888, 0, 0, 2, smoke_boss);
+    // 第三只:**场内**(y=200,与自机同列 x=0)、hp 极高不死——给 frame_events 冒烟当靶子。
+    // 必须在场内:自机弹越界回收线是 y ∈ [-64, 512],上面那两只在 y<-64 处,弹飞不到。
+    // 它排在最后 → 敌池索引 2,不影响前面按索引 0 做的 mm oy == -160 判别。
+    _ = spawn_enemy(0.0fx, 200.0fx, 9999, 0, 0, 0, none);
     // task-7:表现锚点 + 中段启动冒烟——bgm(3) 是 mark(9) 前最近一条 bgm 声明,正常流
     // 一跳跨过垫片(bgm 仍照直写生效=3);start=9 跳入则由 mark 自动补偿注入同一值 3。
     bgm(3);

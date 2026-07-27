@@ -132,7 +132,20 @@ impl WorldBody {
                     if self.enemies.invuln[e] != 0 || !self.shots.is_alive(s) {
                         continue; // 无敌帧跳伤害；悬垂弹跳过
                     }
-                    self.damage_enemy(e, self.shots.damage[s], tables);
+                    let dmg = self.shots.damage[s];
+                    // 命中事实（表现层消费：火花/音效/伤害数字）。坐标取**自机弹**当帧位置
+                    // ——命中点在弹上、不在敌心；弹此刻尚存活（上一行刚判过），相位 9 才回收。
+                    // 逐命中发不聚合的预算论证见 `events::EVT_SHOT_HIT_ENEMY` 文档。
+                    let ev = Event {
+                        kind: crate::events::EVT_SHOT_HIT_ENEMY,
+                        a_index: e as u16,
+                        a_gen: self.enemies.generation[e],
+                        x: self.shots.x[s],
+                        y: self.shots.y[s],
+                        data: [dmg as i32, 0],
+                    };
+                    self.push_event(ev);
+                    self.damage_enemy(e, dmg, tables);
                 }
                 crate::events::ROW_FIELD_ENEMY => {
                     let f = h.active as usize;
@@ -252,6 +265,73 @@ mod tests {
     use crate::world::PH_COLLIDE;
     use crate::world::test_support::*;
 
+    /// 全 step 回路的端到端腿：自机按住射击 → 相位 1 发弹 → 弹上行 → 相位 6 撞上同列的敌
+    /// → 相位 7 产出命中事件。上面那条只驱动 collide+settle 两相位，这条把"自机真会开火、
+    /// 弹真会飞到、事件真会出现在整局流程里"一并钉住（桥级冒烟的等价物，但不依赖 Godot）。
+    #[test]
+    fn player_holding_shot_hits_enemy_in_its_column() {
+        use crate::input::{BTN_SHOT, InputFrame};
+        let mut w = crate::step::World::new(1);
+        // 自机出生 (0,384)；敌摆在同列上方 y=200（场内，弹的越界回收线是 y ∈ [-64,512]）
+        let _e = spawn_enemy(&mut w, 0, 200, 9999);
+        let img = crate::ecl::image::EclImage::empty();
+        let mut hits = 0usize;
+        for f in 0..120u32 {
+            let mut inp = InputFrame::empty(f);
+            inp.actions[0].buttons = BTN_SHOT;
+            crate::step::step_with_director(&mut w, &crate::tables::TABLES_V0, &img, &inp, |_| {});
+            hits += w
+                .frame_events()
+                .iter()
+                .filter(|ev| ev.kind == crate::events::EVT_SHOT_HIT_ENEMY)
+                .count();
+        }
+        assert!(hits > 0, "按住射击 120 帧应至少命中一次（实际 {hits}）");
+    }
+
+    /// 命中事实：坐标必须取**自机弹**当帧位置，不是敌心。
+    /// 判别力所在——照抄 `EVT_ENEMY_DIED` 的惰性实现会填敌坐标，那样本测试立刻红。
+    #[test]
+    fn settle_shot_hit_emits_event_at_the_shot_not_the_enemy() {
+        use crate::events::EVT_SHOT_HIT_ENEMY;
+        let mut w = crate::step::World::new(1);
+        let e = spawn_enemy(&mut w, 0, 80, 99); // hp 99：不死，只出命中事件
+        let ei = w.body.enemies.get(e).unwrap();
+        let (sx, sy) = (Fx::from_int(8), Fx::from_int(86)); // 刻意偏离敌心 (0,80)
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: sx,
+            y: sy,
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 3,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+
+        assert_eq!(w.body.events_len, 1, "只该有命中事件（敌未死）");
+        let ev = w.body.events[0];
+        assert_eq!(ev.kind, EVT_SHOT_HIT_ENEMY);
+        assert_eq!((ev.x, ev.y), (sx, sy), "坐标须取自机弹位置，不是敌心");
+        assert_ne!(
+            (ev.x, ev.y),
+            (w.body.enemies.x[ei], w.body.enemies.y[ei]),
+            "前提：弹与敌心不同点，否则本测试无判别力"
+        );
+        assert_eq!(ev.data[0], 3, "data[0] = damage");
+        assert_eq!(
+            (ev.a_index, ev.a_gen),
+            (ei as u16, w.body.enemies.generation[ei])
+        );
+    }
+
     #[test]
     fn settle_shot_kills_enemy_marks_dying_and_event() {
         use crate::enemy::ENEMY_DYING;
@@ -278,8 +358,10 @@ mod tests {
         w.body.settle(&crate::tables::TABLES_V0);
         assert!(w.body.enemies.hp[ei] <= 0);
         assert_ne!(w.body.enemies.flags[ei] & ENEMY_DYING, 0);
-        assert_eq!(w.body.events_len, 1);
-        assert_eq!(w.body.events[0].kind, EVT_ENEMY_DIED);
+        // 两条事件、且**命中在死亡之前**（同一趟里先记命中事实、再结算伤害）
+        assert_eq!(w.body.events_len, 2);
+        assert_eq!(w.body.events[0].kind, crate::events::EVT_SHOT_HIT_ENEMY);
+        assert_eq!(w.body.events[1].kind, EVT_ENEMY_DIED);
     }
 
     #[test]
@@ -306,7 +388,20 @@ mod tests {
         }
         w.body.collide(&crate::tables::TABLES_V0);
         w.body.settle(&crate::tables::TABLES_V0);
-        assert_eq!(w.body.events_len, 1); // 只死一次
+        // 只死一次；而且**第二发连命中事件都不发**——它被 ENEMY_DYING 门禁在记事实之前
+        // 就挡掉了（overkill 不该冒第二次火花）。比原来只数死亡事件的断言更严。
+        let kinds: Vec<u8> = w.body.events[..w.body.events_len as usize]
+            .iter()
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                crate::events::EVT_SHOT_HIT_ENEMY,
+                crate::events::EVT_ENEMY_DIED
+            ],
+            "overkill：恰一次命中 + 恰一次死亡"
+        );
     }
 
     #[test]

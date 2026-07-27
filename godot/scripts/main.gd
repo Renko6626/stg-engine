@@ -103,6 +103,7 @@ func _physics_process(_dt: float) -> void:
 
 func _after_step(buttons: int) -> void:
 	dispatcher.drain(bridge.take_requests())
+	_drain_events()
 	hud.refresh(bridge)
 	playfield.update_view(bridge, buttons)
 	# I-1(终审裁定):残机耗尽的最小处置——拦假胜利。life_state==4 = LIFE_GAMEOVER
@@ -111,6 +112,16 @@ func _after_step(buttons: int) -> void:
 	if state == S.PLAYING and int(bridge.hud_player().get("life_state", 0)) == 4:
 		state = S.STAGE_CLEAR
 		hud.show_banner("GAME OVER  (Z restart)", 3600.0)
+
+## 通道 A 的批量事实流(每帧,下次 step 前必须取走)。与 `take_requests` 的分工:
+## 请求 = 脚本/引擎主动发的离散演出指令;事件 = 世界产出的事实,表现层跟着做反应。
+## 目前只消费命中火花;敌死/拾取/符卡等其余 kind 仍走各自的请求或 HUD 路径。
+const EVT_SHOT_HIT_ENEMY := 9
+func _drain_events() -> void:
+	for ev in bridge.frame_events():
+		match int(ev.get("kind", 0)):
+			EVT_SHOT_HIT_ENEMY:
+				effects.hit_spark(Vector2(ev.get("x", 0.0), ev.get("y", 0.0)))
 
 func _on_stage_clear() -> void:
 	state = S.STAGE_CLEAR
