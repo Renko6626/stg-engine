@@ -5,7 +5,7 @@
 use stg_core::bullets::BulletPool;
 use stg_core::enemy::EnemyPool;
 use stg_core::items::ItemPool;
-use stg_core::math::Fx;
+use stg_core::math::{Angle, Fx};
 use stg_core::shots::ShotPool;
 use stg_core::tables::WorldTables;
 use stg_core::world::WorldView;
@@ -51,6 +51,24 @@ fn write_instance(out: &mut [f32], slot: usize, x: f32, y: f32, cos: f32, sin: f
     ]);
 }
 
+/// 弹的实例基（返回 `(cos, sin)`）：**渲染朝向 = 速度方向 + 四分之一圈**。
+///
+/// 两个基准差 90°，必须补：世界侧 `polar_to_vec = (speed·cos, speed·sin)`，所以
+/// **BAM 0 指 +x（右）**；而图集里的弹**画的是头朝上**（原作弹片惯例——arrowhead /
+/// kunai / laser / rice 都是竖着画的）。不补的话，一颗朝上飞的弹（BAM 49152）会被
+/// 转 270°、渲染成头朝左。占位圆看不出来，真美术一上就露馅。
+///
+/// 补 +16384（90°）之后：`49152 + 16384 ≡ 0` → **朝上飞的弹不旋转**，正好头朝上；
+/// BAM 0（朝右飞）转 90°（屏幕 y 向下，正角即顺时针）→ 头朝右。
+///
+/// **只有弹层需要这个补偿**：自机弹层不旋转（sprite 本就朝上、也只朝上飞），敌 / 道具
+/// 层同理走单位基。见 `docs/render-contract.md` §2。
+fn bullet_basis(a: Angle) -> (f32, f32) {
+    const SPRITE_UP_QUARTER_TURN: f32 = 16384.0;
+    let rad = (a.raw() as f32 + SPRITE_UP_QUARTER_TURN) * (core::f32::consts::TAU / 65536.0);
+    (rad.cos(), rad.sin())
+}
+
 /// 活槽压实(池索引升序)写 `out` 前缀,返活数。`out.len() == layer_cap(layer)*12`。
 /// 未知 layer → 0(P4-b no-op)。
 pub fn encode_layer(
@@ -65,16 +83,8 @@ pub fn encode_layer(
             let p = view.bullets();
             let (xs, ys, angles, sprites) = (p.x(), p.y(), p.angle(), p.sprite());
             for i in p.iter_alive() {
-                let rad = angles[i].raw() as f32 * (core::f32::consts::TAU / 65536.0);
-                write_instance(
-                    out,
-                    n,
-                    fx_f32(xs[i]),
-                    fx_f32(ys[i]),
-                    rad.cos(),
-                    rad.sin(),
-                    sprites[i],
-                );
+                let (cos, sin) = bullet_basis(angles[i]);
+                write_instance(out, n, fx_f32(xs[i]), fx_f32(ys[i]), cos, sin, sprites[i]);
                 n += 1;
             }
         }
@@ -157,15 +167,44 @@ sub main() {
         let mut out = vec![0.0f32; layer_cap(LAYER_BULLETS) * FLOATS_PER_INSTANCE];
         let n = encode_layer(g.world.view(), g.tables, LAYER_BULLETS, &mut out);
         assert_eq!(n, 2);
-        // 弹0:angle=0 → cos1/sin0 精确;pos=(10,20) 速度0不动
-        assert_eq!(&out[0..8], &[1.0, -0.0, 0.0, 10.0, 0.0, 1.0, 0.0, 20.0]);
+        // 位置与 sprite：压实序 = 池索引升序
+        assert_eq!((out[3], out[7]), (10.0, 20.0)); // 弹0 pos=(10,20)，速度 0 不动
         let expect_sprite = stg_core::tables::TABLES_V0.appearances[1].sprite as f32;
         assert_eq!(out[8], expect_sprite);
         assert_eq!(&out[9..12], &[0.0, 0.0, 0.0]);
-        // 弹1:angle=16384(90°) → cos≈0/sin≈1;压实序=池索引升序
-        let b1 = &out[12..24];
-        assert!(b1[0].abs() < 1e-6 && (b1[4] - 1.0).abs() < 1e-6);
-        assert_eq!((b1[3], b1[7]), (11.0, 21.0));
+        assert_eq!((out[15], out[19]), (11.0, 21.0)); // 弹1 pos=(11,21)
+
+        // 招牌不变量：**贴图的"上"经实例变换后 == 速度方向**（贴图默认头朝上）。
+        // 实例基是 [xx xy; yx yy] = [cos -sin; sin cos]（out 的 0/1/4/5 位）；Godot 2D 里
+        // 局部"上"是 (0,-1)，变换后 = (-xy, -yy) = (sin, -cos)。世界侧速度方向则是
+        // `polar_to_vec` 的 (cs, sn)。两者必须相等——这一条同时钉死了四分之一圈补偿的
+        // **存在**与**方向**：去掉补偿或补反，两侧立刻对不上。
+        let angles = g.world.view().bullets().angle();
+        for (k, i) in g.world.view().bullets().iter_alive().enumerate() {
+            let base = k * FLOATS_PER_INSTANCE;
+            let (up_x, up_y) = (out[base + 4], -out[base + 5]); // (sin, -cos)
+            let (sn, cs) = stg_core::math::sincos(angles[i]);
+            let (dir_x, dir_y) = (fx_f32(cs), fx_f32(sn));
+            assert!(
+                (up_x - dir_x).abs() < 1e-3 && (up_y - dir_y).abs() < 1e-3,
+                "弹{k}(BAM {}) 贴图朝向 ({up_x:.4},{up_y:.4}) 应等于速度方向 ({dir_x:.4},{dir_y:.4})",
+                angles[i].raw()
+            );
+        }
+    }
+
+    /// 判别腿：朝**正上方**飞的弹（BAM 49152，`polar_to_vec` 得 (0,-1)）必须**不旋转**
+    /// ——贴图本就头朝上。这一格是"补偿量恰好是 +90° 而不是 -90°/180°"的锚。
+    #[test]
+    fn bullet_flying_up_renders_unrotated() {
+        let (cos, sin) = bullet_basis(Angle(49152));
+        assert!(
+            (cos - 1.0).abs() < 1e-6 && sin.abs() < 1e-6,
+            "朝上飞的弹必须以单位基渲染，实际 (cos,sin)=({cos},{sin})"
+        );
+        // 反向锚：朝右飞（BAM 0）必须转成头朝右 → (cos,sin)=(0,1)
+        let (cos0, sin0) = bullet_basis(Angle(0));
+        assert!(cos0.abs() < 1e-6 && (sin0 - 1.0).abs() < 1e-6);
     }
 
     #[test]

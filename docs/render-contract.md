@@ -9,7 +9,14 @@
 
 `[cos,-sin,0,x, sin,cos,0,y, sprite,0,0,0]` —— 前 8 = `MULTIMESH_TRANSFORM_2D`，
 后 4 = `INSTANCE_CUSTOM`；`custom.x=sprite` 号，`y/z/w` 保留（将来 scale/alpha/调色，stride 不变）。
-bullets 层带旋转（basis=角度），其余层单位 basis。压实前缀 + `set_visible_instances`。
+bullets 层带旋转，其余层单位 basis。压实前缀 + `set_visible_instances`。
+
+**弹的朝向约定（硬规矩）**：渲染旋转 = **速度方向 + 四分之一圈**（`frame.rs::bullet_basis`）。
+两个基准差 90°：世界侧 `polar_to_vec = (speed·cos, speed·sin)` 所以 **BAM 0 指 +x（右）**，
+而图集里的弹**画的是头朝上**（原作弹片惯例）。补 +16384 之后，朝上飞的弹（BAM 49152）
+**不旋转**、正好头朝上；BAM 0（朝右飞）转 90°（屏幕 y 向下，正角即顺时针）→ 头朝右。
+等价表述、也是单测钉住的不变量：**贴图的"上"经实例变换后等于速度方向**。
+**换真美术时若图元不是头朝上画的，改这里的补偿量，不要改 shader。**
 
 ## 3. 图集契约（每层独立 PNG + 独立 id 空间）
 
