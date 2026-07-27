@@ -25,22 +25,27 @@ const STAR: int = 160;       // 星                                r=4
 const LASERHEAD: int = 176;  // 激光头（激光束端头的圆帽）        r=5
 
 // ── 颜色（列）────────────────────────────────────────────────────────────
-// 原作是「暗/亮成对」的排法：1/2 红、3/4 品红、5/6 蓝、7/8 青、9/10 绿各为一对
-// （前暗后亮）；11..14 是黄绿→黄→橙的色相梯度；两端 0/15 是灰与白。
-// 名字按逐列实测色相取，改名只需改本文件。
+// 逐列实测（色相/明度）后的实际结构，**不是**整齐的"暗/亮成对"：
+//   真正的暗/亮对只有三组：1/2 红、7/8 青、9/10 绿（同色相、后者更亮）。
+//   3/4 是**色相差**（291°/303°），明度几乎相同——所以不叫 MAGENTA_DARK/MAGENTA。
+//   5/6 色相与明度同时变（249°/233°），是靛→蓝。
+//   11..14 是一条色相梯度：黄绿 95° → 73° → 黄 60° → 橙 41°，不是明暗对。
+//   两端 0/15 是灰与白。
+// 注：本图集的色序与 Danmakufu 默认弹片（RED=1/ORANGE=2/YELLOW=3… 彩虹递增）**不同**，
+// 那套常量不能按索引套过来。名字按实测色相取，改名只需改本文件。
 const COLOR_GRAY: int = 0;
-const COLOR_RED_DARK: int = 1;
-const COLOR_RED: int = 2;
-const COLOR_MAGENTA_DARK: int = 3;
-const COLOR_MAGENTA: int = 4;
-const COLOR_BLUE_DARK: int = 5;
-const COLOR_BLUE: int = 6;
-const COLOR_CYAN_DARK: int = 7;
-const COLOR_CYAN: int = 8;
-const COLOR_GREEN_DARK: int = 9;
-const COLOR_GREEN: int = 10;
-const COLOR_LIME: int = 11;
-const COLOR_YELLOW_GREEN: int = 12;
-const COLOR_YELLOW: int = 13;
-const COLOR_ORANGE: int = 14;
+const COLOR_RED_DARK: int = 1;    // 0°  暗
+const COLOR_RED: int = 2;         // 0°  亮
+const COLOR_PURPLE: int = 3;      // 291°
+const COLOR_MAGENTA: int = 4;     // 303°
+const COLOR_INDIGO: int = 5;      // 249°
+const COLOR_BLUE: int = 6;        // 233°
+const COLOR_CYAN_DARK: int = 7;   // 182° 暗
+const COLOR_CYAN: int = 8;        // 184° 亮
+const COLOR_GREEN_DARK: int = 9;  // 142° 暗
+const COLOR_GREEN: int = 10;      // 146° 亮
+const COLOR_CHARTREUSE: int = 11; //  95°
+const COLOR_YELLOW_GREEN: int = 12; // 73°
+const COLOR_YELLOW: int = 13;     //  60°
+const COLOR_ORANGE: int = 14;     //  41°
 const COLOR_WHITE: int = 15;
