@@ -81,12 +81,27 @@ fn clone_world(src: &World) -> Box<World> {
     dst
 }
 
+/// 存档点集计算（B14 抽出，独立可测）：均匀分布 `saves` 个存档帧号，**去重**（`frames` 小而
+/// `saves` 大时可能算出重复帧号），去重后若为空集则报错——`--saves 0` 不再零存档点、零重演
+/// 腿却照样"全部逐位一致"退出 0（正确性工具自身的假绿脚枪）。
+fn save_points(frames: u32, saves: usize) -> Result<Vec<u32>, String> {
+    let mut save_at: Vec<u32> = (1..=saves as u32)
+        .map(|k| k * frames / (saves as u32 + 1))
+        .collect();
+    save_at.dedup();
+    if save_at.is_empty() {
+        return Err(format!(
+            "saves={saves} 算出空存档点集(零重演腿)——storm 存在意义是逐点重演对拍,\
+             saves 至少要 1 且 frames 足够大"
+        ));
+    }
+    Ok(save_at)
+}
+
 pub(crate) fn run_storm(frames: u32, saves: usize, seed: u64) -> Result<(), String> {
     let (mut w, image, _boss) = crate::build_rainbow_world(seed);
     let inputs = gen_inputs(frames, seed);
-    let save_at: Vec<u32> = (1..=saves as u32)
-        .map(|k| k * frames / (saves as u32 + 1))
-        .collect();
+    let save_at = save_points(frames, saves)?;
 
     // 主跑：逐帧校验和流 + 沿途双源存档
     let mut stream = Vec::with_capacity(frames as usize);
@@ -141,6 +156,28 @@ mod tests {
     #[test]
     fn storm_short_gate() {
         super::run_storm(240, 3, 0xAB).expect("短风暴必须全逐位一致");
+    }
+
+    /// 正确性工具自身的假绿脚枪（B14）：`--saves 0` 曾零存档点、零重演腿，
+    /// 照样打印"全部逐位一致"退出 0。守卫后必须报错。
+    #[test]
+    fn storm_rejects_zero_saves_instead_of_vacuous_pass() {
+        let err = run_storm(/* frames */ 120, /* saves */ 0, /* seed */ 1)
+            .expect_err("saves=0 必须报错,不得空转假绿");
+        assert!(
+            err.to_string().contains("saves"),
+            "错误信息该点出是 saves 参数的问题,实际: {err}"
+        );
+    }
+
+    /// 去重：`frames` 小而 `saves` 大时会算出重复帧号；去重后非空则正常跑通。
+    #[test]
+    fn storm_dedups_save_points_when_frames_small_saves_large() {
+        let pts = super::save_points(5, 20).expect("frames=5 saves=20 去重后仍非空");
+        let mut sorted = pts.clone();
+        sorted.dedup();
+        assert_eq!(pts, sorted, "save_points 返回值必须已去重");
+        assert!(!pts.is_empty());
     }
 
     /// 变异检验：篡改重演输入一帧必须报分歧——证明对拍真在比，不是恒真（spec §6.4 判别式）。
