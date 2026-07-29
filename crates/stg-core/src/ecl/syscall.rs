@@ -986,6 +986,29 @@ mod tests {
         )
     }
 
+    /// 单个**带参** `Async` sub（raw=1，一个 `Fx` 参）的镜像——支路③另一半专用（终审 M-4）：
+    /// `kind() != Async || !param_types().is_empty()` 这个判据是**或**，`wrong_kind_task_image`
+    /// 只打了左半（kind 不对）；这个 helper 打右半（kind 对但带参）——号在册、`sub_meta`
+    /// 命中、`kind()==Async`，唯独 `param_types` 非空。若把 `!param_types().is_empty()`
+    /// 那半判据删掉，这里必须能把变异逮住（否则"带参 Async sub 不许当 task 挂载"这条
+    /// 约束就是无网状态）。先例：`image.rs:606` 的 `SubInit::new(0, SubKind::Async,
+    /// vec![EclValueType::Fx])`。
+    fn async_with_param_task_image() -> EclImage {
+        test_image(
+            vec![
+                crate::ecl::ops::OP_PUSHI as u32,
+                1,
+                crate::ecl::ops::OP_WAIT as u32,
+            ],
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(0, SubKind::Async, vec![crate::ecl::image::EclValueType::Fx]),
+            ],
+            vec![EntryInit::new("pattern", 1)],
+            Some(0),
+        )
+    }
+
     #[test]
     fn sys_frame_reads_world_frame() {
         let (mut w, ecl) = fresh();
@@ -1388,6 +1411,22 @@ mod tests {
         assert_eq!(w.body.bullets.iter_alive().count(), 0, "先查后建：零副作用");
     }
 
+    /// P4-b 支路③另一半（终审 M-4）：`fire` 的 task_script 号在册、`kind()==Async`，
+    /// 唯独**带参**（非零参）→ 同样必须 Fault，且先查后建（弹不应被创建）。
+    /// 与 `sys_create_bullet_task_script_wrong_kind_faults_before_creating` 互补——
+    /// 那条打 kind 半边，这条打 param_types 半边，合起来才覆盖判据的完整析取。
+    /// 镜像 `spawn_enemy_task_script_with_params_faults_without_enemy`。
+    #[test]
+    fn sys_create_bullet_task_script_with_params_faults_before_creating() {
+        let ecl = async_with_param_task_image();
+        let mut w = World::new(1);
+        let mut task = Task::default();
+        let args = [ROW_A, 0, 0, 0, 0, 0, 0, 1]; // task_script=1，在册、Async，但带参
+        let r = call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP));
+        assert_eq!(w.body.bullets.iter_alive().count(), 0, "先查后建：零副作用");
+    }
+
     /// 池满 → 押 -1，不 Fault，不派任务（NULL 分支）。
     #[test]
     fn sys_create_bullet_pool_full_pushes_neg1() {
@@ -1682,6 +1721,25 @@ mod tests {
         let mut task = Task::default();
         // 正序参：x, y, hp, drop_table, score, sprite, task_script
         let args = [0, 0, 100, 0, 0, 0, 1]; // task_script=1，在册但 CallOnly
+        let r = call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP));
+        assert_eq!(
+            w.body.enemies.iter_alive().count(),
+            0,
+            "先验后建：不留半成品"
+        );
+    }
+
+    /// P4-b 支路③另一半（终审 M-4）：task 号在册、`kind()==Async`，唯独**带参**
+    /// （非零参）→ 同样必须 Fault，且敌未创建。镜像
+    /// `sys_create_bullet_task_script_with_params_faults_before_creating`。
+    #[test]
+    fn spawn_enemy_task_script_with_params_faults_without_enemy() {
+        let ecl = async_with_param_task_image();
+        let mut w = World::new(1);
+        let mut task = Task::default();
+        // 正序参：x, y, hp, drop_table, score, sprite, task_script
+        let args = [0, 0, 100, 0, 0, 0, 1]; // task_script=1，在册、Async，但带参
         let r = call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args);
         assert_eq!(r, Err(FAULT_BAD_OP));
         assert_eq!(

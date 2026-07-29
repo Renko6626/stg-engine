@@ -235,7 +235,10 @@ impl WorldBody {
             }
             ITEM_LIFE_PIECE => {
                 let pl = &mut self.players[p];
-                pl.life_pieces += 1;
+                // `saturating_add`（非裸 `+= 1`）：与下面 `>=` 判据的"抗直写越界"论证自洽——
+                // 若真有人直写 `life_pieces` 到 u8 上限附近，裸 `+= 1` 会先在 debug 下溢出
+                // panic，根本走不到 `>=` 判据；饱和后不 panic，才轮到下面的进位判据兜底。
+                pl.life_pieces = pl.life_pieces.saturating_add(1);
                 // `>=`（非 `==`）单步追赶（B12）：抗直写越界——若碎片被直接写成远超阈值的
                 // 值，一次进位只清零并 +1 命，超出阈值的部分被丢弃（不会连续进位多命）。
                 // 正常引擎路径下无人直写该字段（只有本函数每次 +1），这是纯防御性降级；
@@ -247,8 +250,8 @@ impl WorldBody {
             }
             ITEM_BOMB_PIECE => {
                 let pl = &mut self.players[p];
-                pl.bomb_pieces += 1;
-                // 同上：`>=` 单步追赶，抗直写越界（B12）。
+                // 同上：饱和加 + `>=` 单步追赶，抗直写越界（B12）。
+                pl.bomb_pieces = pl.bomb_pieces.saturating_add(1);
                 if pl.bomb_pieces >= PIECES_PER_BOMB {
                     pl.bomb_pieces = 0;
                     pl.bombs = pl.bombs.saturating_add(1);
@@ -858,14 +861,31 @@ mod tests {
     fn piece_carry_crosses_boundary_exactly() {
         use crate::items::{ITEM_BOMB_PIECE, ITEM_LIFE_PIECE, PIECES_PER_BOMB, PIECES_PER_LIFE};
         let mut w = crate::step::World::new(1);
-        w.body.players[0].life_pieces = PIECES_PER_LIFE - 1;
+
+        // 未满阈值不得进位（钉死 `>=` 没有把常量本身抹掉——I-1）：差 2 时吃一次仍差 1，
+        // 命数不动。旧 `==` 语义下这半靠语义本身兜底，换 `>=` 后必须有测试显式钉住。
+        w.body.players[0].life_pieces = PIECES_PER_LIFE - 2;
+        let lives_before = w.body.players[0].lives;
+        w.body
+            .credit_item(0, ITEM_LIFE_PIECE, &crate::tables::TABLES_V0);
+        assert_eq!(w.body.players[0].lives, lives_before, "未满阈值不得进位");
+        assert_eq!(w.body.players[0].life_pieces, PIECES_PER_LIFE - 1);
+
+        // 再吃一次，正好到阈值 → 进位。
         let lives_before = w.body.players[0].lives;
         w.body
             .credit_item(0, ITEM_LIFE_PIECE, &crate::tables::TABLES_V0);
         assert_eq!(w.body.players[0].lives, lives_before + 1);
         assert_eq!(w.body.players[0].life_pieces, 0);
 
-        w.body.players[0].bomb_pieces = PIECES_PER_BOMB - 1;
+        // bombs 同构：未满阈值不进位 → 到阈值再进位。
+        w.body.players[0].bomb_pieces = PIECES_PER_BOMB - 2;
+        let bombs_before = w.body.players[0].bombs;
+        w.body
+            .credit_item(0, ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);
+        assert_eq!(w.body.players[0].bombs, bombs_before, "未满阈值不得进位");
+        assert_eq!(w.body.players[0].bomb_pieces, PIECES_PER_BOMB - 1);
+
         let bombs_before = w.body.players[0].bombs;
         w.body
             .credit_item(0, ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);

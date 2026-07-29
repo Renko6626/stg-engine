@@ -127,6 +127,17 @@ pub(crate) fn run_storm(frames: u32, saves: usize, seed: u64) -> Result<(), Stri
         }
     }
 
+    // 自证有真重演腿（B14 同族守卫，非仅"存档点非空"）：`save_points` 非空只保证"存了档"，
+    // 不保证"存档之后还有帧可重演"——`frames=0` 时 `snaps` 直接为空（`0..0` 零轮主循环，
+    // `save_at.contains(&f)` 从未被求值）；`frames=1, saves=1` 时存档点 f0=0 但重演区间
+    // `1..1` 为空腿，同样是"跑了但没测任何东西"。用 `f0 + 1 < frames` 钉住"至少一个存档点
+    // 之后还有 ≥1 帧可重演"，而不只判非空——非空挡不住 `frames=1,saves=1` 那个空腿。
+    if !snaps.iter().any(|(f0, _, _)| *f0 + 1 < frames) {
+        return Err(format!(
+            "frames={frames} saves={saves} 未产生任何有效重演腿(所有存档点之后都无帧可重演)"
+        ));
+    }
+
     // 逐点重演：内存源 + 磁盘源
     for (f0, snap, bytes) in &snaps {
         let disk = World::load_bytes(bytes, &stg_core::tables::TABLES_V0, &image).unwrap();
@@ -167,6 +178,32 @@ mod tests {
         assert!(
             err.to_string().contains("saves"),
             "错误信息该点出是 saves 参数的问题,实际: {err}"
+        );
+    }
+
+    /// 同族假绿（终审 I-2）：`--frames 0` 时 `save_points` 非空过守卫（`save_at` 由
+    /// `k*frames/(saves+1)` 全算出 0），但主循环 `0..0` 零轮，`snaps` 恒空——
+    /// 必须被"有效重演腿"守卫拦下，不能只靠"存档点非空"那道旧守卫放行。
+    #[test]
+    fn storm_rejects_zero_frames_instead_of_vacuous_pass() {
+        let err = run_storm(/* frames */ 0, /* saves */ 8, /* seed */ 1)
+            .expect_err("frames=0 必须报错,不得空转假绿");
+        assert!(
+            err.to_string().contains("重演腿"),
+            "错误信息该点出是零重演腿的问题,实际: {err}"
+        );
+    }
+
+    /// 同族假绿的边界形态：`frames=1, saves=1` 时存档点算出 f0=0（非空，过旧守卫），但
+    /// 重演区间 `(f0+1)..frames` = `1..1` 为空腿——存了档、却没有任何一帧被真正重演验证。
+    /// 只判 `snaps.is_empty()` 挡不住这个；必须用 `f0 + 1 < frames` 才能抓住。
+    #[test]
+    fn storm_rejects_frames_one_saves_one_empty_replay_leg() {
+        let err = run_storm(/* frames */ 1, /* saves */ 1, /* seed */ 1)
+            .expect_err("frames=1,saves=1 的存档点之后无帧可重演,必须报错");
+        assert!(
+            err.to_string().contains("重演腿"),
+            "错误信息该点出是零重演腿的问题,实际: {err}"
         );
     }
 
