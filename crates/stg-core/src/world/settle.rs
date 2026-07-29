@@ -236,6 +236,10 @@ impl WorldBody {
             ITEM_LIFE_PIECE => {
                 let pl = &mut self.players[p];
                 pl.life_pieces += 1;
+                // `>=`（非 `==`）单步追赶（B12）：抗直写越界——若碎片被直接写成远超阈值的
+                // 值，一次进位只清零并 +1 命，超出阈值的部分被丢弃（不会连续进位多命）。
+                // 正常引擎路径下无人直写该字段（只有本函数每次 +1），这是纯防御性降级；
+                // 该降级本身可接受——比 `==` 版本"永远追不上、永不进位"的死锁强。
                 if pl.life_pieces >= PIECES_PER_LIFE {
                     pl.life_pieces = 0;
                     pl.lives = pl.lives.saturating_add(1);
@@ -244,6 +248,7 @@ impl WorldBody {
             ITEM_BOMB_PIECE => {
                 let pl = &mut self.players[p];
                 pl.bomb_pieces += 1;
+                // 同上：`>=` 单步追赶，抗直写越界（B12）。
                 if pl.bomb_pieces >= PIECES_PER_BOMB {
                     pl.bomb_pieces = 0;
                     pl.bombs = pl.bombs.saturating_add(1);
