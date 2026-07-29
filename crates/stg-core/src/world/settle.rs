@@ -236,17 +236,17 @@ impl WorldBody {
             ITEM_LIFE_PIECE => {
                 let pl = &mut self.players[p];
                 pl.life_pieces += 1;
-                if pl.life_pieces == PIECES_PER_LIFE {
+                if pl.life_pieces >= PIECES_PER_LIFE {
                     pl.life_pieces = 0;
-                    pl.lives += 1;
+                    pl.lives = pl.lives.saturating_add(1);
                 }
             }
             ITEM_BOMB_PIECE => {
                 let pl = &mut self.players[p];
                 pl.bomb_pieces += 1;
-                if pl.bomb_pieces == PIECES_PER_BOMB {
+                if pl.bomb_pieces >= PIECES_PER_BOMB {
                     pl.bomb_pieces = 0;
-                    pl.bombs += 1;
+                    pl.bombs = pl.bombs.saturating_add(1);
                 }
             }
             ITEM_STAR => {
@@ -402,6 +402,76 @@ mod tests {
             ],
             "overkill：恰一次命中 + 恰一次死亡"
         );
+        assert_eq!(
+            w.body.enemies.hp[ei], 0,
+            "第二发必须被 ENEMY_DYING 门禁挡住——hp 不得二次扣减（B4）"
+        );
+    }
+
+    /// P4-b：越界 `drop_table` id → 视同空表 + 计 contract_viol，不 panic、不掉道具（B11）。
+    #[test]
+    fn settle_out_of_range_drop_table_degrades_to_empty() {
+        let mut w = crate::step::World::new(1);
+        // 内建表只有 2 张掉落表，取一个必然越界的 id
+        let bad = crate::tables::TABLES_V0.drop_tables.len() as u16 + 9;
+        let e = w.body.create_enemy(crate::enemy::EnemyInit {
+            x: Fx::from_int(0),
+            y: Fx::from_int(80),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            mv_from_x: Fx::ZERO,
+            mv_from_y: Fx::ZERO,
+            mv_to_x: Fx::ZERO,
+            mv_to_y: Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp: 1,
+            hp_max: 1,
+            radius: Fx::from_int(12),
+            hurtbox: Fx::from_int(16),
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 0,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_table: bad,
+            score: 100,
+        });
+        let ei = w.body.enemies.get(e).unwrap();
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: w.body.enemies.x[ei],
+            y: w.body.enemies.y[ei],
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 1,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        let viol_before = w.body.diag.contract_viol;
+        let items_before = w.body.items.iter_alive().count();
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        assert_eq!(
+            w.body.diag.contract_viol,
+            viol_before + 1,
+            "越界表须计一次违约"
+        );
+        assert_eq!(
+            w.body.items.iter_alive().count(),
+            items_before,
+            "不得掉任何道具"
+        );
+        assert!(w.body.enemies.hp[ei] <= 0, "敌照常死（降级不影响伤害结算）");
     }
 
     #[test]
@@ -795,6 +865,26 @@ mod tests {
         w.body
             .credit_item(0, ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);
         assert_eq!(w.body.players[0].bombs, bombs_before + 1);
+        assert_eq!(w.body.players[0].bomb_pieces, 0);
+    }
+
+    /// P4-a 相邻：命数/炸弹到 u8 上限后继续吃碎片 → **饱和**，不 panic 不回绕（B12）。
+    /// 确定性本来就没破（跨平台一致地回绕），但入账值荒谬；且 debug 会 panic。
+    #[test]
+    fn credit_item_saturates_lives_and_bombs_at_u8_max() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].lives = u8::MAX;
+        w.body.players[0].life_pieces = crate::items::PIECES_PER_LIFE - 1;
+        w.body
+            .credit_item(0, crate::items::ITEM_LIFE_PIECE, &crate::tables::TABLES_V0);
+        assert_eq!(w.body.players[0].lives, u8::MAX, "命数须饱和在 u8::MAX");
+        assert_eq!(w.body.players[0].life_pieces, 0, "碎片照常清零进位");
+
+        w.body.players[0].bombs = u8::MAX;
+        w.body.players[0].bomb_pieces = crate::items::PIECES_PER_BOMB - 1;
+        w.body
+            .credit_item(0, crate::items::ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);
+        assert_eq!(w.body.players[0].bombs, u8::MAX, "炸弹数须饱和");
         assert_eq!(w.body.players[0].bomb_pieces, 0);
     }
 
