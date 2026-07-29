@@ -18,6 +18,8 @@ define_pool! {
         radius: Fx, hurtbox: Fx,
         invuln: u16, hit_flash: u8, flags: u8,
         sprite: u16, anm_state: u16,
+        // main_task（follow-ups B25 口径）：只写不读的记账字段——敌死后任务被 owner-gate
+        // 静默清杀，但 main_task 本身不清零；读到非零**不代表**任务还活着，全仓目前无消费者。
         main_task: u32, death_script: u16, drop_table: u16,
         score: u16
     }

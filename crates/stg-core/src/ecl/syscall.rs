@@ -970,6 +970,22 @@ mod tests {
         )
     }
 
+    /// 单个 **CallOnly**（非 Async）sub（raw=1）的镜像——task 号支路③专用（B25）：
+    /// 号在册（`sub_id`/`sub_meta` 均命中）但 `kind() != SubKind::Async`，用来钉死
+    /// "在册但不是零参 Async" 这条校验，而不是被支路②（号不在册）顺手拦下。
+    /// CallOnly sub 不需要 entry 表项（`MissingAsyncEntry` 只查 Async sub）。
+    fn wrong_kind_task_image() -> EclImage {
+        test_image(
+            vec![crate::ecl::ops::OP_RET as u32],
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(0, SubKind::CallOnly, vec![]),
+            ],
+            vec![],
+            Some(0),
+        )
+    }
+
     #[test]
     fn sys_frame_reads_world_frame() {
         let (mut w, ecl) = fresh();
@@ -1337,6 +1353,41 @@ mod tests {
         assert_eq!(w.body.bullets.iter_alive().count(), 0, "先查后建：零副作用");
     }
 
+    /// P4-b 支路①（B25）：`fire`（`sys_create_bullet`）的 task_script 超出 `u16` 范围
+    /// （`u16::try_from` 失败）→ Fault，且先查后建：弹不应被创建（零副作用）。
+    /// 镜像 `spawn_enemy_task_script_out_of_u16_faults_without_enemy`。
+    ///
+    /// **取值刻意挑过**（变异检验陷阱，见 task-3 报告）：`65537 as u16 == 1`，而
+    /// `1` 在 `async_pattern_image()` 里恰是一个合法在册的零参 Async sub——若把
+    /// `u16::try_from` 检查误删成 `as u16` 截断，这条参数会"活下来"变成合法号，
+    /// 从而真的建成弹（支路②③都拦不住它）。用一个恰好越界又恰好在册的取值，才能
+    /// 让"删掉①检查"这个变异被**这条测试**真正捕捉，而不是被②顺手挡住。
+    #[test]
+    fn sys_create_bullet_task_script_out_of_u16_faults_before_creating() {
+        let ecl = async_pattern_image();
+        let mut w = World::new(1);
+        let mut task = Task::default();
+        // 正序：appearance,x,y,speed,angle,xform_off,xform_cnt,task_script
+        let args = [ROW_A, 0, 0, 0, 0, 0, 0, 65537]; // 65537 > u16::MAX，但截断后=1（在册）
+        let r = call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP));
+        assert_eq!(w.body.bullets.iter_alive().count(), 0, "先查后建：零副作用");
+    }
+
+    /// P4-b 支路③（B25）：`fire` 的 task_script 号在册但不是零参 `Async`（这里用
+    /// `CallOnly`）→ Fault，且先查后建：弹不应被创建（零副作用）。镜像
+    /// `spawn_enemy_task_script_wrong_kind_faults_without_enemy`。
+    #[test]
+    fn sys_create_bullet_task_script_wrong_kind_faults_before_creating() {
+        let ecl = wrong_kind_task_image();
+        let mut w = World::new(1);
+        let mut task = Task::default();
+        let args = [ROW_A, 0, 0, 0, 0, 0, 0, 1]; // task_script=1，在册但 CallOnly
+        let r = call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP));
+        assert_eq!(w.body.bullets.iter_alive().count(), 0, "先查后建：零副作用");
+    }
+
     /// 池满 → 押 -1，不 Fault，不派任务（NULL 分支）。
     #[test]
     fn sys_create_bullet_pool_full_pushes_neg1() {
@@ -1597,6 +1648,47 @@ mod tests {
         let r = call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args);
         assert_eq!(r, Err(FAULT_BAD_OP));
         assert_eq!(w.body.enemies.iter_alive().count(), 0, "先验后建：零副作用");
+    }
+
+    /// P4-b 支路①：task 号超出 u16 范围 → Fault，且敌未创建（B25）。
+    ///
+    /// **取值刻意挑过**（同 `sys_create_bullet_task_script_out_of_u16_faults_before_creating`
+    /// 的陷阱说明）：`65537 as u16 == 1`，而 `1` 在 `async_pattern_image()` 里恰是一个
+    /// 合法在册的零参 Async sub——若把 `u16::try_from` 检查误删成 `as u16` 截断，这条
+    /// 参数会"活下来"变成合法号，敌真的会建成（支路②③都拦不住）。选一个恰好越界又
+    /// 恰好截断落进"在册"的取值，才能让这条测试真正命中支路①，而不是被②顺手挡住。
+    #[test]
+    fn spawn_enemy_task_script_out_of_u16_faults_without_enemy() {
+        let ecl = async_pattern_image();
+        let mut w = World::new(1);
+        let mut task = Task::default();
+        // 正序参：x, y, hp, drop_table, score, sprite, task_script
+        let args = [0, 0, 100, 0, 0, 0, 65537]; // 65537 > u16::MAX，但截断后=1（在册）
+        let r = call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP));
+        assert_eq!(
+            w.body.enemies.iter_alive().count(),
+            0,
+            "先验后建：不留半成品"
+        );
+    }
+
+    /// P4-b 支路③：task 号在册但不是零参 `Async`（这里用 `CallOnly`）→ Fault，
+    /// 且敌未创建（B25）。镜像 `sys_create_bullet_task_script_wrong_kind_faults_before_creating`。
+    #[test]
+    fn spawn_enemy_task_script_wrong_kind_faults_without_enemy() {
+        let ecl = wrong_kind_task_image();
+        let mut w = World::new(1);
+        let mut task = Task::default();
+        // 正序参：x, y, hp, drop_table, score, sprite, task_script
+        let args = [0, 0, 100, 0, 0, 0, 1]; // task_script=1，在册但 CallOnly
+        let r = call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args);
+        assert_eq!(r, Err(FAULT_BAD_OP));
+        assert_eq!(
+            w.body.enemies.iter_alive().count(),
+            0,
+            "先验后建：不留半成品"
+        );
     }
 
     /// 任务池满（P4-a 降级）：敌仍建成、`diag.pool_full[POOL_TASK]` 计数 +1、
