@@ -1112,6 +1112,154 @@ mod tests {
     use super::*;
     use crate::world::test_support::*;
 
+    /// 最小合法 `BulletInit`（半径/生命随便给个能过 P4-b 钳制的值，只为灌池）。
+    fn min_bullet_init() -> crate::bullets::BulletInit {
+        crate::bullets::BulletInit {
+            x: Fx::ZERO,
+            y: Fx::ZERO,
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: crate::math::Angle::ZERO,
+            ang_vel: 0,
+            accel: Fx::ZERO,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            sprite: 0,
+            radius: Fx::from_int(2),
+            delay: 0,
+            life: 0xFFFF,
+            flags: 0,
+            grazed_by: 0,
+            transform_head: 0xFFFF,
+            xform_wait: 0,
+            xform_next: 0,
+        }
+    }
+
+    /// 最小合法 `ShotInit`。
+    fn min_shot_init() -> crate::shots::ShotInit {
+        crate::shots::ShotInit {
+            x: Fx::ZERO,
+            y: Fx::ZERO,
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 1,
+            radius: Fx::from_int(2),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        }
+    }
+
+    /// 最小合法 `EnemyInit`。
+    fn min_enemy_init() -> crate::enemy::EnemyInit {
+        crate::enemy::EnemyInit {
+            x: Fx::ZERO,
+            y: Fx::ZERO,
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            mv_from_x: Fx::ZERO,
+            mv_from_y: Fx::ZERO,
+            mv_to_x: Fx::ZERO,
+            mv_to_y: Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp: 1,
+            hp_max: 1,
+            radius: Fx::from_int(12),
+            hurtbox: Fx::from_int(16),
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 0,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_table: 0,
+            score: 0,
+        }
+    }
+
+    /// 最小合法 `FieldInit`。
+    fn min_field_init() -> crate::field::FieldInit {
+        crate::field::FieldInit {
+            x: Fx::ZERO,
+            y: Fx::ZERO,
+            radius: Fx::from_int(10),
+            dmg_per_frame: 0,
+            life: 1,
+            owner: 0,
+            flags: 0,
+        }
+    }
+
+    /// P4-a（宪法级）：弹池满 → 确定性降级——返回 NULL + 计数 + last_status，不 panic。
+    /// 金向量永远走不到这里（实测稳态 ~375/8192），故只能靠本测试守。
+    #[test]
+    fn create_bullet_pool_full_degrades_deterministically() {
+        let mut w = crate::step::World::new(1);
+        for _ in 0..crate::bullets::BulletPool::CAP {
+            let h = w.body.create_bullet(min_bullet_init());
+            assert_ne!(h, crate::bullets::BulletHandle::NULL, "灌池阶段不该失败");
+        }
+        let before = w.body.diag.pool_full[POOL_BULLET];
+        let h = w.body.create_bullet(min_bullet_init());
+        assert_eq!(h, crate::bullets::BulletHandle::NULL, "池满须返 NULL");
+        assert_eq!(w.body.diag.pool_full[POOL_BULLET], before + 1, "池满须计数");
+        assert_eq!(w.body.last_status, STATUS_POOL_FULL);
+    }
+
+    /// P4-a：自机弹池满 → 确定性降级——返回 NULL + 计数 + last_status，不 panic。
+    /// 金向量永远走不到这里，故只能靠本测试守。
+    #[test]
+    fn create_player_shot_pool_full_degrades_deterministically() {
+        let mut w = crate::step::World::new(1);
+        for _ in 0..crate::shots::ShotPool::CAP {
+            let h = w.body.create_player_shot(min_shot_init());
+            assert_ne!(h, crate::shots::ShotHandle::NULL, "灌池阶段不该失败");
+        }
+        let before = w.body.diag.pool_full[POOL_SHOT];
+        let h = w.body.create_player_shot(min_shot_init());
+        assert_eq!(h, crate::shots::ShotHandle::NULL, "池满须返 NULL");
+        assert_eq!(w.body.diag.pool_full[POOL_SHOT], before + 1, "池满须计数");
+        assert_eq!(w.body.last_status, STATUS_POOL_FULL);
+    }
+
+    /// P4-a：敌人池满（cap 256，实测稳态 3/256）→ 确定性降级——返回 NULL + 计数 +
+    /// last_status，不 panic。
+    #[test]
+    fn create_enemy_pool_full_degrades_deterministically() {
+        let mut w = crate::step::World::new(1);
+        for _ in 0..crate::enemy::EnemyPool::CAP {
+            let h = w.body.create_enemy(min_enemy_init());
+            assert_ne!(h, crate::enemy::EnemyHandle::NULL, "灌池阶段不该失败");
+        }
+        let before = w.body.diag.pool_full[POOL_ENEMY];
+        let h = w.body.create_enemy(min_enemy_init());
+        assert_eq!(h, crate::enemy::EnemyHandle::NULL, "池满须返 NULL");
+        assert_eq!(w.body.diag.pool_full[POOL_ENEMY], before + 1, "池满须计数");
+        assert_eq!(w.body.last_status, STATUS_POOL_FULL);
+    }
+
+    /// P4-a：作用区池满（cap 16，实测稳态 1/16）→ 确定性降级——返回 NULL + 计数 +
+    /// last_status，不 panic。
+    #[test]
+    fn create_field_pool_full_degrades_deterministically() {
+        let mut w = crate::step::World::new(1);
+        for _ in 0..crate::field::FieldPool::CAP {
+            let h = w.body.create_field(min_field_init());
+            assert_ne!(h, crate::field::FieldHandle::NULL, "灌池阶段不该失败");
+        }
+        let before = w.body.diag.pool_full[POOL_FIELD];
+        let h = w.body.create_field(min_field_init());
+        assert_eq!(h, crate::field::FieldHandle::NULL, "池满须返 NULL");
+        assert_eq!(w.body.diag.pool_full[POOL_FIELD], before + 1, "池满须计数");
+        assert_eq!(w.body.last_status, STATUS_POOL_FULL);
+    }
+
     #[test]
     fn hits_push_clear_and_overflow() {
         use crate::events::HITS_CAP;
@@ -1144,6 +1292,24 @@ mod tests {
         });
         assert_eq!(w.body.events_len, 1);
         assert_eq!(w.body.events[0].kind, EVT_PLAYER_DIED);
+    }
+
+    /// P4-a：`push_event` 溢出 → 停收 + 计数，不 panic（`push_hit` 的同构缺口，B2）。
+    #[test]
+    fn events_push_overflow_counts_and_drops() {
+        use crate::events::{EVENTS_CAP, Event};
+        let mut w = crate::step::World::new(1);
+        w.body.events_len = EVENTS_CAP as u16;
+        w.body.push_event(Event {
+            kind: crate::events::EVT_ENEMY_DIED,
+            a_index: 0,
+            a_gen: 0,
+            x: Fx::ZERO,
+            y: Fx::ZERO,
+            data: [0, 0],
+        });
+        assert_eq!(w.body.events_len, EVENTS_CAP as u16, "满后未增");
+        assert_eq!(w.body.diag.events_overflow, 1, "须计一次溢出");
     }
 
     /// set_player_power 钳边界：恰 POWER_MAX 原样写入；超一格被钳（判别 min 是否真在——
