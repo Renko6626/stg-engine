@@ -316,8 +316,8 @@ impl<'p, 't> Checker<'p, 't> {
                 },
             }
         }
-        if ok && builtins::folds_shape_color(b.name) {
-            self.check_shape_color(b.name, &out, args, span);
+        if ok && let Some(f) = builtins::fold_start(b.name) {
+            self.check_shape_color(b.name, &out, args, span, f);
         }
         if ok { Some(out) } else { None }
     }
@@ -328,15 +328,24 @@ impl<'p, 't> Checker<'p, 't> {
     /// 本层只负责两件事：① **只在两参都是编译期常量、且绑定了表时**才问判据（变量色
     /// 跳过，由 syscall 的 `valid` 判据在运行期兜底——`sys_create_bullet(s_batch)` 先验
     /// 后建）；② 把否决按 [`atlas::Blame`] 挂到出错那一位的 span 上。
-    fn check_shape_color(&mut self, name: &str, out: &[CallArg], args: &[Expr], span: Span) {
+    /// `f` = 两参糖的起始下标（`builtins::fold_start`）——`fire`/`batch` 是 0，
+    /// `sh_sprite(id, shape, color)` 是 1。**不能硬编码 0**，否则会拿 `id` 当弹型去查表。
+    fn check_shape_color(
+        &mut self,
+        name: &str,
+        out: &[CallArg],
+        args: &[Expr],
+        span: Span,
+        f: usize,
+    ) {
         let Some(table) = self.table else { return };
-        let (Some(shape), Some(color)) = (const_val(&out[0]), const_val(&out[1])) else {
+        let (Some(shape), Some(color)) = (const_val(&out[f]), const_val(&out[f + 1])) else {
             return; // 变量参：运行期由 syscall 的 valid 判据兜底
         };
         if let Err(e) = atlas::check_shape_color(table, name, shape, color) {
             let blamed = match e.blame {
-                atlas::Blame::Shape => &args[0],
-                atlas::Blame::Color => &args[1],
+                atlas::Blame::Shape => &args[f],
+                atlas::Blame::Color => &args[f + 1],
             };
             self.err(expr_span(blamed).unwrap_or(span), e.msg);
         }

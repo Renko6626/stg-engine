@@ -365,6 +365,20 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `drop_add(type: int, n: int)` — 自身待掉落计数增量加 n 颗 type(只增不减,要清空用 drop_clear);计数上限 255 饱和
 - `drop_items()` — 立刻撒出自身待掉落计数;**吐完不清空**(故 drop_items();die(); 掉双份);不加分不发死亡事件
 - `die()` — 就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)
+- `sh_reset(id: int)` — 重置发射器槽 id 为默认(1×1 单发、无 xform/挂弹任务/请求)
+- `sh_sprite(id: int, shape: int, color: int)` — 设发射器的弹型与颜色;查外观表(越界/空格 编译期或 Fault)
+- `sh_offset(id: int, x: fx, y: fx)` — 设出弹点**相对 owner** 的偏移;与 sh_offset_abs 写同一对字段,后写的赢(本条清绝对位标志)
+- `sh_offset_abs(id: int, x: fx, y: fx)` — 设出弹点的**绝对**坐标(不跟随 owner);与 sh_offset 写同一对字段,后写的赢
+- `sh_offset_rad(id: int, angle: angle, r: fx)` — 设出弹点的极坐标偏移;与 sh_offset/sh_offset_abs **永远叠加**,不是覆盖
+- `sh_dist(id: int, d: fx)` — 出生后沿**各自角度**把弹推出去的距离(逐颗方向不同,不是整体平移)
+- `sh_angle(id: int, angle0: angle, step: angle)` — 设基准角与逐弹角增量;开了 sh_aim 时 angle0 是相对自机方向的偏移,开了 sh_ring 时 step 转义成逐层偏移
+- `sh_speed(id: int, speed0: fx, step: fx)` — 设基准速度与逐层速度增量(层数 = sh_count 的 n_speed)
+- `sh_count(id: int, n_angle: int, n_speed: int)` — 设发弹阵列规模:角度向 n_angle 颗 × 速度向 n_speed 层;双边钳 [0,255] 不回绕
+- `sh_aim(id: int, on: int)` — 开/关自机狙(on!=0 为开):开则 sh_angle 的 angle0 是相对自机方向的偏移,而非绝对方向
+- `sh_ring(id: int, on: int)` — 开/关整周环(on!=0 为开):开则 n_angle 颗自动均分整周;关则是以基准方向为中心对称展开的 fan
+- `sh_xform(id: int, xf: xform|none)` — 给发射器挂 xformdef(名或 none);开火时每颗弹都带上
+- `sh_task(id: int, sub: sub|none)` — 给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹
+- `sh_req(id: int, req_id: int)` — 设开火时顺带发的通道 B 请求 id(音效等);0 = 不发
 <!-- gen:builtins:end -->
 
 > **弹 setter 族的 handle 参数是陷阱位**（`set_speed`/`set_angle`/`turn`/`set_vel`/

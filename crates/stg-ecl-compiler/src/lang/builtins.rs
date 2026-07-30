@@ -525,6 +525,139 @@ const BUILTINS: &[Builtin] = &[
         doc: "就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)",
         param_names: &[],
     },
+    // ── Shooter：预存发射参数集（syscall 62-75；参照 ZUN et* 族 600-641）───────
+    //    `sh_reset` 重置编号槽 → 一堆以 `id` 打头的 setter 逐项配 → 开火。改一个字段
+    //    再开一次火就是下一波。每任务 4 个槽（id ∈ 0..4），槽号越界一律 no-op+计数。
+    //    **这 14 条只写字段、无副作用**：appearance 在册/xform 区间/sub 号在册的校验
+    //    全部推迟到开火那一刻（设参数时弹还不存在，没有可拒绝的对象）。
+    Builtin {
+        name: "sh_reset",
+        syscall: syscall::SYS_SH_RESET,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: None,
+        doc: "重置发射器槽 id 为默认(1×1 单发、无 xform/挂弹任务/请求)",
+        param_names: &["id"],
+    },
+    Builtin {
+        name: "sh_sprite",
+        syscall: syscall::SYS_SH_SPRITE,
+        is_op: false,
+        // 颜色轴糖：表层 shape/color 两参，codegen 折叠成单个 appearance（同 fire/batch）。
+        // **折叠起点是下标 1**（第 1 参是 id）——见 `fold_start`。
+        params: &[Val(Int), Val(Int), Val(Int)],
+        ret: None,
+        doc: "设发射器的弹型与颜色;查外观表(越界/空格 编译期或 Fault)",
+        param_names: &["id", "shape", "color"],
+    },
+    Builtin {
+        name: "sh_offset",
+        syscall: syscall::SYS_SH_OFFSET,
+        is_op: false,
+        params: &[Val(Int), Val(Fx), Val(Fx)],
+        ret: None,
+        doc: "设出弹点**相对 owner** 的偏移;与 sh_offset_abs 写同一对字段,后写的赢(本条清绝对位标志)",
+        param_names: &["id", "x", "y"],
+    },
+    Builtin {
+        name: "sh_offset_abs",
+        syscall: syscall::SYS_SH_OFFSET_ABS,
+        is_op: false,
+        params: &[Val(Int), Val(Fx), Val(Fx)],
+        ret: None,
+        doc: "设出弹点的**绝对**坐标(不跟随 owner);与 sh_offset 写同一对字段,后写的赢",
+        param_names: &["id", "x", "y"],
+    },
+    Builtin {
+        name: "sh_offset_rad",
+        syscall: syscall::SYS_SH_OFFSET_RAD,
+        is_op: false,
+        params: &[Val(Int), Val(Angle), Val(Fx)],
+        ret: None,
+        doc: "设出弹点的极坐标偏移;与 sh_offset/sh_offset_abs **永远叠加**,不是覆盖",
+        param_names: &["id", "angle", "r"],
+    },
+    Builtin {
+        name: "sh_dist",
+        syscall: syscall::SYS_SH_DIST,
+        is_op: false,
+        params: &[Val(Int), Val(Fx)],
+        ret: None,
+        doc: "出生后沿**各自角度**把弹推出去的距离(逐颗方向不同,不是整体平移)",
+        param_names: &["id", "d"],
+    },
+    Builtin {
+        name: "sh_angle",
+        syscall: syscall::SYS_SH_ANGLE,
+        is_op: false,
+        params: &[Val(Int), Val(Angle), Val(Angle)],
+        ret: None,
+        doc: "设基准角与逐弹角增量;开了 sh_aim 时 angle0 是相对自机方向的偏移,开了 sh_ring 时 step 转义成逐层偏移",
+        param_names: &["id", "angle0", "step"],
+    },
+    Builtin {
+        name: "sh_speed",
+        syscall: syscall::SYS_SH_SPEED,
+        is_op: false,
+        params: &[Val(Int), Val(Fx), Val(Fx)],
+        ret: None,
+        doc: "设基准速度与逐层速度增量(层数 = sh_count 的 n_speed)",
+        param_names: &["id", "speed0", "step"],
+    },
+    Builtin {
+        name: "sh_count",
+        syscall: syscall::SYS_SH_COUNT,
+        is_op: false,
+        params: &[Val(Int), Val(Int), Val(Int)],
+        ret: None,
+        doc: "设发弹阵列规模:角度向 n_angle 颗 × 速度向 n_speed 层;双边钳 [0,255] 不回绕",
+        param_names: &["id", "n_angle", "n_speed"],
+    },
+    Builtin {
+        name: "sh_aim",
+        syscall: syscall::SYS_SH_AIM,
+        is_op: false,
+        params: &[Val(Int), Val(Int)],
+        ret: None,
+        doc: "开/关自机狙(on!=0 为开):开则 sh_angle 的 angle0 是相对自机方向的偏移,而非绝对方向",
+        param_names: &["id", "on"],
+    },
+    Builtin {
+        name: "sh_ring",
+        syscall: syscall::SYS_SH_RING,
+        is_op: false,
+        params: &[Val(Int), Val(Int)],
+        ret: None,
+        doc: "开/关整周环(on!=0 为开):开则 n_angle 颗自动均分整周;关则是以基准方向为中心对称展开的 fan",
+        param_names: &["id", "on"],
+    },
+    Builtin {
+        name: "sh_xform",
+        syscall: syscall::SYS_SH_XFORM,
+        is_op: false,
+        params: &[Val(Int), Xf],
+        ret: None,
+        doc: "给发射器挂 xformdef(名或 none);开火时每颗弹都带上",
+        param_names: &["id", "xf"],
+    },
+    Builtin {
+        name: "sh_task",
+        syscall: syscall::SYS_SH_TASK,
+        is_op: false,
+        params: &[Val(Int), Sub],
+        ret: None,
+        doc: "给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹",
+        param_names: &["id", "sub"],
+    },
+    Builtin {
+        name: "sh_req",
+        syscall: syscall::SYS_SH_REQ,
+        is_op: false,
+        params: &[Val(Int), Val(Int)],
+        ret: None,
+        doc: "设开火时顺带发的通道 B 请求 id(音效等);0 = 不发",
+        param_names: &["id", "req_id"],
+    },
 ];
 
 /// 按名字查内建函数（线性扫描；表 <30 项，`lang::typeck` 每次 `Call` 判型调用一次）。
@@ -532,17 +665,33 @@ pub fn lookup(name: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.name == name)
 }
 
-/// 该内建的前两位是不是"弹型 + 颜色"两参糖（颜色轴刀）——**单一权威**。
+/// 该内建有没有"弹型 + 颜色"两参糖（颜色轴刀）——[`fold_start`] 的存在性投影。
 ///
-/// `lang::typeck` 据此施加图集三判据（`lang::atlas`）、`lang::codegen` 据此把两位折叠成
-/// 单个 appearance 值。两处**必须问同一个谓词**：从任何一边的名单里掉出去都是静默事故
-/// ——typeck 掉了 = 判据不施加（隐形弹重新可造）；codegen 掉了 = 给 8 参 syscall 压 9 个
-/// 值，整条参数序列错位，只有间接信号能发现。
-///
-/// 名单与 [`BUILTINS`] 的参数名表由 `folds_shape_color_matches_the_param_name_table`
-/// 双向钉死（前两位恰名为 `shape`/`color` ⟺ 本谓词为真）。
+/// **起点不总是 0**（`sh_sprite` 是 1），所以两个消费者要的是 `fold_start` 而不是这个
+/// 布尔；本谓词留给"只关心有没有"的场合。
 pub fn folds_shape_color(name: &str) -> bool {
-    matches!(name, "fire" | "batch")
+    fold_start(name).is_some()
+}
+
+/// "弹型 + 颜色"两参糖的**起始参数下标**（`None` = 该内建没有两参糖）——**单一权威**。
+///
+/// `lang::typeck` 据此施加图集三判据（`lang::atlas`）、`lang::codegen` 据此把那两位折叠成
+/// 单个 appearance 值。两处**必须问同一个函数**：从名单里掉出去都是静默事故——typeck 掉了
+/// = 判据不施加（隐形弹重新可造）；codegen 掉了 = 给 8 参 syscall 压 9 个值，整条参数序列
+/// 错位，只有间接信号能发现。
+///
+/// **起点不总是 0**：`fire`/`batch` 的 `shape`/`color` 是前两参，但
+/// `sh_sprite(id, shape, color)` 的第 1 参是发射器槽号，折的是第 2、3 参。判据曾经硬编码
+/// "下标 0"，加 `sh_sprite` 时必须改成按内建查——否则会把 `id` 和 `shape` 折在一起。
+/// 起点与 [`BUILTINS`] 的参数名表由 `fold_start_matches_the_param_name_table` 双向钉死；
+/// `fire`/`batch` 的产物逐字节不变另有 `fire_and_batch_bytecode_is_byte_for_byte_unchanged`
+/// 押运。
+pub fn fold_start(name: &str) -> Option<usize> {
+    match name {
+        "fire" | "batch" => Some(0),
+        "sh_sprite" => Some(1),
+        _ => None,
+    }
 }
 
 /// 全量导出（编辑体验刀：`gen-ecl-meta`/VS Code 扩展/文档生成的单一真相源——不得另起
@@ -634,6 +783,20 @@ mod tests {
             "drop_add",
             "drop_items",
             "die",
+            "sh_reset",
+            "sh_sprite",
+            "sh_offset",
+            "sh_offset_abs",
+            "sh_offset_rad",
+            "sh_dist",
+            "sh_angle",
+            "sh_speed",
+            "sh_count",
+            "sh_aim",
+            "sh_ring",
+            "sh_xform",
+            "sh_task",
+            "sh_req",
         ];
         for n in names {
             assert!(lookup(n).is_some(), "内建函数 '{n}' 应在表中");
@@ -691,22 +854,32 @@ mod tests {
         }
     }
 
-    /// 折叠谓词与参数名表**双向**一致：前两位恰名为 `shape`/`color` ⟺
-    /// [`folds_shape_color`] 为真。防两种漂移——加了两参糖却忘登记谓词（判据不施加、
-    /// codegen 不折叠），或谓词里多写一个名字（给 syscall 多压一个值）。
+    /// 折叠谓词**与起点**跟参数名表**双向**一致：某相邻两位恰名为 `shape`/`color` ⟺
+    /// [`fold_start`] 指向那一位。防三种漂移——加了两参糖却忘登记（判据不施加、codegen
+    /// 不折叠），谓词里多写一个名字（给 syscall 多压一个值），或**起点填错**（`sh_sprite`
+    /// 填 0 就会把 `id` 和 `shape` 折在一起，整条参数序列错位）。
     #[test]
-    fn folds_shape_color_matches_the_param_name_table() {
+    fn fold_start_matches_the_param_name_table() {
         for b in all() {
-            let by_names =
-                b.param_names.first() == Some(&"shape") && b.param_names.get(1) == Some(&"color");
+            let by_names = b
+                .param_names
+                .windows(2)
+                .position(|w| w == ["shape", "color"]);
             assert_eq!(
-                folds_shape_color(b.name),
+                fold_start(b.name),
                 by_names,
-                "'{}' 的折叠谓词与参数名表不一致",
+                "'{}' 的折叠起点与参数名表不一致",
                 b.name
             );
         }
-        assert!(folds_shape_color("fire") && folds_shape_color("batch"));
+        assert_eq!(fold_start("fire"), Some(0));
+        assert_eq!(fold_start("batch"), Some(0));
+        assert_eq!(
+            fold_start("sh_sprite"),
+            Some(1),
+            "第 1 参是 id，折的是 2/3 参"
+        );
+        assert!(folds_shape_color("fire") && folds_shape_color("sh_sprite"));
         assert!(!folds_shape_color("spawn_enemy"), "sprite 位不是两参糖");
     }
 
@@ -809,6 +982,20 @@ mod tests {
             "drop_add",
             "drop_items",
             "die",
+            "sh_reset",
+            "sh_sprite",
+            "sh_offset",
+            "sh_offset_abs",
+            "sh_offset_rad",
+            "sh_dist",
+            "sh_angle",
+            "sh_speed",
+            "sh_count",
+            "sh_aim",
+            "sh_ring",
+            "sh_xform",
+            "sh_task",
+            "sh_req",
         ] {
             assert_eq!(lookup(n).unwrap().ret, None, "'{n}' 应无返回值");
         }

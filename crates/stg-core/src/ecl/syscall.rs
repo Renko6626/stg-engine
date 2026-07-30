@@ -22,6 +22,9 @@
 use crate::boss::BossUiSlot;
 use crate::bullets::{BulletHandle, BulletInit};
 use crate::ecl::image::{SubId, SubKind};
+use crate::ecl::shooter::{
+    SH_ABS_OFFSET, SH_AIMED, SH_NO_TASK, SH_RING, SHOOTERS_PER_TASK, ShooterSlot,
+};
 use crate::ecl::task::{LOCALS, OWNER_BULLET, OWNER_ENEMY, Task};
 use crate::ecl::vm::{FAULT_BAD_OP, FAULT_STACK, VmCtx};
 use crate::enemy::{EnemyHandle, EnemyInit};
@@ -148,6 +151,30 @@ pub const SYS_DROP_ITEMS: u16 = 60;
 /// `death_script` 通电那一刀，届时与 ZUN 完全同构。
 pub const SYS_DIE: u16 = 61;
 
+// ── Shooter：预存发射参数集（62-76；shooter 刀 2026-07-31，参照 ZUN et* 族 600-641）──
+//
+// 每任务 4 个编号槽（[`crate::ecl::shooter::SHOOTERS_PER_TASK`]）。`id ≥ SHOOTERS_PER_TASK`
+// 一律 no-op + `contract_viol`（P4-b）——不 Fault，因为"槽号写错"是常见笔误而非结构性违约，
+// 降级比杀任务更有用。判据集中在 [`shooter_mut`] 一处，14 个派发臂共用。
+//
+// 下面 14 条**都只是写字段，无副作用**：不查 appearance 是否在册、不查 xform 区间、不查
+// sub 号在册——那些校验统一在**开火那一刻**做（同 `fire` 的"先验后建"口径：设参数时弹还
+// 不存在，没有可拒绝的对象）。`sh_fire`(76) 的语义见其自身文档。
+pub const SYS_SH_RESET: u16 = 62;
+pub const SYS_SH_SPRITE: u16 = 63;
+pub const SYS_SH_OFFSET: u16 = 64;
+pub const SYS_SH_OFFSET_ABS: u16 = 65;
+pub const SYS_SH_OFFSET_RAD: u16 = 66;
+pub const SYS_SH_DIST: u16 = 67;
+pub const SYS_SH_ANGLE: u16 = 68;
+pub const SYS_SH_SPEED: u16 = 69;
+pub const SYS_SH_COUNT: u16 = 70;
+pub const SYS_SH_AIM: u16 = 71;
+pub const SYS_SH_RING: u16 = 72;
+pub const SYS_SH_XFORM: u16 = 73;
+pub const SYS_SH_TASK: u16 = 74;
+pub const SYS_SH_REQ: u16 = 75;
+
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
 fn pop(task: &mut Task) -> Result<i32, u8> {
@@ -243,6 +270,24 @@ fn self_enemy_handle(task: &Task) -> Result<EnemyHandle, u8> {
         index: task.owner_index,
         generation: task.owner_gen,
     })
+}
+
+/// 取本任务的第 `id` 个 shooter（可变）。`id` 越界 → `None` + `contract_viol` + `BAD_ARGS`
+/// （P4-b：no-op，不 Fault——见 62-75 号表注释）。`id` 是脚本给的任意 `i32`，负数与超界同处置。
+///
+/// **必须在参数全部 `pop` 完之后再调**：栈效应与成功路径一致（同 `sys_emit_req` 的"先弹后验"
+/// 口径），否则越界腿会给下一条指令留下垃圾栈。
+fn shooter_mut<'a>(
+    id: i32,
+    task_index: u16,
+    ctx: &'a mut VmCtx<'_>,
+) -> Option<&'a mut ShooterSlot> {
+    if id < 0 || id as usize >= SHOOTERS_PER_TASK {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+        ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+        return None;
+    }
+    Some(&mut ctx.tasks.shooters[task_index as usize][id as usize])
 }
 
 /// 号表派发。坏号/参数不足 → `Err(fault_code)`（由 `vm::exec` 转 `Exec::Fault`）。
@@ -430,6 +475,158 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_DIE => {
             let h = self_enemy_handle(task)?;
             ctx.body.kill_enemy_by_handle(h, ctx.tables);
+            Ok(())
+        }
+        // ── Shooter 配置面 62-75（参数**逆序弹出**，照 `sys_move_enemy_to`；`id` 是首参、
+        //    故最后弹）。每条都是"弹完全部参数 → 取槽（越界即 no-op）→ 写字段"三段式。
+        SYS_SH_RESET => {
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                *s = ShooterSlot::default();
+            }
+            Ok(())
+        }
+        SYS_SH_SPRITE => {
+            // 表层是 (id, shape, color) 三参，但 shape/color 在**编译期**已折叠成单个
+            // appearance 值（`builtins::fold_start("sh_sprite") == 1`），故这里只弹两个。
+            // appearance 在册与否留到开火时查（同 `fire` 的先验后建）。
+            let appearance = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                s.appearance = appearance.clamp(0, u16::MAX as i32) as u16;
+            }
+            Ok(())
+        }
+        SYS_SH_OFFSET => {
+            let y = pop(task)?;
+            let x = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                s.off_x = Fx::from_raw(x);
+                s.off_y = Fx::from_raw(y);
+                s.flags &= !SH_ABS_OFFSET; // 相对模式：清标志（与 sh_offset_abs 互为反向）
+            }
+            Ok(())
+        }
+        SYS_SH_OFFSET_ABS => {
+            let y = pop(task)?;
+            let x = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                s.off_x = Fx::from_raw(x);
+                s.off_y = Fx::from_raw(y);
+                s.flags |= SH_ABS_OFFSET;
+            }
+            Ok(())
+        }
+        SYS_SH_OFFSET_RAD => {
+            let r = pop(task)?;
+            let ang = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                s.polar_ang = bam(ang);
+                s.polar_r = Fx::from_raw(r);
+            }
+            Ok(())
+        }
+        SYS_SH_DIST => {
+            let d = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                s.dist = Fx::from_raw(d);
+            }
+            Ok(())
+        }
+        SYS_SH_ANGLE => {
+            let step = pop(task)?;
+            let angle0 = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                s.angle0 = bam(angle0);
+                s.angle_step = bam(step);
+            }
+            Ok(())
+        }
+        SYS_SH_SPEED => {
+            let step = pop(task)?;
+            let speed0 = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                s.speed0 = Fx::from_raw(speed0);
+                s.speed_step = Fx::from_raw(step);
+            }
+            Ok(())
+        }
+        SYS_SH_COUNT => {
+            let n_speed = pop(task)?;
+            let n_angle = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                // P4-b：脚本给的任意 i32，先钳进 [0,255] 再存（裸 `as u8` 会让负数回绕）。
+                s.n_angle = n_angle.clamp(0, u8::MAX as i32) as u8;
+                s.n_speed = n_speed.clamp(0, u8::MAX as i32) as u8;
+            }
+            Ok(())
+        }
+        SYS_SH_AIM => {
+            let on = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                if on != 0 {
+                    s.flags |= SH_AIMED;
+                } else {
+                    s.flags &= !SH_AIMED;
+                }
+            }
+            Ok(())
+        }
+        SYS_SH_RING => {
+            let on = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                if on != 0 {
+                    s.flags |= SH_RING;
+                } else {
+                    s.flags &= !SH_RING;
+                }
+            }
+            Ok(())
+        }
+        SYS_SH_XFORM => {
+            // 表层 `XformRef` 在 codegen 里降低成 `(off, cnt)` **两个**栈值。`cnt == 0` 即无
+            // xform。**此处不校验区间**——`off + cnt*3 ≤ LOCALS` 在开火时查（与 `fire` 同
+            // 口径：`fire` 也是在建弹那一刻才查 `LOCALS` 边界）。这里只做**存储收窄**的
+            // 饱和钳，防负值/超宽裸 `as` 回绕成一个看似合法的小区间。
+            let cnt = pop(task)?;
+            let off = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                s.xform_off = off.clamp(0, u16::MAX as i32) as u16;
+                s.xform_cnt = cnt.clamp(0, u8::MAX as i32) as u8;
+            }
+            Ok(())
+        }
+        SYS_SH_TASK => {
+            // 表层 `SubRef` 降低成一个栈值（sub 号或 -1）。**此处不校验号是否在册**——与
+            // `fire` 的"先验后建"不同，因为设的时候还没建弹；校验在开火时做。
+            // 超 `u16` 的号同样降级成"不挂"（P4-b，确定性安全结果）。
+            let sub = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                s.task_script = if sub < 0 {
+                    SH_NO_TASK
+                } else {
+                    u16::try_from(sub).unwrap_or(SH_NO_TASK)
+                };
+            }
+            Ok(())
+        }
+        SYS_SH_REQ => {
+            let req_id = pop(task)?;
+            let id = pop(task)?;
+            if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+                s.on_fire_req = req_id.clamp(0, u16::MAX as i32) as u16;
+            }
             Ok(())
         }
         _ => Err(FAULT_BAD_OP),
@@ -991,6 +1188,7 @@ fn sys_aim_player_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
 mod tests {
     use super::*;
     use crate::ecl::image::{EclImage, EntryInit, SubInit, SubKind, test_image};
+    use crate::ecl::shooter::{SH_ABS_OFFSET, SH_AIMED, SH_RING, SHOOTERS_PER_TASK, ShooterSlot};
     use crate::ecl::task::{OWNER_ENEMY, OWNER_STAGE, Task};
     use crate::step::World;
     use crate::tables::TABLES_V0;
@@ -3109,5 +3307,284 @@ mod tests {
                 "syscall {no} 的非敌 owner 腿"
             );
         }
+    }
+
+    // ── Shooter 配置面（syscall 62-75；shooter 刀 T2 2026-07-31）──────────────
+    //
+    // 四条测试全是**表驱动**的：14 个 setter 各写一段复制粘贴既臃肿、又保证将来加第 15 个
+    // 时漏掉——而漏掉的那个恰恰是最可能忘写边界检查/写串字段的那个。表在一处，加一行即入网。
+
+    /// 一个 setter 的完整描述：syscall 号 + `id` 之后的实参（正序）+ "它应当造成的改变"。
+    /// `mutate` 是**期望的**改变（作用在 `ShooterSlot::default()` 上），与实际派发结果整槽比对
+    /// ⇒ 既验"该改的改了"，又验"不该改的一个字节都没动"。
+    struct ShCase {
+        no: u16,
+        /// `id` 之后的实参，脚本声明顺序（正序压栈）。
+        rest: &'static [i32],
+        mutate: fn(&mut ShooterSlot),
+    }
+
+    /// 14 个 setter 的单一权威表（新增 setter 就加一行——四条测试全部自动覆盖它）。
+    fn shooter_cases() -> Vec<ShCase> {
+        vec![
+            // `sh_reset` 作用在默认槽上是恒等——它自己的判别腿在
+            // `sh_reset_restores_every_field_to_default`（先弄脏再重置）。
+            ShCase {
+                no: SYS_SH_RESET,
+                rest: &[],
+                mutate: |_s| {},
+            },
+            ShCase {
+                no: SYS_SH_SPRITE,
+                rest: &[19], // 编译期已折叠成单个 appearance（同 fire/batch）
+                mutate: |s| s.appearance = 19,
+            },
+            ShCase {
+                no: SYS_SH_OFFSET,
+                rest: &[0x0001_0000, 0x0002_0000],
+                mutate: |s| {
+                    s.off_x = Fx::from_raw(0x0001_0000);
+                    s.off_y = Fx::from_raw(0x0002_0000);
+                },
+            },
+            ShCase {
+                no: SYS_SH_OFFSET_ABS,
+                rest: &[0x0003_0000, 0x0004_0000],
+                mutate: |s| {
+                    s.off_x = Fx::from_raw(0x0003_0000);
+                    s.off_y = Fx::from_raw(0x0004_0000);
+                    s.flags |= SH_ABS_OFFSET;
+                },
+            },
+            ShCase {
+                no: SYS_SH_OFFSET_RAD,
+                rest: &[0x2000, 0x0005_0000],
+                mutate: |s| {
+                    s.polar_ang = Angle(0x2000);
+                    s.polar_r = Fx::from_raw(0x0005_0000);
+                },
+            },
+            ShCase {
+                no: SYS_SH_DIST,
+                rest: &[0x0006_0000],
+                mutate: |s| s.dist = Fx::from_raw(0x0006_0000),
+            },
+            ShCase {
+                no: SYS_SH_ANGLE,
+                rest: &[0x1234, 0x0100],
+                mutate: |s| {
+                    s.angle0 = Angle(0x1234);
+                    s.angle_step = Angle(0x0100);
+                },
+            },
+            ShCase {
+                no: SYS_SH_SPEED,
+                rest: &[0x0002_8000, -0x0000_4000],
+                mutate: |s| {
+                    s.speed0 = Fx::from_raw(0x0002_8000);
+                    s.speed_step = Fx::from_raw(-0x0000_4000);
+                },
+            },
+            ShCase {
+                no: SYS_SH_COUNT,
+                rest: &[7, 3],
+                mutate: |s| {
+                    s.n_angle = 7;
+                    s.n_speed = 3;
+                },
+            },
+            ShCase {
+                no: SYS_SH_AIM,
+                rest: &[1],
+                mutate: |s| s.flags |= SH_AIMED,
+            },
+            ShCase {
+                no: SYS_SH_RING,
+                rest: &[1],
+                mutate: |s| s.flags |= SH_RING,
+            },
+            ShCase {
+                no: SYS_SH_XFORM,
+                rest: &[9, 2], // codegen 把 XformRef 降低成 (off, cnt) 两个栈值
+                mutate: |s| {
+                    s.xform_off = 9;
+                    s.xform_cnt = 2;
+                },
+            },
+            ShCase {
+                no: SYS_SH_TASK,
+                rest: &[3],
+                mutate: |s| s.task_script = 3,
+            },
+            ShCase {
+                no: SYS_SH_REQ,
+                rest: &[42],
+                mutate: |s| s.on_fire_req = 42,
+            },
+        ]
+    }
+
+    /// `id` 打头的完整实参（正序）。
+    fn sh_args(id: i32, rest: &[i32]) -> Vec<i32> {
+        let mut v = vec![id];
+        v.extend_from_slice(rest);
+        v
+    }
+
+    /// `fresh()` + 把 0 号任务的 shooter 槽置成 `spawn` 会给的初值。
+    ///
+    /// ⚠️ **必须显式做这一步**：`World::new` 走 `alloc_zeroed`（见 `step::World::new`），
+    /// 而 `ShooterSlot::default()` **非全零**（`n_angle/n_speed=1`、`task_script=0xFFFF`）——
+    /// 生产路径上是 `TaskPool::spawn` 负责重置，而本模块的 `call` 助手用的是手拼 `Task`
+    /// （从没经过 `spawn`）。不补这一步，测试比对的基线就是"全零槽"而非真实初值，
+    /// `sh_reset` 一类断言会以看不出所以然的方式红。坑档见 `TaskPool::new` 文档。
+    fn fresh_with_shooters() -> (Box<World>, EclImage) {
+        let (mut w, ecl) = fresh();
+        w.tasks.shooters[0] = [ShooterSlot::default(); SHOOTERS_PER_TASK];
+        (w, ecl)
+    }
+
+    /// 每个 setter 只改自己那一维，其余字段纹丝不动。
+    /// 这条守的是"14 个派发臂没有互相串写"——串写在只测单个 setter 的测试里看不出来。
+    #[test]
+    fn each_shooter_setter_touches_only_its_own_field() {
+        for c in shooter_cases() {
+            let (mut w, ecl) = fresh_with_shooters();
+            let mut task = Task::default();
+            assert!(
+                call(&mut w, &ecl, &mut task, c.no, &sh_args(1, c.rest)).is_ok(),
+                "syscall {} 应正常返回",
+                c.no
+            );
+            let mut want = ShooterSlot::default();
+            (c.mutate)(&mut want);
+            assert_eq!(
+                w.tasks.shooters[0][1], want,
+                "syscall {} 改动的字段集不符（多改/少改/串写）",
+                c.no
+            );
+            for k in [0usize, 2, 3] {
+                assert_eq!(
+                    w.tasks.shooters[0][k],
+                    ShooterSlot::default(),
+                    "syscall {} 串写到了槽 {k}",
+                    c.no
+                );
+            }
+            assert_eq!(task.sp, 0, "syscall {} 未把实参全部弹栈", c.no);
+        }
+    }
+
+    /// `sh_offset` 与 `sh_offset_abs` 写的是同一对字段，只是解释方式不同——**后写的赢**。
+    /// 判别腿：先 abs 后 rel，`SH_ABS_OFFSET` 必须被**清掉**（不是只置不清）。
+    #[test]
+    fn offset_abs_flag_is_set_and_cleared_by_the_two_setters() {
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut task = Task::default();
+        let ten = Fx::from_int(10).raw();
+        let twenty = Fx::from_int(20).raw();
+        let thirty = Fx::from_int(30).raw();
+        let forty = Fx::from_int(40).raw();
+
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_SH_OFFSET_ABS,
+                &[0, ten, twenty]
+            )
+            .is_ok()
+        );
+        let s = w.tasks.shooters[0][0];
+        assert_ne!(s.flags & SH_ABS_OFFSET, 0, "abs 设完标志应置位");
+        assert_eq!((s.off_x.raw(), s.off_y.raw()), (ten, twenty));
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_OFFSET, &[0, thirty, forty]).is_ok());
+        let s = w.tasks.shooters[0][0];
+        assert_eq!(
+            s.flags & SH_ABS_OFFSET,
+            0,
+            "相对模式必须把 SH_ABS_OFFSET **清掉**（只置不清 = 一旦 abs 过就再也回不去）"
+        );
+        assert_eq!((s.off_x.raw(), s.off_y.raw()), (thirty, forty), "后写的赢");
+    }
+
+    /// `sh_reset` 恢复**全部**默认（不只是清几个字段）。
+    #[test]
+    fn sh_reset_restores_every_field_to_default() {
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut task = Task::default();
+        // 14 个 setter 全调一遍把槽 0 弄脏（`sh_reset` 自己那行是恒等，无所谓）。
+        for c in shooter_cases() {
+            assert!(call(&mut w, &ecl, &mut task, c.no, &sh_args(0, c.rest)).is_ok());
+        }
+        assert_ne!(
+            w.tasks.shooters[0][0],
+            ShooterSlot::default(),
+            "前置条件：整套 setter 跑完槽必须确实脏了（否则本测试是假绿）"
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_RESET, &[0]).is_ok());
+        assert_eq!(
+            w.tasks.shooters[0][0],
+            ShooterSlot::default(),
+            "sh_reset 必须恢复整槽默认，不是清几个字段"
+        );
+    }
+
+    /// P4-b：`id ≥ SHOOTERS_PER_TASK` → no-op + contract_viol + STATUS_BAD_ARGS。
+    /// **14 个 setter 各一腿**（表驱动）——只测其中一个的话，漏写边界检查的那几个不会红。
+    #[test]
+    fn every_shooter_setter_rejects_out_of_range_id() {
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut task = Task::default();
+        let mut expect_viol = w.body.diag.contract_viol;
+        for c in shooter_cases() {
+            for bad_id in [SHOOTERS_PER_TASK as i32, -1] {
+                w.body.last_status = crate::world::STATUS_OK;
+                assert!(
+                    call(&mut w, &ecl, &mut task, c.no, &sh_args(bad_id, c.rest)).is_ok(),
+                    "syscall {} 越界 id 是 no-op 而非 Fault",
+                    c.no
+                );
+                expect_viol += 1;
+                assert_eq!(
+                    w.body.diag.contract_viol, expect_viol,
+                    "syscall {} 的 id={bad_id} 腿应记一次 contract_viol",
+                    c.no
+                );
+                assert_eq!(
+                    w.body.last_status,
+                    crate::world::STATUS_BAD_ARGS,
+                    "syscall {} 的 id={bad_id} 腿应置 STATUS_BAD_ARGS",
+                    c.no
+                );
+                // no-op 的判别腿：只查 contract_viol 证不了"没写脏"。
+                for k in 0..SHOOTERS_PER_TASK {
+                    assert_eq!(
+                        w.tasks.shooters[0][k],
+                        ShooterSlot::default(),
+                        "syscall {} 的 id={bad_id} 腿写脏了槽 {k}",
+                        c.no
+                    );
+                }
+                assert_eq!(task.sp, 0, "syscall {} 越界腿也应把实参全部弹栈", c.no);
+            }
+        }
+    }
+
+    /// P4-b：`sh_count` 的参数是脚本给的任意 i32，先钳后存，不回绕不 panic。
+    #[test]
+    fn sh_count_clamps_both_ends() {
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_COUNT, &[0, -5, i32::MAX]).is_ok());
+        let s = w.tasks.shooters[0][0];
+        assert_eq!(s.n_angle, 0, "负数下钳到 0（裸 `as u8` 会回绕成 251）");
+        assert_eq!(s.n_speed, 255, "i32::MAX 上钳到 255");
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_COUNT, &[0, 256, -256]).is_ok());
+        let s = w.tasks.shooters[0][0];
+        assert_eq!(s.n_angle, 255, "256 上钳到 255（裸 `as u8` 会回绕成 0）");
+        assert_eq!(s.n_speed, 0, "-256 下钳到 0");
     }
 }

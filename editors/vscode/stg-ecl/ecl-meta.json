@@ -39,6 +39,20 @@
     {"name": "drop_clear", "signature": "drop_clear()", "ret": null, "doc": "清空自身待掉落计数;self 必须是敌", "params": []},
     {"name": "drop_add", "signature": "drop_add(type: int, n: int)", "ret": null, "doc": "自身待掉落计数增量加 n 颗 type(只增不减,要清空用 drop_clear);计数上限 255 饱和", "params": [{"name": "type", "ty": "int"}, {"name": "n", "ty": "int"}]},
     {"name": "drop_items", "signature": "drop_items()", "ret": null, "doc": "立刻撒出自身待掉落计数;**吐完不清空**(故 drop_items();die(); 掉双份);不加分不发死亡事件", "params": []},
-    {"name": "die", "signature": "die()", "ret": null, "doc": "就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)", "params": []}
+    {"name": "die", "signature": "die()", "ret": null, "doc": "就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)", "params": []},
+    {"name": "sh_reset", "signature": "sh_reset(id: int)", "ret": null, "doc": "重置发射器槽 id 为默认(1×1 单发、无 xform/挂弹任务/请求)", "params": [{"name": "id", "ty": "int"}]},
+    {"name": "sh_sprite", "signature": "sh_sprite(id: int, shape: int, color: int)", "ret": null, "doc": "设发射器的弹型与颜色;查外观表(越界/空格 编译期或 Fault)", "params": [{"name": "id", "ty": "int"}, {"name": "shape", "ty": "int"}, {"name": "color", "ty": "int"}]},
+    {"name": "sh_offset", "signature": "sh_offset(id: int, x: fx, y: fx)", "ret": null, "doc": "设出弹点**相对 owner** 的偏移;与 sh_offset_abs 写同一对字段,后写的赢(本条清绝对位标志)", "params": [{"name": "id", "ty": "int"}, {"name": "x", "ty": "fx"}, {"name": "y", "ty": "fx"}]},
+    {"name": "sh_offset_abs", "signature": "sh_offset_abs(id: int, x: fx, y: fx)", "ret": null, "doc": "设出弹点的**绝对**坐标(不跟随 owner);与 sh_offset 写同一对字段,后写的赢", "params": [{"name": "id", "ty": "int"}, {"name": "x", "ty": "fx"}, {"name": "y", "ty": "fx"}]},
+    {"name": "sh_offset_rad", "signature": "sh_offset_rad(id: int, angle: angle, r: fx)", "ret": null, "doc": "设出弹点的极坐标偏移;与 sh_offset/sh_offset_abs **永远叠加**,不是覆盖", "params": [{"name": "id", "ty": "int"}, {"name": "angle", "ty": "angle"}, {"name": "r", "ty": "fx"}]},
+    {"name": "sh_dist", "signature": "sh_dist(id: int, d: fx)", "ret": null, "doc": "出生后沿**各自角度**把弹推出去的距离(逐颗方向不同,不是整体平移)", "params": [{"name": "id", "ty": "int"}, {"name": "d", "ty": "fx"}]},
+    {"name": "sh_angle", "signature": "sh_angle(id: int, angle0: angle, step: angle)", "ret": null, "doc": "设基准角与逐弹角增量;开了 sh_aim 时 angle0 是相对自机方向的偏移,开了 sh_ring 时 step 转义成逐层偏移", "params": [{"name": "id", "ty": "int"}, {"name": "angle0", "ty": "angle"}, {"name": "step", "ty": "angle"}]},
+    {"name": "sh_speed", "signature": "sh_speed(id: int, speed0: fx, step: fx)", "ret": null, "doc": "设基准速度与逐层速度增量(层数 = sh_count 的 n_speed)", "params": [{"name": "id", "ty": "int"}, {"name": "speed0", "ty": "fx"}, {"name": "step", "ty": "fx"}]},
+    {"name": "sh_count", "signature": "sh_count(id: int, n_angle: int, n_speed: int)", "ret": null, "doc": "设发弹阵列规模:角度向 n_angle 颗 × 速度向 n_speed 层;双边钳 [0,255] 不回绕", "params": [{"name": "id", "ty": "int"}, {"name": "n_angle", "ty": "int"}, {"name": "n_speed", "ty": "int"}]},
+    {"name": "sh_aim", "signature": "sh_aim(id: int, on: int)", "ret": null, "doc": "开/关自机狙(on!=0 为开):开则 sh_angle 的 angle0 是相对自机方向的偏移,而非绝对方向", "params": [{"name": "id", "ty": "int"}, {"name": "on", "ty": "int"}]},
+    {"name": "sh_ring", "signature": "sh_ring(id: int, on: int)", "ret": null, "doc": "开/关整周环(on!=0 为开):开则 n_angle 颗自动均分整周;关则是以基准方向为中心对称展开的 fan", "params": [{"name": "id", "ty": "int"}, {"name": "on", "ty": "int"}]},
+    {"name": "sh_xform", "signature": "sh_xform(id: int, xf: xform|none)", "ret": null, "doc": "给发射器挂 xformdef(名或 none);开火时每颗弹都带上", "params": [{"name": "id", "ty": "int"}, {"name": "xf", "ty": "xform|none"}]},
+    {"name": "sh_task", "signature": "sh_task(id: int, sub: sub|none)", "ret": null, "doc": "给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹", "params": [{"name": "id", "ty": "int"}, {"name": "sub", "ty": "sub|none"}]},
+    {"name": "sh_req", "signature": "sh_req(id: int, req_id: int)", "ret": null, "doc": "设开火时顺带发的通道 B 请求 id(音效等);0 = 不发", "params": [{"name": "id", "ty": "int"}, {"name": "req_id", "ty": "int"}]}
   ]
 }
