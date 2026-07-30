@@ -26,7 +26,14 @@ define_pool! {
         // `main_task_slot_reuse_does_not_spuriously_self_destruct`）。敌死后任务被 owner-gate
         // 静默清杀那条路径本字段不清零（owner 已死，读它没有消费者），敌槽复用时会随
         // `EnemyInit`（exhaustive Init）重置为 0。
-        main_task: u32, death_script: u16, drop_table: u16,
+        main_task: u32, death_script: u16,
+        // 掉落计数（敌人死亡效果刀 2026-07-30）：**逐道具类型的待掉落颗数**，敌身上的
+        // 可变状态。此前是 `drop_table: u16`（生成时定死的表索引）——改成计数后脚本可以
+        // 增量配置（`drop_clear`/`drop_add`），且"撒掉落"与"死亡"得以解耦（`drop_items`）。
+        // `drop_table` 未消失，只是退化成 `spawn_enemy` 的**生成参数**：由
+        // `tables::drop_counts` 在建敌时展开进本字段，此后无人读表号。
+        // 撒的顺序是**类型升序**（I4），见 `world::settle::spill_drops`。
+        drop_count: [u8; crate::items::ITEM_TYPE_COUNT],
         score: u16
     }
 }
@@ -62,7 +69,7 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 0,
+            drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 100,
         }
     }

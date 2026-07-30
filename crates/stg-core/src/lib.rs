@@ -32,7 +32,15 @@ extern crate self as stg_core;
 ///
 /// **2 → 3**（ECL parity 刀 Task 2，2026-07-30）：syscall 号表新增 `SYS_CLEAR_BULLETS`(54)
 /// （全场清弹 B19）——号表变更同 op 表冻结纪律，同款口径 bump。
-pub const ENGINE_VER: u32 = 3;
+///
+/// **3 → 4**（敌人死亡效果刀 T3，2026-07-30）——**两条理由，缺一不可**：
+/// ① syscall 号表新增 `SYS_DROP_CLEAR`(58)/`SYS_DROP_ADD`(59)/`SYS_DROP_ITEMS`(60)/
+///   `SYS_DIE`(61)；
+/// ② **敌人池字段布局变更**（本刀 T1）：`drop_table: u16` → `drop_count: [u8; 5]`，
+///   `EnemyPool` 的 SoA 字段序/宽度变了 ⇒ SaveBytes 载荷编码随之变化（存档 wire format
+///   变更）。T1 落地时未 bump（本刀内的中间状态），身份三元组直到本步才动，故理由记在
+///   这里——只写 ① 会让人误以为旧档还能读。
+pub const ENGINE_VER: u32 = 4;
 
 pub use stg_derive::define_pool;
 

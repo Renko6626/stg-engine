@@ -1686,10 +1686,10 @@ mod tests {
     /// D9 测试专用敌：`drop_table=1`（内建 1 号表非空：POWER×2 + POINT×1）+ `score=100`——
     /// 若实现者照抄 `damage_enemy`（掉道具 / 发 `EVT_ENEMY_DIED`），两条反向断言立刻显形。
     ///
-    /// `score=100` **不**构成判别力：`damage_enemy` 从不直接写 `players[].score`，它只把
-    /// `enemies.score[e]` 塞进 `EVT_ENEMY_DIED` 的 `data[0]` 与 `REQ_ENEMY_DEATH`；分数是
-    /// 道具被拾到时经 `world::settle::credit_item` 才入账的。留 `score=100` 只是让这只敌
-    /// 长得像真敌人。
+    /// `score=100` **也构成判别力**（订正于 2026-07-30 敌死加分刀）：`world::settle::kill_enemy`
+    /// 现在**直接**写 `players[0].score`，所以照抄死亡效果的错实现会当场把分加上。
+    /// （旧注释说它"不构成判别力"——那在加分落地**之前**是对的：当时分数只能由道具被拾到时
+    /// 经 `credit_item` 入账，而这些测试没人去捡。别照旧注释把 score 断言当惰性的删掉。）
     fn d9_enemy_init(x: i32, y: i32) -> crate::enemy::EnemyInit {
         crate::enemy::EnemyInit {
             x: Fx::from_int(x),
@@ -1715,20 +1715,26 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 1,
+            drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, 1).0,
             score: 100,
         }
     }
 
     /// D9：敌主协程自然返回 → owner 敌被标 ENEMY_DYING（相位 9 回收）。
     ///
-    /// **静默退场**：不掉道具、不发 EVT_ENEMY_DIED——这两条是与 `damage_enemy`（伤害致死）
-    /// 路径的**真判别腿**：照抄 `damage_enemy` 会立刻掉 3 颗道具 + 发一条 `EVT_ENEMY_DIED`。
+    /// **静默退场**：不掉道具、不加分、不发 EVT_ENEMY_DIED——**三条都是真判别腿**，
+    /// 把 `world::settle::kill_enemy` 挂进上面的 `Exec::End` 分支会让它们同时红。
+    /// 这是"死亡三路径"里的第 3 条；另外两条（被打死 / 脚本 `die()`）的导航见
+    /// `world::settle` 测试模块里那段以"敌人死亡的三条路径"起头的路径清单
+    /// （在 `kill_enemy_is_idempotent` 之前，**不在测试模块顶部**——2026-07-30 订正指向）。
     ///
-    /// 下面那条 `score` 断言**不是**判别腿（别拿它当"静默退场已被证明"的证据）：`damage_enemy`
-    /// 从不直接写 `players[].score`，分数要等道具被拾到、走 `credit_item` 才入账，而本测试
-    /// 只跑一次 `run_tasks`、没人去捡——照抄 `damage_enemy` 的错实现照样能过这条。保留它是
-    /// 因为它仍是有意义的现状锚点（"这条路径不该凭空产生分数"）。
+    /// **`score` 那条的判别力是 2026-07-30 敌死加分刀给的**（订正旧注释）：在那之前
+    /// `damage_enemy` 从不直接写 `players[].score`，分数只能等道具被拾到走 `credit_item`
+    /// 入账，而本测试只跑一次 `run_tasks`、没人去捡 —— 照抄死亡效果的错实现照样能过。
+    /// 现在 `kill_enemy` 直接写 `players[0].score`，这条断言当场生效。
+    /// 变异实测（该刀修复轮）：把 `kill_enemy` 临时挂进 `Exec::End`，本测试红在道具那条；
+    /// 再把 `d9_enemy_init` 的 `drop_count` 清零单独暴露 score 腿，红在
+    /// `静默退场不凭空加分` 上 —— 两条各自独立成立。
     #[test]
     fn enemy_main_task_returning_self_destructs_quietly() {
         use crate::events::EVT_ENEMY_DIED;
@@ -1762,7 +1768,7 @@ mod tests {
             0,
             "静默退场不掉道具（不是 damage_enemy 路径）"
         );
-        // 现状锚点，非判别腿——理由见本测试的 doc 注释。
+        // 真判别腿（自 2026-07-30 加分刀起）——理由见本测试的 doc 注释。
         assert_eq!(w.body.players[0].score, score_before, "静默退场不凭空加分");
         assert!(
             !w.body
@@ -1772,6 +1778,78 @@ mod tests {
             "静默退场不发 EVT_ENEMY_DIED"
         );
         assert!(!w.tasks.is_alive(main_idx as usize), "主任务本身也应已终止");
+    }
+
+    /// `spell::settle_spells` 的 `hp_break` 三路 OR 里 **`ENEMY_DYING` 那一路的判别②**
+    /// （敌人死亡效果刀 T4，2026-07-30）：D9 自燃**只置旗、完全不碰 hp**，所以绑卡 boss 的
+    /// 主任务一自然返回，就造出了"句柄仍有效（相位 9 才回收）+ hp 远高于血线"的局面——
+    /// 三路里另外两路双假，收卡结算只可能来自 dying 那一路。
+    ///
+    /// 判别①（`spell::tests::boss_death_via_enemy_dying_flag_triggers_hp_break`）走的是被打死
+    /// 路径，只能靠 `threshold<0` 这个角落取值分道；本条不需要负 threshold，是这路 OR 的
+    /// **常规取值**判别腿。**变异实测**（本刀）：删掉 `spell.rs` 里
+    /// `self.enemies.flags[i] & ENEMY_DYING != 0 ||` 这半个条件，本测试红在"收卡结算发生"。
+    ///
+    /// 住 vm.rs 而不住 spell.rs 的理由同其余 D9 测试：要 `async_image`/`spawn_sub_internal`
+    /// 才造得出**真带 main_task** 的敌，手写 `flags |= ENEMY_DYING` 造出来的是另一条路径。
+    #[test]
+    fn spell_bound_boss_self_destruct_settles_spell_with_hp_above_threshold() {
+        let mut w = test_world();
+        // 立刻 END 的零参 Async sub 当 boss 主任务 —— 本帧就自燃。
+        let ecl = async_image(vec![OP_END as u32], 0);
+
+        const BOSS_HP: i32 = 10_000;
+        const THRESHOLD: i32 = 300;
+        let boss = crate::world::test_support::spawn_enemy(&mut w, 0, 80, BOSS_HP);
+        let bi = w.body.enemies.get(boss).unwrap();
+        assert!(
+            w.body
+                .spell_begin_internal(0, boss, 77, 100, 1000, 0, THRESHOLD)
+        );
+        let main_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(1).unwrap(),
+                &[],
+                (OWNER_ENEMY, boss.index, boss.generation),
+            )
+            .unwrap();
+        w.body.enemies.main_task[bi] = main_idx as u32 + 1;
+
+        w.body.frame = 1; // 跨出生帧门禁
+        run_tasks(&mut w.tasks, &mut w.body, &ecl, &crate::tables::TABLES_V0);
+
+        // ── 前提三连：把另外两路 OR 摁成假，证明判别力不是巧合 ──
+        assert_ne!(
+            w.body.enemies.flags[bi] & crate::enemy::ENEMY_DYING,
+            0,
+            "前提：D9 自燃真置了 dying 旗"
+        );
+        assert_eq!(
+            w.body.enemies.hp[bi], BOSS_HP,
+            "前提：自燃不碰 hp —— 判别力全部来自这一条（`die()` 会 hp.min(0)，故没有这条判别力）"
+        );
+        assert!(
+            w.body.enemies.hp[bi] > THRESHOLD,
+            "反向对照：第三路 `hp<=threshold` 为假"
+        );
+        assert!(
+            w.body.enemies.get(boss).is_some(),
+            "反向对照：第一路（句柄失效）为假 —— 只标 dying 不回收，相位 9 才收尸"
+        );
+
+        w.body.settle_spells(&crate::tables::TABLES_V0);
+        assert_eq!(
+            w.body.spells[0].active, 0,
+            "收卡结算发生（唯一触发源是 ENEMY_DYING 那路 OR）"
+        );
+        assert!(
+            w.body
+                .frame_events()
+                .iter()
+                .any(|e| e.kind == crate::events::EVT_SPELL_CAPTURED && e.data[0] == 77),
+            "资格未失 → CAPTURED（连带证明走的是正常结算路径，不是把槽抹了）"
+        );
     }
 
     /// 判别腿：**非** main_task 的敌属任务结束 → 敌不死（否则 fire 的伴生任务一结束敌就没了）。

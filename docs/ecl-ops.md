@@ -97,7 +97,7 @@
 | 12 | `enemy_hp`（A5 补遗） | handle | 活敌 `hp`；死/悬垂/越界句柄 → **-1**（P4-b，不比对 generation，不 Fault——stage 编排等 boss 死的轮询原语） |
 | 20 | `create_bullet` | appearance,x,y,speed,angle,xform_off,xform_cnt,task_sub | 弹句柄或 -1 |
 | 21 | `create_bullets_batch` | appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step | 实发数 |
-| 22 | `spawn_enemy` | x,y,hp,drop_table,score,sprite,task_sub | 敌句柄或 -1（A5 乙案：`task_sub` 同 20 号 `create_bullet` 同款 canonical `SubId`/-1=none；`task_sub>=0` 时必须指向零参数 `Async` sub，绑定层派子任务，owner=新敌） |
+| 22 | `spawn_enemy` | x,y,hp,drop_table,score,sprite,task_sub | 敌句柄或 -1（A5 乙案：`task_sub` 同 20 号 `create_bullet` 同款 canonical `SubId`/-1=none；`task_sub>=0` 时必须指向零参数 `Async` sub，绑定层派子任务，owner=新敌。**`drop_table` 在这里就展开成敌身上的 `drop_count[..]` 五槽**（敌死效果刀起表号退化成生成参数，此后无人读表号，见 58-60 号）；**P4-b**：表号越界（含负数——`as u16` 回绕后仍越界）→ **视同空表** + `contract_viol` +1 + `last_status=BAD_ARGS`，敌照建、**不 Fault**（原检查住 `settle::damage_enemy`，随掉落状态前移至此）） |
 | 23 | `drop_item` | x,y,item_type | 道具句柄或 -1 |
 | 24 | `move_enemy_to` | **dur,x,y,easing** | —（owner 须为敌，否则 Fault；参数序以 syscall.rs 为准，勿凭直觉写 x,y 在前） |
 | 25 | `boss_set` | slot,hp_ratio,spell_id,timer,phase_left,active | —（enemy 字段写 NULL，见 boss_ui 契约） |
@@ -115,6 +115,10 @@
 | 55 | `add_lives`（B20） | delta | —（自机 0；`delta` 允许负，`saturating_add` 后**双边钳** `[0, u8::MAX]`——扣穿停 0、加满停 255，不回绕不 panic；**钳位是正常语义**，不计 `contract_viol`、不 Fault（同 `add_score` 口径）；不做参数收窄，owner 类别无限制） |
 | 56 | `add_bombs`（B20） | delta | —（同 55，写 `bombs`，钳 `[0, u8::MAX]`） |
 | 57 | `add_power`（B20） | delta | —（同 55，写 `power`，但上钳是 `items::POWER_MAX`=**400**（显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 档位索引 OOB） |
+| 58 | `drop_clear`（敌死效果刀） | — | —（**0 参**；把 self 敌的 `drop_count[..]` 五槽清零。**owner 须为敌**，否则 Fault(0)（同 `move_enemy_to`）；悬垂 owner 句柄 → no-op + `contract_viol` + `STALE_HANDLE`，不 Fault。参照 ZUN `dropClear`(506)） |
+| 59 | `drop_add`（敌死效果刀） | type,n | —（逆序弹栈 `n, type`；给 self 敌的待掉落计数**增量**加 `n` 颗 `type`，**只增不减**（人类裁定，清空用 58）。`type` 收窄 `[0, items::ITEM_TYPE_COUNT)`，越界 → no-op + `contract_viol` + `BAD_ARGS`，**不 Fault**（P4-b）；`n` **先钳** `[0, u8::MAX]`（负 n 视同 0）**再 `saturating_add`** 到计数上——两步都要，只钳不饱和会在近 255 时 debug panic，只饱和不钳会让负 n `as u8` 回绕。owner 须为敌，否则 Fault(0)。参照 ZUN `dropExtra`(507)） |
+| 60 | `drop_items`（敌死效果刀） | — | —（**0 参**；立刻把 self 敌的待掉落计数撒出去（按类型编号升序逐颗 `spawn_drop`，**消耗世界 RNG**）。**吐完不清空计数**（人类裁定，照 ZUN 字面）——故 `drop_items(); die();` 掉**双份**，作者自负；**不加分、不发 `EVT_ENEMY_DIED`、不发 `REQ_ENEMY_DEATH`、不标 `ENEMY_DYING`**；对已 dying 的敌照撒不误（无幂等门禁，与 61 不同）。池满走 `spawn_drop` 自身的 P4-a 逐颗降级。owner 须为敌，否则 Fault(0)。参照 ZUN `dropItems`(509)） |
+| 61 | `die`（敌死效果刀） | — | —（**0 参**；对 self 敌跑**完整死亡效果**（`world::settle::kill_enemy`）：`hp = hp.min(0)` → 标 `ENEMY_DYING` → 撒掉落 → `enemies.score` 记进自机 0 → `EVT_ENEMY_DIED` → `REQ_ENEMY_DEATH`。**幂等**：已 dying → 直接返回。**只标记不回收**，相位 9 cleanup 才收尸——当帧体碰仍成立。表层 `die()` 由 codegen 降低成 **`SYS 61` + `OP_KILL_SELF` 两条指令**，故调用它的任务立即终止（人类裁定），后续语句不执行；**手写字节码只发 `SYS 61` 不会终止任务**。owner 须为敌，否则 Fault(0)。参照 ZUN `die`(561)——ZUN 那条还经 `setDeath`(556) 间接一层，留给 `death_script` 通电那一刀） |
 
 `create_bullet` 走**丙方案**：`(xform_off, xform_cnt)` 指向本任务 locals 内打包槽
 （每槽 3 字：`word0=(wait<<16)|(op<<8)`、`word1/2=args`，≤16 槽）；`xform_cnt=0` 哑弹；

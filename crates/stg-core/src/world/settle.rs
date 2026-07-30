@@ -23,6 +23,24 @@ impl WorldBody {
         self.players[p].state_timer = crate::player::DEATHBOMB_WINDOW;
     }
 
+    /// 把敌身上的掉落计数原位撒出去——**只撒**：不清零、不加分、不发事件。
+    ///
+    /// 顺序是**类型升序**（I4）：这也是"掉落从表迁成计数后金向量不漂"的依据——内建掉落表 1
+    /// 是 `[(ITEM_POWER,2),(ITEM_POINT,1)]` 而 `ITEM_POWER=0 < ITEM_POINT=1`，表序恰好
+    /// 就是类型升序，故 `spawn_drop` 的 RNG 消耗顺序与迁移前逐字相同
+    /// （由 `enemy_death_drop_sequence_is_pinned` 特征化测试押运）。
+    ///
+    /// 两个调用方：`kill_enemy`（死亡效果的一部分）/ `SYS_DROP_ITEMS`（脚本显式撒）。
+    /// **不清零**是人类裁定（spec D-3）：故 `drop_items(); die();` 会掉两份，作者自负。
+    pub(crate) fn spill_drops(&mut self, e: usize, tables: &WorldTables) {
+        let (ex, ey) = (self.enemies.x[e], self.enemies.y[e]);
+        for ty in 0..crate::items::ITEM_TYPE_COUNT {
+            for _ in 0..self.enemies.drop_count[e][ty] {
+                self.spawn_drop(ex, ey, ty as u8, tables);
+            }
+        }
+    }
+
     /// 敌人扣血 + 致死则标记 dying 并产出 `EnemyDied`（行 4/行 7 共用；只发一次）。
     /// **只标记不回收**——槽要活到相位 8 供死亡脚本/表现层读；相位 9 cleanup 收尸。
     fn damage_enemy(&mut self, e: usize, dmg: u16, tables: &WorldTables) {
@@ -39,44 +57,66 @@ impl WorldBody {
         }
         self.enemies.hit_flash[e] = 4;
         if self.enemies.hp[e] <= 0 {
-            self.enemies.flags[e] |= ENEMY_DYING;
-            // 掉落直接分配（A6/A7）：按 drop_table 查表展开；越界表 → P4-b 计数 + 视同空表。
-            let table = self.enemies.drop_table[e] as usize;
-            if table >= tables.drop_tables.len() {
-                self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
-            } else {
-                let (ex, ey) = (self.enemies.x[e], self.enemies.y[e]);
-                for &(ty, n) in tables.drop_tables[table].iter() {
-                    for _ in 0..n {
-                        self.spawn_drop(ex, ey, ty, tables);
-                    }
-                }
-            }
-            let ev = Event {
-                kind: crate::events::EVT_ENEMY_DIED,
-                a_index: e as u16,
-                a_gen: self.enemies.generation[e],
-                x: self.enemies.x[e],
-                y: self.enemies.y[e],
-                data: [
-                    self.enemies.score[e] as i32,
-                    self.enemies.death_script[e] as i32,
-                ],
-            };
-            self.push_event(ev);
-            // 死亡特效请求（蓝图 §207 机械产出者；args 约定见 `crate::reqs` 模块文档）。
-            self.emit_req(
-                crate::consts::REQ_ENEMY_DEATH,
-                [
-                    self.enemies.x[e].raw(),
-                    self.enemies.y[e].raw(),
-                    self.enemies.sprite[e] as i32,
-                    self.enemies.score[e] as i32,
-                    0,
-                    0,
-                ],
-            );
+            self.kill_enemy(e, tables);
         }
+    }
+
+    /// 敌人的**完整死亡效果**——死亡路径的唯一实现处。
+    ///
+    /// **幂等**：已 `ENEMY_DYING` 即直接返回（与 settle 趟二的 overkill 门禁同构）。
+    /// 顺序：hp 下钳 → 标 dying → 撒掉落 → 记分 → 事件 → 死亡特效请求。
+    ///
+    /// 两个调用方：`damage_enemy` 的 `hp<=0` 分支（被自机打死）/ `SYS_DIE`（脚本显式）。
+    /// **注意 D9 自燃不走这里**——主协程返回是"静默退场"，不掉道具不加分不发事件
+    /// （`ecl::vm::run_tasks` 的 `Exec::End` 分支只置 `ENEMY_DYING`）。三条路径的差异是
+    /// 脚本作者最容易搞混的一处，见 `docs/ecl-lang.md`。
+    ///
+    /// **只标记不回收**——槽要活到相位 8 供表现层读；相位 9 cleanup 收尸。
+    pub(crate) fn kill_enemy(&mut self, e: usize, tables: &WorldTables) {
+        if self.enemies.flags[e] & ENEMY_DYING != 0 {
+            return; // 幂等
+        }
+        // `min(0)` 而非置 0 —— **对 `damage_enemy` 这个调用方是恒等的**（它只在 `hp<=0`
+        // 分支里调，`min(0)` 取的必是 `hp` 自己），判别力全部来自另一个调用方 `SYS_DIE`：
+        // 那条路径打在满血 boss 上，压到 0 才不会让 HUD 当帧显示"满血的死人"；而对已被
+        // overkill 打成负血的敌，`min` 保住负值不被抹平（负血是可观测的诊断信息）。
+        // **两条判别腿都在 `ecl::syscall.rs::tests::die_on_full_hp_enemy_zeroes_hp`**
+        // （满血 die → hp 落 0；再 overkill 到 hp=-5 后 `kill_enemy` → 仍是 -5）。
+        // 本文件的 `settle_overkill_two_shots_one_death_event` **区分不了**这两种写法
+        // （它 hp=1/dmg=1 → hp 恰好是 0，第二发又被 dying 门禁挡在 damage_enemy 之外）。
+        self.enemies.hp[e] = self.enemies.hp[e].min(0);
+        self.enemies.flags[e] |= ENEMY_DYING;
+        // 掉落直接分配（A6/A7）：撒敌身上的逐类型计数（表号已在生成时展开）。
+        self.spill_drops(e, tables);
+        // **强制加分**（人类裁定 D-5，2026-07-30）：此前 `enemies.score` 是纯装饰字段——
+        // 只被塞进 `EVT_ENEMY_DIED.data[0]` 与 `REQ_ENEMY_DEATH` 供表现层显示，打死敌人的
+        // 全部收益来自掉落被 `credit_item` 入账。记自机 0，与 `SYS_ADD_SCORE` 同口径。
+        let bonus = self.enemies.score[e] as u64;
+        self.players[0].score = self.players[0].score.saturating_add(bonus);
+        let ev = Event {
+            kind: crate::events::EVT_ENEMY_DIED,
+            a_index: e as u16,
+            a_gen: self.enemies.generation[e],
+            x: self.enemies.x[e],
+            y: self.enemies.y[e],
+            data: [
+                self.enemies.score[e] as i32,
+                self.enemies.death_script[e] as i32,
+            ],
+        };
+        self.push_event(ev);
+        // 死亡特效请求（蓝图 §207 机械产出者；args 约定见 `crate::reqs` 模块文档）。
+        self.emit_req(
+            crate::consts::REQ_ENEMY_DEATH,
+            [
+                self.enemies.x[e].raw(),
+                self.enemies.y[e].raw(),
+                self.enemies.sprite[e] as i32,
+                self.enemies.score[e] as i32,
+                0,
+                0,
+            ],
+        );
     }
 
     pub(crate) fn settle(&mut self, tables: &WorldTables) {
@@ -416,72 +456,6 @@ mod tests {
         );
     }
 
-    /// P4-b：越界 `drop_table` id → 视同空表 + 计 contract_viol，不 panic、不掉道具（B11）。
-    #[test]
-    fn settle_out_of_range_drop_table_degrades_to_empty() {
-        let mut w = crate::step::World::new(1);
-        // 内建表只有 2 张掉落表，取一个必然越界的 id
-        let bad = crate::tables::TABLES_V0.drop_tables.len() as u16 + 9;
-        let e = w.body.create_enemy(crate::enemy::EnemyInit {
-            x: Fx::from_int(0),
-            y: Fx::from_int(80),
-            vx: Fx::ZERO,
-            vy: Fx::ZERO,
-            mv_from_x: Fx::ZERO,
-            mv_from_y: Fx::ZERO,
-            mv_to_x: Fx::ZERO,
-            mv_to_y: Fx::ZERO,
-            mv_t: 0,
-            mv_dur: 0,
-            mv_easing: 0,
-            mv_active: 0,
-            hp: 1,
-            hp_max: 1,
-            radius: Fx::from_int(12),
-            hurtbox: Fx::from_int(16),
-            invuln: 0,
-            hit_flash: 0,
-            flags: 0,
-            sprite: 0,
-            anm_state: 0,
-            main_task: 0,
-            death_script: 0,
-            drop_table: bad,
-            score: 100,
-        });
-        let ei = w.body.enemies.get(e).unwrap();
-        w.body.create_player_shot(crate::shots::ShotInit {
-            x: w.body.enemies.x[ei],
-            y: w.body.enemies.y[ei],
-            vx: Fx::ZERO,
-            vy: Fx::ZERO,
-            damage: 1,
-            radius: Fx::from_int(4),
-            sprite: 0,
-            owner: 0,
-            flags: 0,
-        });
-        let viol_before = w.body.diag.contract_viol;
-        let items_before = w.body.items.iter_alive().count();
-        #[cfg(debug_assertions)]
-        {
-            w.body.phase_guard = PH_COLLIDE;
-        }
-        w.body.collide(&crate::tables::TABLES_V0);
-        w.body.settle(&crate::tables::TABLES_V0);
-        assert_eq!(
-            w.body.diag.contract_viol,
-            viol_before + 1,
-            "越界表须计一次违约"
-        );
-        assert_eq!(
-            w.body.items.iter_alive().count(),
-            items_before,
-            "不得掉任何道具"
-        );
-        assert!(w.body.enemies.hp[ei] <= 0, "敌照常死（降级不影响伤害结算）");
-    }
-
     #[test]
     fn settle_bullet_hit_triggers_deathwindow() {
         use crate::player::{DEATHBOMB_WINDOW, LIFE_DEATHWINDOW};
@@ -699,8 +673,8 @@ mod tests {
         assert_eq!(w.body.players[0].graze, 1); // 但 graze 照算（擦在先、清在后）
     }
 
-    /// 敌死按 drop_table 掉落：表 1 = 2 POWER + 1 POINT，落点 = 敌死位置（散布只改速度）。
-    /// 两敌同帧死 → 掉落顺序 = 结算序（低索引敌先掉，RNG 消耗序钉死）。
+    /// 敌死撒 `drop_count` 掉落：表 1 展开后 = 2 POWER + 1 POINT，落点 = 敌死位置
+    /// （散布只改速度）。两敌同帧死 → 掉落顺序 = 结算序（低索引敌先掉，RNG 消耗序钉死）。
     #[test]
     fn settle_death_drops_by_table_in_settlement_order() {
         use crate::items::{ITEM_POINT, ITEM_POWER};
@@ -729,7 +703,7 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 1,
+            drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, 1).0,
             score: 100,
         };
         let ea = w.body.create_enemy(enemy_at(-100));
@@ -1014,6 +988,170 @@ mod tests {
                 0
             ],
             "位序 x/y/sprite/score——判别值防对调假绿"
+        );
+    }
+
+    /// D-5：敌死**强制加分**——`enemies.score[e]` 记进自机 0 的分数。
+    /// **判别腿：测试内一颗道具都不拾取**。此前敌人的 score 是纯装饰字段（只塞进
+    /// EVT_ENEMY_DIED 供表现层显示），打死敌人的全部收益来自掉落被 credit_item 入账。
+    /// 若测试里让自机拾到了道具，就分不清这分是敌人加的还是道具加的——D9 那刀正是
+    /// 在这里栽过（"score 未变"断言因分数走 credit_item 而失效，见 vm.rs 的订正注释）。
+    #[test]
+    fn enemy_death_credits_its_score_bonus() {
+        use crate::enemy::ENEMY_DYING;
+        let mut w = crate::step::World::new(1);
+        // `spawn_enemy` 的敌 `drop_count` 全零、`score = 100`；摆在 (0,80)，
+        // 自机在默认出生点 (0,384) —— 远离敌，也远离任何道具（本测试压根不生道具）。
+        let e = spawn_enemy(&mut w, 0, 80, 1);
+        let ei = w.body.enemies.get(e).unwrap();
+        assert_eq!(
+            w.body.enemies.drop_count[ei],
+            [0u8; crate::items::ITEM_TYPE_COUNT],
+            "判别腿前提：这敌不掉任何道具，否则分不清分数来自敌人还是 credit_item"
+        );
+        let before = w.body.players[0].score;
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: w.body.enemies.x[ei],
+            y: w.body.enemies.y[ei],
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 1,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        assert_ne!(w.body.enemies.flags[ei] & ENEMY_DYING, 0, "前提：敌真死了");
+        assert_eq!(
+            w.body.items.iter_alive().count(),
+            0,
+            "判别腿：一颗道具都没生成 → 分数只可能是敌人自己加的"
+        );
+        assert_eq!(
+            w.body.players[0].score,
+            before + 100,
+            "敌死把 enemies.score 记进自机 0"
+        );
+    }
+
+    // ── 敌人死亡的三条路径，测试分居两处（导航线索，别让这组测试散丢）─────────────
+    //
+    // 1. **被自机打死** → `damage_enemy` 的 `hp<=0` 分支 → `kill_enemy`：
+    //    本文件，`enemy_death_credits_its_score_bonus`（加分）
+    //    + `settle_death_drops_by_table_in_settlement_order`（掉落）
+    //    + `settle_enemy_death_emits_render_req_with_pos_sprite_score`（请求）。
+    // 2. **脚本显式 `die()`** → `SYS_DIE` → `kill_enemy_by_handle` → `kill_enemy`：测试住
+    //    `ecl::syscall.rs` 的"敌人死亡效果四 syscall"节（`die_runs_the_full_death_effect`
+    //    等七条），表层"两指令降低"那半住 `stg-ecl-compiler` 的 codegen 测试。
+    // 3. **D9 自燃**（主协程自然返回）→ `ecl::vm::run_tasks` 的 `Exec::End` 分支，
+    //    **不走 `kill_enemy`**：静默退场，不掉道具、不加分、不发 `EVT_ENEMY_DIED`。
+    //    守它的是 `ecl::vm::tests::enemy_main_task_returning_self_destructs_quietly`
+    //    —— 在 vm.rs 而不在这里，因为它要 `async_image`/`spawn_sub_internal` 那套脚手架
+    //    才能造出**真带 main_task**的敌；在本文件里手工置 `ENEMY_DYING` 造不出那条路径
+    //    （`main_task=0` 的敌根本不会被 D9 分支求值，那样的测试无论实现对错都恒绿）。
+    //    自本刀起，它那条 `score` 断言是**真判别腿**：谁把 `kill_enemy` 挂进 `Exec::End`
+    //    它立刻红（本刀用变异实测确认过，见 task-2-report.md 修复轮）。
+
+    /// 幂等：`kill_enemy` 对已 dying 的敌是 no-op（掉落 / 加分 / 事件各只发生一次）。
+    #[test]
+    fn kill_enemy_is_idempotent() {
+        let mut w = crate::step::World::new(1);
+        let e = w.body.create_enemy(enemy_with_drop_table(1)); // 3 颗掉落 + score=100
+        let ei = w.body.enemies.get(e).unwrap();
+        let before = w.body.players[0].score;
+        w.body.kill_enemy(ei, &crate::tables::TABLES_V0);
+        w.body.kill_enemy(ei, &crate::tables::TABLES_V0);
+        assert_eq!(w.body.items.iter_alive().count(), 3, "掉落只撒一次");
+        assert_eq!(w.body.players[0].score, before + 100, "加分只记一次");
+        assert_eq!(w.body.events_len, 1, "EVT_ENEMY_DIED 只发一次");
+    }
+
+    /// 全字段 EnemyInit（exhaustive）：位置固定 (0,80)、hp=1、其余惰性。
+    /// 表号走 `tables::drop_counts` 展开——与 `sys_spawn_enemy` 的生成路径同一条口子。
+    fn enemy_with_drop_table(table: u16) -> crate::enemy::EnemyInit {
+        crate::enemy::EnemyInit {
+            x: Fx::ZERO,
+            y: Fx::from_int(80),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            mv_from_x: Fx::ZERO,
+            mv_from_y: Fx::ZERO,
+            mv_to_x: Fx::ZERO,
+            mv_to_y: Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp: 1,
+            hp_max: 1,
+            radius: Fx::from_int(12),
+            hurtbox: Fx::from_int(16),
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 0,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, table).0,
+            score: 100,
+        }
+    }
+
+    /// **特征化测试**（T1 重构的安全网）：敌死掉落的逐颗 `(type, vx, vy)` 全序列。
+    /// `vx`/`vy` 来自 `spawn_drop` 的世界 RNG 散布，故本测试同时钉住"掉了什么"
+    /// **与** "RNG 被消耗了几次、按什么顺序"——掉落迁成按类型计数后这三者都必须不变。
+    /// 期望值是**重构前实测**填入的（见计划 T1 Step 2）。
+    #[test]
+    fn enemy_death_drop_sequence_is_pinned() {
+        let mut w = crate::step::World::new(1);
+        let e = w.body.create_enemy(enemy_with_drop_table(1));
+        let ei = w.body.enemies.get(e).unwrap();
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: w.body.enemies.x[ei],
+            y: w.body.enemies.y[ei],
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 99,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+
+        let got: Vec<(u8, i32, i32)> = w
+            .body
+            .items
+            .iter_alive()
+            .map(|i| {
+                (
+                    w.body.items.item_type[i],
+                    w.body.items.vx[i].raw(),
+                    w.body.items.vy[i].raw(),
+                )
+            })
+            .collect();
+        // 掉落表 1 = [(ITEM_POWER,2),(ITEM_POINT,1)]；POWER=0 < POINT=1，
+        // 表序恰好就是类型升序 —— 这正是"改成按类型计数后顺序不漂"的原因。
+        assert_eq!(
+            got,
+            vec![
+                (0, 25626, -180916),
+                (0, -35167, -188191),
+                (1, 9857, -167669),
+            ]
         );
     }
 }

@@ -257,6 +257,27 @@ pub fn build_tables_v0() -> WorldTables {
     }
 }
 
+/// 掉落表号 → 逐类型计数（`drop_table` 从"存储状态"退化成"生成参数"的展开口，
+/// 敌人死亡效果刀 2026-07-30）。
+///
+/// 越界表号 → 全零 + `false`；调用方据此计 `contract_viol`（P4-b，原先这条检查在
+/// `settle::damage_enemy` 里，随掉落状态一起前移到生成时）。
+/// 同一张表里同类型多条目**累加**（`saturating_add`：表已过 `validate`，理论上不该溢出，
+/// 但不许在 debug 下 panic）。
+pub fn drop_counts(tables: &WorldTables, table: u16) -> ([u8; ITEM_TYPE_COUNT], bool) {
+    let mut out = [0u8; ITEM_TYPE_COUNT];
+    let Some(rows) = tables.drop_tables.get(table as usize) else {
+        return (out, false);
+    };
+    for &(ty, n) in rows.iter() {
+        // `validate` 已保证 `ty < ITEM_TYPE_COUNT`；`get_mut` 是防御性的，不 panic。
+        if let Some(slot) = out.get_mut(ty as usize) {
+            *slot = slot.saturating_add(n);
+        }
+    }
+    (out, true)
+}
+
 /// 内建默认表：从提交的规范字节反序列化（**证明 core 跑在加载的字节上**；金向量走此路径）。
 pub static TABLES_V0: LazyLock<WorldTables> = LazyLock::new(|| {
     WorldTables::from_bytes(include_bytes!("tables/tables_v0.bin"))
@@ -318,7 +339,8 @@ impl WorldTables {
         }
         // join 校验（防 FM1）：每个 ② 表符号 id 必须是 appearances 的合法行。**② 段自
         // 颜色轴刀（2026-07-26）起为空**（弹型名归内容包），故本循环当前不执行；机制保留
-        // ——② 段将来重新长出行（如道具类型符号）时自动生效，届时按 tag 分流。
+        // ——② 段将来重新长出**可加载表行**的符号时自动生效，届时按 tag 分流。
+        // （道具类型符号不是那种行，它们在 ① 段——理由见 `consts.rs` ② 段注释。）
         for c in crate::consts::TABLE_SYMBOLS {
             if (c.value as usize) >= self.appearances.len() {
                 return false;
@@ -734,6 +756,29 @@ mod tests {
                 .all(|&(ty, _)| (ty as usize) < ITEM_TYPE_COUNT),
             "掉落表条目类型必须合法——扩展四步第④步的脚下网"
         );
+    }
+
+    /// `drop_counts`：内建表 1 展开成逐类型计数；越界表号降级成全零 + false（P4-b）。
+    #[test]
+    fn drop_counts_expands_table_and_degrades_out_of_range() {
+        let (c1, ok1) = drop_counts(&TABLES_V0, 1);
+        assert!(ok1);
+        assert_eq!(c1[crate::items::ITEM_POWER as usize], 2);
+        assert_eq!(c1[crate::items::ITEM_POINT as usize], 1);
+        assert_eq!(
+            c1.iter().map(|&n| n as u32).sum::<u32>(),
+            3,
+            "别的类型必须是 0"
+        );
+
+        let (c0, ok0) = drop_counts(&TABLES_V0, 0);
+        assert!(ok0, "表 0 是合法的空表，不是越界");
+        assert_eq!(c0, [0u8; crate::items::ITEM_TYPE_COUNT]);
+
+        let bad = TABLES_V0.drop_tables.len() as u16 + 9;
+        let (cb, okb) = drop_counts(&TABLES_V0, bad);
+        assert!(!okb, "越界表号必须报 false");
+        assert_eq!(cb, [0u8; crate::items::ITEM_TYPE_COUNT]);
     }
 
     /// 判别腿：interval=0 / radius 超上限 / option 号越界的坏表各自 `validate() == false`。

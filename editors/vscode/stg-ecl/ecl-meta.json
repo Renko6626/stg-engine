@@ -35,6 +35,10 @@
     {"name": "clear_bullets", "signature": "clear_bullets()", "ret": null, "doc": "全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧", "params": []},
     {"name": "add_lives", "signature": "add_lives(delta: int)", "ret": null, "doc": "增减残机:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_", "params": [{"name": "delta", "ty": "int"}]},
     {"name": "add_bombs", "signature": "add_bombs(delta: int)", "ret": null, "doc": "增减 bomb 数:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_", "params": [{"name": "delta", "ty": "int"}]},
-    {"name": "add_power", "signature": "add_power(delta: int)", "ret": null, "doc": "增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout", "params": [{"name": "delta", "ty": "int"}]}
+    {"name": "add_power", "signature": "add_power(delta: int)", "ret": null, "doc": "增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout", "params": [{"name": "delta", "ty": "int"}]},
+    {"name": "drop_clear", "signature": "drop_clear()", "ret": null, "doc": "清空自身待掉落计数;self 必须是敌", "params": []},
+    {"name": "drop_add", "signature": "drop_add(type: int, n: int)", "ret": null, "doc": "自身待掉落计数增量加 n 颗 type(只增不减,要清空用 drop_clear);计数上限 255 饱和", "params": [{"name": "type", "ty": "int"}, {"name": "n", "ty": "int"}]},
+    {"name": "drop_items", "signature": "drop_items()", "ret": null, "doc": "立刻撒出自身待掉落计数;**吐完不清空**(故 drop_items();die(); 掉双份);不加分不发死亡事件", "params": []},
+    {"name": "die", "signature": "die()", "ret": null, "doc": "就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)", "params": []}
   ]
 }

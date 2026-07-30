@@ -469,7 +469,7 @@ mod tests {
         }
     }
 
-    /// `hp_break` 三路 OR 的 `ENEMY_DYING` 分支判别（Task 1 复审修 Fix 2）：经真
+    /// `hp_break` 三路 OR 的 `ENEMY_DYING` 分支判别**①·被打死**（Task 1 复审修 Fix 2）：经真
     /// `damage_enemy`→`ENEMY_DYING` 路径打死 boss（非手写 `hp[i]=0`），断言死亡触发收卡结算。
     ///
     /// **判别设计的关键取舍**：字面"最终卡 `threshold=0`"打不出判别力——`damage_enemy` 里
@@ -477,9 +477,22 @@ mod tests {
     /// 恰好是同一个条件（`hp<=0` ⇔ `hp<=0`），删 `ENEMY_DYING` 那路 OR 测试仍绿（已实测，见
     /// task-1-report.md 复审修节的红绿证据）；`threshold>0` 时下钳会先兜底把 hp 摁在
     /// threshold（>0）之上，`ENEMY_DYING` 反而永远不会置位——两种取值下第三路都独立盖过它。
-    /// 唯一能让 `hp<=0`（`ENEMY_DYING` 置位判据）与 `hp<=s.hp_threshold`（第三路判据）分道的
-    /// 取值是 **threshold 严格 < 0**（校验只拒 `threshold>hp`，不拒负值，故为合法输入）：
-    /// hp 精确落 0 时 `0<=0` 假（threshold=-1）但 `hp<=0` 真——`ENEMY_DYING` 成为唯一触发源。
+    /// 故**在被打死这条路径上**，唯一能让 `hp<=0`（`ENEMY_DYING` 置位判据）与
+    /// `hp<=s.hp_threshold`（第三路判据）分道的取值是 **threshold 严格 < 0**（校验只拒
+    /// `threshold>hp`，不拒负值，故为合法输入）：hp 精确落 0 时 `0<=0` 假（threshold=-1）
+    /// 但 `hp<=0` 真——`ENEMY_DYING` 成为唯一触发源。
+    ///
+    /// **订正（敌人死亡效果刀 T4，2026-07-30）**：上一段的"唯一"只对**被打死**这条路径成立，
+    /// 它的隐含前提"置 `ENEMY_DYING` 的路径只有 `hp<=0`"如今已不成立。置旗的路径现有三条：
+    /// - **被打死**（`damage_enemy` 的 `hp<=0` 分支）—— 本测试，需 threshold<0 才判别；
+    /// - **D9 自燃**（`ecl::vm::run_tasks` 的 `Exec::End` 分支）—— **只置旗、完全不碰 hp**，
+    ///   故满血绑卡 boss 的主任务一返回，第一路（句柄失效）与第三路（`hp<=threshold`）双假，
+    ///   `ENEMY_DYING` 是唯一触发源。判别②就走这条，`threshold>0` 即可，测试住
+    ///   `ecl::vm::tests::spell_bound_boss_self_destruct_settles_spell_with_hp_above_threshold`
+    ///   （脚手架要 `async_image`/`spawn_sub_internal`，故与其余 D9 测试同居 vm.rs）；
+    /// - **脚本 `die()`**（`SYS_DIE`→`kill_enemy`）—— **不**属于上一类：`kill_enemy` 会
+    ///   `hp.min(0)`，`threshold>=0` 时第三路照样同真，判别力与本测试同源（都要负 threshold），
+    ///   所以它不值得再补一条同构测试。
     #[test]
     fn boss_death_via_enemy_dying_flag_triggers_hp_break() {
         use crate::shots::ShotInit;

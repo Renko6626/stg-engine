@@ -2135,11 +2135,18 @@ mod tests {
         // 不是新池（③ D10 容量预算不适用——D10 只管池容量常数，本刀四字段是标量）；
         // ② checksum 走 derive 默认全量入（未加 skip）；④ SaveBytes 走 derive 自动
         // （WorldBody 用 `#[derive(... SaveBytes)]`，非手写 impl，无需两侧同步）。
+        // 2026-07-30（敌人死亡效果刀 Task 1）：`EnemyPool` 的 `drop_table: u16` 换成
+        // `drop_count: [u8; ITEM_TYPE_COUNT]`（ITEM_TYPE_COUNT=5）。逐槽 2B→5B，×cap 256
+        // = 512→1280，净 **+768**，无对齐吸收（u8 数组对齐 1）：WorldBody 969376→970144、
+        // World 1084120→1084888，增量 1:1。① `copy_into` 走 `s.enemies.copy_into(...)`
+        // ——池内字段清单由 `define_pool!` 生成，非手写，无需同步；② checksum/④ SaveBytes
+        // 同样走 `define_pool!` 的 derive（`[T; N]` 有泛型 impl），自动入；③ D10 容量预算
+        // 不变（cap 仍 256，只是每槽宽了 3B）。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (969376, 1084120);
+        const EXPECTED: (usize, usize) = (970144, 1084888);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (969376, 1084120);
+        const EXPECTED: (usize, usize) = (970144, 1084888);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2168,9 +2175,10 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            3,
-            "bump 必须是有意识决定(评审 + 改本测试)——2→3：ECL parity 刀 Task 2 新增 \
-             SYS_CLEAR_BULLETS(54)"
+            4,
+            "bump 必须是有意识决定(评审 + 改本测试)——3→4：敌人死亡效果刀 T3,两条理由 \
+             ①syscall 号表新增 58-61(drop_clear/drop_add/drop_items/die) \
+             ②敌人池字段布局变更(drop_table:u16 → drop_count:[u8;5],T1)导致存档载荷编码变化"
         );
     }
 
@@ -2224,7 +2232,7 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 0,
+            drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 500,
         });
         assert_ne!(boss, crate::enemy::EnemyHandle::NULL, "boss 敌人必须建成");

@@ -6,21 +6,22 @@
 
 ## 现在（2026-07-30）
 
-- **位置**：**ECL 复刻刀**（`feat/ecl-parity`）——三项挡着写真实关卡的 ECL 缺口补齐：敌主
-  协程返回即自燃（D9）/ `clear_bullets()` 全场清弹（B19）/ `add_lives`·`add_bombs`·
-  `add_power` 三个账面增量 setter（B20）；syscall 号表 54–57，`ENGINE_VER` 2→3；手册补三块
-  手写语义、销 follow-ups 三条；金向量全程逐字节不变。
+- **位置**：**敌人死亡效果刀**（`feat/enemy-death-effect`）——掉落从"生成时定死的表索引"迁成
+  敌身上的逐类型计数 `drop_count`、死亡效果提成 `kill_enemy()`（幂等 + 敌死强制加分）、
+  四个 syscall 58–61（`drop_clear`/`drop_add`/`drop_items`/`die`，`die()` 降低成两条指令），
+  `ENGINE_VER` 3→4；手册补"三条死亡路径对照表"+ 号表四行；金向量漂两段，归因各有对照实验。
 - **在飞**：无。
 - **待目验**（卡在"要有头环境"）：B26 余 ②`visible_instances` 断言 + ③ 可玩性目验（打到
-  结算/手感/节奏）；本刀动了敌退场语义，杂兵段节奏值得顺手看一眼。
+  结算/手感/节奏）；本刀让敌死直接加分，分数曲线与掉落节奏值得顺手看一眼。
 - **下一阶段候选**：M3 环形快照回滚 / `stg-py` RL 线 / 背景刀（A4）/ 内容美术期（A9）/
   更多弹型（bullet1 底部 4 行杂项、bullet2·3）。
-- **待办**：细目见 [`docs/follow-ups.md`](docs/follow-ups.md)。
+- **待办**：细目见 [`docs/follow-ups.md`](docs/follow-ups.md)（本刀新记 D12 击杀分归属）。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-07-30 | **敌人死亡效果刀** | 三件:掉落从"生成时定死的表索引"迁成敌身上的 `drop_count:[u8;5]` 逐类型可变计数(表号退化成 `spawn_enemy` 的生成参数,建敌时展开,撒落恒按类型编号升序)+死亡效果提成 `world::settle::kill_enemy()`(幂等门禁/`hp.min(0)`/敌死强制把 `enemies.score` 记进自机 0——此前 score 是纯装饰字段)+四个 syscall 58-61 `drop_clear`/`drop_add`/`drop_items`/`die`(表层 `die()` 由 codegen 降低成 `SYS`+`OP_KILL_SELF` 两条指令故立即终止本任务;道具类型常量入 consts ①段;`ENGINE_VER` 3→4);两条人类裁定用测试钉死(`drop_items` 吐完不清空⇒`die()` 前调掉双份/dying 敌当帧仍体碰仍撞死自机);关键判别力:`(type=5,n=3)` 逮参数写反、满血 `die()` 逮 `min(0)` 与无条件置 0、D9 自燃在 hp 远高于血线时判 `hp_break` 三路 OR 里的 `ENEMY_DYING` 那路(删该路即红,实测);金向量两段漂移各有独立归因与对照实验——T1 池布局(哈希全槽⇒空世界即变,frame 0 起全差)/T2 死亡加分(frame 29 起才分岔,不死敌的二号场景零漂,注释掉加分即逐位复原),T3/T4 逐字节不变;新记 follow-ups D12(击杀分硬编码自机 0,联机线要重访) |
 | 2026-07-30 | **ECL 复刻刀** | 三项挡着写真实关卡的 ECL 缺口:敌主协程返回即自燃(D9,挂 vm::run_tasks 的 Exec::End 分支+任意终止路径清 main_task 的别名防护,demo 杂兵退场点从越界 y=760 改回回收线内 y=500;判别腿=不掉道具/不发 EVT_ENEMY_DIED)+clear_bullets() 全场清弹(B19,复用 FieldPool 铺 life=1 全屏消弹区,消弹转星星与 EVT_FIELD_CLEARED 白送;判别腿=星星池真出 3 颗)+add_lives/add_bombs/add_power 三个账面增量 setter(B20,saturating_add 后双边钳,power 钳 POWER_MAX=400 非 u16::MAX;裸+与错上限两处变异实证);syscall 号表 54-57、ENGINE_VER 2→3;ecl-lang.md 手写三块语义(D9 单列一节改敌任务默认心智)+ecl-ops.md 号表追四行;销 follow-ups 三条(D9/B19/B20);金向量全程逐字节不变 |
 | 2026-07-27 | **P4 覆盖刀** | 宪法级不变量的零覆盖分支补齐:四池满降级(B1)+push_event 溢出(B2)+overkill 断言 hp(B4)+越界 drop_table(B11)+task 号支路①③两族(B25);修两处真缺陷:credit_item 的 u8 饱和(B12,debug 曾 panic)+storm --saves 0 假绿(B14);每条经变异检验证判别力;销 follow-ups 七条 |
 | 2026-07-27 | **真美术 + 命中特效** | 原作弹片切 12 弹型×16 色图集(切图工具/gen_atlas 移除弹层防覆盖/cell 16 零留白)+词表按行序登记+色名三轮测量定稿(暗亮对×5 + 暖色梯度×4,名字迁就受众)+弹朝向补四分之一圈(贴图头朝上 vs BAM 0 指右,两轮变异实证)+自机弹命中走 events(EVT_SHOT_HIT_ENEMY,坐标取弹不取敌心)+桥面 frame_events() 读口(八种事件一次开放);B23 销(画面目验不镜像) |
