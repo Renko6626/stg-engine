@@ -32,6 +32,9 @@
     {"name": "bgm", "signature": "bgm(id: int)", "ret": null, "doc": "声明当前 BGM:写世界锚点字段 bgm_id 并发 REQ_BGM;mark 跳入自动补偿最近声明(常量参)", "params": [{"name": "id", "ty": "int"}]},
     {"name": "bg", "signature": "bg(id: int)", "ret": null, "doc": "声明当前背景:写锚点 bg_id 并发 REQ_BG;换背景隐含新的 phase 纪元(补偿细则见 ecl-lang)", "params": [{"name": "id", "ty": "int"}]},
     {"name": "bg_phase", "signature": "bg_phase(phase: int)", "ret": null, "doc": "声明背景演出段号:写 bg_phase 并自动盖 bg_phase_frame=当前帧,发 REQ_BG_PHASE;表现层按段内局部时间 seek", "params": [{"name": "phase", "ty": "int"}]},
-    {"name": "clear_bullets", "signature": "clear_bullets()", "ret": null, "doc": "全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧", "params": []}
+    {"name": "clear_bullets", "signature": "clear_bullets()", "ret": null, "doc": "全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧", "params": []},
+    {"name": "add_lives", "signature": "add_lives(delta: int)", "ret": null, "doc": "增减残机:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_", "params": [{"name": "delta", "ty": "int"}]},
+    {"name": "add_bombs", "signature": "add_bombs(delta: int)", "ret": null, "doc": "增减 bomb 数:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_", "params": [{"name": "delta", "ty": "int"}]},
+    {"name": "add_power", "signature": "add_power(delta: int)", "ret": null, "doc": "增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout", "params": [{"name": "delta", "ty": "int"}]}
   ]
 }

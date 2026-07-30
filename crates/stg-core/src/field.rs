@@ -43,6 +43,27 @@ define_pool! {
     }
 }
 
+/// 全场消弹区的**唯一构造口**——置场心、`life=1`（活一帧且当帧生效）、纯消弹无伤害。
+///
+/// 两个调用方：符卡结算清弹（`world::WorldBody::settle_one_spell`）/ `clear_bullets()`
+/// syscall（`ecl::syscall::SYS_CLEAR_BULLETS`）。**改这里等于同时改两处，这正是抽它的目的**
+/// ——此前是两份逐字段相同的 `FieldInit` 字面量，将来谁给其中一处加个标志位
+/// （比如 bomb 刀加 `FIELD_DAMAGE`），另一处不会跟着变，且没有任何测试会红。
+///
+/// 想要"带伤害的全屏区"（bomb）的人：**别改这个函数**，另起一个构造口——本函数的语义
+/// 由它的两个现有调用方钉死。
+pub(crate) fn fullscreen_clear_field() -> FieldInit {
+    FieldInit {
+        x: Fx::ZERO,
+        y: Fx::from_int(crate::world::FIELD_HEIGHT / 2),
+        radius: FIELD_RADIUS_FULLSCREEN,
+        dmg_per_frame: 0,
+        life: 1,
+        owner: 0,
+        flags: FIELD_CLEAR_BULLETS,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

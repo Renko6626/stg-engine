@@ -829,15 +829,7 @@ impl WorldBody {
             ],
         );
         if s.flags & crate::spell::SPELL_NO_CLEAR == 0 {
-            self.create_field(FieldInit {
-                x: Fx::ZERO,
-                y: Fx::from_int(224),
-                radius: crate::field::FIELD_RADIUS_FULLSCREEN,
-                dmg_per_frame: 0,
-                life: 1,
-                owner: 0,
-                flags: crate::field::FIELD_CLEAR_BULLETS,
-            });
+            self.create_field(crate::field::fullscreen_clear_field());
         }
         self.spells[slot] = crate::spell::SpellSlot::default();
         // B16② 清扫(2026-07-25):结算原子同步清公告板——否则 spells 清零后整槽被

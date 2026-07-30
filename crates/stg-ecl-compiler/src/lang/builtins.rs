@@ -459,6 +459,35 @@ const BUILTINS: &[Builtin] = &[
         doc: "全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧",
         param_names: &[],
     },
+    // ── B20：账面增量三件套（syscall 55/56/57）。只有 add_*、没有 set_*——绝对赋值场景
+    //    已被 Loadout（开局装备）收编，是人类裁定，别"补全"（裁定详见 syscall.rs 号表注释）。
+    Builtin {
+        name: "add_lives",
+        syscall: syscall::SYS_ADD_LIVES,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: None,
+        doc: "增减残机:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_",
+        param_names: &["delta"],
+    },
+    Builtin {
+        name: "add_bombs",
+        syscall: syscall::SYS_ADD_BOMBS,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: None,
+        doc: "增减 bomb 数:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_",
+        param_names: &["delta"],
+    },
+    Builtin {
+        name: "add_power",
+        syscall: syscall::SYS_ADD_POWER,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: None,
+        doc: "增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout",
+        param_names: &["delta"],
+    },
 ];
 
 /// 按名字查内建函数（线性扫描；表 <30 项，`lang::typeck` 每次 `Call` 判型调用一次）。
@@ -561,6 +590,9 @@ mod tests {
             "bg",
             "bg_phase",
             "clear_bullets",
+            "add_lives",
+            "add_bombs",
+            "add_power",
         ];
         for n in names {
             assert!(lookup(n).is_some(), "内建函数 '{n}' 应在表中");
@@ -729,6 +761,9 @@ mod tests {
             "bg",
             "bg_phase",
             "clear_bullets",
+            "add_lives",
+            "add_bombs",
+            "add_power",
         ] {
             assert_eq!(lookup(n).unwrap().ret, None, "'{n}' 应无返回值");
         }

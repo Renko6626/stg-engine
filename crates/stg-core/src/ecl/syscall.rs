@@ -116,6 +116,21 @@ pub const SYS_BG_PHASE: u16 = 53;
 /// 那刀的职责（bomb = `FIELD_CLEAR_BULLETS | FIELD_DAMAGE` + 自机无敌）。
 /// P4-a：field 池满 → `create_field` 自身的降级（NULL + 计数），本 syscall 不 Fault。
 pub const SYS_CLEAR_BULLETS: u16 = 54;
+/// 残机增量（B20；1 参 `delta`、无返回）。双边钳 `[0, u8::MAX]`（P4-b：`delta` 是脚本给的
+/// 任意 `i32`，先 `saturating_add` 再 `clamp`，不回绕不 panic）。
+///
+/// **增量形态（`add_*`）是人类裁定**，不是漏了 `set_*`：绝对赋值的唯一确定场景（开局装备）
+/// 已被 [`crate::player::Loadout`]（`World::new_game_at` 的装备参）收编，运行中脚本要的
+/// 都是"奖命 +1 / 中弹 −1"这类记账。
+/// 别把这族"补全"成 `set_lives`/`set_bombs`/`set_power` 四件套——多一条写路径就多一处
+/// 与 `Loadout` 抢开局初值的歧义。
+pub const SYS_ADD_LIVES: u16 = 55;
+/// bomb 增量（B20）。语义同 [`SYS_ADD_LIVES`]，钳 `[0, u8::MAX]`；增量形态同为人类裁定。
+pub const SYS_ADD_BOMBS: u16 = 56;
+/// 火力增量（B20）。语义同 [`SYS_ADD_LIVES`]，但上钳是 [`crate::items::POWER_MAX`]（400，
+/// = 显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 索引就 OOB（见
+/// `world::WorldBody::set_player_power` 文档）。增量形态同为人类裁定。
+pub const SYS_ADD_POWER: u16 = 57;
 
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
@@ -348,15 +363,32 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_BG => sys_anchor_u16(task, ctx, AnchorKind::Bg),
         SYS_BG_PHASE => sys_anchor_u16(task, ctx, AnchorKind::BgPhase),
         SYS_CLEAR_BULLETS => {
-            ctx.body.create_field(crate::field::FieldInit {
-                x: Fx::ZERO,
-                y: Fx::from_int(crate::world::FIELD_HEIGHT / 2),
-                radius: crate::field::FIELD_RADIUS_FULLSCREEN,
-                dmg_per_frame: 0,
-                life: 1,
-                owner: 0,
-                flags: crate::field::FIELD_CLEAR_BULLETS,
-            });
+            ctx.body
+                .create_field(crate::field::fullscreen_clear_field());
+            Ok(())
+        }
+        // B20 三件套：`d` 是脚本 push 上来的**任意 i32**，故一律先 `saturating_add`
+        // 再 `clamp` —— 裸 `+`（如 `255i32 + i32::MAX`）在 debug 下溢出 panic，而
+        // "调用方给坏参数"是 P4-b（确定性安全结果），不是 P4-c（引擎自身 bug 就地炸）。
+        SYS_ADD_LIVES => {
+            let d = pop(task)?;
+            let p = &mut ctx.body.players[0];
+            p.lives = (p.lives as i32).saturating_add(d).clamp(0, u8::MAX as i32) as u8;
+            Ok(())
+        }
+        SYS_ADD_BOMBS => {
+            let d = pop(task)?;
+            let p = &mut ctx.body.players[0];
+            p.bombs = (p.bombs as i32).saturating_add(d).clamp(0, u8::MAX as i32) as u8;
+            Ok(())
+        }
+        SYS_ADD_POWER => {
+            let d = pop(task)?;
+            let p = &mut ctx.body.players[0];
+            // 上钳 POWER_MAX(400) 而非 u16::MAX —— 见 SYS_ADD_POWER 号表注释。
+            p.power = (p.power as i32)
+                .saturating_add(d)
+                .clamp(0, crate::items::POWER_MAX as i32) as u16;
             Ok(())
         }
         _ => Err(FAULT_BAD_OP),
@@ -2596,5 +2628,125 @@ mod tests {
 
         assert!(result.is_ok(), "池满降级不应 Fault");
         assert_eq!(w.body.diag.pool_full[POOL_FIELD], before + 1, "池满须计数");
+    }
+
+    // ── SYS_ADD_LIVES/SYS_ADD_BOMBS/SYS_ADD_POWER（B20；账面增量 setter）──────────
+
+    /// B20：`add_lives(d)` 增量记账，双边钳位（P4-b），不回绕不 panic。
+    #[test]
+    fn add_lives_clamps_both_ends() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        w.body.players[0].lives = 3;
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_LIVES, &[1]).is_ok());
+        assert_eq!(w.body.players[0].lives, 4, "正增");
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_LIVES, &[-1]).is_ok());
+        assert_eq!(w.body.players[0].lives, 3, "负减");
+
+        w.body.players[0].lives = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_LIVES, &[-1]).is_ok());
+        assert_eq!(w.body.players[0].lives, 0, "下钳 0，不回绕成 255");
+
+        w.body.players[0].lives = u8::MAX;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_LIVES, &[1]).is_ok());
+        assert_eq!(w.body.players[0].lives, u8::MAX, "上钳 u8::MAX，不回绕成 0");
+    }
+
+    /// B20：`add_bombs(d)` 同构（独立字段——判别腿：写错字段会让 lives 动而 bombs 不动）。
+    #[test]
+    fn add_bombs_clamps_both_ends() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        w.body.players[0].bombs = 3;
+        let lives0 = w.body.players[0].lives;
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_BOMBS, &[1]).is_ok());
+        assert_eq!(w.body.players[0].bombs, 4, "正增");
+        assert_eq!(w.body.players[0].lives, lives0, "判别腿：不得误写 lives");
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_BOMBS, &[-1]).is_ok());
+        assert_eq!(w.body.players[0].bombs, 3, "负减");
+
+        w.body.players[0].bombs = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_BOMBS, &[-1]).is_ok());
+        assert_eq!(w.body.players[0].bombs, 0, "下钳 0，不回绕成 255");
+
+        w.body.players[0].bombs = u8::MAX;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_BOMBS, &[1]).is_ok());
+        assert_eq!(w.body.players[0].bombs, u8::MAX, "上钳 u8::MAX");
+    }
+
+    /// `power` 上限是 `POWER_MAX`（400，= 显示 4.00），**不是 `u16::MAX`**——判别腿：
+    /// 钳错成 `u16::MAX` 时 401 会被放行，`power_tier` 索引随后 OOB（见 `set_player_power` 文档）。
+    #[test]
+    fn add_power_clamps_to_power_max_not_u16_max() {
+        use crate::items::POWER_MAX;
+
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        w.body.players[0].power = 100;
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_POWER, &[50]).is_ok());
+        assert_eq!(w.body.players[0].power, 150, "正增");
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_POWER, &[-50]).is_ok());
+        assert_eq!(w.body.players[0].power, 100, "负减");
+
+        w.body.players[0].power = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_POWER, &[-1]).is_ok());
+        assert_eq!(w.body.players[0].power, 0, "下钳 0");
+
+        w.body.players[0].power = POWER_MAX;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_POWER, &[1]).is_ok());
+        assert_eq!(
+            w.body.players[0].power, POWER_MAX,
+            "上钳 POWER_MAX(400)，不是 u16::MAX"
+        );
+
+        // 一步跨过上限也得钳住（不是"只在恰好 +1 时钳"）。
+        w.body.players[0].power = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_POWER, &[10_000]).is_ok());
+        assert_eq!(w.body.players[0].power, POWER_MAX, "一步跨越同样钳 400");
+    }
+
+    /// P4-b：脚本可以 push 任意 `i32`，极值 delta 不得让中间量溢出（debug 下裸 `+` 会 panic）。
+    /// 三个 setter × `{i32::MAX, i32::MIN}` 全走一遍：不 panic、不 Fault，且落在各自钳位边界上。
+    #[test]
+    fn add_counters_survive_extreme_deltas() {
+        use crate::items::POWER_MAX;
+
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+
+        for &no in &[SYS_ADD_LIVES, SYS_ADD_BOMBS] {
+            w.body.players[0].lives = 200;
+            w.body.players[0].bombs = 200;
+            assert!(call(&mut w, &ecl, &mut task, no, &[i32::MAX]).is_ok());
+            let v = if no == SYS_ADD_LIVES {
+                w.body.players[0].lives
+            } else {
+                w.body.players[0].bombs
+            };
+            assert_eq!(v, u8::MAX, "syscall {no}：i32::MAX 应钳到 u8::MAX");
+
+            assert!(call(&mut w, &ecl, &mut task, no, &[i32::MIN]).is_ok());
+            let v = if no == SYS_ADD_LIVES {
+                w.body.players[0].lives
+            } else {
+                w.body.players[0].bombs
+            };
+            assert_eq!(v, 0, "syscall {no}：i32::MIN 应钳到 0");
+        }
+
+        w.body.players[0].power = 200;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_POWER, &[i32::MAX]).is_ok());
+        assert_eq!(
+            w.body.players[0].power, POWER_MAX,
+            "i32::MAX 应钳到 POWER_MAX"
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_POWER, &[i32::MIN]).is_ok());
+        assert_eq!(w.body.players[0].power, 0, "i32::MIN 应钳到 0");
     }
 }
