@@ -18,8 +18,14 @@ define_pool! {
         radius: Fx, hurtbox: Fx,
         invuln: u16, hit_flash: u8, flags: u8,
         sprite: u16, anm_state: u16,
-        // main_task（follow-ups B25 口径）：只写不读的记账字段——敌死后任务被 owner-gate
-        // 静默清杀，但 main_task 本身不清零；读到非零**不代表**任务还活着，全仓目前无消费者。
+        // main_task（follow-ups B25 口径，D9 起有消费者）：存"任务槽号+1"（0=无），不带
+        // generation。`ecl::vm::run_tasks` 的 D9 自燃判据读它——任务终止时若其槽号命中
+        // 本字段即视为"owner 敌的主协程"，自然 `End` 就把 owner 标 `ENEMY_DYING`（ZUN ECL
+        // 语义：主协程返回即自燃）。因不带 generation，**任意**终止路径（End/Fault/坏脚本号）
+        // 命中即清零——防同槽被子任务复用后误判"主任务还在"（别名防护，见 vm.rs 测试
+        // `main_task_slot_reuse_does_not_spuriously_self_destruct`）。敌死后任务被 owner-gate
+        // 静默清杀那条路径本字段不清零（owner 已死，读它没有消费者），敌槽复用时会随
+        // `EnemyInit`（exhaustive Init）重置为 0。
         main_task: u32, death_script: u16, drop_table: u16,
         score: u16
     }

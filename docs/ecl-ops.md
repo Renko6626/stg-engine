@@ -111,6 +111,10 @@
 | 51 | `bgm` | id | —（写表现锚点 `bgm_id` + 发 `REQ_BGM`；`id` 收窄 `0..=65535`，越界 → no-op + `diag.contract_viol` +1 + `last_status=BAD_ARGS`，**不 Fault**（P4-b），owner 类别无限制） |
 | 52 | `bg` | id | —（同上，写 `bg_id` + 发 `REQ_BG`；同一收窄/no-op 口径） |
 | 53 | `bg_phase` | n | —（写 `bg_phase`，同时把 `bg_phase_frame` 盖为当前帧，再发 `REQ_BG_PHASE`；`n` 同上收窄/no-op 口径） |
+| 54 | `clear_bullets`（B19） | — | —（**0 参**；调 `create_field(field::fullscreen_clear_field())` 铺一个覆盖全场、`life=1`、`FIELD_CLEAR_BULLETS` 的作用区，当帧相位 6 生效——消弹转星星与 `EVT_FIELD_CLEARED` 都是消弹区机制白送的，syscall 层零新逻辑；不做参数收窄；**P4-a**：field 池（cap 16）满 → 走 `create_field` 自身降级（NULL + `diag.pool_full[POOL_FIELD]` +1），**不 Fault**；owner 类别无限制） |
+| 55 | `add_lives`（B20） | delta | —（自机 0；`delta` 允许负，`saturating_add` 后**双边钳** `[0, u8::MAX]`——扣穿停 0、加满停 255，不回绕不 panic；**钳位是正常语义**，不计 `contract_viol`、不 Fault（同 `add_score` 口径）；不做参数收窄，owner 类别无限制） |
+| 56 | `add_bombs`（B20） | delta | —（同 55，写 `bombs`，钳 `[0, u8::MAX]`） |
+| 57 | `add_power`（B20） | delta | —（同 55，写 `power`，但上钳是 `items::POWER_MAX`=**400**（显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 档位索引 OOB） |
 
 `create_bullet` 走**丙方案**：`(xform_off, xform_cnt)` 指向本任务 locals 内打包槽
 （每槽 3 字：`word0=(wait<<16)|(op<<8)`、`word1/2=args`，≤16 槽）；`xform_cnt=0` 哑弹；

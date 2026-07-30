@@ -121,6 +121,12 @@ impl World {
     /// This is primarily for test-harness scenarios where a root script
     /// represents entity-specific behavior (e.g., enemy AI) that must be
     /// enemy-owned rather than stage-owned.
+    ///
+    /// **D9 豁免（重要）**：本入口**不写** `enemies.main_task`——只有
+    /// `sys_spawn_enemy` 的第 7 参才登记主任务。故一个 `EclOwner::Enemy` 的**根**脚本
+    /// 自然返回时**不会**让那只敌退场，与 `spawn_enemy(task=...)` 挂的主任务不同。
+    /// 金向量的 boss 正是这样挂的（其 `main` 在 `wait_spell()` 后确实返回），这是
+    /// 「ECL 复刻刀」对 golden 零漂移的结构性原因。
     pub fn start_main_with_owner(
         &mut self,
         image: &EclImage,

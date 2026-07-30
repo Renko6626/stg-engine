@@ -33,6 +33,14 @@
 > `drop_table` 测试〕/**B12**〔`credit_item` `saturating_add`+`>=` 修复与测试〕/**B14**
 > 〔`storm --saves 0` 守卫+去重+测试〕/**B25**〔`spawn_enemy`/`fire` task 号支路①③四条
 > 测试，`main_task` doc 注释已随该刀补在 `enemy.rs`〕，七条均已在代码里核实落地）。
+>
+> 最后核实：2026-07-30（**ECL 复刻刀**销账：逐条核实后整条删除 **D9**〔`vm::run_tasks` 的
+> `Exec::End` 分支已自燃 + 四条测试 + `enemy.rs`/`world.rs`/`cleanup.rs` 三处注释改口径 +
+> demo 杂兵退场点改回场内〕/**B19**〔`SYS_CLEAR_BULLETS`=54 + 表层 `clear_bullets()` +
+> 两条测试；语义拍板"直接消 + 消弹转星星"，不做护盾帧——那归 bomb〕/**B20**〔55/56/57 三个
+> syscall + `add_lives`/`add_bombs`/`add_power` 三个内建 + 四条测试；形态拍板为**增量**
+> `add_*`，`set_*` 不做，绝对赋值归 `Loadout`〕。三条的语义均已写进 `docs/ecl-lang.md`
+> 手写节与 `docs/ecl-ops.md` 号表。）
 
 ---
 
@@ -204,24 +212,6 @@ threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy �
 实数据判别绕开，不断言可见数）。**触发点 = 首个有 GPU/真渲染器的环境**，与 B23 的 UV
 判决同批可做（同样卡在"本机无 GPU/无 X"）——合并单见 **B26**（与 B23、DoD 可玩目验三件
 一次做完，别单做一件就散场）。
-
-### B19. 清弹 builtin——语义空间未定（整局流程刀 spec §8 记档，2026-07-25）
-
-practice 单场景不需要清弹；真实整局脚本关底转场（`REQ_STAGE_CLEAR` 挂牌前）大概率需要，
-但语义有内容层设计空间未拍板：直接消（静默清空）/ 转点（消弹换分/道具）/ 护盾帧（清弹同时
-给自机短暂无敌）三种玩法权重不同，`FieldPool` 已有通用消弹区机制（bomb 那刀是它的首个
-真租户，见本文件"E. bomb 那一刀开工前"）可复用，缺的是脚本层 builtin 与语义选型。**触发点
-= 真实整局脚本落地、关底转场需求出现时**，届时再定语义、开新 syscall 号（5x 族之后的下一个
-空号）。
-
-### B20. `set_power`/`set_lives`/`set_bombs` 账面 setter 三件——脚本侧暂无场景（整局流程刀 spec §3 记档，2026-07-25）
-
-装备/命数/炸弹数三件账面 setter 曾在早期草案里设想给脚本用（如"道中事件奖一条命"），但
-`Loadout`（`crates/stg-core/src/player.rs`）已把**装备上行**这唯一确定场景收编——菜单侧
-practice 装备走 `new_game_at` 的 `loadout` 参数，不需要脚本再写一次。四件套因此**缩编为
-一件 `add_score`**（关底 bonus/结算记账必须在世界内发生，其余三个暂无消费者）。**触发点 =
-"道中事件奖命/加炸弹"一类脚本需求真出现时**，届时按 `add_score` 同款 5x 族口径（1 参、无
-返回、钳位/饱和语义见 P4-b）补开 syscall。
 
 ### B21. mark 自动补偿的 `visited` 防环在"同一 sub 被同步调用两次"场景下与纯线性执行序背离（整局流程刀批审 Minor-1，2026-07-25）
 
@@ -566,20 +556,6 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 （知会，原 D6 尾注，2026-07-25 前置债务刀随 D6 收口挪存于此：`TaskPool` 的 `impl Default`
 仍可外部构造空池——但 `tasks` 字段已封,无注入路径,终审 2026-07-23 判无动作必要,记此防将来
 误判为漏网。）
-
-### D9. "敌主协程返回即自燃"——设计承诺代码查无实现（场景刀 T7 探查，2026-07-26）
-
-`world.rs:106` 与 `world/cleanup.rs:6` 的注释均写"M1 起敌人主协程返回即自燃——ZUN ECL
-语义"（`ENEMY_OOB_MARGIN` 只是防泄漏的大边界兜底，回收"主导"本该靠这条纪律），
-`stg-world-design.md` 也有同句。全仓 `grep ENEMY_DYING`：唯一置位点是
-`world/settle.rs::hp_break`（伤害血线路径）——**没有任何代码路径在 ECL 任务（尤其
-`main_task` 绑定的敌主任务）自然 `return`/结束时把 owner 敌标记 `ENEMY_DYING`**。这条
-"任务亡→敌燃"的承诺（注意方向，与既有的"敌死→任务被 owner-gate 清杀"是相反方向、两者都
-该成立但现在只有后者是真的）从 M1 起就只停留在注释里。demo 局的杂兵（`stage1.ecl`
-`zako_dive`）目前靠退场目标 `y=760`（超过 `FIELD_HEIGHT+ENEMY_OOB_MARGIN=704` 的回收线）
-让越界回收兜底顶上，是第一个真实撞上这条空缺的消费者——如果不特意把退场终点设过界，
-`zako_dive` 任务 `wait(600)` 结束后敌会**留在场上不消失**。**触发点 = 下一次编排"敌任务
-跑完就该退场"的内容且不方便靠越界收尾时**（比如原地驻守型敌、场内消失型敌）。
 
 ### D10. 部分设运行期只护 stride、不查 `valid`——编译期空格闸只覆盖 `.ecl` 源码路径（颜色轴刀 T6 记档，2026-07-26）
 
