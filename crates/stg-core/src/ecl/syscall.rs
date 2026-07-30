@@ -281,7 +281,7 @@ fn self_enemy_handle(task: &Task) -> Result<EnemyHandle, u8> {
 }
 
 /// 取本任务的第 `id` 个 shooter（可变）。`id` 越界 → `None` + `contract_viol` + `BAD_ARGS`
-/// （P4-b：no-op，不 Fault——见 62-75 号表注释）。`id` 是脚本给的任意 `i32`，负数与超界同处置。
+/// （P4-b：no-op，不 Fault——见 62-76 号表注释）。`id` 是脚本给的任意 `i32`，负数与超界同处置。
 ///
 /// **必须在参数全部 `pop` 完之后再调**：栈效应与成功路径一致（同 `sys_emit_req` 的"先弹后验"
 /// 口径），否则越界腿会给下一条指令留下垃圾栈。
@@ -769,7 +769,15 @@ fn sys_sh_fire(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     //         且 `angle_step` 转义成**逐层**偏移。
     let ring = sh.flags & SH_RING != 0;
     let n_angle = sh.n_angle as i32;
-    let step = sh.angle_step.raw() as i32;
+    // **符号扩展是必须的，不是风格问题**（复审 ①，Critical）：`angle_step` 存的是 `Angle`
+    // （底层 u16），脚本写 `sh_angle(0, 0deg, -6deg)` 存进去的是 `65536 − 1092`。
+    // `i·step`/`j·step` 在 mod 65536 下不受零扩展影响，**但下面的 `/2` 不与 mod 65536 交换**：
+    //   `((n−1)(s + 65536))/2 = ((n−1)s)/2 + (n−1)·32768`
+    // `n` 奇数 ⇒ 多出项是 65536 的整数倍、无害；**`n` 偶数 ⇒ 多出半圈**，整把扇形被搬到
+    // `base` 的正对面（形状还对，故只看"相邻差 step"的测试看不见它）。
+    // 读侧符号扩展也正是本仓家规：`create_bullets_batch` 的形参就是 `angle_step: i16`、
+    // `Angle::add_delta` 也收 i16。钉死在 `fan_centering_handles_even_ways_with_negative_step`。
+    let step = sh.angle_step.raw() as i16 as i32;
     // 奇数路时 (n−1) 为偶数、除 2 精确；偶数路截断半个 BAM 单位（1/65536 圈，确定且可忽略）。
     let fan_center = ((n_angle - 1) * step) / 2;
     let mut created: u32 = 0;
@@ -781,7 +789,7 @@ fn sys_sh_fire(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
             } else {
                 base + i * step - fan_center
             };
-            let angle = Angle((raw as u32 & 0xFFFF) as u16);
+            let angle = bam(raw);
             // `dist`：逐颗沿**各自**角度推出去，不是整环平移（判别腿
             // `dist_pushes_each_bullet_along_its_own_angle`）。dist=0 时 polar_to_vec
             // 恒返 (0,0)，故不必分支。
@@ -4083,6 +4091,111 @@ mod tests {
         speeds.dedup();
         assert_eq!(angles.len(), N_ANGLE as usize, "网格里应出现 5 个不同角");
         assert_eq!(speeds.len(), N_SPEED as usize, "网格里应出现 3 个不同速");
+    }
+
+    /// 居中公式的**偶数路 × 负步长**格（复审 ①/③）。
+    ///
+    /// 上一版这两格全无覆盖：等价测试只跑 `N_ANGLE = 5`（奇数），唯一用偶数路的
+    /// `dist_pushes_each_bullet_along_its_own_angle` 只比 dist 前后的**位移差**、两侧
+    /// `fan_center` 相同 ⇒ 对居中值完全免疫。于是下面这个 bug 整整逃逸了一轮：
+    ///
+    /// `ShooterSlot.angle_step` 存的是 `Angle`（底层 **u16**），`sh_angle(0, 0deg, -6deg)`
+    /// 这种常规写法存进去的是 `65536 − 1092`。`i·step`/`j·step` 在 mod 65536 下不受影响，
+    /// **但 `/2` 不与 mod 65536 交换**：
+    ///   `((n−1)(s + 65536))/2 = ((n−1)s)/2 + (n−1)·32768`
+    /// `n` 奇数 ⇒ `(n−1)` 偶 ⇒ 多出项是 65536 的整数倍、无害；
+    /// **`n` 偶数 ⇒ 多出 32768 BAM = 半圈**，整把扇形被搬到 `base` 的正对面
+    /// （扇形形状还对，相邻仍差 `step`——所以"形状对不对"式的测试也看不见它）。
+    ///
+    /// 修法是读侧符号扩展（`as i16 as i32`），回到本仓家规：`create_bullets_batch` 的形参
+    /// 就是 `angle_step: i16`、`Angle::add_delta` 也收 i16——**有符号角度增量是既定口径**，
+    /// `ShooterSlot` 存 `Angle` 是唯一破口。别改结构（槽宽已被 44 B 测试冻结）。
+    #[test]
+    fn fan_centering_handles_even_ways_with_negative_step() {
+        const N_ANGLE: i32 = 4;
+        const STEP: i32 = -0x400; // 脚本侧的 `-Xdeg`：经 `bam()` 存成 0xFC00
+        const BASE: i32 = 0;
+
+        let (mut wa, ecl) = fresh_with_shooters();
+        let mut ta = Task::default();
+        sh(&mut wa, &ecl, &mut ta, SYS_SH_SPRITE, &[0, ROW_C]);
+        sh(&mut wa, &ecl, &mut ta, SYS_SH_COUNT, &[0, N_ANGLE, 1]);
+        sh(&mut wa, &ecl, &mut ta, SYS_SH_ANGLE, &[0, BASE, STEP]);
+        sh(&mut wa, &ecl, &mut ta, SYS_SH_FIRE, &[0]);
+        let got: Vec<u16> = wa
+            .body
+            .bullets
+            .iter_alive()
+            .map(|i| wa.body.bullets.angle[i].raw())
+            .collect();
+
+        // 契约意图：base ± 512、base ± 1536（4 路以 base 为中心、步长 −1024）。
+        // 有 bug 的实现给出 34304/33280/32256/31232——形状对、整扇偏 180°。
+        assert_eq!(
+            got,
+            vec![1536, 512, 65024, 64000],
+            "偶数路 + 负步长的居中值错了（差 32768 = 半圈就是 u16 零扩展那个 bug）"
+        );
+
+        // 同一格也走一遍与 `batch` 的等价（`batch` 的 `angle_step` 形参本就是 i16，
+        // 故它是这条口径的现成参照物）。
+        let compensated = BASE - (N_ANGLE - 1) * STEP / 2;
+        let (mut wb, _) = fresh();
+        let mut tb = Task::default();
+        let args = [ROW_C, 0, 0, N_ANGLE, compensated, STEP, 1, 0, 0];
+        assert!(call(&mut wb, &ecl, &mut tb, SYS_CREATE_BULLETS_BATCH, &args).is_ok());
+        let want: Vec<u16> = wb
+            .body
+            .bullets
+            .iter_alive()
+            .map(|i| wb.body.bullets.angle[i].raw())
+            .collect();
+        assert_eq!(
+            got, want,
+            "偶数路 + 负步长下 shooter 的 fan 应仍与 batch 等价"
+        );
+    }
+
+    /// 复审 ②：aim 的基点是**原点**（含全部三种偏移），不是 owner 位置。
+    ///
+    /// 为什么另开一条：`aim_resolves_at_fire_time_not_at_set_time` 的 owner 是 STAGE、
+    /// 无任何偏移 ⇒ `origin == self_pos == (0,0)`，两个基点**重合**——把实现里的
+    /// `origin_x/origin_y` 换成 `self_pos(task, ctx)`（也就是"顺手复用
+    /// `sys_aim_player_angle` 口径"这个最自然的错法）那条测试照样绿。
+    /// 同 `CLAUDE.md` 点名的"圆心重合式测试对半径映射是瞎的"。
+    #[test]
+    fn aim_is_measured_from_the_fire_origin_not_from_the_owner() {
+        let (mut w, ecl) = fresh_with_shooters();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 100, -60, 5);
+        let mut t = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+        // 绝对偏移把原点挪到 (300, 0)——**远离** owner 的 (100, -60)。
+        sh(
+            &mut w,
+            &ecl,
+            &mut t,
+            SYS_SH_OFFSET_ABS,
+            &[0, Fx::from_int(300).raw(), 0],
+        );
+        sh(&mut w, &ecl, &mut t, SYS_SH_AIM, &[0, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+
+        let i = w.body.bullets.iter_alive().next().expect("应发一颗");
+        let got = w.body.bullets.angle[i];
+        let (px, py) = (w.body.players[0].x, w.body.players[0].y);
+        let from_origin = crate::math::cordic::atan2(py - Fx::ZERO, px - Fx::from_int(300));
+        let from_owner = crate::math::cordic::atan2(py - Fx::from_int(-60), px - Fx::from_int(100));
+        // 两条断言都要：只写前一条的话，owner 位置恰好也对得上的取值会漏。
+        assert_eq!(got, from_origin, "aim 必须从**开火原点**量");
+        assert_ne!(
+            got, from_owner,
+            "aim 从 owner 位置量了（顺手复用 sys_aim_player_angle 的口径就是这个结果）"
+        );
     }
 
     /// `dist` 是**逐颗沿各自角度**位移，不是整环朝同一方向平移。
