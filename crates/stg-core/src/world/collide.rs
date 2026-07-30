@@ -61,6 +61,10 @@ impl WorldBody {
         }
     }
     /// 行 3：敌体（enemy.radius）× 自机 hit_radius。
+    ///
+    /// **不查 `ENEMY_DYING`**——人类裁定 D-9（spec `2026-07-30-enemy-death-effect-design.md`
+    /// §3/§6）：dying 敌当帧仍参与体碰、仍撞得死自机。别顺手加 dying 门禁；
+    /// `tests::collide_dying_enemy_still_body_hits_player` 就是为此钉的。
     fn collide_body_player(&mut self) {
         for p in 0..crate::MAX_PLAYERS {
             if self.players[p].life_state != crate::player::LIFE_ALIVE
@@ -338,6 +342,64 @@ mod tests {
             .filter(|&k| w.body.hits[k].row == ROW_BODY_PLAYER_HIT)
             .count();
         assert_eq!(n, 0);
+    }
+
+    /// **人类裁定 D-9（spec `2026-07-30-enemy-death-effect-design.md` §3/§6）：
+    /// dying 敌当帧仍参与体碰、仍撞得死自机。这不是 bug，别"修好"它。**
+    ///
+    /// 相位 6 **故意不看** `ENEMY_DYING`——只有相位 7 settle 的伤害臂看。于是一只被
+    /// `die()`（相位 2）掉的敌，当帧的体碰照样成立；伤害致死那条路同性质，只是它的
+    /// dying 在相位 7 才置、相位 6 早已碰完，`die()` 把这个窗口拉长到了整帧。裁定理由：
+    /// 加一条"dying 不参与碰撞"的例外会让 D8 碰撞矩阵多一条隐式规则，而"神风敌撞死你"
+    /// 本就说得通。
+    ///
+    /// 这条测试是这个裁定在全仓的**唯一**回归保护（全支线复审 Critical #2 补：`PROGRESS.md`
+    /// 曾声称它有测试钉死，实际零覆盖）。它守的是"未来最可能被当 bug 顺手修掉"的那条语义：
+    /// 有人在 `collide_body_player` 里加一句 dying 门禁，三平台金向量闸门**会一起放行**
+    /// （闸门只比跨平台一致性，抓不到行为回归，见 CLAUDE.md「金向量闸门的能力边界」）。
+    ///
+    /// **变异实测**（本轮）：在 `collide_body_player` 的敌人循环里加
+    /// `if self.enemies.flags[e] & ENEMY_DYING != 0 { continue; }` → 本测试红在
+    /// "dying 敌的体碰必须照样收（人类裁定 D-9）"（left: 0, right: 1）。
+    #[test]
+    fn collide_dying_enemy_still_body_hits_player() {
+        use crate::events::ROW_BODY_PLAYER_HIT;
+        use crate::player::{DEATHBOMB_WINDOW, LIFE_DEATHWINDOW};
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(100);
+        // 敌体 radius 12 + 自机 hit 2.5，圆心重合——本条测的是 dying 门禁的有无，
+        // 不是半径映射（那条判别力归 `collide_body_uses_body_radius_not_hurtbox`）。
+        let e = spawn_enemy(&mut w, 0, 100, 5);
+        let ei = w.body.enemies.get(e).unwrap();
+        // 直接置旗 = `die()` 与"被打死"两条路径在相位 6 眼里的共同状态
+        // （`kill_enemy` 除了置旗还撒掉落/加分，与本条无关，不引进来当噪声）。
+        w.body.enemies.flags[ei] |= crate::enemy::ENEMY_DYING;
+        assert!(
+            w.body.enemies.is_alive(ei),
+            "前提：相位 9 才收尸，此刻槽还活着"
+        );
+
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        assert_eq!(
+            (0..w.body.hits_len as usize)
+                .filter(|&k| w.body.hits[k].row == ROW_BODY_PLAYER_HIT)
+                .count(),
+            1,
+            "dying 敌的体碰必须照样收（人类裁定 D-9）"
+        );
+
+        // 下游腿：收了还得真生效——settle 把自机推进决死窗口（"仍撞死自机"这半句）。
+        w.body.settle(&crate::tables::TABLES_V0);
+        assert_eq!(
+            w.body.players[0].life_state, LIFE_DEATHWINDOW,
+            "dying 敌撞死自机（D-9 的后半句）"
+        );
+        assert_eq!(w.body.players[0].state_timer, DEATHBOMB_WINDOW);
     }
 
     // 几何同上一条判别式思路，但行 4（自机弹×敌人）用 enemy.hurtbox（受击，大），

@@ -97,7 +97,7 @@
 | 12 | `enemy_hp`（A5 补遗） | handle | 活敌 `hp`；死/悬垂/越界句柄 → **-1**（P4-b，不比对 generation，不 Fault——stage 编排等 boss 死的轮询原语） |
 | 20 | `create_bullet` | appearance,x,y,speed,angle,xform_off,xform_cnt,task_sub | 弹句柄或 -1 |
 | 21 | `create_bullets_batch` | appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step | 实发数 |
-| 22 | `spawn_enemy` | x,y,hp,drop_table,score,sprite,task_sub | 敌句柄或 -1（A5 乙案：`task_sub` 同 20 号 `create_bullet` 同款 canonical `SubId`/-1=none；`task_sub>=0` 时必须指向零参数 `Async` sub，绑定层派子任务，owner=新敌） |
+| 22 | `spawn_enemy` | x,y,hp,drop_table,score,sprite,task_sub | 敌句柄或 -1（A5 乙案：`task_sub` 同 20 号 `create_bullet` 同款 canonical `SubId`/-1=none；`task_sub>=0` 时必须指向零参数 `Async` sub，绑定层派子任务，owner=新敌。**`drop_table` 在这里就展开成敌身上的 `drop_count[..]` 五槽**（敌死效果刀起表号退化成生成参数，此后无人读表号，见 58-60 号）；**P4-b**：表号越界（含负数——`as u16` 回绕后仍越界）→ **视同空表** + `contract_viol` +1 + `last_status=BAD_ARGS`，敌照建、**不 Fault**（原检查住 `settle::damage_enemy`，随掉落状态前移至此）） |
 | 23 | `drop_item` | x,y,item_type | 道具句柄或 -1 |
 | 24 | `move_enemy_to` | **dur,x,y,easing** | —（owner 须为敌，否则 Fault；参数序以 syscall.rs 为准，勿凭直觉写 x,y 在前） |
 | 25 | `boss_set` | slot,hp_ratio,spell_id,timer,phase_left,active | —（enemy 字段写 NULL，见 boss_ui 契约） |

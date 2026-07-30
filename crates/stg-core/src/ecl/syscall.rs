@@ -694,9 +694,14 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
 
     // 掉落表号在**生成时**展开成逐类型计数（此前存表号、死时才查表）。
     // P4-b：越界表号 → 视同空表 + 计数（原检查在 `settle::damage_enemy`，随状态前移）。
+    // `contract_viol` 与 `last_status` **两样都写**——邻居的每条 P4-b 都是这个口径
+    // （`world::add_enemy_drop` / `world::move_enemy_to` / `sys_spell_begin`），搬到 syscall
+    // 层之后不该变成异类。`last_status` 进校验和，故这一处会改世界状态（金向量两侧表号
+    // 恒不越界，压不到这条路径，实测逐字节不变）。
     let (drop_count, table_ok) = crate::tables::drop_counts(ctx.tables, drop_table as u16);
     if !table_ok {
         ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+        ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
     }
 
     let init = EnemyInit {
@@ -1695,9 +1700,14 @@ mod tests {
         assert_eq!(w.body.enemies.score[i], 100);
     }
 
-    /// P4-b：`spawn_enemy` 的越界 `drop_table` → 视同空表 + 计 contract_viol，
-    /// 敌照建、不 panic、死时不掉道具（原 B11，随掉落状态从 settle 前移到生成时）。
+    /// P4-b：`spawn_enemy` 的越界 `drop_table` → 视同空表 + 计 contract_viol +
+    /// `last_status=BAD_ARGS`，敌照建、不 panic、死时不掉道具
+    /// （原 B11，随掉落状态从 settle 前移到生成时）。
     /// 负数表号同样走这条（`as u16` 回绕成大正数 → 仍越界）。
+    ///
+    /// `last_status` 那条断言是全支线复审 Minor #6 补的：兄弟测试
+    /// `world::tests::enemy_drop_and_kill_apis_degrade_on_stale_handle` 一直断言两样，
+    /// 这条搬到 syscall 层时只剩了 `contract_viol`。
     #[test]
     fn spawn_enemy_out_of_range_drop_table_degrades_to_empty() {
         // 内建表只有 2 张掉落表；取一个必然越界的正数号，再取 -1 走回绕那条腿。
@@ -1706,6 +1716,11 @@ mod tests {
             let (mut w, ecl) = fresh();
             let mut task = Task::default();
             let viol_before = w.body.diag.contract_viol;
+            assert_eq!(
+                w.body.last_status,
+                crate::world::STATUS_OK,
+                "前提：开局 last_status 干净（表号 {bad}）"
+            );
             // 正序：x,y,hp,drop_table,score,sprite,task(none=-1)
             let args = [Fx::ZERO.raw(), Fx::from_int(80).raw(), 10, bad, 100, 0, -1];
             assert!(
@@ -1718,6 +1733,11 @@ mod tests {
                 w.body.diag.contract_viol,
                 viol_before + 1,
                 "越界表号须计一次违约（表号 {bad}）"
+            );
+            assert_eq!(
+                w.body.last_status,
+                crate::world::STATUS_BAD_ARGS,
+                "越界表号须写 last_status（同邻居 P4-b 口径；表号 {bad}）"
             );
             assert_eq!(
                 w.body.enemies.drop_count[idx as usize],
@@ -3027,6 +3047,46 @@ mod tests {
         // 已封顶再加仍是 255（饱和，非回绕）——只钳不饱和会在这里溢出 panic。
         assert!(call(&mut w, &ecl, &mut task, SYS_DROP_ADD, &[ty, 200]).is_ok());
         assert_eq!(w.body.enemies.drop_count[i][slot], 255, "饱和不回绕");
+    }
+
+    /// spec §5 的断言腿：**`die()` 打在绑卡 boss 上，经现有的破卡三路 OR 自动收卡结算——
+    /// 无需新增机制。** 这是设计里一句"现成机制够用"的论断，不是推论，要验（全支线复审
+    /// Important #3 补：spec §8 点名的这一行在 T4 交接中蒸发了，全仓再无 `SYS_DIE` 与
+    /// 符卡槽同框的测试）。
+    ///
+    /// 与 `vm::tests::spell_bound_boss_self_destruct_settles_spell_with_hp_above_threshold`
+    /// 的分工：那条走 **D9 自燃**（不碰 hp，故 hp 远高于血线，判的是三路 OR 里
+    /// `ENEMY_DYING` 那一路的判别力）；本条走 **`SYS_DIE`**，`kill_enemy` 的 `hp.min(0)`
+    /// 让第三路 `hp<=threshold` 同真，故它**不**是 OR 分支的判别腿——它验的是别的东西：
+    /// syscall → 世界 → `settle_spells` 这条链在 `die()` 上真的接通了。
+    #[test]
+    fn die_on_spell_bound_boss_settles_the_spell() {
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 10_000, 0);
+        assert!(
+            w.body.spell_begin_internal(0, eh, 77, 100, 1000, 0, 300),
+            "前提：卡开起来了"
+        );
+        assert_eq!(w.body.spells[0].active, 1, "前提：槽 active");
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_DIE, &[]).is_ok());
+        assert_eq!(
+            w.body.enemies.hp[eh.index as usize], 0,
+            "前提：`die()` 压过血线下钳（spec §4.2 有意为之），不是停在 threshold=300"
+        );
+
+        w.body.settle_spells(&TABLES_V0);
+        assert_eq!(
+            w.body.spells[0].active, 0,
+            "spec §5 断言：`die()` 打绑卡 boss 无需新增机制即收卡结算"
+        );
+        assert!(
+            w.body
+                .frame_events()
+                .iter()
+                .any(|e| e.kind == crate::events::EVT_SPELL_CAPTURED && e.data[0] == 77),
+            "走的是正常结算路径（CAPTURED），不是把槽抹了"
+        );
     }
 
     /// misuse：非 enemy-owner 调这四个 → Fault（照 `self_enemy_handle` 既有口径）。
