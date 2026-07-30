@@ -108,6 +108,14 @@ pub const SYS_BGM: u16 = 51;
 pub const SYS_BG: u16 = 52;
 /// 1 参：`n`。写 `bg_phase` + 自动盖 `bg_phase_frame` = 当前帧 + 发 `REQ_BG_PHASE`。
 pub const SYS_BG_PHASE: u16 = 53;
+/// 全场清弹（B19；0 参、无返回）。铺一个覆盖全场、`life=1` 的 `FIELD_CLEAR_BULLETS`
+/// 作用区——**复用现成的消弹区机制**，故"每颗被消的弹原位转一颗星星"（M0-15）与
+/// `EVT_FIELD_CLEARED` 都是白送的，引擎侧零新机制（同 `settle_one_spell` 的全屏清弹样板）。
+///
+/// 关底转场（`REQ_STAGE_CLEAR` 挂牌前）是首个真实消费者。**不给护盾帧**——那是 bomb
+/// 那刀的职责（bomb = `FIELD_CLEAR_BULLETS | FIELD_DAMAGE` + 自机无敌）。
+/// P4-a：field 池满 → `create_field` 自身的降级（NULL + 计数），本 syscall 不 Fault。
+pub const SYS_CLEAR_BULLETS: u16 = 54;
 
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
@@ -339,6 +347,18 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_BGM => sys_anchor_u16(task, ctx, AnchorKind::Bgm),
         SYS_BG => sys_anchor_u16(task, ctx, AnchorKind::Bg),
         SYS_BG_PHASE => sys_anchor_u16(task, ctx, AnchorKind::BgPhase),
+        SYS_CLEAR_BULLETS => {
+            ctx.body.create_field(crate::field::FieldInit {
+                x: Fx::ZERO,
+                y: Fx::from_int(crate::world::FIELD_HEIGHT / 2),
+                radius: crate::field::FIELD_RADIUS_FULLSCREEN,
+                dmg_per_frame: 0,
+                life: 1,
+                owner: 0,
+                flags: crate::field::FIELD_CLEAR_BULLETS,
+            });
+            Ok(())
+        }
         _ => Err(FAULT_BAD_OP),
     }
 }
@@ -2496,5 +2516,85 @@ mod tests {
         task.sp = 0;
         assert!(call(&mut w, &ecl, &mut task, SYS_ADD_SCORE, &[100]).is_ok());
         assert_eq!(w.body.players[0].score, u64::MAX, "上溢钳 u64::MAX");
+    }
+
+    // ── SYS_CLEAR_BULLETS（B19；整局流程刀 Task 2）──────────────────────────
+
+    /// B19：`clear_bullets()` 铺一个覆盖全场、存活 1 帧的消弹区。
+    /// **消弹转星星是白送的**（M0-15：settle 趟一对每颗被消的弹原位转一颗星星）,
+    /// 故断言"弹没了"**和**"星星出现了"——后者是"真走了 FieldPool 那条路"的判别腿
+    /// （若实现者绕开 field、自己写个循环把弹 free 掉，星星那条立刻红）。
+    #[test]
+    fn clear_bullets_lays_fullscreen_field_and_converts_to_stars() {
+        use crate::bullets::BULLET_CLEARED;
+        use crate::events::EVT_FIELD_CLEARED;
+        use crate::items::ITEM_STAR;
+        use crate::world::PH_COLLIDE;
+        use crate::world::test_support::bullet_at;
+
+        let (mut w, ecl) = fresh();
+        // 三颗弹散在场内不同位置（场界 x∈[-192,192]、y∈[0,448]），全部落在
+        // FIELD_RADIUS_FULLSCREEN 的覆盖范围内。
+        bullet_at(&mut w, -100, 50);
+        bullet_at(&mut w, 100, 400);
+        bullet_at(&mut w, 0, 224);
+
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_CLEAR_BULLETS, &[]).is_ok());
+
+        // 手动驱动到相位 6/7：field 是 life=1，相位5 减到 0、相位6 alive 位仍在
+        // 照常判定（field.rs 模块文档），故 collide 仍能吃到它。
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&TABLES_V0);
+        w.body.settle(&TABLES_V0);
+
+        assert_ne!(w.body.bullets.flags[0] & BULLET_CLEARED, 0, "弹0 应被消");
+        assert_ne!(w.body.bullets.flags[1] & BULLET_CLEARED, 0, "弹1 应被消");
+        assert_ne!(w.body.bullets.flags[2] & BULLET_CLEARED, 0, "弹2 应被消");
+
+        // 判别腿：星星必须出现（真走了 FieldPool），不是"弹没了"就算数。
+        assert_eq!(
+            w.body.items.iter_alive().count(),
+            3,
+            "每颗被消的弹应原位转一颗星星"
+        );
+        for i in 0..3 {
+            assert_eq!(w.body.items.item_type[i], ITEM_STAR, "槽 {i} 应为星星");
+        }
+
+        assert_eq!(w.body.events_len, 1, "field 消弹应聚合发一条事件");
+        assert_eq!(w.body.events[0].kind, EVT_FIELD_CLEARED);
+        assert_eq!(w.body.events[0].data[0], 3, "data[0] == 弹数");
+    }
+
+    /// P4-a：field 池满 → 确定性降级（不 panic、不 Fault，计 pool_full[POOL_FIELD]）。
+    #[test]
+    fn clear_bullets_field_pool_full_degrades() {
+        use crate::field::{FieldHandle, FieldInit, FieldPool};
+        use crate::world::POOL_FIELD;
+
+        let (mut w, ecl) = fresh();
+        for _ in 0..FieldPool::CAP {
+            let h = w.body.create_field(FieldInit {
+                x: Fx::ZERO,
+                y: Fx::ZERO,
+                radius: Fx::from_int(10),
+                dmg_per_frame: 0,
+                life: 1,
+                owner: 0,
+                flags: 0,
+            });
+            assert_ne!(h, FieldHandle::NULL, "灌池阶段不该失败");
+        }
+        let before = w.body.diag.pool_full[POOL_FIELD];
+
+        let mut task = Task::default();
+        let result = call(&mut w, &ecl, &mut task, SYS_CLEAR_BULLETS, &[]);
+
+        assert!(result.is_ok(), "池满降级不应 Fault");
+        assert_eq!(w.body.diag.pool_full[POOL_FIELD], before + 1, "池满须计数");
     }
 }

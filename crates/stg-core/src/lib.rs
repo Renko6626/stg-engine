@@ -29,7 +29,10 @@ extern crate self as stg_core;
 ///
 /// **1 → 2**（颜色轴刀 T7，2026-07-26）：op 清单新增 `OP_SET_SHAPE`(32)/`OP_SET_COLOR`(33)
 /// （`set_sprite` 细化出的"只改形"/"只改色"两个部分设 op）。
-pub const ENGINE_VER: u32 = 2;
+///
+/// **2 → 3**（ECL parity 刀 Task 2，2026-07-30）：syscall 号表新增 `SYS_CLEAR_BULLETS`(54)
+/// （全场清弹 B19）——号表变更同 op 表冻结纪律，同款口径 bump。
+pub const ENGINE_VER: u32 = 3;
 
 pub use stg_derive::define_pool;
 

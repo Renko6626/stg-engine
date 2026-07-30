@@ -449,6 +449,16 @@ const BUILTINS: &[Builtin] = &[
         doc: "声明背景演出段号:写 bg_phase 并自动盖 bg_phase_frame=当前帧,发 REQ_BG_PHASE;表现层按段内局部时间 seek",
         param_names: &["phase"],
     },
+    // ── B19：全场清弹（整局流程刀 Task 2；关底转场用）─────────────────────────
+    Builtin {
+        name: "clear_bullets",
+        syscall: syscall::SYS_CLEAR_BULLETS,
+        is_op: false,
+        params: &[],
+        ret: None,
+        doc: "全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧",
+        param_names: &[],
+    },
 ];
 
 /// 按名字查内建函数（线性扫描；表 <30 项，`lang::typeck` 每次 `Call` 判型调用一次）。
@@ -550,6 +560,7 @@ mod tests {
             "bgm",
             "bg",
             "bg_phase",
+            "clear_bullets",
         ];
         for n in names {
             assert!(lookup(n).is_some(), "内建函数 '{n}' 应在表中");
@@ -717,6 +728,7 @@ mod tests {
             "bgm",
             "bg",
             "bg_phase",
+            "clear_bullets",
         ] {
             assert_eq!(lookup(n).unwrap().ret, None, "'{n}' 应无返回值");
         }
