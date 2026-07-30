@@ -57,34 +57,61 @@ impl WorldBody {
         }
         self.enemies.hit_flash[e] = 4;
         if self.enemies.hp[e] <= 0 {
-            self.enemies.flags[e] |= ENEMY_DYING;
-            // 掉落直接分配（A6/A7）：撒敌身上的逐类型计数（表号已在生成时展开）。
-            self.spill_drops(e, tables);
-            let ev = Event {
-                kind: crate::events::EVT_ENEMY_DIED,
-                a_index: e as u16,
-                a_gen: self.enemies.generation[e],
-                x: self.enemies.x[e],
-                y: self.enemies.y[e],
-                data: [
-                    self.enemies.score[e] as i32,
-                    self.enemies.death_script[e] as i32,
-                ],
-            };
-            self.push_event(ev);
-            // 死亡特效请求（蓝图 §207 机械产出者；args 约定见 `crate::reqs` 模块文档）。
-            self.emit_req(
-                crate::consts::REQ_ENEMY_DEATH,
-                [
-                    self.enemies.x[e].raw(),
-                    self.enemies.y[e].raw(),
-                    self.enemies.sprite[e] as i32,
-                    self.enemies.score[e] as i32,
-                    0,
-                    0,
-                ],
-            );
+            self.kill_enemy(e, tables);
         }
+    }
+
+    /// 敌人的**完整死亡效果**——死亡路径的唯一实现处。
+    ///
+    /// **幂等**：已 `ENEMY_DYING` 即直接返回（与 settle 趟二的 overkill 门禁同构）。
+    /// 顺序：hp 下钳 → 标 dying → 撒掉落 → 记分 → 事件 → 死亡特效请求。
+    ///
+    /// 两个调用方：`damage_enemy` 的 `hp<=0` 分支（被自机打死）/ `SYS_DIE`（脚本显式）。
+    /// **注意 D9 自燃不走这里**——主协程返回是"静默退场"，不掉道具不加分不发事件
+    /// （`ecl::vm::run_tasks` 的 `Exec::End` 分支只置 `ENEMY_DYING`）。三条路径的差异是
+    /// 脚本作者最容易搞混的一处，见 `docs/ecl-lang.md`。
+    ///
+    /// **只标记不回收**——槽要活到相位 8 供表现层读；相位 9 cleanup 收尸。
+    pub(crate) fn kill_enemy(&mut self, e: usize, tables: &WorldTables) {
+        if self.enemies.flags[e] & ENEMY_DYING != 0 {
+            return; // 幂等
+        }
+        // `min(0)` 而非置 0：伤害路径 hp 已 ≤0（保留 overkill 的负值可观测性，
+        // `settle_overkill_two_shots_one_death_event` 依赖它）；`die()` 路径可能打在
+        // 满血 boss 上，压到 0 才不会让 HUD 当帧显示"满血的死人"。
+        self.enemies.hp[e] = self.enemies.hp[e].min(0);
+        self.enemies.flags[e] |= ENEMY_DYING;
+        // 掉落直接分配（A6/A7）：撒敌身上的逐类型计数（表号已在生成时展开）。
+        self.spill_drops(e, tables);
+        // **强制加分**（人类裁定 D-5，2026-07-30）：此前 `enemies.score` 是纯装饰字段——
+        // 只被塞进 `EVT_ENEMY_DIED.data[0]` 与 `REQ_ENEMY_DEATH` 供表现层显示，打死敌人的
+        // 全部收益来自掉落被 `credit_item` 入账。记自机 0，与 `SYS_ADD_SCORE` 同口径。
+        let bonus = self.enemies.score[e] as u64;
+        self.players[0].score = self.players[0].score.saturating_add(bonus);
+        let ev = Event {
+            kind: crate::events::EVT_ENEMY_DIED,
+            a_index: e as u16,
+            a_gen: self.enemies.generation[e],
+            x: self.enemies.x[e],
+            y: self.enemies.y[e],
+            data: [
+                self.enemies.score[e] as i32,
+                self.enemies.death_script[e] as i32,
+            ],
+        };
+        self.push_event(ev);
+        // 死亡特效请求（蓝图 §207 机械产出者；args 约定见 `crate::reqs` 模块文档）。
+        self.emit_req(
+            crate::consts::REQ_ENEMY_DEATH,
+            [
+                self.enemies.x[e].raw(),
+                self.enemies.y[e].raw(),
+                self.enemies.sprite[e] as i32,
+                self.enemies.score[e] as i32,
+                0,
+                0,
+            ],
+        );
     }
 
     pub(crate) fn settle(&mut self, tables: &WorldTables) {
@@ -957,6 +984,88 @@ mod tests {
             ],
             "位序 x/y/sprite/score——判别值防对调假绿"
         );
+    }
+
+    /// D-5：敌死**强制加分**——`enemies.score[e]` 记进自机 0 的分数。
+    /// **判别腿：测试内一颗道具都不拾取**。此前敌人的 score 是纯装饰字段（只塞进
+    /// EVT_ENEMY_DIED 供表现层显示），打死敌人的全部收益来自掉落被 credit_item 入账。
+    /// 若测试里让自机拾到了道具，就分不清这分是敌人加的还是道具加的——D9 那刀正是
+    /// 在这里栽过（"score 未变"断言因分数走 credit_item 而失效，见 vm.rs 的订正注释）。
+    #[test]
+    fn enemy_death_credits_its_score_bonus() {
+        use crate::enemy::ENEMY_DYING;
+        let mut w = crate::step::World::new(1);
+        // `spawn_enemy` 的敌 `drop_count` 全零、`score = 100`；摆在 (0,80)，
+        // 自机在默认出生点 (0,384) —— 远离敌，也远离任何道具（本测试压根不生道具）。
+        let e = spawn_enemy(&mut w, 0, 80, 1);
+        let ei = w.body.enemies.get(e).unwrap();
+        assert_eq!(
+            w.body.enemies.drop_count[ei],
+            [0u8; crate::items::ITEM_TYPE_COUNT],
+            "判别腿前提：这敌不掉任何道具，否则分不清分数来自敌人还是 credit_item"
+        );
+        let before = w.body.players[0].score;
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: w.body.enemies.x[ei],
+            y: w.body.enemies.y[ei],
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 1,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        assert_ne!(w.body.enemies.flags[ei] & ENEMY_DYING, 0, "前提：敌真死了");
+        assert_eq!(
+            w.body.items.iter_alive().count(),
+            0,
+            "判别腿：一颗道具都没生成 → 分数只可能是敌人自己加的"
+        );
+        assert_eq!(
+            w.body.players[0].score,
+            before + 100,
+            "敌死把 enemies.score 记进自机 0"
+        );
+    }
+
+    /// 判别腿：**D9 自然退场仍是静默的**——不加分、不掉落。
+    /// 防实现者把 kill_enemy 顺手挂到 vm 的 Exec::End 上（或挂到 cleanup 的 dying 收尸上）。
+    #[test]
+    fn d9_silent_exit_credits_no_score_and_drops_nothing() {
+        use crate::enemy::ENEMY_DYING;
+        use crate::input::InputFrame;
+        let mut w = crate::step::World::new(1);
+        // 掉落表 1（展开 3 颗）+ score=100 —— 两条断言各自都有判别力。
+        let e = w.body.create_enemy(enemy_with_drop_table(1));
+        let ei = w.body.enemies.get(e).unwrap();
+        let before = w.body.players[0].score;
+        // 模拟 D9 自燃的效果：`ecl::vm::run_tasks` 的 `Exec::End` 分支**只**置这一位。
+        // 注意：这里不调 kill_enemy —— 那正是本测试要证明"没被调用"的东西。
+        w.body.enemies.flags[ei] |= ENEMY_DYING;
+        step_t(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.players[0].score, before, "D9 自然退场不加分");
+        assert_eq!(w.body.items.iter_alive().count(), 0, "D9 自然退场不掉落");
+    }
+
+    /// 幂等：`kill_enemy` 对已 dying 的敌是 no-op（掉落 / 加分 / 事件各只发生一次）。
+    #[test]
+    fn kill_enemy_is_idempotent() {
+        let mut w = crate::step::World::new(1);
+        let e = w.body.create_enemy(enemy_with_drop_table(1)); // 3 颗掉落 + score=100
+        let ei = w.body.enemies.get(e).unwrap();
+        let before = w.body.players[0].score;
+        w.body.kill_enemy(ei, &crate::tables::TABLES_V0);
+        w.body.kill_enemy(ei, &crate::tables::TABLES_V0);
+        assert_eq!(w.body.items.iter_alive().count(), 3, "掉落只撒一次");
+        assert_eq!(w.body.players[0].score, before + 100, "加分只记一次");
+        assert_eq!(w.body.events_len, 1, "EVT_ENEMY_DIED 只发一次");
     }
 
     /// 全字段 EnemyInit（exhaustive）：位置固定 (0,80)、hp=1、其余惰性。
