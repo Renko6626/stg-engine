@@ -76,9 +76,14 @@ impl WorldBody {
         if self.enemies.flags[e] & ENEMY_DYING != 0 {
             return; // 幂等
         }
-        // `min(0)` 而非置 0：伤害路径 hp 已 ≤0（保留 overkill 的负值可观测性，
-        // `settle_overkill_two_shots_one_death_event` 依赖它）；`die()` 路径可能打在
-        // 满血 boss 上，压到 0 才不会让 HUD 当帧显示"满血的死人"。
+        // `min(0)` 而非置 0 —— **对当前唯一调用方是恒等的**：`damage_enemy` 只在 `hp<=0`
+        // 分支里调，`min(0)` 取的必是 `hp` 自己。它是为**将来的 `die()`（T3）**准备的：
+        // 那条路径可能打在满血 boss 上，压到 0 才不会让 HUD 当帧显示"满血的死人"；
+        // 而对已被 overkill 打成负血的敌，`min` 保住负值不被抹平（负血是可观测的诊断信息）。
+        // **判别性测试在 T3**（`die()` 落地时补 `die_on_full_hp_enemy_zeroes_hp` +
+        // 一条 overkill 反向腿：先打到 hp=-5 再 `kill_enemy`，断言仍是 -5）。当前全仓**没有**
+        // 任何测试能区分 `min(0)` 与无条件置 0 —— `settle_overkill_two_shots_one_death_event`
+        // 也不能（它 hp=1/dmg=1 → hp 恰好是 0，第二发又被 dying 门禁挡在 damage_enemy 之外）。
         self.enemies.hp[e] = self.enemies.hp[e].min(0);
         self.enemies.flags[e] |= ENEMY_DYING;
         // 掉落直接分配（A6/A7）：撒敌身上的逐类型计数（表号已在生成时展开）。
@@ -1035,24 +1040,21 @@ mod tests {
         );
     }
 
-    /// 判别腿：**D9 自然退场仍是静默的**——不加分、不掉落。
-    /// 防实现者把 kill_enemy 顺手挂到 vm 的 Exec::End 上（或挂到 cleanup 的 dying 收尸上）。
-    #[test]
-    fn d9_silent_exit_credits_no_score_and_drops_nothing() {
-        use crate::enemy::ENEMY_DYING;
-        use crate::input::InputFrame;
-        let mut w = crate::step::World::new(1);
-        // 掉落表 1（展开 3 颗）+ score=100 —— 两条断言各自都有判别力。
-        let e = w.body.create_enemy(enemy_with_drop_table(1));
-        let ei = w.body.enemies.get(e).unwrap();
-        let before = w.body.players[0].score;
-        // 模拟 D9 自燃的效果：`ecl::vm::run_tasks` 的 `Exec::End` 分支**只**置这一位。
-        // 注意：这里不调 kill_enemy —— 那正是本测试要证明"没被调用"的东西。
-        w.body.enemies.flags[ei] |= ENEMY_DYING;
-        step_t(&mut w, &InputFrame::empty(0));
-        assert_eq!(w.body.players[0].score, before, "D9 自然退场不加分");
-        assert_eq!(w.body.items.iter_alive().count(), 0, "D9 自然退场不掉落");
-    }
+    // ── 敌人死亡的三条路径，测试分居两处（导航线索，别让这组测试散丢）─────────────
+    //
+    // 1. **被自机打死** → `damage_enemy` 的 `hp<=0` 分支 → `kill_enemy`：
+    //    本文件，`enemy_death_credits_its_score_bonus`（加分）
+    //    + `settle_death_drops_by_table_in_settlement_order`（掉落）
+    //    + `settle_enemy_death_emits_render_req_with_pos_sprite_score`（请求）。
+    // 2. **脚本显式 `die()`** → `SYS_DIE` → `kill_enemy`：**T3 才落地**，届时测试住 vm.rs。
+    // 3. **D9 自燃**（主协程自然返回）→ `ecl::vm::run_tasks` 的 `Exec::End` 分支，
+    //    **不走 `kill_enemy`**：静默退场，不掉道具、不加分、不发 `EVT_ENEMY_DIED`。
+    //    守它的是 `ecl::vm::tests::enemy_main_task_returning_self_destructs_quietly`
+    //    —— 在 vm.rs 而不在这里，因为它要 `async_image`/`spawn_sub_internal` 那套脚手架
+    //    才能造出**真带 main_task**的敌；在本文件里手工置 `ENEMY_DYING` 造不出那条路径
+    //    （`main_task=0` 的敌根本不会被 D9 分支求值，那样的测试无论实现对错都恒绿）。
+    //    自本刀起，它那条 `score` 断言是**真判别腿**：谁把 `kill_enemy` 挂进 `Exec::End`
+    //    它立刻红（本刀用变异实测确认过，见 task-2-report.md 修复轮）。
 
     /// 幂等：`kill_enemy` 对已 dying 的敌是 no-op（掉落 / 加分 / 事件各只发生一次）。
     #[test]
