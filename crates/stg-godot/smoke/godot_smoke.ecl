@@ -15,6 +15,12 @@ const BALL: int = 48;
 const COLOR_CYAN: int = 8;
 
 async sub smoke_spell_pattern() { loop { wait(60); } }
+// **D9 注意**(ECL 复刻刀,2026-07-30):本 sub 是下面那只 boss 的**主任务**,而它
+// `wait_spell()` 一返回就落到函数尾 = 自然结束 → D9 判定该敌退场(标 ENEMY_DYING,相位 9
+// 回收)。因 time_limit 压到 8,符卡早期几帧就超时结算,故**这只 boss 只活约 10 帧**,
+// 不再像 D9 之前那样驻留整个冒烟窗口。冒烟仍全绿:摸敌人的断言打的都是池索引 0(y=-160
+// 那只)与 2(y=200 靶子),hud_boss 读的槽 0 也是 main() 手写的、与本卡绑的槽 1 无关。
+// 要让它留到底,给 sub 尾部加 `loop { wait(60); }` 即可。
 async sub smoke_boss() {
     spell_begin(1, 7, smoke_spell_pattern, 8, 50000, 0, 0);
     wait_spell();

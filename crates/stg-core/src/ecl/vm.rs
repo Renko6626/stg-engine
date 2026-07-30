@@ -498,9 +498,19 @@ pub(crate) fn run_tasks(
         }
 
         // D9：敌主协程返回即自燃（ZUN ECL 语义）。`main_task` 存槽号+1、不带 generation，
-        // 故**任意**终止路径都要清零——否则该槽被同 owner 的子任务复用后，子任务结束会
-        // 误杀 owner。自燃只在自然 `End` 上触发：Fault/坏脚本号是错误路径（已有 fault
-        // 事件），不该顺手把敌收走，但同样要清零 main_task 以防别名误杀。
+        // 故**本函数拥有的每条终止路径**都要清零——否则该槽被同 owner 的子任务复用后，
+        // 子任务结束会误杀 owner。自燃只在自然 `End` 上触发：Fault/坏脚本号是错误路径
+        // （已有 fault 事件），不该顺手把敌收走，但同样要清零 main_task 以防别名误杀。
+        //
+        // 三条**不**在本函数手上的路径，各自的处置：
+        // - `OP_KILL_SELF`（`exec` 内）返回 `Exec::End` → 走下面的自燃分支。即
+        //   **主任务里调 `kill_self()` 等于让这只敌退场**。
+        // - `OP_KILL_CHILDREN`（`exec` 内）直接 `ctx.tasks.kill(j)`，绕过本函数 → 若被杀的
+        //   子任务恰是某敌的 main_task，会留下陈旧槽号（别名隐患）。当前不可达：两个 op 都
+        //   没有表层内建/语句，只有 raw builder 能发；且还需同 owner 的孙任务复用该槽才会
+        //   显形。**若将来把 kill_children 开成表层能力，这里要一并清零。**
+        // - `binding::start_main_with_owner` 根本不写 `main_task` → 敌属**根**脚本豁免 D9
+        //   （金向量的 boss 正是这样挂的，故本刀对 golden 零漂移）。
         let is_main = t.owner_kind == OWNER_ENEMY
             && body.enemies.main_task[t.owner_index as usize] == i as u32 + 1;
 
