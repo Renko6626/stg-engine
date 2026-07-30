@@ -239,7 +239,7 @@ fn bench_mix(frames: u32) {
         anm_state: 0,
         main_task: 0,
         death_script: 0,
-        drop_table: 1,
+        drop_count: stg_core::tables::drop_counts(&stg_core::tables::TABLES_V0, 1).0,
         score: 100,
     };
     let seq = [XformSlot {
@@ -460,7 +460,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
         anm_state: 0,
         main_task: 0,
         death_script: 0,
-        drop_table: 1,
+        drop_count: stg_core::tables::drop_counts(&stg_core::tables::TABLES_V0, 1).0,
         score: 100,
     };
 
@@ -960,7 +960,7 @@ fn build_rainbow_world(
         anm_state: 0,
         main_task: 0,
         death_script: 0,
-        drop_table: 0,
+        drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],
         score: 10000,
     });
     world2
@@ -1082,7 +1082,7 @@ mod ecl_rainbow_tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 0,
+            drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],
             score: 10000,
         }
     }

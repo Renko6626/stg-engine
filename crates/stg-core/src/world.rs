@@ -1075,7 +1075,7 @@ pub(crate) mod test_support {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 0,
+            drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 100,
         })
     }
@@ -1171,7 +1171,7 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 0,
+            drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 0,
         }
     }
@@ -1376,7 +1376,7 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 0,
+            drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 100,
         };
         let h = w.body.create_enemy(init);
@@ -1497,7 +1497,7 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 0,
+            drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 0,
         });
         let i = w.body.enemies.get(h).unwrap();

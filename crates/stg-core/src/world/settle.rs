@@ -23,6 +23,24 @@ impl WorldBody {
         self.players[p].state_timer = crate::player::DEATHBOMB_WINDOW;
     }
 
+    /// 把敌身上的掉落计数原位撒出去——**只撒**：不清零、不加分、不发事件。
+    ///
+    /// 顺序是**类型升序**（I4）：这也是"掉落从表迁成计数后金向量不漂"的依据——内建掉落表 1
+    /// 是 `[(ITEM_POWER,2),(ITEM_POINT,1)]` 而 `ITEM_POWER=0 < ITEM_POINT=1`，表序恰好
+    /// 就是类型升序，故 `spawn_drop` 的 RNG 消耗顺序与迁移前逐字相同
+    /// （由 `enemy_death_drop_sequence_is_pinned` 特征化测试押运）。
+    ///
+    /// 两个调用方：`kill_enemy`（死亡效果的一部分）/ `SYS_DROP_ITEMS`（脚本显式撒）。
+    /// **不清零**是人类裁定（spec D-3）：故 `drop_items(); die();` 会掉两份，作者自负。
+    pub(crate) fn spill_drops(&mut self, e: usize, tables: &WorldTables) {
+        let (ex, ey) = (self.enemies.x[e], self.enemies.y[e]);
+        for ty in 0..crate::items::ITEM_TYPE_COUNT {
+            for _ in 0..self.enemies.drop_count[e][ty] {
+                self.spawn_drop(ex, ey, ty as u8, tables);
+            }
+        }
+    }
+
     /// 敌人扣血 + 致死则标记 dying 并产出 `EnemyDied`（行 4/行 7 共用；只发一次）。
     /// **只标记不回收**——槽要活到相位 8 供死亡脚本/表现层读；相位 9 cleanup 收尸。
     fn damage_enemy(&mut self, e: usize, dmg: u16, tables: &WorldTables) {
@@ -40,18 +58,8 @@ impl WorldBody {
         self.enemies.hit_flash[e] = 4;
         if self.enemies.hp[e] <= 0 {
             self.enemies.flags[e] |= ENEMY_DYING;
-            // 掉落直接分配（A6/A7）：按 drop_table 查表展开；越界表 → P4-b 计数 + 视同空表。
-            let table = self.enemies.drop_table[e] as usize;
-            if table >= tables.drop_tables.len() {
-                self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
-            } else {
-                let (ex, ey) = (self.enemies.x[e], self.enemies.y[e]);
-                for &(ty, n) in tables.drop_tables[table].iter() {
-                    for _ in 0..n {
-                        self.spawn_drop(ex, ey, ty, tables);
-                    }
-                }
-            }
+            // 掉落直接分配（A6/A7）：撒敌身上的逐类型计数（表号已在生成时展开）。
+            self.spill_drops(e, tables);
             let ev = Event {
                 kind: crate::events::EVT_ENEMY_DIED,
                 a_index: e as u16,
@@ -416,72 +424,6 @@ mod tests {
         );
     }
 
-    /// P4-b：越界 `drop_table` id → 视同空表 + 计 contract_viol，不 panic、不掉道具（B11）。
-    #[test]
-    fn settle_out_of_range_drop_table_degrades_to_empty() {
-        let mut w = crate::step::World::new(1);
-        // 内建表只有 2 张掉落表，取一个必然越界的 id
-        let bad = crate::tables::TABLES_V0.drop_tables.len() as u16 + 9;
-        let e = w.body.create_enemy(crate::enemy::EnemyInit {
-            x: Fx::from_int(0),
-            y: Fx::from_int(80),
-            vx: Fx::ZERO,
-            vy: Fx::ZERO,
-            mv_from_x: Fx::ZERO,
-            mv_from_y: Fx::ZERO,
-            mv_to_x: Fx::ZERO,
-            mv_to_y: Fx::ZERO,
-            mv_t: 0,
-            mv_dur: 0,
-            mv_easing: 0,
-            mv_active: 0,
-            hp: 1,
-            hp_max: 1,
-            radius: Fx::from_int(12),
-            hurtbox: Fx::from_int(16),
-            invuln: 0,
-            hit_flash: 0,
-            flags: 0,
-            sprite: 0,
-            anm_state: 0,
-            main_task: 0,
-            death_script: 0,
-            drop_table: bad,
-            score: 100,
-        });
-        let ei = w.body.enemies.get(e).unwrap();
-        w.body.create_player_shot(crate::shots::ShotInit {
-            x: w.body.enemies.x[ei],
-            y: w.body.enemies.y[ei],
-            vx: Fx::ZERO,
-            vy: Fx::ZERO,
-            damage: 1,
-            radius: Fx::from_int(4),
-            sprite: 0,
-            owner: 0,
-            flags: 0,
-        });
-        let viol_before = w.body.diag.contract_viol;
-        let items_before = w.body.items.iter_alive().count();
-        #[cfg(debug_assertions)]
-        {
-            w.body.phase_guard = PH_COLLIDE;
-        }
-        w.body.collide(&crate::tables::TABLES_V0);
-        w.body.settle(&crate::tables::TABLES_V0);
-        assert_eq!(
-            w.body.diag.contract_viol,
-            viol_before + 1,
-            "越界表须计一次违约"
-        );
-        assert_eq!(
-            w.body.items.iter_alive().count(),
-            items_before,
-            "不得掉任何道具"
-        );
-        assert!(w.body.enemies.hp[ei] <= 0, "敌照常死（降级不影响伤害结算）");
-    }
-
     #[test]
     fn settle_bullet_hit_triggers_deathwindow() {
         use crate::player::{DEATHBOMB_WINDOW, LIFE_DEATHWINDOW};
@@ -729,7 +671,7 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 1,
+            drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, 1).0,
             score: 100,
         };
         let ea = w.body.create_enemy(enemy_at(-100));
@@ -1014,6 +956,89 @@ mod tests {
                 0
             ],
             "位序 x/y/sprite/score——判别值防对调假绿"
+        );
+    }
+
+    /// 全字段 EnemyInit（exhaustive）：位置固定 (0,80)、hp=1、其余惰性。
+    /// 表号走 `tables::drop_counts` 展开——与 `sys_spawn_enemy` 的生成路径同一条口子。
+    fn enemy_with_drop_table(table: u16) -> crate::enemy::EnemyInit {
+        crate::enemy::EnemyInit {
+            x: Fx::ZERO,
+            y: Fx::from_int(80),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            mv_from_x: Fx::ZERO,
+            mv_from_y: Fx::ZERO,
+            mv_to_x: Fx::ZERO,
+            mv_to_y: Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp: 1,
+            hp_max: 1,
+            radius: Fx::from_int(12),
+            hurtbox: Fx::from_int(16),
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 0,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, table).0,
+            score: 100,
+        }
+    }
+
+    /// **特征化测试**（T1 重构的安全网）：敌死掉落的逐颗 `(type, vx, vy)` 全序列。
+    /// `vx`/`vy` 来自 `spawn_drop` 的世界 RNG 散布，故本测试同时钉住"掉了什么"
+    /// **与** "RNG 被消耗了几次、按什么顺序"——掉落迁成按类型计数后这三者都必须不变。
+    /// 期望值是**重构前实测**填入的（见计划 T1 Step 2）。
+    #[test]
+    fn enemy_death_drop_sequence_is_pinned() {
+        let mut w = crate::step::World::new(1);
+        let e = w.body.create_enemy(enemy_with_drop_table(1));
+        let ei = w.body.enemies.get(e).unwrap();
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: w.body.enemies.x[ei],
+            y: w.body.enemies.y[ei],
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 99,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+
+        let got: Vec<(u8, i32, i32)> = w
+            .body
+            .items
+            .iter_alive()
+            .map(|i| {
+                (
+                    w.body.items.item_type[i],
+                    w.body.items.vx[i].raw(),
+                    w.body.items.vy[i].raw(),
+                )
+            })
+            .collect();
+        // 掉落表 1 = [(ITEM_POWER,2),(ITEM_POINT,1)]；POWER=0 < POINT=1，
+        // 表序恰好就是类型升序 —— 这正是"改成按类型计数后顺序不漂"的原因。
+        assert_eq!(
+            got,
+            vec![
+                (0, 25626, -180916),
+                (0, -35167, -188191),
+                (1, 9857, -167669),
+            ]
         );
     }
 }

@@ -651,6 +651,13 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
         None
     };
 
+    // 掉落表号在**生成时**展开成逐类型计数（此前存表号、死时才查表）。
+    // P4-b：越界表号 → 视同空表 + 计数（原检查在 `settle::damage_enemy`，随状态前移）。
+    let (drop_count, table_ok) = crate::tables::drop_counts(ctx.tables, drop_table as u16);
+    if !table_ok {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+    }
+
     let init = EnemyInit {
         x: Fx::from_raw(x_raw),
         y: Fx::from_raw(y_raw),
@@ -675,7 +682,7 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
         anm_state: 0,
         main_task: 0, // 任务 spawn 后回填（敌句柄先于任务存在）
         death_script: 0,
-        drop_table: drop_table as u16,
+        drop_count,
         score: score as u16,
     };
     let handle = ctx.body.create_enemy(init);
@@ -1109,7 +1116,7 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 0,
+            drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 0,
         });
         let mut enemy_task = Task {
@@ -1635,8 +1642,48 @@ mod tests {
         assert_eq!(w.body.enemies.x[i], Fx::from_int(5));
         assert_eq!(w.body.enemies.y[i], Fx::from_int(6));
         assert_eq!(w.body.enemies.hp[i], 42);
-        assert_eq!(w.body.enemies.drop_table[i], 1);
+        // 表号在生成时就展开成逐类型计数（表 1 = POWER×2 + POINT×1）。
+        assert_eq!(
+            w.body.enemies.drop_count[i],
+            crate::tables::drop_counts(&TABLES_V0, 1).0
+        );
+        assert_eq!(
+            w.body.enemies.drop_count[i][crate::items::ITEM_POWER as usize],
+            2
+        );
         assert_eq!(w.body.enemies.score[i], 100);
+    }
+
+    /// P4-b：`spawn_enemy` 的越界 `drop_table` → 视同空表 + 计 contract_viol，
+    /// 敌照建、不 panic、死时不掉道具（原 B11，随掉落状态从 settle 前移到生成时）。
+    /// 负数表号同样走这条（`as u16` 回绕成大正数 → 仍越界）。
+    #[test]
+    fn spawn_enemy_out_of_range_drop_table_degrades_to_empty() {
+        // 内建表只有 2 张掉落表；取一个必然越界的正数号，再取 -1 走回绕那条腿。
+        let oob = TABLES_V0.drop_tables.len() as i32 + 9;
+        for &bad in &[oob, -1] {
+            let (mut w, ecl) = fresh();
+            let mut task = Task::default();
+            let viol_before = w.body.diag.contract_viol;
+            // 正序：x,y,hp,drop_table,score,sprite,task(none=-1)
+            let args = [Fx::ZERO.raw(), Fx::from_int(80).raw(), 10, bad, 100, 0, -1];
+            assert!(
+                call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok(),
+                "越界表号不得 Fault（P4-b 降级，不是违约方的锅）"
+            );
+            let idx = task.stack[0];
+            assert!(idx >= 0, "敌照建（表号 {bad}）");
+            assert_eq!(
+                w.body.diag.contract_viol,
+                viol_before + 1,
+                "越界表号须计一次违约（表号 {bad}）"
+            );
+            assert_eq!(
+                w.body.enemies.drop_count[idx as usize],
+                [0u8; crate::items::ITEM_TYPE_COUNT],
+                "视同空表（表号 {bad}）"
+            );
+        }
     }
 
     /// task_script ≥0 挂敌派任务：owner=(ENEMY, 新敌 index/gen)，`main_task` 回填槽号+1。

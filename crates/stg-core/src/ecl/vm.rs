@@ -1715,7 +1715,7 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 1,
+            drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, 1).0,
             score: 100,
         }
     }

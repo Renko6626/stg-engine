@@ -1505,7 +1505,7 @@ mod tests {
             anm_state: 0,
             main_task: 0,
             death_script: 0,
-            drop_table: 0,
+            drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],
             score: 100,
         });
         w.start_main_with_owner(&image, EclOwner::Enemy(boss))
