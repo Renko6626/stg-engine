@@ -43,7 +43,7 @@ extern crate self as stg_core;
 /// **4 → 5**（shooter 刀 Task 1，2026-07-31）——**两条理由**：
 /// ① syscall 号表将新增 62–76（`sh_*` 族 setter + `sh_fire`，本刀 T2/T3）；
 /// ② **`TaskPool` 布局变更**（本刀 T1，**就是本次提交**）：新增并行数组
-///   `shooters: [[Shooter; 4]; 256]`（+45056 B），`SaveBytes` derive 自动把它写进载荷
+///   `shooters: [[ShooterSlot; 4]; 256]`（+45056 B），`SaveBytes` derive 自动把它写进载荷
 ///   ⇒ 存档 wire format 变化，旧档不可用新版解析。
 ///
 /// **为什么在 T1 就 bump**：布局在本步就变了。上一刀（敌人死亡效果）把 bump 拖到第三步，

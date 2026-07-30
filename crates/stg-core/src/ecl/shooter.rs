@@ -1,4 +1,4 @@
-//! Shooter（预存发射参数集）——ECL 层的每任务发射器状态（shooter 刀 2026-07-31）。
+//! ShooterSlot（预存发射参数集）——ECL 层的每任务发射器状态（shooter 刀 2026-07-31）。
 //!
 //! 参照 ZUN ECL 的 `et*` 族弹幕管理器（600-641）：`sh_reset` 重置编号槽 → 一堆以 `id` 打头的
 //! setter 逐项配 → `sh_fire(id)` 开火。改一个字段再开一次火就是下一波。
@@ -6,6 +6,12 @@
 //! **为什么住 ECL 层而不是 `WorldBody`**：P1 明写 world 不 import 任何 ECL 类型、不知道
 //! "任务"存在。shooter 按任务键 ⇒ 天然是 ECL 层的东西。存储挂在 `TaskPool` 的并行数组上，
 //! 顺带白捡"槽复用时的重置有现成挂点"（`TaskPool::spawn`）。
+//!
+//! **为什么叫 `ShooterSlot` 而不是 `Shooter`**：`crate::tables::Shooter` 已经占了后者，而且
+//! 它是个**几乎同概念**的东西（自机 shottype 的子发射器描述：`interval/delay/dx/dy/angle/
+//! speed/...`）——两者都是"存起来的发射器参数"，只差"静态表数据 vs 每任务可变状态"。同概念
+//! 撞名比无关撞名难受得多，故取 `-Slot` 后缀：既落进本仓 `XformSlot`/`SpellSlot`/`BossUiSlot`
+//! 的家规，又自带"可变的槽"语义。模块名与 `TaskPool.shooters` 字段名保持复数、不带后缀。
 //!
 //! **字段顺序按 4 字节对齐紧排**（`Fx` 在前、`u16` 居中、`u8` 收尾），`repr(C)` 下恰好 44 B。
 //! 改字段顺序会改槽宽 → 改快照尺寸 → 改存档格式，动前先看 `size_of` 那条测试。
@@ -30,7 +36,7 @@ pub const SH_NO_TASK: u16 = 0xFFFF;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, crate::checksum::Checksum, crate::save::SaveBytes)]
-pub struct Shooter {
+pub struct ShooterSlot {
     pub off_x: Fx,
     pub off_y: Fx,
     /// 极坐标偏移的半径；与 `off_x/off_y` **永远叠加**，不存在覆盖关系（ZUN 626 明写 stacks）。
@@ -57,9 +63,9 @@ pub struct Shooter {
     pub flags: u8,
 }
 
-impl Default for Shooter {
+impl Default for ShooterSlot {
     fn default() -> Self {
-        Shooter {
+        ShooterSlot {
             off_x: Fx::ZERO,
             off_y: Fx::ZERO,
             polar_r: Fx::ZERO,
@@ -90,14 +96,14 @@ mod tests {
     /// 槽宽是容量账的一部分（spec §4.2：44 B × 4 × 256 = 45056 B）。变了就要重算预算表。
     #[test]
     fn shooter_is_44_bytes() {
-        assert_eq!(core::mem::size_of::<Shooter>(), 44);
+        assert_eq!(core::mem::size_of::<ShooterSlot>(), 44);
     }
 
     /// 默认值：`n_angle`/`n_speed` 是 **1×1** 而不是 0——刚重置的 shooter 开火发**一颗**弹，
     /// 是个有意义的退化，不是"什么也不发"这种要 debug 半天的静默（spec §5）。
     #[test]
     fn shooter_default_fires_exactly_one_bullet() {
-        let s = Shooter::default();
+        let s = ShooterSlot::default();
         assert_eq!((s.n_angle, s.n_speed), (1, 1), "默认 1×1,不是 0");
         assert_eq!(s.flags, 0, "aimed/ring/abs_offset 三位全关");
         assert_eq!(s.xform_cnt, 0, "无 xform");

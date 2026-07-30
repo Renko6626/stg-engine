@@ -2143,7 +2143,7 @@ mod tests {
         // 同样走 `define_pool!` 的 derive（`[T; N]` 有泛型 impl），自动入；③ D10 容量预算
         // 不变（cap 仍 256，只是每槽宽了 3B）。
         // 2026-07-31（shooter 刀 Task 1）：`TaskPool` 新增并行数组
-        // `shooters: [[Shooter; 4]; 256]`。`Shooter` = 44 B（`repr(C)`，6×Fx + 6×u16 +
+        // `shooters: [[ShooterSlot; 4]; 256]`。`ShooterSlot` = 44 B（`repr(C)`，6×Fx + 6×u16 +
         // 4×u8，4 字节对齐紧排、无尾部 padding），44×4×256 = **+45056**，无对齐吸收
         // （数组对齐 = Fx 的 4，`TaskPool` 本就 4 对齐）。**加在 `TaskPool` 而非
         // `WorldBody`**（P1：world 不知道"任务"存在）⇒ 左值 970144 不动、右值
@@ -2189,7 +2189,7 @@ mod tests {
             5,
             "bump 必须是有意识决定(评审 + 改本测试)——4→5：shooter 刀 T1,两条理由 \
              ①syscall 号表将新增 62-76(sh_* 族 setter + sh_fire,T2/T3) \
-             ②TaskPool 布局变更(新增并行数组 shooters:[[Shooter;4];256],**本步就变了**)\
+             ②TaskPool 布局变更(新增并行数组 shooters:[[ShooterSlot;4];256],**本步就变了**)\
              导致 SaveBytes 载荷编码变化"
         );
     }
