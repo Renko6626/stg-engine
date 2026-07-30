@@ -641,8 +641,8 @@ mod tests {
         assert_eq!(w.body.players[0].graze, 1); // 但 graze 照算（擦在先、清在后）
     }
 
-    /// 敌死按 drop_table 掉落：表 1 = 2 POWER + 1 POINT，落点 = 敌死位置（散布只改速度）。
-    /// 两敌同帧死 → 掉落顺序 = 结算序（低索引敌先掉，RNG 消耗序钉死）。
+    /// 敌死撒 `drop_count` 掉落：表 1 展开后 = 2 POWER + 1 POINT，落点 = 敌死位置
+    /// （散布只改速度）。两敌同帧死 → 掉落顺序 = 结算序（低索引敌先掉，RNG 消耗序钉死）。
     #[test]
     fn settle_death_drops_by_table_in_settlement_order() {
         use crate::items::{ITEM_POINT, ITEM_POWER};
