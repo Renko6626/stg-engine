@@ -1674,7 +1674,12 @@ mod tests {
     // ── D9：敌主协程返回即自燃 ──────────────────────────────────────────
 
     /// D9 测试专用敌：`drop_table=1`（内建 1 号表非空：POWER×2 + POINT×1）+ `score=100`——
-    /// 若实现者照抄 `damage_enemy`（掉道具/加分/发 `EVT_ENEMY_DIED`），三条反向断言立刻显形。
+    /// 若实现者照抄 `damage_enemy`（掉道具 / 发 `EVT_ENEMY_DIED`），两条反向断言立刻显形。
+    ///
+    /// `score=100` **不**构成判别力：`damage_enemy` 从不直接写 `players[].score`，它只把
+    /// `enemies.score[e]` 塞进 `EVT_ENEMY_DIED` 的 `data[0]` 与 `REQ_ENEMY_DEATH`；分数是
+    /// 道具被拾到时经 `world::settle::credit_item` 才入账的。留 `score=100` 只是让这只敌
+    /// 长得像真敌人。
     fn d9_enemy_init(x: i32, y: i32) -> crate::enemy::EnemyInit {
         crate::enemy::EnemyInit {
             x: Fx::from_int(x),
@@ -1706,7 +1711,14 @@ mod tests {
     }
 
     /// D9：敌主协程自然返回 → owner 敌被标 ENEMY_DYING（相位 9 回收）。
-    /// **静默退场**：不掉道具、不加分、不发 EVT_ENEMY_DIED——与伤害致死路径的判别腿。
+    ///
+    /// **静默退场**：不掉道具、不发 EVT_ENEMY_DIED——这两条是与 `damage_enemy`（伤害致死）
+    /// 路径的**真判别腿**：照抄 `damage_enemy` 会立刻掉 3 颗道具 + 发一条 `EVT_ENEMY_DIED`。
+    ///
+    /// 下面那条 `score` 断言**不是**判别腿（别拿它当"静默退场已被证明"的证据）：`damage_enemy`
+    /// 从不直接写 `players[].score`，分数要等道具被拾到、走 `credit_item` 才入账，而本测试
+    /// 只跑一次 `run_tasks`、没人去捡——照抄 `damage_enemy` 的错实现照样能过这条。保留它是
+    /// 因为它仍是有意义的现状锚点（"这条路径不该凭空产生分数"）。
     #[test]
     fn enemy_main_task_returning_self_destructs_quietly() {
         use crate::events::EVT_ENEMY_DIED;
@@ -1740,7 +1752,8 @@ mod tests {
             0,
             "静默退场不掉道具（不是 damage_enemy 路径）"
         );
-        assert_eq!(w.body.players[0].score, score_before, "静默退场不加分");
+        // 现状锚点，非判别腿——理由见本测试的 doc 注释。
+        assert_eq!(w.body.players[0].score, score_before, "静默退场不凭空加分");
         assert!(
             !w.body
                 .frame_events()
