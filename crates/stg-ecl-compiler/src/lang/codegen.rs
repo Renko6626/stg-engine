@@ -1602,6 +1602,10 @@ mod tests {
     /// async sub 真实经调度执行（同 `fire_task_script_attaches_and_runs_async_sub_on_new_bullet`
     /// 先例）。本 crate P1 边界不摸 `TaskPool` 内部字段（见模块文档"观测口"），owner 三元组
     /// 绑定的核侧断言见 `stg-core::ecl::syscall::tests::spawn_enemy_with_task_binds_owner_and_main_task`。
+    ///
+    /// `on_enemy` 写完 global 后 `loop { wait(1); }`——D9 落地后主协程自然返回会自燃 owner
+    /// （`ecl::vm::run_tasks` 的 `Exec::End` 分支），若这里让脚本直接 return，本测试第 3 帧
+    /// 断言"敌还活着"时敌已被相位 9 回收，与本测试意图（sprite/task 接线）无关却会误红。
     #[test]
     fn spawn_enemy_sprite_and_task_wire_correctly_end_to_end() {
         let src = "sub main() {\n\
@@ -1610,6 +1614,7 @@ mod tests {
                    }\n\
                    async sub on_enemy() {\n\
                      set_global(20, 1);\n\
+                     loop { wait(1); }\n\
                    }";
         // 帧序：0=main 出生跳过；1=main 首跑（spawn_enemy 挂任务，born_frame=1）；
         // 2=挂载任务首跑。

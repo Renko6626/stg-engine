@@ -103,8 +103,9 @@ pub const FIELD_HEIGHT: i32 = 448; // y ∈ [0, 448]
 /// 飞行物越界回收边距（单位 px）。表现层通常不需要，py 观测器可用来解释实体消失。
 pub const OOB_MARGIN: i32 = 64; // 越界回收边距
 /// 敌人专用越界边距（回收兜底，单位 px）。系统性宽于飞行物的 64px：入场/绕场编排要在场外
-/// 起舞，回收主导靠纪律（M1 起敌人主协程返回即自燃——ZUN ECL 语义；本常量只是防泄漏安全网）。
-/// 表现层通常不需要，py 观测器可用来解释实体消失。
+/// 起舞，回收主导靠纪律——敌人主协程返回即自燃（ZUN ECL 语义，D9 落地：
+/// `ecl::vm::run_tasks` 的 `Exec::End` 分支，命中 `enemies.main_task` 即标 `ENEMY_DYING`）；
+/// 本常量只是防脚本失手泄漏的安全网。表现层通常不需要，py 观测器可用来解释实体消失。
 pub const ENEMY_OOB_MARGIN: i32 = 256;
 pub(crate) const POC_LINE_Y: i32 = 128; // 回收线（PoC）：ALIVE 自机 y 低于此线 → 全场道具磁吸
 

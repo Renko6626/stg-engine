@@ -416,7 +416,11 @@ fn fault_event(task_index: u16, fault_code: u8, script: SubId) -> Event {
 /// 2. **次帧首跑门禁**：`born_frame == frame` → 跳过（出生当帧不跑）。
 /// 3. **wait 门禁**：`wait > 0` → 递减 1、跳过（不消耗预算）。
 /// 4. **全局预算门禁**（本刀设计决策，T2 无先例——见下）。
-/// 5. `exec`：`Yield` 写回、`End`/`Fault` 杀（`Fault` 额外发事件 + 计数）。
+/// 5. `exec`：`Yield` 写回、`End`/`Fault` 杀（`Fault` 额外发事件 + 计数）。**D9**：若被杀的
+///    任务恰是 owner 敌记的 `main_task`，任意终止路径都清零 `main_task`（别名防护——该槽
+///    被同 owner 的子任务复用后不会误判"主任务还在"）；仅自然 `End` 额外把 owner 敌标
+///    `ENEMY_DYING`（相位 9 cleanup 回收）——静默退场，不走 `damage_enemy`（不掉道具/不加分/
+///    不发 `EVT_ENEMY_DIED`），ZUN ECL 语义"主协程返回即自燃"。
 ///
 /// **"没轮到"与"自己撞墙"的边界**：进 `exec` 前若全局预算已耗尽为 0，视同调度层门禁
 /// （同 `wait`）——静默跳过、任务状态原封不动、次帧满血重跑，**不产生 `Fault`、不杀**：
@@ -493,10 +497,20 @@ pub(crate) fn run_tasks(
             continue; // 本帧没轮到：不是它的错，次帧满血重跑（不 Fault，见函数文档）
         }
 
+        // D9：敌主协程返回即自燃（ZUN ECL 语义）。`main_task` 存槽号+1、不带 generation，
+        // 故**任意**终止路径都要清零——否则该槽被同 owner 的子任务复用后，子任务结束会
+        // 误杀 owner。自燃只在自然 `End` 上触发：Fault/坏脚本号是错误路径（已有 fault
+        // 事件），不该顺手把敌收走，但同样要清零 main_task 以防别名误杀。
+        let is_main = t.owner_kind == OWNER_ENEMY
+            && body.enemies.main_task[t.owner_index as usize] == i as u32 + 1;
+
         let Some(_meta) = ecl.sub_meta(t.script) else {
             // 脚本号已不在册（画面外情形——正常 spawn 路径已在创建时校验，这里是防御）：
             // 视同确定性坏行为，杀 + 事件 + 计数。
             tasks.kill(i);
+            if is_main {
+                body.enemies.main_task[t.owner_index as usize] = 0;
+            }
             body.diag.task_faults = body.diag.task_faults.wrapping_add(1);
             body.push_event(fault_event(i as u16, FAULT_BAD_OP, t.script));
             continue;
@@ -519,10 +533,21 @@ pub(crate) fn run_tasks(
             Exec::End => {
                 tasks.slots[i] = t;
                 tasks.kill(i);
+                if is_main {
+                    let e = t.owner_index as usize;
+                    body.enemies.main_task[e] = 0;
+                    // **静默退场**，不走 damage_enemy：脚本跑完是"退场"不是"被击破"——
+                    // 不掉道具、不加分、不发 EVT_ENEMY_DIED（ZUN 口径）。相位 9 cleanup
+                    // 见 ENEMY_DYING 即回收。
+                    body.enemies.flags[e] |= crate::enemy::ENEMY_DYING;
+                }
             }
             Exec::Fault(code) => {
                 tasks.slots[i] = t;
                 tasks.kill(i);
+                if is_main {
+                    body.enemies.main_task[t.owner_index as usize] = 0;
+                }
                 body.diag.task_faults = body.diag.task_faults.wrapping_add(1);
                 body.push_event(fault_event(i as u16, code, t.script));
             }
@@ -1643,6 +1668,284 @@ mod tests {
             !w.tasks.is_alive(leftover_idx as usize),
             "卡 A 残留模式任务的 epoch（{epoch_a}）与当前槽 epoch（{epoch_b}）不匹配，\
              ABA 门禁必须杀掉它，不能让它与卡 B 并发"
+        );
+    }
+
+    // ── D9：敌主协程返回即自燃 ──────────────────────────────────────────
+
+    /// D9 测试专用敌：`drop_table=1`（内建 1 号表非空：POWER×2 + POINT×1）+ `score=100`——
+    /// 若实现者照抄 `damage_enemy`（掉道具/加分/发 `EVT_ENEMY_DIED`），三条反向断言立刻显形。
+    fn d9_enemy_init(x: i32, y: i32) -> crate::enemy::EnemyInit {
+        crate::enemy::EnemyInit {
+            x: Fx::from_int(x),
+            y: Fx::from_int(y),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            mv_from_x: Fx::ZERO,
+            mv_from_y: Fx::ZERO,
+            mv_to_x: Fx::ZERO,
+            mv_to_y: Fx::ZERO,
+            mv_t: 0,
+            mv_dur: 0,
+            mv_easing: 0,
+            mv_active: 0,
+            hp: 5,
+            hp_max: 5,
+            radius: Fx::from_int(12),
+            hurtbox: Fx::from_int(16),
+            invuln: 0,
+            hit_flash: 0,
+            flags: 0,
+            sprite: 0,
+            anm_state: 0,
+            main_task: 0,
+            death_script: 0,
+            drop_table: 1,
+            score: 100,
+        }
+    }
+
+    /// D9：敌主协程自然返回 → owner 敌被标 ENEMY_DYING（相位 9 回收）。
+    /// **静默退场**：不掉道具、不加分、不发 EVT_ENEMY_DIED——与伤害致死路径的判别腿。
+    #[test]
+    fn enemy_main_task_returning_self_destructs_quietly() {
+        use crate::events::EVT_ENEMY_DIED;
+
+        let mut w = test_world();
+        // 一个立刻 END 的零参 Async sub 当敌主任务。
+        let ecl = async_image(vec![OP_END as u32], 0);
+
+        let h = w.body.create_enemy(d9_enemy_init(0, 100));
+        let eidx = w.body.enemies.get(h).unwrap();
+        let main_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(1).unwrap(),
+                &[],
+                (OWNER_ENEMY, h.index, h.generation),
+            )
+            .unwrap();
+        w.body.enemies.main_task[eidx] = main_idx as u32 + 1;
+
+        let score_before = w.body.players[0].score;
+        w.body.frame = 1; // 跨出生帧门禁
+        run_tasks(&mut w.tasks, &mut w.body, &ecl, &crate::tables::TABLES_V0);
+
+        assert!(
+            w.body.enemies.flags[eidx] & crate::enemy::ENEMY_DYING != 0,
+            "主任务自然 End，owner 敌应被标 ENEMY_DYING"
+        );
+        assert_eq!(
+            w.body.items.iter_alive().count(),
+            0,
+            "静默退场不掉道具（不是 damage_enemy 路径）"
+        );
+        assert_eq!(w.body.players[0].score, score_before, "静默退场不加分");
+        assert!(
+            !w.body
+                .frame_events()
+                .iter()
+                .any(|e| e.kind == EVT_ENEMY_DIED),
+            "静默退场不发 EVT_ENEMY_DIED"
+        );
+        assert!(!w.tasks.is_alive(main_idx as usize), "主任务本身也应已终止");
+    }
+
+    /// 判别腿：**非** main_task 的敌属任务结束 → 敌不死（否则 fire 的伴生任务一结束敌就没了）。
+    #[test]
+    fn non_main_enemy_task_ending_does_not_self_destruct() {
+        // sub1：main 任务，PUSHI 1; WAIT; JMP 回自身入口——本帧只 Yield，绝不 End。
+        // sub2：非 main 任务，直接 END。
+        let code = vec![
+            OP_END as u32,   // 0: root（不用）
+            OP_PUSHI as u32, // 1: main 任务入口
+            1,               // 2
+            OP_WAIT as u32,  // 3
+            OP_JMP as u32,   // 4
+            1,               // 5: 跳回 1
+            OP_END as u32,   // 6: 非 main 任务入口——立即 End
+        ];
+        let ecl = test_image(
+            code,
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(1, SubKind::Async, vec![]),
+                SubInit::new(6, SubKind::Async, vec![]),
+            ],
+            vec![
+                EntryInit::new("task_main", 1),
+                EntryInit::new("task_side", 2),
+            ],
+            Some(0),
+        );
+
+        let mut w = test_world();
+        let h = w.body.create_enemy(d9_enemy_init(0, 100));
+        let eidx = w.body.enemies.get(h).unwrap();
+
+        let main_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(1).unwrap(),
+                &[],
+                (OWNER_ENEMY, h.index, h.generation),
+            )
+            .unwrap();
+        w.body.enemies.main_task[eidx] = main_idx as u32 + 1;
+        let side_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(2).unwrap(),
+                &[],
+                (OWNER_ENEMY, h.index, h.generation),
+            )
+            .unwrap();
+
+        w.body.frame = 1;
+        run_tasks(&mut w.tasks, &mut w.body, &ecl, &crate::tables::TABLES_V0);
+
+        assert!(
+            !w.tasks.is_alive(side_idx as usize),
+            "非 main 任务应正常 End"
+        );
+        assert!(
+            w.tasks.is_alive(main_idx as usize),
+            "main 任务本帧只 Yield，不应受影响"
+        );
+        assert_eq!(
+            w.body.enemies.flags[eidx] & crate::enemy::ENEMY_DYING,
+            0,
+            "非 main 任务结束不得自燃 owner（否则 fire 的伴生任务一结束敌就没了）"
+        );
+    }
+
+    /// 判别腿：Fault 结束 **不**自燃——只有自然返回才是"跑完了"，报错是另一回事
+    /// （且已有 fault 事件 + 计数）。
+    #[test]
+    fn enemy_main_task_faulting_does_not_self_destruct() {
+        // 主任务入口立即 OP_DUP（空栈）→ FAULT_STACK。
+        let code = vec![
+            OP_END as u32, // 0: root（不用）
+            OP_DUP as u32, // 1: main 任务入口——立即 Fault
+        ];
+        let ecl = test_image(
+            code,
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(1, SubKind::Async, vec![]),
+            ],
+            vec![EntryInit::new("task_main", 1)],
+            Some(0),
+        );
+
+        let mut w = test_world();
+        let h = w.body.create_enemy(d9_enemy_init(0, 100));
+        let eidx = w.body.enemies.get(h).unwrap();
+        let main_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(1).unwrap(),
+                &[],
+                (OWNER_ENEMY, h.index, h.generation),
+            )
+            .unwrap();
+        w.body.enemies.main_task[eidx] = main_idx as u32 + 1;
+
+        w.body.frame = 1;
+        run_tasks(&mut w.tasks, &mut w.body, &ecl, &crate::tables::TABLES_V0);
+
+        assert!(
+            !w.tasks.is_alive(main_idx as usize),
+            "Fault 仍应终止任务本身"
+        );
+        assert_eq!(
+            w.body.diag.task_faults, 1,
+            "Fault 路径已有的计数不受 D9 影响"
+        );
+        assert_eq!(
+            w.body.enemies.flags[eidx] & crate::enemy::ENEMY_DYING,
+            0,
+            "Fault 不是自然返回，不应自燃 owner"
+        );
+        assert_eq!(
+            w.body.enemies.main_task[eidx], 0,
+            "别名防护：任意终止路径都应清零 main_task（即使不自燃）"
+        );
+    }
+
+    /// 别名防护：主任务 Fault 后 main_task 清零 → 同槽复用的子任务结束不误杀 owner。
+    ///
+    /// 用真实的池复用构造（不走 pub(crate) 直写捷径）：`TaskPool::spawn` 恒取最低空位
+    /// （`kill_frees_slot_for_reuse` 钉死的行为），故 main 任务 Fault 死后，同一趟里
+    /// 再 spawn 的非 main 任务必落回同一槽——若 Fault 路径忘了清零 `main_task`，该子任务
+    /// 自然结束时就会因槽号命中而误杀 owner。
+    #[test]
+    fn main_task_slot_reuse_does_not_spuriously_self_destruct() {
+        let code = vec![
+            OP_END as u32, // 0: root（不用）
+            OP_DUP as u32, // 1: main 任务入口——立即 Fault（空栈）
+            OP_END as u32, // 2: 复用同槽的子任务入口——立即 End
+        ];
+        let ecl = test_image(
+            code,
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(1, SubKind::Async, vec![]),
+                SubInit::new(2, SubKind::Async, vec![]),
+            ],
+            vec![
+                EntryInit::new("task_child", 2),
+                EntryInit::new("task_main", 1),
+            ],
+            Some(0),
+        );
+
+        let mut w = test_world();
+        let h = w.body.create_enemy(d9_enemy_init(0, 100));
+        let eidx = w.body.enemies.get(h).unwrap();
+
+        let main_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(1).unwrap(),
+                &[],
+                (OWNER_ENEMY, h.index, h.generation),
+            )
+            .unwrap();
+        w.body.enemies.main_task[eidx] = main_idx as u32 + 1;
+
+        w.body.frame = 1;
+        run_tasks(&mut w.tasks, &mut w.body, &ecl, &crate::tables::TABLES_V0);
+        assert!(
+            !w.tasks.is_alive(main_idx as usize),
+            "main 任务应已 Fault 死"
+        );
+
+        // 同一 owner 再 spawn 一个非 main 子任务——池最低空位必是刚腾出的 main_idx 槽。
+        let reused_idx = w
+            .spawn_sub_internal(
+                &ecl,
+                ecl.sub_id(2).unwrap(),
+                &[],
+                (OWNER_ENEMY, h.index, h.generation),
+            )
+            .unwrap();
+        assert_eq!(
+            reused_idx, main_idx,
+            "前提：确须复用同一槽，否则本测试没测到别名风险"
+        );
+
+        w.body.frame = 2;
+        run_tasks(&mut w.tasks, &mut w.body, &ecl, &crate::tables::TABLES_V0);
+
+        assert!(
+            !w.tasks.is_alive(reused_idx as usize),
+            "复用槽的子任务应正常 End"
+        );
+        assert_eq!(
+            w.body.enemies.flags[eidx] & crate::enemy::ENEMY_DYING,
+            0,
+            "别名防护：同槽复用的非 main 子任务结束不应误杀 owner"
         );
     }
 }
