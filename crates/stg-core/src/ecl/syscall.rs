@@ -746,6 +746,17 @@ fn sys_sh_fire(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
         self_pos(task, ctx)
     };
     let (px, py) = polar_to_vec(sh.polar_r, sh.polar_ang);
+    // ⚠️ **裸 `+` 的溢出归 P4-c 域**（引擎自身 bug 才该触发的那一档：debug 溢出 panic、
+    // release 回绕），不是 P4-b 的"调用方违约要降级"。三个 `Fx` 相加没有钳制——
+    // `sh_offset(0, 32767.0fx, 0fx)` 配一个 x 非零的 owner 就能在 debug 下 panic。
+    // **这不是本刀新立的立场**：`world.rs::create_bullets_batch` 的文档已经声明过
+    // "两轴累加器：角度 BAM 回绕、速度 Fx 裸加（溢出 P4-c 域）"，而 ⑦ 的 `cur_speed +
+    // sh.speed_step` 继承的正是那个累加器。本处（偏移相加）只是那条声明**没覆盖到的
+    // 同类一处**——本仓第一次把两个**大坐标**相加（`fire`/`batch` 是把 x/y 直通不加），
+    // 故在此显式记一笔，免得后人以为漏了 P4-b 校验。
+    // 要改立场（譬如改成 `saturating_add` 或收窄 `sh_offset` 的入参）请连同
+    // `create_bullets_batch` 那条一起改——单改一处会让两个发射路径口径分叉，
+    // 而 `shooter_fan_matches_batch_with_centering_compensation` 那条等价测试正押着它们。
     let origin_x = bx + sh.off_x + px;
     let origin_y = by + sh.off_y + py;
 

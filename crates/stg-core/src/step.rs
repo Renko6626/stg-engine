@@ -1092,11 +1092,25 @@ mod tests {
 
     /// M1 T1：`World.tasks` 快照往返 + 校验和敏感（M0-15 同款判别）——写一个从未 `spawn`
     /// 过的槽字段，checksum 必须变（P6 哈希全槽不看存活位）；`copy_into` 漏拷 `tasks` 即红。
+    ///
+    /// **shooter 并行数组是独立的一条腿**（shooter 刀复审 ①，2026-07-31）：
+    /// `TaskPool::copy_into` 是**手写字段清单**（不是 derive），三行里少写
+    /// `dst.shooters.copy_from_slice(..)` 那一行是个**等价变异**——除非测试让两边的
+    /// shooter 真的不同。金向量与 `storm` 闸都盯不住它（金向量脚本从不调 `sh_*`，
+    /// 两边 shooter 恒等于默认值），漏了这腿就是"回滚静默把 shooter 恢复成默认值、
+    /// 三平台一致、闸门全绿"。M3 环形快照正要靠这个 `copy_into`。
     #[test]
     fn snapshot_covers_tasks_pool() {
         let mut w = World::new(3);
         let ck0 = w.checksum();
         w.tasks.slots[5].pc = 42; // 槽 5 从未 spawn 过——专挑"只哈希占用槽"的变异体
+        // 同一个槽的 shooter 也弄脏（`World::new` 走 alloc_zeroed ⇒ 原值全零，
+        // 不是 `ShooterSlot::default()`，故先存原值再改）。
+        let clean_sh = w.tasks.shooters[5][2];
+        w.tasks.shooters[5][2].n_angle = 17;
+        w.tasks.shooters[5][2].speed0 = Fx::from_int(3);
+        w.tasks.shooters[5][2].task_script = 9;
+        let dirty_sh = w.tasks.shooters[5][2];
         let ck1 = w.checksum();
         assert_ne!(ck1, ck0, "tasks 池必须入校验和（哈希全槽不看 alive）");
 
@@ -1104,11 +1118,16 @@ mod tests {
         w.copy_into(&mut snap);
         assert_eq!(snap.checksum(), ck1, "快照必须带 tasks 池全部字节");
         w.tasks.slots[5].pc = 0;
+        w.tasks.shooters[5][2] = clean_sh;
         snap.copy_into(&mut w); // 恢复
         assert_eq!(
             w.checksum(),
             ck1,
             "restore 必须还原 tasks 池（copy_into 漏拷即红）"
+        );
+        assert_eq!(
+            w.tasks.shooters[5][2], dirty_sh,
+            "restore 必须还原 shooter 并行数组（copy_into 少 shooters 那行即红）"
         );
     }
 

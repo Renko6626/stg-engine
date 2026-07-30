@@ -49,6 +49,13 @@
 > 进校验和的值，别"顺手对齐"**）。本刀顺带删掉 `builtins::folds_shape_color`（两个真消费者
 > 已转投 `fold_start`，它只剩测试在调且答的是没用的那一半）。
 >
+> shooter 刀**整支复审修复波**再追一条（2026-07-31）：**C23**（`SHOOTERS_PER_TASK` 没作为
+> C14 引擎常量注入 ⇒ 手册与所有脚本硬编码 `0..=3`，而它每个兄弟都是注入的）。同波顺带
+> 订正、**不入清单**（已改完，不留墓碑）的四处：`ecl/task.rs` 模块文档的容量数字过时 ·
+> `bench-baseline.md` 文件头"贴在旧表上方"与实际的向下追加自相矛盾 ·
+> `ecl-ops.md`/`ecl-lang.md`/`xform-ops.md` 三处漏枚举 `sh_fire` 的 **xform 段池**压力 ·
+> `ecl-ops.md` 75 号补记 `sh_req` 为何与 `emit_req` 收窄口径不同（钳 vs no-op）。
+>
 > 敌人死亡效果刀 T1 追记（2026-07-30）：新记 **D11**——掉落从"生成时定死的表索引"迁成
 > "敌身上按类型计数的可变状态"后，掉落表的**条目顺序不再影响任何东西**（撒的顺序由
 > `spill_drops` 的类型升序决定），而 `validate()` 不要求条目升序 ⇒ 非升序的内容包表会
@@ -530,6 +537,23 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 道具类型符号）时机制自动生效，删掉它反而是白扔一次未来要重写的代码——但记档防止将来
 复审者看到"零覆盖的校验逻辑"误判为遗留 bug 想删掉它。**触发点 = ② 段再长出符号**
 （如道具类型符号表落地）时，记得给这条 join 校验重新配一对正/负测试，别让它继续裸奔。
+
+### C23. `SHOOTERS_PER_TASK` 没作为 C14 引擎常量注入，脚本只能硬编码 `0..=3`（shooter 刀终审记档，2026-07-31）
+
+`crate::ecl::shooter::SHOOTERS_PER_TASK = 4` 是 `sh_*` 族（syscall 62-76）**槽号 `id` 的
+合法上界**，越界走 P4-b（no-op + `contract_viol`，不 Fault）。但它**没有进 `consts.rs` 的
+① 结构常量段**，而它的每一个同类兄弟都进了：`GLOBALS_SYS_SEGMENT`（同样是"脚本必须知道的
+边界值"）、`REQ_SCRIPT_BASE`、`ITEM_*` 五个；连表派生的 `BULLET_COLOR_STRIDE` 都由
+`compile_with_options` 注入。后果是 `docs/ecl-lang.md` 的发射器节与**所有将来的 `.ecl`**
+都只能把 `4` / `0..=3` 写成字面量——正是 C14 那条"跨语言常量引用缺失"要消灭的形态。
+
+**为什么本刀没做**（不是遗漏，是范围判断）：K=4 由 D-1 拍死、短期不会动，而注入它要碰
+`consts.rs` 的 ① 段 ⇒ 改 `ENGINE_CONSTS` 的内容 ⇒ 所有脚本可见词汇表变化，本该和别的
+常量增补一起走一次。**触发点 = 下次动 `consts.rs` ① 段**（或有人真想改 K）时顺手加一行
+`SHOOTERS_PER_TASK: usize as int = crate::ecl::shooter::SHOOTERS_PER_TASK;`，同时把
+`ecl-lang.md` 那句"编号 `0..=3`"改成引用常量。注意 `engine_consts!` 的 v0 限制是
+`$val as i32` 要求原生整数——`usize` 可以，但 ① 段现有各条都是 `u16`/`u8`，加进去时
+顺带确认宏的 `@ty` 分支与 `assert` 口径。
 
 ---
 

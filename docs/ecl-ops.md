@@ -130,10 +130,10 @@
 | 70 | `sh_count`（shooter 刀） | id,n_angle,n_speed | —（网格规模。两值各自 `clamp(0, u8::MAX)` 后存 u8——**先钳再 `as`**（裸 `as u8` 会让负数回绕成大正数）；钳位是正常语义，不计 `contract_viol`。零与超容的处置在 76 号。参照 ZUN `606 etCount`） |
 | 71 | `sh_aim`（shooter 刀） | id,on | —（`on != 0` 置 `SH_AIMED`、否则清。开火时才解析自机方向（不是设的时候算死，判别腿 `aim_resolves_at_fire_time_not_at_set_time`），基点是**出弹点**而非 owner 位置（判别腿 `aim_is_measured_from_the_fire_origin_not_from_the_owner`）。无存活自机时沿用既有 `aim_player` 口径（直接对 `players[0]` 求 atan2）。参照 ZUN `607 etAim` 九值 aimmode 枚举的 aimed 半——D-6 把那个枚举塌成 `aimed`/`ring` 两个正交布尔） |
 | 72 | `sh_ring`（shooter 刀） | id,on | —（`on != 0` 置 `SH_RING`、否则清。开则 `n_angle` 颗**自动均分整周**、`angle_step` 转义成逐层偏移；关则 fan（逐弹增量 + **以基准方向为中心**对称展开）。参照 ZUN `607 etAim` 的 ring 半（同上 D-6）；ZUN 的 mode 4/5「offset ring」在此冗余——ring 下 `angle_step` 本就是逐层偏移，「错开半步」写 `sh_angle(id, base, (32768/n) as angle)` 即可，不必单开模式） |
-| 73 | `sh_xform`（shooter 刀） | id,xform_off,xform_cnt | —（表层 `XformRef` 由 codegen 降低成 `(off, cnt)` **两个**栈值，`cnt == 0` = 无 xform。此处只做**存储收窄**的饱和钳（`off` → u16、`cnt` → u8，防负值/超宽裸 `as` 回绕成看似合法的小区间），**不校验区间**——`cnt ≤ 16` 与 `off + cnt*3 ≤ LOCALS` 在 76 号开火时查（同 `create_bullet` 的丙方案边界口径）。数据住**本任务 locals**，由 codegen 在 sub 入口一次性 staging、`slots` 的调用图着色保证区间不被复用 ⇒ **跨帧延迟读是安全的**（钉在 `xform_survives_a_frame_boundary_between_set_and_fire`）。参照 ZUN `609-612 etEx*`） |
+| 73 | `sh_xform`（shooter 刀） | id,xform_off,xform_cnt | —（表层 `XformRef` 由 codegen 降低成 `(off, cnt)` **两个**栈值，`cnt == 0` = 无 xform。此处只做**存储收窄**的饱和钳（`off` → u16、`cnt` → u8，防负值/超宽裸 `as` 回绕成看似合法的小区间），**不校验区间**——`cnt ≤ 16` 与 `off + cnt*3 ≤ LOCALS` 在 76 号开火时查（同 `create_bullet` 的丙方案边界口径）。数据住**本任务 locals**，由 codegen 在 sub 入口一次性 staging、`slots` 的调用图着色保证区间不被复用 ⇒ **跨帧延迟读是安全的**（钉在 `xform_survives_a_frame_boundary_between_set_and_fire`）。⚠️ 开火时是**每颗弹**自有一个段拷贝，见 76 号的段池压力（同 74 号之于任务槽）。参照 ZUN `609-612 etEx*`） |
 | 74 | `sh_task`（shooter 刀） | id,task_sub | —（表层 `SubRef` 降低成一个栈值（canonical `SubId` 或 -1=none）。负值 → `SH_NO_TASK`(0xFFFF)；超 u16 的号同样降级成"不挂"（P4-b）。**此处不校验号在册**——设的时候还没建弹，校验在 76 号开火时做。⚠️ 开火时是**每颗弹**派一个任务，见 76 号的任务槽压力。**ZUN 的 `et*` 族无此参**——这是本仓扩展，与 `fire`/`spawn_enemy` 的 `task` 参同构） |
-| 75 | `sh_req`（shooter 刀） | id,req_id | —（开火时顺带发的通道 B 请求 id；`clamp(0, u16::MAX)` 收窄，**`0` = 不发**（ZUN 608 的 sound1 归并进通道 B）。载荷布局见 76 号。参照 ZUN `608 etSound` 的 sound1；sound2 与 ZUN 的音效通道概念一并归并进通道 B，不单列） |
-| 76 | `sh_fire`（shooter 刀） | id | —（**无返回值**，人类裁定 D-8：本语言要求值必须消费，有返回就得写 `_ = sh_fire(0);` 而开火是循环里最高频的语句——**别"补全"成返回实发数**。用槽 `id` 的参数造弹，七步：① 退化网格 → ② appearance → ③ xform 区间 → ④ 挂弹任务号 → ⑤ 原点 → ⑥ 基准角 → ⑦ 网格循环，**一切拒绝都发生在任何世界写之前**（同 `create_bullet` 的先验后建）。<br>**P4 处置逐条**：`id` 越界 → no-op + `contract_viol`（同 62-75）；`n_angle==0 \|\| n_speed==0 \|\| n_angle*n_speed > BulletPool::CAP` → **不发 + `contract_viol` + `BAD_ARGS`，不 Fault**（对齐 `create_bullets_batch` 的退化网格口径）；appearance 越界或 `!valid` → **Fault(0)**；`xform_cnt > 16` 或 `off + cnt*3 > LOCALS` → **Fault(0)**；`task_script` 不在册 / 非零参 `Async` sub → **Fault(0)**；弹池满 → **短路本次开火的剩余部分**（同 `batch` 的 `'grid`，同相位无回收 ⇒ 后续必然同败），已发的留着；挂弹任务池满 → **弹保留、任务丢** + `pool_full[POOL_TASK]` +1，**不 Fault**（P4-a，同 `fire`）。<br>网格序 = **角度外层、速度内层**（= 池槽分配序，I4）。fan：`base + i·step − ((n−1)·step)/2`（**居中**，D-7）；ring：`base + (i×65536)/n + j·step`（逐颗算、余数均摊 ⇒ 精确闭合；`i ≤ 254` 故 i32 不溢出）。`on_fire_req != 0` 时发 `emit_req(on_fire_req, [origin_x, origin_y, appearance, **实际创建数**, 0, 0])`——`args[3]` 是实发数**不是**请求数（池满时要能区分）。owner 类别无限制。参照 ZUN `601 etOn`） |
+| 75 | `sh_req`（shooter 刀） | id,req_id | —（开火时顺带发的通道 B 请求 id；`clamp(0, u16::MAX)` 收窄，**`0` = 不发**（ZUN 608 的 sound1 归并进通道 B）。载荷布局见 76 号。<br>⚠️ **本族唯一不"保号越界性"的 setter，与 `emit_req`(27)/`bgm`(51) 等同 id 空间的兄弟口径不同，是有意的**：那些兄弟对越界 id 是 **no-op + `contract_viol` + `BAD_ARGS`**，而本条**钳**——`sh_req(0, 100000)` 存下 65535，于是 76 号会发出一个脚本从没要求过的 id。两条理由：① 危害有界——`reqs` 是 `#[checksum(skip)]` 的**纯输出缓冲**，请求分发器对未知 id 是 warn-and-ignore，坏 id 顶多是"少放一个音效"，不像 63 号 `sh_sprite` 那样一旦洗掉越界性就再也拒不掉隐形弹；② "修好"它要动 `contract_viol`，而**那个是进校验和的**——改一个纯表现通道的参数校验去动确定性状态，代价方向反了。要在设的那一刻就拒坏 id，用 `emit_req` 自己发。参照 ZUN `608 etSound` 的 sound1；sound2 与 ZUN 的音效通道概念一并归并进通道 B，不单列） |
+| 76 | `sh_fire`（shooter 刀） | id | —（**无返回值**，人类裁定 D-8：本语言要求值必须消费，有返回就得写 `_ = sh_fire(0);` 而开火是循环里最高频的语句——**别"补全"成返回实发数**。用槽 `id` 的参数造弹，七步：① 退化网格 → ② appearance → ③ xform 区间 → ④ 挂弹任务号 → ⑤ 原点 → ⑥ 基准角 → ⑦ 网格循环，**一切拒绝都发生在任何世界写之前**（同 `create_bullet` 的先验后建）。<br>**P4 处置逐条**：`id` 越界 → no-op + `contract_viol`（同 62-75）；`n_angle==0 \|\| n_speed==0 \|\| n_angle*n_speed > BulletPool::CAP` → **不发 + `contract_viol` + `BAD_ARGS`，不 Fault**（对齐 `create_bullets_batch` 的退化网格口径）；appearance 越界或 `!valid` → **Fault(0)**；`xform_cnt > 16` 或 `off + cnt*3 > LOCALS` → **Fault(0)**；`task_script` 不在册 / 非零参 `Async` sub → **Fault(0)**；弹池满 → **短路本次开火的剩余部分**（同 `batch` 的 `'grid`，同相位无回收 ⇒ 后续必然同败），已发的留着；**xform 段池满**（只在 `sh_xform` 非空时可达）→ **同样短路剩余部分** + `pool_full[POOL_XFORM]` +1 + `STATUS_POOL_FULL`，**不 Fault**（P4-a）——`create_bullet_with_xform` 是"先段后弹"，段分配不到就直接返回 NULL，`'grid` 短路不区分是弹池还是段池，但**计数器是两个、失败模式是两条**；**段消耗账**：`sh_xform` 非空时每颗弹自有段拷贝 ⇒ 一次 `sh_fire` 吃 `n_angle × n_speed` 个段（段池共 **2048**），`sh_xform` + `sh_count(0, 28, 5)` = **140 段**，与 `batch` 的段消耗账逐字同一件事（见 [`xform-ops.md`](xform-ops.md)"消费入口"）；挂弹任务池满 → **弹保留、任务丢** + `pool_full[POOL_TASK]` +1，**不 Fault**（P4-a，同 `fire`）。<br>网格序 = **角度外层、速度内层**（= 池槽分配序，I4）。fan：`base + i·step − ((n−1)·step)/2`（**居中**，D-7）；ring：`base + (i×65536)/n + j·step`（逐颗算、余数均摊 ⇒ 精确闭合；`i ≤ 254` 故 i32 不溢出）。`on_fire_req != 0` 时发 `emit_req(on_fire_req, [origin_x, origin_y, appearance, **实际创建数**, 0, 0])`——`args[3]` 是实发数**不是**请求数（池满时要能区分）。owner 类别无限制。参照 ZUN `601 etOn`） |
 
 `create_bullet` 走**丙方案**：`(xform_off, xform_cnt)` 指向本任务 locals 内打包槽
 （每槽 3 字：`word0=(wait<<16)|(op<<8)`、`word1/2=args`，≤16 槽）；`xform_cnt=0` 哑弹；
@@ -144,6 +144,20 @@
 - **`emit_req`（27）**：通道 B 渲染请求（`docs/ecl-lang.md`"渲染请求"节）。id 收窄 P4-b：
   栈值超出 `0..=65535` → no-op + `contract_viol` + `BAD_ARGS`，不 Fault；缓冲满走 D12
   （丢弃 + `TRUNCATED` + `diag.reqs_dropped`）。无 owner 类别限制（STAGE 任务可发）。
+
+### shooter 族（62-76）对 ZUN `et*` 的**有意缺口**
+
+号表是白名单，"ZUN 有而这里没有"永远是有意的，不是漏排。写在这里免得将来某次
+"补全性"清扫把它们静默加回来（spec `2026-07-31-ecl-shooter-design.md` §3 的十条裁定）：
+
+- **`614 etCopy`（拷贝一个发射器槽到另一个）——不做**（裁定 D-9）。两条理由：ZUN 自己的
+  文档就自陈这条 **"partially broken"**；且 `SHOOTERS_PER_TASK` 只有 **4**，真要复制一个
+  槽，手写几行 setter 就完事，不值得为它多一个进契约、要冻结、要测的号。**想加回来先
+  推翻 D-9**。
+- **`617-625` 难度分档族——不在本刀**（D-10），归「难度分档」独立一刀，不是否决。
+- **`608 etSound` 的 sound2**——与 ZUN 的音效通道概念一并归并进通道 B（见 75 号），不单列。
+- **`607 etAim` 的九值 aimmode 枚举**——D-6 塌成 `sh_aim`/`sh_ring` 两个正交布尔（71/72 号）：
+  mode 4/5 在两布尔下冗余，**mode 6/7/8 的随机模式不做**（另见 `follow-ups.md` D13）。
 
 ## 符卡计器（syscall 11/28/29 + `wait_spell` 糖；spec 2026-07-24）
 

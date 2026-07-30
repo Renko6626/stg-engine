@@ -113,3 +113,9 @@
   段满按尽力而为降级计 `pool_full[XFORM]`。
 - **ECL 侧（M1）**：丙方案 locals 区间引用——每槽 3 字，`word0 = (wait << 16) | (op << 8)`、
   `word1/2 = args`；16 槽 = 48 字 ≤ Task.locals[64]。
+- **shooter（`sh_xform` + `sh_fire`，2026-07-31）**：`sh_xform(id, off, cnt)` 把丙方案区间
+  **存进发射器槽**，`sh_fire(id)` 才消费——每颗弹自有段拷贝，**一次 `sh_fire` 吃
+  `n_angle × n_speed` 个段**（`sh_xform` + `sh_count(0, 28, 5)` = 140 段），与上面 `batch`
+  那条**是同一笔账**；段满同样尽力而为 + 短路，计 `pool_full[XFORM]`。
+  区别只在**颗数不写在同一行**：`sh_count` 与 `sh_fire` 分处两句，循环里的 `sh_fire(0)`
+  看不出它吃多少段。作者视角见 [`ecl-lang.md`](ecl-lang.md)"发射器"节坑④。

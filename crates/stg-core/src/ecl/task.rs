@@ -2,8 +2,14 @@
 //! generation——任务句柄 = (index, birth_frame) 由调度层管；对外只 spawn/kill/iter）。
 //!
 //! 容量全为编译期常量（spec 拍板 3）：求值栈 32 字 / locals 64 字 / 调用栈 8 帧 / 池 cap 256——
-//! `Task` ≈ 460B、`TaskPool` ≈ 118KB（World ~1.04MB，校验和 +12%）。全部编译期常量，
-//! 金向量实测不够再调。
+//! `Task` = **448 B**、`TaskPool` = **159 776 B ≈ 156 KiB**（其中 shooter 并行数组占
+//! 45 056 B，见下方 `shooters` 字段；World = 1 129 944 B ≈ 1.08 MB，任务池占其 **14%**，
+//! 逐帧全量进校验和）。全部编译期常量，金向量实测不够再调。
+//!
+//! （数字随 shooter 刀 2026-07-31 订正：旧值 "≈460 B / ≈118 KB / World ~1.04MB" 是加
+//! `shooters` 之前的估算口径，与 `bench-baseline.md` 的内存账/`step.rs` 的
+//! `world_size_sentinel` 对齐后取实测值。`docs/superpowers/specs/2026-07-18-m1-ecl-vm-design.md`
+//! 里那串旧数字**不动**——那是冻结的设计记录。）
 //!
 //! **为何手写而非 `define_pool!`**：`define_pool!` 把每个字段展开成独立 SoA 数组
 //! （`[T; CAP]` per field），适合"细粒度字段各自成阵列"的场景；`Task` 本身已是一块含定长
