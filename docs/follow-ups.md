@@ -603,6 +603,21 @@ mod 提供的二进制 xform 段格式、M4 rollback 对端镜像重放）——
 代价是内建表 `tables_v0.bin` 恰好已满足，不需要重烘焙。**触发点 = 第一张非内建掉落表出现时**
 （C11 资产管线的 owned 表 / mod 内容包），届时若还没加就必须先加。
 
+### D12. 死亡加分硬编码给自机 0——"谁打死谁得分"在联机/多人下不存在（2026-07-30 记档）
+
+`world::settle::kill_enemy` 里那句 `self.players[0].score = ...saturating_add(bonus)` 的
+自机号是**写死的 0**。上游拿不到别的号：`damage_enemy(e, dmg, tables)` 的签名里就没有
+"是谁打的"——`shots` 池明明有 `owner: u8` 字段，但 settle 趟二的 `ROW_SHOT_ENEMY` 臂只从
+命中记录里取了 `damage`，`owner` 一路没往下传；`ROW_FIELD_ENEMY`（消弹区伤害致死）那条更是
+连概念上的"击杀者"都要重新定义（field 的属主是谁？bomb 是谁放的？）。
+
+本刀按裁定就取自机 0，与既有 `SYS_ADD_SCORE`（`syscall.rs`，同样硬编码 `players[0]`）同口径，
+单人下完全正确。**注意对照**：道具入账 `credit_item(p, ..)` **不**是这样——它带自机号参数，
+拾取者是谁就记给谁。所以联机线上要统一的是"击杀分"与"脚本 `add_score`"这两处，不是全仓。**触发点 = co-op / rollback 联机真的上线时**
+（M4 那条线，与 B3 多自机 graze 位、B8 并列自机裁决、B13 磁吸自机选择同批）：届时要一次性
+决定"击杀归属"的口径——是把 `owner` 从 `hits` 一路穿到 `kill_enemy`，还是干脆改成共享分数。
+在那之前别单独修这一处，改一半会让四处记分口彼此不一致。
+
 ---
 
 ## E. bomb 那一刀开工前

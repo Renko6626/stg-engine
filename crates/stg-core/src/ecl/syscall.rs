@@ -2968,8 +2968,12 @@ mod tests {
         let i = eh.index as usize;
         let viol0 = w.body.diag.contract_viol;
 
-        // 腿一：越界正数类型（正序参 `type, n`——`n=3` 是合法类型号，故写反弹出顺序时
-        // 这条会把 3 当类型写进 `drop_count[3]`，被下面的全零断言逮住）。
+        // 腿一：越界正数类型。取值 `(type=ITEM_TYPE_COUNT=5, n=3)` 是**刻意挑的判别对**：
+        // `n=3` 自己是个**合法**类型号（`ITEM_BOMB_PIECE`），所以一旦实现把两个 `pop` 写反
+        // （正序参 `type, n` → 逆序弹栈 `n` 先 `type` 后），这条腿就不再是"坏类型 no-op"，
+        // 而是老老实实执行 `drop_count[3] += 5` —— 被下面的"全零"断言当场逮住。
+        // 换成 `n=1` 之类也合法的值同样能逮，但换成 `n` 越界（如 99）就两路都 no-op，
+        // 这条腿会退化成对参数序瞎的测试。别顺手改这两个数。
         assert!(
             call(
                 &mut w,

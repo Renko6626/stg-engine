@@ -76,14 +76,14 @@ impl WorldBody {
         if self.enemies.flags[e] & ENEMY_DYING != 0 {
             return; // 幂等
         }
-        // `min(0)` 而非置 0 —— **对当前唯一调用方是恒等的**：`damage_enemy` 只在 `hp<=0`
-        // 分支里调，`min(0)` 取的必是 `hp` 自己。它是为**将来的 `die()`（T3）**准备的：
-        // 那条路径可能打在满血 boss 上，压到 0 才不会让 HUD 当帧显示"满血的死人"；
-        // 而对已被 overkill 打成负血的敌，`min` 保住负值不被抹平（负血是可观测的诊断信息）。
-        // **判别性测试在 T3**（`die()` 落地时补 `die_on_full_hp_enemy_zeroes_hp` +
-        // 一条 overkill 反向腿：先打到 hp=-5 再 `kill_enemy`，断言仍是 -5）。当前全仓**没有**
-        // 任何测试能区分 `min(0)` 与无条件置 0 —— `settle_overkill_two_shots_one_death_event`
-        // 也不能（它 hp=1/dmg=1 → hp 恰好是 0，第二发又被 dying 门禁挡在 damage_enemy 之外）。
+        // `min(0)` 而非置 0 —— **对 `damage_enemy` 这个调用方是恒等的**（它只在 `hp<=0`
+        // 分支里调，`min(0)` 取的必是 `hp` 自己），判别力全部来自另一个调用方 `SYS_DIE`：
+        // 那条路径打在满血 boss 上，压到 0 才不会让 HUD 当帧显示"满血的死人"；而对已被
+        // overkill 打成负血的敌，`min` 保住负值不被抹平（负血是可观测的诊断信息）。
+        // **两条判别腿都在 `ecl::syscall.rs::tests::die_on_full_hp_enemy_zeroes_hp`**
+        // （满血 die → hp 落 0；再 overkill 到 hp=-5 后 `kill_enemy` → 仍是 -5）。
+        // 本文件的 `settle_overkill_two_shots_one_death_event` **区分不了**这两种写法
+        // （它 hp=1/dmg=1 → hp 恰好是 0，第二发又被 dying 门禁挡在 damage_enemy 之外）。
         self.enemies.hp[e] = self.enemies.hp[e].min(0);
         self.enemies.flags[e] |= ENEMY_DYING;
         // 掉落直接分配（A6/A7）：撒敌身上的逐类型计数（表号已在生成时展开）。
@@ -1046,7 +1046,9 @@ mod tests {
     //    本文件，`enemy_death_credits_its_score_bonus`（加分）
     //    + `settle_death_drops_by_table_in_settlement_order`（掉落）
     //    + `settle_enemy_death_emits_render_req_with_pos_sprite_score`（请求）。
-    // 2. **脚本显式 `die()`** → `SYS_DIE` → `kill_enemy`：**T3 才落地**，届时测试住 vm.rs。
+    // 2. **脚本显式 `die()`** → `SYS_DIE` → `kill_enemy_by_handle` → `kill_enemy`：测试住
+    //    `ecl::syscall.rs` 的"敌人死亡效果四 syscall"节（`die_runs_the_full_death_effect`
+    //    等七条），表层"两指令降低"那半住 `stg-ecl-compiler` 的 codegen 测试。
     // 3. **D9 自燃**（主协程自然返回）→ `ecl::vm::run_tasks` 的 `Exec::End` 分支，
     //    **不走 `kill_enemy`**：静默退场，不掉道具、不加分、不发 `EVT_ENEMY_DIED`。
     //    守它的是 `ecl::vm::tests::enemy_main_task_returning_self_destructs_quietly`

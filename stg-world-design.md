@@ -214,7 +214,7 @@ WorldTables 清单（v1）：
 
 ## A7 死亡结算机制
 
-- **机械部分（world 固定逻辑、数据驱动）**：相位 8 趟二伤害结算中 hp≤0 ⇒ 标记死亡、按 `drop_table` 查 WorldTables 直接分配掉落（散布消耗世界 RNG，消耗序 = 结算序，确定）、发死亡特效请求（`reqs`）、产出 `EnemyDied{x, y, appearance, death_script}` 入 `frame_events`。槽位相位 10 回收。
+- **机械部分（world 固定逻辑、数据驱动）**：相位 8 趟二伤害结算中 hp≤0 ⇒ 标记死亡、按敌身上的 `drop_count` 逐类型计数直接分配掉落（**2026-07-30 修订**：原文写"按 `drop_table` 查 WorldTables"，表查询自敌人死亡效果刀起挪到了**建敌那一刻**，见 D5 敌人字段表；散布消耗世界 RNG，消耗序 = 结算序，确定）、**把敌的 `score` 记进自机 0**（同刀，人类裁定）、发死亡特效请求（`reqs`）、产出 `EnemyDied{x, y, appearance, death_script}` 入 `frame_events`。槽位相位 10 回收。
 - **脚本部分（经相位 9 挂钩）**：ECL 层对带死亡脚本的 `EnemyDied` 派生任务——owner = **关卡句柄**（不能是垂死敌人，否则次帧 owner 门禁杀之），死亡坐标经任务入参传入（带参派生机制归 ECL 文档；**事件带哪些字段归本文档**）。死亡逻辑就是一段普通 ECL：同语言、同 syscall、同编译管线，作者体验 = "敌人定义 = 主控 sub + 可选死亡 sub"。
 - 分工：**例行掉落走掉落表**（快、零脚本成本），**异行为走死亡脚本**（告别弹、演出、额外掉落），共存不互斥。
 - 敌人死亡**默认不清弹**（既定语义：其弹上任务因 owner 失效而死，弹本体存续）。
@@ -435,7 +435,7 @@ SoA，~64 B/敌，256 敌 ≈ 16 KB：
 | 判定 | `radius: Fx`（体碰）, `hurtbox: Fx`（受击） | **双半径**，映射见 D8 |
 | 状态 | `invuln: u16, hit_flash: u8, flags: u8` | 无敌帧、受击闪计时、位标记（dying 预留位） |
 | 外观 | `sprite: u16, anm_state: u16` | 展示 id；anm_state 供表现层选动画，**世界不解释** |
-| 挂钩 | `main_task: Handle, death_script: u16, drop_table: u16` | 主控任务、死亡脚本（不透明转发）、掉落表 |
+| 挂钩 | `main_task: Handle, death_script: u16, drop_count: [u8; ITEM_TYPE_COUNT]` | 主控任务、死亡脚本（不透明转发）、**待掉落的逐类型计数**（敌人死亡效果刀，2026-07-30 修订）——每类型一个 `u8`、上限 255 饱和，死时按类型编号升序撒。原字段 `drop_table: u16` 已退化成 `spawn_enemy` 的**生成参数**：建敌时经 `tables::drop_counts` 展开进本字段，此后无人读表号，脚本可经 `drop_clear`/`drop_add`/`drop_items` 逐敌改写 |
 | 计分 | `score: u16` | 击破基础分 |
 
 **`move_to` 语义（拍板）**：插值器激活期间**完全接管位置**（`pos = from + (to−from)·ease(t/dur)`），vx/vy 冻结不积分；到期 `mv_active = 0` 且 **vx/vy 清零**——到点即悬停（ZUN boss 移动语义）。easing 查 D1 烘焙表。
