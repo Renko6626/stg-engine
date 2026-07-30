@@ -2143,8 +2143,14 @@ mod tests {
         // 同样走 `define_pool!` 的 derive（`[T; N]` 有泛型 impl），自动入；③ D10 容量预算
         // 不变（cap 仍 256，只是每槽宽了 3B）。
         // 2026-07-31（shooter 刀 Task 1）：`TaskPool` 新增并行数组
-        // `shooters: [[ShooterSlot; 4]; 256]`。`ShooterSlot` = 44 B（`repr(C)`，6×Fx + 6×u16 +
-        // 4×u8，4 字节对齐紧排、无尾部 padding），44×4×256 = **+45056**，无对齐吸收
+        // `shooters: [[ShooterSlot; 4]; 256]`。`ShooterSlot` = 44 B（`repr(C)`）：
+        // 6×Fx(24) + 7×u16(14) + 4×u8(4) = **42 原始字节**，结构对齐 4（Fx = i32）
+        // ⇒ 补 **2 字节尾部 padding** 才到 44。**这 2 字节是隐形余量**：往
+        // `ShooterSlot` 再塞两个 `u8`（或一个 `u16`）字段，结构**不长**——本哨兵与
+        // `shooter::tests::shooter_is_44_bytes` **两条都照绿**，而 checksum 与
+        // SaveBytes 载荷却已经变了（新字段自动入两者）。故给 `ShooterSlot` 加字段时
+        // 尺寸测试**不是网**，`ENGINE_VER` 该不该 bump 要自己判。
+        // 44×4×256 = **+45056**，无对齐吸收
         // （数组对齐 = Fx 的 4，`TaskPool` 本就 4 对齐）。**加在 `TaskPool` 而非
         // `WorldBody`**（P1：world 不知道"任务"存在）⇒ 左值 970144 不动、右值
         // 1084888→1129944，增量 1:1。① `copy_into` 手写清单**已同步**加

@@ -676,15 +676,11 @@ pub fn lookup(name: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.name == name)
 }
 
-/// 该内建有没有"弹型 + 颜色"两参糖（颜色轴刀）——[`fold_start`] 的存在性投影。
-///
-/// **起点不总是 0**（`sh_sprite` 是 1），所以两个消费者要的是 `fold_start` 而不是这个
-/// 布尔；本谓词留给"只关心有没有"的场合。
-pub fn folds_shape_color(name: &str) -> bool {
-    fold_start(name).is_some()
-}
-
 /// "弹型 + 颜色"两参糖的**起始参数下标**（`None` = 该内建没有两参糖）——**单一权威**。
+///
+/// （曾另有一个 `folds_shape_color(name) -> bool` 的存在性投影。shooter 刀把两个消费者都
+/// 改成问起点之后它只剩测试在调，且它答的恰是这道题**没用的那一半**——真正咬人的是起点
+/// 填错、不是"有没有"，故随本刀删除。要判"有没有"写 `fold_start(n).is_some()`。）
 ///
 /// `lang::typeck` 据此施加图集三判据（`lang::atlas`）、`lang::codegen` 据此把那两位折叠成
 /// 单个 appearance 值。两处**必须问同一个函数**：从名单里掉出去都是静默事故——typeck 掉了
@@ -891,8 +887,7 @@ mod tests {
             Some(1),
             "第 1 参是 id，折的是 2/3 参"
         );
-        assert!(folds_shape_color("fire") && folds_shape_color("sh_sprite"));
-        assert!(!folds_shape_color("spawn_enemy"), "sprite 位不是两参糖");
+        assert_eq!(fold_start("spawn_enemy"), None, "sprite 位不是两参糖");
     }
 
     /// `batch` 的 10 位形状（头两位 shape/color，其余沿用 syscall 既有顺序）。
