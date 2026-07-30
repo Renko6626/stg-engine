@@ -490,10 +490,19 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             // 表层是 (id, shape, color) 三参，但 shape/color 在**编译期**已折叠成单个
             // appearance 值（`builtins::fold_start("sh_sprite") == 1`），故这里只弹两个。
             // appearance 在册与否留到开火时查（同 `fire` 的先验后建）。
+            //
+            // **收窄必须保号越界性**：`try_from` 失败（负值 / 超 u16）一律落到 `u16::MAX`
+            // ——它远超表长，T3 开火时照样查不到 ⇒ 越界值进来、越界值出去。
+            // 曾经写成 `clamp(0, u16::MAX)`，把负值钳成 **0**，而 `appearances[0]` 是在册
+            // 且 valid 的格子 ⇒ 越界值被偷偷洗成合法值，开火时再也拒不掉，和上面那句
+            // "留到开火时查"的承诺直接矛盾（复审 ①）。`fire` 侧同样的脚本值是 Fault
+            // （`appearances.get(负 as usize)` → `None`），两条路不该有这种差别。
+            // 可达性是真的：typeck 的形色判据只在两参**都是编译期常量**时施加，
+            // `sh_sprite(0, 16, c)` 里 `c` 是变量时判据跳过，`c = -20` 就折叠成 -4。
             let appearance = pop(task)?;
             let id = pop(task)?;
             if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
-                s.appearance = appearance.clamp(0, u16::MAX as i32) as u16;
+                s.appearance = u16::try_from(appearance).unwrap_or(u16::MAX);
             }
             Ok(())
         }
@@ -1223,6 +1232,32 @@ mod tests {
         args: &[i32],
         tables: &crate::tables::WorldTables,
     ) -> Result<(), u8> {
+        call_full(w, ecl, task, no, args, tables, 0)
+    }
+
+    /// 指定 `self_index` 的 `call`——shooter 族专用（复审 ③）：shooter 存储按**任务索引**
+    /// 键，而 `call` 把 `self_index` 写死 0，于是"派发臂用的是 `ctx.self_index` 还是字面量
+    /// 0"在测试里不可辨（等价变异）。`vm.rs` 已有 `self_index: 7` 的先例。
+    fn call_at(
+        w: &mut World,
+        ecl: &EclImage,
+        task: &mut Task,
+        no: u16,
+        args: &[i32],
+        self_index: u16,
+    ) -> Result<(), u8> {
+        call_full(w, ecl, task, no, args, &TABLES_V0, self_index)
+    }
+
+    fn call_full(
+        w: &mut World,
+        ecl: &EclImage,
+        task: &mut Task,
+        no: u16,
+        args: &[i32],
+        tables: &crate::tables::WorldTables,
+        self_index: u16,
+    ) -> Result<(), u8> {
         for &a in args {
             task.stack[task.sp as usize] = a;
             task.sp += 1;
@@ -1236,7 +1271,7 @@ mod tests {
             ecl,
             body: &mut w.body,
             tables,
-            self_index: 0,
+            self_index,
             frame,
         };
         dispatch(no, task, &mut ctx)
@@ -3571,6 +3606,109 @@ mod tests {
                 assert_eq!(task.sp, 0, "syscall {} 越界腿也应把实参全部弹栈", c.no);
             }
         }
+    }
+
+    /// 复审 ②：`sh_aim`/`sh_ring` 的**清位**方向。
+    ///
+    /// `shooter_cases()` 那张表每个 setter 只喂一组入参，两条旗标 setter 喂的都是 `on = 1`
+    /// ⇒ 把两个派发臂里的 `else { s.flags &= !BIT }` **整个删掉，表驱动那三条测试全绿**。
+    /// 这跟 `sh_offset` 的"只置不清"是同一个 bug 类，只是表结构塞不下"同一 setter 两种
+    /// 入参"，故另开一条定向腿。
+    #[test]
+    fn aim_and_ring_flags_are_cleared_by_passing_zero() {
+        for (no, bit, who) in [
+            (SYS_SH_AIM, SH_AIMED, "sh_aim"),
+            (SYS_SH_RING, SH_RING, "sh_ring"),
+        ] {
+            let (mut w, ecl) = fresh_with_shooters();
+            let mut task = Task::default();
+            assert!(call(&mut w, &ecl, &mut task, no, &[0, 1]).is_ok());
+            assert_ne!(w.tasks.shooters[0][0].flags & bit, 0, "{who}(id, 1) 应置位");
+            assert!(call(&mut w, &ecl, &mut task, no, &[0, 0]).is_ok());
+            assert_eq!(
+                w.tasks.shooters[0][0].flags & bit,
+                0,
+                "{who}(id, 0) 必须把位**清掉**（只置不清 = 开了就再也关不上）"
+            );
+            // 判别腿：清的是自己那一位，没顺手把另一位也抹了。
+            assert_eq!(
+                w.tasks.shooters[0][0],
+                ShooterSlot::default(),
+                "{who} 一置一清之后整槽应回到默认"
+            );
+        }
+    }
+
+    /// 复审 ③：shooter 存储按**任务索引**键——派发臂必须用 `ctx.self_index`，不是字面量 0。
+    /// 助手把 `self_index` 写死 0 时这条是等价变异（改成 `0` 全绿）。
+    #[test]
+    fn setters_write_the_slots_of_the_calling_task_not_task_zero() {
+        let (mut w, ecl) = fresh();
+        w.tasks.shooters[0] = [ShooterSlot::default(); SHOOTERS_PER_TASK];
+        w.tasks.shooters[7] = [ShooterSlot::default(); SHOOTERS_PER_TASK];
+        let mut task = Task::default();
+        assert!(call_at(&mut w, &ecl, &mut task, SYS_SH_DIST, &[2, 0x0006_0000], 7).is_ok());
+        assert_eq!(
+            w.tasks.shooters[7][2].dist,
+            Fx::from_raw(0x0006_0000),
+            "写的应是 self_index=7 的槽 2"
+        );
+        for k in 0..SHOOTERS_PER_TASK {
+            assert_eq!(
+                w.tasks.shooters[0][k],
+                ShooterSlot::default(),
+                "0 号任务的槽 {k} 不该被碰（派发臂若写死 0 就会红在这里）"
+            );
+        }
+    }
+
+    /// 复审 ①：`sh_sprite` 的收窄**必须保号越界性**。
+    ///
+    /// 负折叠值（`sh_sprite(0, 16, c)` 里 `c` 是变量、typeck 判据跳过 ⇒ `c = -20` 折成 -4）
+    /// 若被钳成 **0**，就落在 `appearances[0]` 这个**在册且 valid** 的格子上 ⇒ T3 开火时
+    /// 再也拒不掉。`fire` 侧同样的值是 `FAULT_BAD_OP`，两条路不该有这种差别。
+    #[test]
+    fn sh_sprite_narrowing_keeps_out_of_range_values_out_of_range() {
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut task = Task::default();
+        let n_rows = TABLES_V0.appearances.len();
+        assert!(
+            TABLES_V0.appearances[0].valid,
+            "前置条件：0 号格在册且 valid——正因为如此，把负值钳成 0 才是事故"
+        );
+
+        for bad in [-4, -1, i32::MIN] {
+            assert!(call(&mut w, &ecl, &mut task, SYS_SH_SPRITE, &[0, bad]).is_ok());
+            let got = w.tasks.shooters[0][0].appearance;
+            assert_ne!(got, 0, "负 appearance {bad} 不得被洗成合法的 0 号格");
+            assert!(
+                got as usize >= n_rows,
+                "负 appearance {bad} 收窄后仍须落在表外（表 {n_rows} 行，实际存了 {got}）"
+            );
+        }
+        // 上沿：超 u16 同样保持越界。
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_SPRITE, &[0, 100_000]).is_ok());
+        assert!(w.tasks.shooters[0][0].appearance as usize >= n_rows);
+        // 合法值照常原样存（防"一律存 u16::MAX"这种把测试骗绿的实现）。
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_SPRITE, &[0, 19]).is_ok());
+        assert_eq!(w.tasks.shooters[0][0].appearance, 19);
+    }
+
+    /// `sh_req` 的收窄（复审 ① 顺带点名的覆盖空缺）。这里钳到 **0 是对的**——`0` 在
+    /// `ShooterSlot::on_fire_req` 上有明确语义（"不发请求"），不像 appearance 的 0 是个
+    /// 在册格子；负 req id 降级成"不发"是 P4-b 的确定性安全结果。
+    #[test]
+    fn sh_req_narrowing_degrades_bad_ids_to_no_request() {
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_REQ, &[0, -7]).is_ok());
+        assert_eq!(w.tasks.shooters[0][0].on_fire_req, 0, "负 id → 不发请求");
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_REQ, &[0, 100_000]).is_ok());
+        assert_eq!(
+            w.tasks.shooters[0][0].on_fire_req,
+            u16::MAX,
+            "超 u16 上钳，不回绕（裸 `as u16` 会得 34464）"
+        );
     }
 
     /// P4-b：`sh_count` 的参数是脚本给的任意 i32，先钳后存，不回绕不 panic。
