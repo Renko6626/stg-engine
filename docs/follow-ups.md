@@ -27,6 +27,12 @@
 > **C22**（`tables.rs::validate` 的 ② join 校验循环随 ② 段清空而空转，机制保留但非活防护）、
 > **D10**（部分设运行期不查 `valid`，编译期空格闸只覆盖 `.ecl` 源码路径，直接构造
 > `XformSlot` 的未来消费者不受保护）。
+>
+> 最后核实：2026-07-27（P4 覆盖刀销账：逐条核实后整条删除 **B1**〔四个 `create_*` 池满
+> 测试〕/**B2**〔`push_event` 溢出测试〕/**B4**〔overkill hp 断言〕/**B11**〔越界
+> `drop_table` 测试〕/**B12**〔`credit_item` `saturating_add`+`>=` 修复与测试〕/**B14**
+> 〔`storm --saves 0` 守卫+去重+测试〕/**B25**〔`spawn_enemy`/`fire` task 号支路①③四条
+> 测试，`main_task` doc 注释已随该刀补在 `enemy.rs`〕，七条均已在代码里核实落地）。
 
 ---
 
@@ -112,31 +118,10 @@ boss 条/符卡行会残留上一次刷新的陈旧值而非归零；④ `hud.gd
 
 ## B. 测试覆盖缺口
 
-### B1. P4-a 池满降级：四个写 API 仍零覆盖（道具池份额已还）
-
-`create_bullet` / `create_player_shot` / `create_enemy` / `create_field` 的池满分支
-（→ `Handle::NULL` + `diag.pool_full[池id]` + `last_status`）**全无测试**，且金向量也从不触及
-（实测稳态：弹 ~375/8192、敌 3/256、field 1/16）。第五个写 API `drop_item`（道具池）的池满分支
-已于 M0-12 补测（`step.rs::drop_item_bad_type_and_pool_full`），不再计入本条缺口。
-
-P4-a 是宪法级不变量（资源耗尽 → 确定性降级不 panic，计数入校验和），却是四个池零覆盖。
-**建议**：一刀补齐四个池满测试 + 一个把某池打满的金向量饱和场景（后者顺带验证"两机同序同丢"）。
-
-### B2. `push_event` 的溢出分支无测试
-
-`world.rs` 的 `push_hit` 溢出（`diag.hits_overflow`）有测试；结构同构的 `push_event`
-（`diag.events_overflow`）没有。补一个镜像测试即可（置 `events_len = EVENTS_CAP`，push，
-断言未增 + 计数 +1）。
-
 ### B3. 多自机 graze 位隔离 —— 被 co-op 阻塞
 
 `grazed_by` 是每自机一位的掩码。「P0 擦到的弹不该置 P1 的位」目前无测试，因为
 `players[1]` 在所有场景里恒为 `LIFE_ABSENT`。**需 co-op 出场机制才可测**，届时一并做。
-
-### B4. overkill 测试只断言事件数，未断言 hp
-
-`settle_overkill_two_shots_one_death_event` 断言 `events_len == 1`，但没断言敌人 hp
-**没被二次扣减**。加一行 assert 即可，能多抓一类回归（dying 门禁被绕过但事件恰好只发一次）。
 
 ### B5. 碰撞的边界相等（`d2 == sum²`）无测试 —— **低价值，可能永远不做**
 
@@ -173,29 +158,12 @@ delay 门测试只覆盖了 POLAR 弹 `angle`/位置冻结，`accel=0` 时 `spee
 LOOP 跳回后 `[0, xform_next)` 收缩：活跃 STEP 冻结至重武装、武装反弹弹该窗口 walls 读 0
 暂时失效——均确定性且属 spec 字面执行，但缺一条判别式测试与一句设计文档明写这条角落语义。
 
-### B11. 越界 `drop_table` id 分支无直测（M0-12 终审分诊）
-
-`create_enemy` 不验 `drop_table`，调用方可传入越界 id 使其在 settle 趟二触达"视同空表 +
-`contract_viol` 计数"的降级分支——P4-b 是宪法级不变量，按纪律该分支应有测试，目前无。
-
-### B12. `credit_item` 的 `lives`/`bombs` u8 进位无饱和（M0-12 终审分诊）
-
-`credit_item` 里 `lives`/`bombs` 字段累加没有饱和上限：刷够 1275 枚生命/炸弹蜡（`u8` 满表下
-的极端场景）会在 debug 触发溢出 panic、release 静默回绕——确定性不破（跨平台逐位一致仍成立）
-但入账值荒谬。修法：累加改 `saturating_add(1)`，蜡数比较从 `==` 改 `>=` 以抗直写越界。
-
 ### B13. 道具近距磁吸 v0 的自机选择与优先裁决序偏离 spec —— 与 B3/B8 co-op 族同批（M0-12 终审分诊）
 
 道具近距磁吸 v0 实现取"升序首个圈内自机"，而非 spec 写的"最近的 ALIVE 自机"——`players[1]`
 恒 `LIFE_ABSENT`，两种取法在单机场景下不可观测、无法用当前测试区分。另外 PoC 磁吸与近距圈
 两者的优先裁决序 spec 未写明，也是同一刀留下的空白。co-op 出场机制到位（解除 B3/B8 阻塞）后
 与它们一并定案；此处先把"spec 偏离"显式记档，避免后续误当 bug 修掉。
-
-### B14. `storm --saves 0` 静默空转假绿（L1/L2 终审分诊,2026-07-23）
-
-`run_storm` 的 `save_at` 无 `saves ≥ 1` 守卫也无去重:`--saves 0` 时零存档点、零重演腿,
-照样打印"全部逐位一致"退出 0——**正确性工具自身的假绿脚枪**(CI 不走 CLI 路径,只坑手动
-调用)。修法:`save_at.is_empty() → Err` + 去重。顺手级。
 
 ### B15. `storm_short_gate` 是全套件最重单测(~10.6s debug,终审实测知会)
 
@@ -301,21 +269,6 @@ mark(2);`（`sub common() { bgm(9); }`）。`visited` 在第一次遇到 `common
 敌实例数量（杂兵波次期望瞬时敌数 >1，boss 单敌）判别。**触发点 = 下次真要收紧这条冒烟
 断言，或者杂兵/boss 内容有实质变化时**（权衡：复杂度 vs 真实手误极少"连节奏一起清空"，
 当前不算阻塞）。
-
-### B25. `spawn_enemy`/`fire` 的 task 号三条拒绝支路合计零测试（场景刀 T1/demo 局刀实现附带发现，2026-07-26）
-
-`sys_spawn_enemy`（`ecl/syscall.rs`）与 `sys_create_bullet`（backs `fire`）的 task 参校验
-都是同一套三段先验后建：①`task_script` 超出 `u16` 范围（`u16::try_from` 失败）；②号不在册
-（`sub_id` 查无）；③在册但不是零参 `Async`（`kind() != SubKind::Async` 或有参数）——全部
-`FAULT_BAD_OP`。现状每个函数**只有②有直接测试**
-（`spawn_enemy_bad_task_script_faults_without_enemy`/
-`sys_create_bullet_bad_task_script_faults_before_creating`），①③零覆盖，`spawn_enemy`
-与 `fire` 两族完全同构地留了同一个缺口（"与 fire 先例一致"——不是 `spawn_enemy` 独有的
-新债，是抄了既有代码路径连带抄了既有测试盲区）。P4-b 是宪法级不变量，按纪律该补齐。
-**顺带记一句设计口径**：`EnemyPool.main_task` 是**只写不读**的记账字段（`stg-world-design.md`
-称其为 Handle 用途，不是"当前存活任务"的活句柄——敌死后任务被 owner-gate 清杀，但
-`main_task` 本身不会被清零，读到非零不代表任务还活着；目前全仓也确实没有任何消费者读它，
-只是别在将来加消费者时想当然把它当"活任务槽号"用。
 
 ### B26. 首个有 GPU/X 环境的三件套合并单（2026-07-26；**2026-07-27 部分兑现，余 ① 一条**）
 

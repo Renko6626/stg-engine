@@ -81,12 +81,27 @@ fn clone_world(src: &World) -> Box<World> {
     dst
 }
 
+/// 存档点集计算（B14 抽出，独立可测）：均匀分布 `saves` 个存档帧号，**去重**（`frames` 小而
+/// `saves` 大时可能算出重复帧号），去重后若为空集则报错——`--saves 0` 不再零存档点、零重演
+/// 腿却照样"全部逐位一致"退出 0（正确性工具自身的假绿脚枪）。
+fn save_points(frames: u32, saves: usize) -> Result<Vec<u32>, String> {
+    let mut save_at: Vec<u32> = (1..=saves as u32)
+        .map(|k| k * frames / (saves as u32 + 1))
+        .collect();
+    save_at.dedup();
+    if save_at.is_empty() {
+        return Err(format!(
+            "saves={saves} 算出空存档点集(零重演腿)——storm 存在意义是逐点重演对拍,\
+             saves 至少要 1 且 frames 足够大"
+        ));
+    }
+    Ok(save_at)
+}
+
 pub(crate) fn run_storm(frames: u32, saves: usize, seed: u64) -> Result<(), String> {
     let (mut w, image, _boss) = crate::build_rainbow_world(seed);
     let inputs = gen_inputs(frames, seed);
-    let save_at: Vec<u32> = (1..=saves as u32)
-        .map(|k| k * frames / (saves as u32 + 1))
-        .collect();
+    let save_at = save_points(frames, saves)?;
 
     // 主跑：逐帧校验和流 + 沿途双源存档
     let mut stream = Vec::with_capacity(frames as usize);
@@ -110,6 +125,17 @@ pub(crate) fn run_storm(frames: u32, saves: usize, seed: u64) -> Result<(), Stri
             }
             snaps.push((f, snap, bytes));
         }
+    }
+
+    // 自证有真重演腿（B14 同族守卫，非仅"存档点非空"）：`save_points` 非空只保证"存了档"，
+    // 不保证"存档之后还有帧可重演"——`frames=0` 时 `snaps` 直接为空（`0..0` 零轮主循环，
+    // `save_at.contains(&f)` 从未被求值）；`frames=1, saves=1` 时存档点 f0=0 但重演区间
+    // `1..1` 为空腿，同样是"跑了但没测任何东西"。用 `f0 + 1 < frames` 钉住"至少一个存档点
+    // 之后还有 ≥1 帧可重演"，而不只判非空——非空挡不住 `frames=1,saves=1` 那个空腿。
+    if !snaps.iter().any(|(f0, _, _)| *f0 + 1 < frames) {
+        return Err(format!(
+            "frames={frames} saves={saves} 未产生任何有效重演腿(所有存档点之后都无帧可重演)"
+        ));
     }
 
     // 逐点重演：内存源 + 磁盘源
@@ -141,6 +167,54 @@ mod tests {
     #[test]
     fn storm_short_gate() {
         super::run_storm(240, 3, 0xAB).expect("短风暴必须全逐位一致");
+    }
+
+    /// 正确性工具自身的假绿脚枪（B14）：`--saves 0` 曾零存档点、零重演腿，
+    /// 照样打印"全部逐位一致"退出 0。守卫后必须报错。
+    #[test]
+    fn storm_rejects_zero_saves_instead_of_vacuous_pass() {
+        let err = run_storm(/* frames */ 120, /* saves */ 0, /* seed */ 1)
+            .expect_err("saves=0 必须报错,不得空转假绿");
+        assert!(
+            err.to_string().contains("saves"),
+            "错误信息该点出是 saves 参数的问题,实际: {err}"
+        );
+    }
+
+    /// 同族假绿（终审 I-2）：`--frames 0` 时 `save_points` 非空过守卫（`save_at` 由
+    /// `k*frames/(saves+1)` 全算出 0），但主循环 `0..0` 零轮，`snaps` 恒空——
+    /// 必须被"有效重演腿"守卫拦下，不能只靠"存档点非空"那道旧守卫放行。
+    #[test]
+    fn storm_rejects_zero_frames_instead_of_vacuous_pass() {
+        let err = run_storm(/* frames */ 0, /* saves */ 8, /* seed */ 1)
+            .expect_err("frames=0 必须报错,不得空转假绿");
+        assert!(
+            err.to_string().contains("重演腿"),
+            "错误信息该点出是零重演腿的问题,实际: {err}"
+        );
+    }
+
+    /// 同族假绿的边界形态：`frames=1, saves=1` 时存档点算出 f0=0（非空，过旧守卫），但
+    /// 重演区间 `(f0+1)..frames` = `1..1` 为空腿——存了档、却没有任何一帧被真正重演验证。
+    /// 只判 `snaps.is_empty()` 挡不住这个；必须用 `f0 + 1 < frames` 才能抓住。
+    #[test]
+    fn storm_rejects_frames_one_saves_one_empty_replay_leg() {
+        let err = run_storm(/* frames */ 1, /* saves */ 1, /* seed */ 1)
+            .expect_err("frames=1,saves=1 的存档点之后无帧可重演,必须报错");
+        assert!(
+            err.to_string().contains("重演腿"),
+            "错误信息该点出是零重演腿的问题,实际: {err}"
+        );
+    }
+
+    /// 去重：`frames` 小而 `saves` 大时会算出重复帧号；去重后非空则正常跑通。
+    #[test]
+    fn storm_dedups_save_points_when_frames_small_saves_large() {
+        let pts = super::save_points(5, 20).expect("frames=5 saves=20 去重后仍非空");
+        let mut sorted = pts.clone();
+        sorted.dedup();
+        assert_eq!(pts, sorted, "save_points 返回值必须已去重");
+        assert!(!pts.is_empty());
     }
 
     /// 变异检验：篡改重演输入一帧必须报分歧——证明对拍真在比，不是恒真（spec §6.4 判别式）。
