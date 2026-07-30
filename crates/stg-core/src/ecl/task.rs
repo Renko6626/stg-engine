@@ -20,6 +20,7 @@ pub const OWNER_STAGE: u8 = 0;
 pub const OWNER_ENEMY: u8 = 1;
 pub const OWNER_BULLET: u8 = 2;
 use crate::ecl::image::SubId;
+use crate::ecl::shooter::{SHOOTERS_PER_TASK, Shooter};
 
 /// 一个 ECL 任务（协程）的完整可 memcpy 状态（I5：模拟协程完整状态位于可 memcpy 的扁平内存）。
 #[repr(C)]
@@ -91,14 +92,25 @@ impl Default for Task {
 #[derive(crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct TaskPool {
     pub(crate) slots: [Task; TASK_CAP],
+    /// 每任务 4 个发射器槽（shooter 刀 2026-07-31）。**并行数组而非塞进 `Task`**——
+    /// `Task` 的 `repr(C)` 布局是精算过的（`spell_bound` 卡在对齐间隙里以免改 `size_of`），
+    /// 不该为这个塞 176 B 进去。
+    /// `spawn` 负责重置（复用槽写满纪律，撑"校验和哈希全槽不掩码"）。
+    pub(crate) shooters: [[Shooter; SHOOTERS_PER_TASK]; TASK_CAP],
     pub(crate) alive: [u64; TASK_CAP / 64],
 }
 
 impl TaskPool {
-    /// 全零构造（供独立于 `World` 的单测使用；`World::new` 走 `alloc_zeroed`，不经此路）。
+    /// 空池构造（供独立于 `World` 的单测使用；`World::new` 走 `alloc_zeroed`，不经此路）。
+    ///
+    /// **注意 `shooters` 不是全零**（`Shooter::default()` 的 `n_angle/n_speed=1`、
+    /// `task_script=SH_NO_TASK`）⇒ 本构造与 `alloc_zeroed` 的世界**位模式不同**，`Task`
+    /// 那条"全零天然一致"不覆盖并行数组。这不影响任何语义：没有 `spawn` 过的槽的 shooter
+    /// 永远不被读（`spawn` 一律重置），两条路径下的活槽内容恒等。
     pub(crate) fn new() -> Self {
         TaskPool {
             slots: [Task::default(); TASK_CAP],
+            shooters: [[Shooter::default(); SHOOTERS_PER_TASK]; TASK_CAP],
             alive: [0; TASK_CAP / 64],
         }
     }
@@ -146,6 +158,9 @@ impl TaskPool {
                     calls: [0; CALL_DEPTH],
                     locals: [0; LOCALS],
                 };
+                // 复用槽写满：新任务的发射器一律回默认值。漏这步会让上一个任务的发射器
+                // 参数泄漏给新任务——而且因为校验和哈希全槽,泄漏值还会进校验和。
+                self.shooters[idx] = [Shooter::default(); SHOOTERS_PER_TASK];
                 return Some(idx as u16);
             }
         }
@@ -199,6 +214,7 @@ impl TaskPool {
     /// 快照拷贝（`copy_into` 家族，M0-15 同款：安全逐字段/整块 `copy_from_slice`）。
     pub(crate) fn copy_into(&self, dst: &mut TaskPool) {
         dst.slots.copy_from_slice(&self.slots);
+        dst.shooters.copy_from_slice(&self.shooters);
         dst.alive.copy_from_slice(&self.alive);
     }
 }
@@ -240,6 +256,35 @@ mod tests {
         let t2 = &p.slots[b as usize];
         assert_eq!(t2.parent, a + 1);
         assert_eq!(t2.born_frame, 11);
+    }
+
+    /// 「复用槽写满」纪律：`spawn` 必须把新任务的 4 个 shooter 写成默认值。
+    /// 判别腿是**先脏后建**——直接查一个刚 new 出来的池只能证明"全零构造对"，
+    /// 证不了"复用时会重置"。
+    #[test]
+    fn spawn_resets_all_shooters_of_the_reused_slot() {
+        use crate::ecl::shooter::Shooter;
+        use crate::math::Fx;
+
+        let mut p = TaskPool::new();
+        let h = p
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .unwrap();
+        // 弄脏这个槽的全部 4 个 shooter
+        for s in p.shooters[h as usize].iter_mut() {
+            s.n_angle = 99;
+            s.flags = 0xFF;
+            s.dist = Fx::from_int(7);
+        }
+        p.kill(h as usize);
+        // 复用同一个槽（最低空位分配 ⇒ 必然是它）
+        let h2 = p
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .unwrap();
+        assert_eq!(h2, h, "最低空位分配应复用同一槽");
+        for (k, s) in p.shooters[h2 as usize].iter().enumerate() {
+            assert_eq!(*s, Shooter::default(), "槽 {k} 未被重置为默认值");
+        }
     }
 
     #[test]

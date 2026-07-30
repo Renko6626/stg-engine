@@ -2142,11 +2142,22 @@ mod tests {
         // ——池内字段清单由 `define_pool!` 生成，非手写，无需同步；② checksum/④ SaveBytes
         // 同样走 `define_pool!` 的 derive（`[T; N]` 有泛型 impl），自动入；③ D10 容量预算
         // 不变（cap 仍 256，只是每槽宽了 3B）。
+        // 2026-07-31（shooter 刀 Task 1）：`TaskPool` 新增并行数组
+        // `shooters: [[Shooter; 4]; 256]`。`Shooter` = 44 B（`repr(C)`，6×Fx + 6×u16 +
+        // 4×u8，4 字节对齐紧排、无尾部 padding），44×4×256 = **+45056**，无对齐吸收
+        // （数组对齐 = Fx 的 4，`TaskPool` 本就 4 对齐）。**加在 `TaskPool` 而非
+        // `WorldBody`**（P1：world 不知道"任务"存在）⇒ 左值 970144 不动、右值
+        // 1084888→1129944，增量 1:1。① `copy_into` 手写清单**已同步**加
+        // `dst.shooters.copy_from_slice(...)`（`TaskPool::copy_into` 是手写的，正是本
+        // 哨兵盯的那种缝）；② checksum 走 `TaskPool` 的 derive + `[T; N]` 泛型 impl，
+        // 自动全量入（无 skip）；③ D10 容量预算：新增 45056 B/world，非池 cap 变更；
+        // ④ SaveBytes 同 ② 走 derive + 泛型 impl，自动入档 ⇒ 存档 wire format 变化，
+        // 故 `ENGINE_VER` 4→5（见 lib.rs）。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (970144, 1084888);
+        const EXPECTED: (usize, usize) = (970144, 1129944);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (970144, 1084888);
+        const EXPECTED: (usize, usize) = (970144, 1129944);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2175,10 +2186,11 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            4,
-            "bump 必须是有意识决定(评审 + 改本测试)——3→4：敌人死亡效果刀 T3,两条理由 \
-             ①syscall 号表新增 58-61(drop_clear/drop_add/drop_items/die) \
-             ②敌人池字段布局变更(drop_table:u16 → drop_count:[u8;5],T1)导致存档载荷编码变化"
+            5,
+            "bump 必须是有意识决定(评审 + 改本测试)——4→5：shooter 刀 T1,两条理由 \
+             ①syscall 号表将新增 62-76(sh_* 族 setter + sh_fire,T2/T3) \
+             ②TaskPool 布局变更(新增并行数组 shooters:[[Shooter;4];256],**本步就变了**)\
+             导致 SaveBytes 载荷编码变化"
         );
     }
 
