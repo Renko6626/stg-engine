@@ -131,6 +131,22 @@ pub const SYS_ADD_BOMBS: u16 = 56;
 /// = 显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 索引就 OOB（见
 /// `world::WorldBody::set_player_power` 文档）。增量形态同为人类裁定。
 pub const SYS_ADD_POWER: u16 = 57;
+/// 清空自身待掉落计数（58；0 参、无返回。敌人死亡效果刀，参照 ZUN ECL 的 `dropClear` 506）。
+/// self owner 必须是 ENEMY，否则 Fault（misuse 策略，同 `move_enemy_to`）。
+pub const SYS_DROP_CLEAR: u16 = 58;
+/// 给自身待掉落计数增量加 `n` 颗 `type`（59；2 参、无返回。参照 ZUN `dropExtra` 507）。
+/// **只增不减**是人类裁定——要清空用 `drop_clear()`。坏类型/负 n 的处置见
+/// [`crate::world::WorldBody::add_enemy_drop`]。
+pub const SYS_DROP_ADD: u16 = 59;
+/// 立刻把自身待掉落计数撒出去（60；0 参、无返回。参照 ZUN `dropItems` 509）。
+/// **吐完不清空**（人类裁定 D-3，照 ZUN 字面）——故 `drop_items(); die();` 掉**双份**，
+/// 作者自负。这条语义有测试钉死（`drop_items_does_not_clear_counts_...`），别"顺手修好"。
+pub const SYS_DROP_ITEMS: u16 = 60;
+/// 就地阵亡：跑完整死亡效果（61；0 参、无返回。参照 ZUN `die` 561）。
+/// **表层 `die()` 降低成本 syscall + `OP_KILL_SELF` 两条指令**（见 codegen），故调用它的
+/// 任务立即终止（人类裁定 D-4）。ZUN 的 561 还经 `setDeath`(556) 间接一层——那半留给
+/// `death_script` 通电那一刀，届时与 ZUN 完全同构。
+pub const SYS_DIE: u16 = 61;
 
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
@@ -389,6 +405,31 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             p.power = (p.power as i32)
                 .saturating_add(d)
                 .clamp(0, crate::items::POWER_MAX as i32) as u16;
+            Ok(())
+        }
+        // 敌人死亡效果四件（58-61）：一律经 `WorldBody` 的 handle 写 API（P1：调用方
+        // 永不直接摸池内存），self owner 必须是敌（misuse → Fault，同 `move_enemy_to`）。
+        SYS_DROP_CLEAR => {
+            let h = self_enemy_handle(task)?;
+            ctx.body.clear_enemy_drops(h);
+            Ok(())
+        }
+        SYS_DROP_ADD => {
+            let h = self_enemy_handle(task)?;
+            // 逆序弹出（模块文档"参数传递约定"）：`drop_add(type, n)` 故先 `n` 后 `type`。
+            let n = pop(task)?;
+            let item_type = pop(task)?;
+            ctx.body.add_enemy_drop(h, item_type, n);
+            Ok(())
+        }
+        SYS_DROP_ITEMS => {
+            let h = self_enemy_handle(task)?;
+            ctx.body.spill_enemy_drops(h, ctx.tables);
+            Ok(())
+        }
+        SYS_DIE => {
+            let h = self_enemy_handle(task)?;
+            ctx.body.kill_enemy_by_handle(h, ctx.tables);
             Ok(())
         }
         _ => Err(FAULT_BAD_OP),
@@ -2795,5 +2836,214 @@ mod tests {
         );
         assert!(call(&mut w, &ecl, &mut task, SYS_ADD_POWER, &[i32::MIN]).is_ok());
         assert_eq!(w.body.players[0].power, 0, "i32::MIN 应钳到 0");
+    }
+
+    // ── 敌人死亡效果四 syscall（58-61；敌人死亡效果刀 T3）────────────────────
+
+    /// 造一只 owner 敌 + 指向它的任务（掉落计数**空**——要灌表 1 用 `load_drop_table_1`）。
+    fn enemy_owner_task(w: &mut World, hp: i32, score: u16) -> (EnemyHandle, Task) {
+        let eh = crate::world::test_support::spawn_enemy(w, 0, 0, hp);
+        w.body.enemies.score[eh.index as usize] = score;
+        let task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        (eh, task)
+    }
+
+    /// 把内建掉落表 1 展开（`ITEM_POWER`×2 + `ITEM_POINT`×1 = **3 颗**）灌进敌的掉落计数。
+    fn load_drop_table_1(w: &mut World, eh: EnemyHandle) {
+        let (counts, ok) = crate::tables::drop_counts(&TABLES_V0, 1);
+        assert!(ok, "内建掉落表 1 必须存在");
+        assert_eq!(
+            counts.iter().map(|&n| n as u32).sum::<u32>(),
+            3,
+            "本组测试的 3 颗判别值依赖表 1 的内容"
+        );
+        w.body.enemies.drop_count[eh.index as usize] = counts;
+    }
+
+    /// D-3 判别腿：`drop_items()` 吐完**不清空**计数 → 再死一次会掉**双份**。
+    /// 这是人类裁定（spec §3 D-3），不是 bug——将来有人"顺手修好"成清零语义，这条会红。
+    #[test]
+    fn drop_items_does_not_clear_counts_so_dying_after_drops_twice() {
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 8888, 0);
+        load_drop_table_1(&mut w, eh);
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_DROP_ITEMS, &[]).is_ok());
+        assert_eq!(w.body.items.iter_alive().count(), 3, "表 1 展开 = 3 颗");
+
+        // 计数没被清空 —— 随后的死亡效果把同一批再撒一遍。
+        w.body.kill_enemy(eh.index as usize, &TABLES_V0);
+        assert_eq!(
+            w.body.items.iter_alive().count(),
+            6,
+            "吐完不清空（人类裁定 D-3）：`drop_items(); die();` 掉双份，作者自负"
+        );
+    }
+
+    /// `die()` 走**完整**死亡效果：四件齐。判别腿——只标 dying 不跑效果的实现会红。
+    #[test]
+    fn die_runs_the_full_death_effect() {
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 8888, 100);
+        load_drop_table_1(&mut w, eh);
+        let score_before = w.body.players[0].score;
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_DIE, &[]).is_ok());
+
+        let i = eh.index as usize;
+        assert_eq!(w.body.items.iter_alive().count(), 3, "掉落");
+        assert_eq!(
+            w.body.players[0].score,
+            score_before + 100,
+            "加分（测试内不拾取道具，故这 100 只能来自 enemies.score）"
+        );
+        assert!(
+            w.body
+                .frame_events()
+                .iter()
+                .any(|e| e.kind == crate::events::EVT_ENEMY_DIED),
+            "死亡事件"
+        );
+        assert_ne!(
+            w.body.enemies.flags[i] & crate::enemy::ENEMY_DYING,
+            0,
+            "dying 标记"
+        );
+        let reqs = w.body.take_requests();
+        assert!(
+            reqs.iter().any(|r| r.id == crate::consts::REQ_ENEMY_DEATH),
+            "死亡特效请求"
+        );
+    }
+
+    /// `die()` 打**满血** boss → hp 归 0（不是留在 8888）。
+    /// 防"HUD 当帧显示满血死人"；这也是 `min(0)` 与"什么都不做"的判别点。
+    #[test]
+    fn die_on_full_hp_enemy_zeroes_hp() {
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 8888, 0);
+        let i = eh.index as usize;
+        assert_eq!(w.body.enemies.hp_max[i], 8888, "前提：满血");
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_DIE, &[]).is_ok());
+        assert_eq!(w.body.enemies.hp[i], 0, "满血 die → hp 压到 0");
+
+        // 反向腿：overkill 打成的负血不得被抹平（负值可观测性是
+        // `settle_overkill_two_shots_one_death_event` 的依赖）——证明用的是 `min(0)`
+        // 而不是无条件置 0。
+        let (eh2, _t2) = enemy_owner_task(&mut w, 10, 0);
+        let j = eh2.index as usize;
+        w.body.enemies.hp[j] = -5;
+        w.body.kill_enemy(j, &TABLES_V0);
+        assert_eq!(w.body.enemies.hp[j], -5, "min(0) 而非无条件置 0");
+    }
+
+    /// `drop_clear()` 清空计数 → 随后的死亡效果一颗都不掉（`clear_enemy_drops` 的正腿；
+    /// 七条钉裁定的测试里只有 misuse 腿碰过 `SYS_DROP_CLEAR`，那条不区分"清空"与"no-op"）。
+    #[test]
+    fn drop_clear_zeroes_counts_so_death_drops_nothing() {
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 8888, 0);
+        load_drop_table_1(&mut w, eh);
+
+        assert!(call(&mut w, &ecl, &mut task, SYS_DROP_CLEAR, &[]).is_ok());
+        assert_eq!(
+            w.body.enemies.drop_count[eh.index as usize],
+            [0; crate::items::ITEM_TYPE_COUNT]
+        );
+        w.body.kill_enemy(eh.index as usize, &TABLES_V0);
+        assert_eq!(w.body.items.iter_alive().count(), 0, "清空后死亡不掉落");
+    }
+
+    /// P4-b：`drop_add` 坏类型（≥ `ITEM_TYPE_COUNT` / 负数）→ no-op + contract_viol，无掉落。
+    #[test]
+    fn drop_add_bad_type_degrades_and_counts() {
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 8888, 0);
+        let i = eh.index as usize;
+        let viol0 = w.body.diag.contract_viol;
+
+        // 腿一：越界正数类型（正序参 `type, n`——`n=3` 是合法类型号，故写反弹出顺序时
+        // 这条会把 3 当类型写进 `drop_count[3]`，被下面的全零断言逮住）。
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_DROP_ADD,
+                &[crate::items::ITEM_TYPE_COUNT as i32, 3]
+            )
+            .is_ok(),
+            "坏类型是 P4-b 降级，不 Fault"
+        );
+        // 腿二：负数类型
+        assert!(call(&mut w, &ecl, &mut task, SYS_DROP_ADD, &[-1, 3]).is_ok());
+
+        assert_eq!(
+            w.body.enemies.drop_count[i],
+            [0; crate::items::ITEM_TYPE_COUNT],
+            "两条坏类型腿都必须 no-op"
+        );
+        assert_eq!(
+            w.body.diag.contract_viol,
+            viol0 + 2,
+            "各计一次 contract_viol"
+        );
+        w.body.kill_enemy(i, &TABLES_V0);
+        assert_eq!(w.body.items.iter_alive().count(), 0, "无掉落");
+    }
+
+    /// P4-b：`drop_add` 的 n 为负或巨大 → 钳位后饱和，不 panic 不回绕。
+    /// `n = -5` → 计数不变（视同 0）；`n = i32::MAX` → 计数封顶 255。
+    #[test]
+    fn drop_add_clamps_and_saturates_n() {
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 8888, 0);
+        let i = eh.index as usize;
+        let ty = crate::items::ITEM_POINT as i32;
+        let slot = crate::items::ITEM_POINT as usize;
+
+        // 负 n 视同 0（本刀不做"减掉落"；只饱和不钳的实现会让 `-5 as u8` 回绕成 251）。
+        assert!(call(&mut w, &ecl, &mut task, SYS_DROP_ADD, &[ty, -5]).is_ok());
+        assert_eq!(w.body.enemies.drop_count[i][slot], 0, "负 n 视同 0");
+
+        // 增量语义：两次调用累加，不是覆盖。
+        assert!(call(&mut w, &ecl, &mut task, SYS_DROP_ADD, &[ty, 2]).is_ok());
+        assert!(call(&mut w, &ecl, &mut task, SYS_DROP_ADD, &[ty, 3]).is_ok());
+        assert_eq!(w.body.enemies.drop_count[i][slot], 5, "增量累加");
+
+        // 巨大 n：先钳 [0,255] 再 saturating_add —— 不 panic、不回绕。
+        assert!(call(&mut w, &ecl, &mut task, SYS_DROP_ADD, &[ty, i32::MAX]).is_ok());
+        assert_eq!(w.body.enemies.drop_count[i][slot], 255, "封顶 255");
+        // 已封顶再加仍是 255（饱和，非回绕）——只钳不饱和会在这里溢出 panic。
+        assert!(call(&mut w, &ecl, &mut task, SYS_DROP_ADD, &[ty, 200]).is_ok());
+        assert_eq!(w.body.enemies.drop_count[i][slot], 255, "饱和不回绕");
+    }
+
+    /// misuse：非 enemy-owner 调这四个 → Fault（照 `self_enemy_handle` 既有口径）。
+    #[test]
+    fn drop_and_die_syscalls_fault_for_non_enemy_owner() {
+        let (mut w, ecl) = fresh();
+        for (no, args) in [
+            (SYS_DROP_CLEAR, &[][..]),
+            (SYS_DROP_ADD, &[0, 1][..]),
+            (SYS_DROP_ITEMS, &[][..]),
+            (SYS_DIE, &[][..]),
+        ] {
+            let mut task = Task {
+                owner_kind: OWNER_STAGE,
+                ..Task::default()
+            };
+            assert_eq!(
+                call(&mut w, &ecl, &mut task, no, args),
+                Err(FAULT_BAD_OP),
+                "syscall {no} 的非敌 owner 腿"
+            );
+        }
     }
 }

@@ -339,7 +339,8 @@ impl WorldTables {
         }
         // join 校验（防 FM1）：每个 ② 表符号 id 必须是 appearances 的合法行。**② 段自
         // 颜色轴刀（2026-07-26）起为空**（弹型名归内容包），故本循环当前不执行；机制保留
-        // ——② 段将来重新长出行（如道具类型符号）时自动生效，届时按 tag 分流。
+        // ——② 段将来重新长出**可加载表行**的符号时自动生效，届时按 tag 分流。
+        // （道具类型符号不是那种行，它们在 ① 段——理由见 `consts.rs` ② 段注释。）
         for c in crate::consts::TABLE_SYMBOLS {
             if (c.value as usize) >= self.appearances.len() {
                 return false;

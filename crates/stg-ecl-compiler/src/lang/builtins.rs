@@ -488,6 +488,43 @@ const BUILTINS: &[Builtin] = &[
         doc: "增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout",
         param_names: &["delta"],
     },
+    // ── 敌人死亡效果（syscall 58-61；参照 ZUN ECL 506/507/509/561）───────────
+    Builtin {
+        name: "drop_clear",
+        syscall: syscall::SYS_DROP_CLEAR,
+        is_op: false,
+        params: &[],
+        ret: None,
+        doc: "清空自身待掉落计数;self 必须是敌",
+        param_names: &[],
+    },
+    Builtin {
+        name: "drop_add",
+        syscall: syscall::SYS_DROP_ADD,
+        is_op: false,
+        params: &[Val(Int), Val(Int)],
+        ret: None,
+        doc: "自身待掉落计数增量加 n 颗 type(只增不减,要清空用 drop_clear);计数上限 255 饱和",
+        param_names: &["type", "n"],
+    },
+    Builtin {
+        name: "drop_items",
+        syscall: syscall::SYS_DROP_ITEMS,
+        is_op: false,
+        params: &[],
+        ret: None,
+        doc: "立刻撒出自身待掉落计数;**吐完不清空**(故 drop_items();die(); 掉双份);不加分不发死亡事件",
+        param_names: &[],
+    },
+    Builtin {
+        name: "die",
+        syscall: syscall::SYS_DIE,
+        is_op: false,
+        params: &[],
+        ret: None,
+        doc: "就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)",
+        param_names: &[],
+    },
 ];
 
 /// 按名字查内建函数（线性扫描；表 <30 项，`lang::typeck` 每次 `Call` 判型调用一次）。
@@ -593,6 +630,10 @@ mod tests {
             "add_lives",
             "add_bombs",
             "add_power",
+            "drop_clear",
+            "drop_add",
+            "drop_items",
+            "die",
         ];
         for n in names {
             assert!(lookup(n).is_some(), "内建函数 '{n}' 应在表中");
@@ -764,6 +805,10 @@ mod tests {
             "add_lives",
             "add_bombs",
             "add_power",
+            "drop_clear",
+            "drop_add",
+            "drop_items",
+            "die",
         ] {
             assert_eq!(lookup(n).unwrap().ret, None, "'{n}' 应无返回值");
         }

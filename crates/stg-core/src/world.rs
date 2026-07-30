@@ -509,6 +509,61 @@ impl WorldBody {
         self.enemies.mv_active[i] = 1;
     }
 
+    /// 清空敌人的待掉落计数（敌人死亡效果刀）。P4-b：悬垂 → no-op + 计数。
+    pub fn clear_enemy_drops(&mut self, h: EnemyHandle) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        self.enemies.drop_count[i] = [0; crate::items::ITEM_TYPE_COUNT];
+    }
+
+    /// 给敌人的待掉落计数**增量**加 `n` 颗 `item_type`（敌人死亡效果刀）。
+    ///
+    /// P4-b 三处：悬垂 → no-op + 计数；`item_type` 越界 → no-op + 计数；
+    /// `n` 先钳进 `[0, u8::MAX]` 再对计数 `saturating_add`。**两步都要**——只钳不饱和会在
+    /// 计数接近 255 时溢出（debug 下 panic），只饱和不钳则负数 `as u8` 会回绕成大正数。
+    /// 本刀不做"减掉落"，故负 `n` 视同 0（要清空用 [`WorldBody::clear_enemy_drops`]）。
+    pub fn add_enemy_drop(&mut self, h: EnemyHandle, item_type: i32, n: i32) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        if item_type < 0 || item_type as usize >= crate::items::ITEM_TYPE_COUNT {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return;
+        }
+        let add = n.clamp(0, u8::MAX as i32) as u8;
+        let slot = &mut self.enemies.drop_count[i][item_type as usize];
+        *slot = slot.saturating_add(add);
+    }
+
+    /// 脚本显式撒掉落（敌人死亡效果刀）。**不清零、不加分、不发事件**（人类裁定 D-3）。
+    /// **不设 dying 门禁**——对已 dying 的敌照撒不误（与 `kill_enemy` 的幂等门禁不同）。
+    /// P4-b：悬垂 → no-op + 计数。
+    pub fn spill_enemy_drops(&mut self, h: EnemyHandle, tables: &crate::tables::WorldTables) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        self.spill_drops(i, tables);
+    }
+
+    /// 脚本显式触发敌人的完整死亡效果（敌人死亡效果刀）。幂等（已 dying → no-op）。
+    /// P4-b：悬垂 → no-op + 计数。
+    pub fn kill_enemy_by_handle(&mut self, h: EnemyHandle, tables: &crate::tables::WorldTables) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        self.kill_enemy(i, tables);
+    }
+
     /// 创建一个作用区（P4-a：池满 → NULL + 计数；P4-b：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]` + 计数）。
     pub fn create_field(&mut self, mut init: FieldInit) -> FieldHandle {
         // P4-b：调用方违约 → 确定性安全结果。与 create_bullet/create_enemy/create_player_shot
@@ -1653,6 +1708,43 @@ mod tests {
             dst.body.take_requests().is_empty(),
             "恢复出的 World 必须无陈旧通道 B 输出（同 hits/events 契约，见 step.rs copy_into 注释）"
         );
+    }
+
+    /// P4-b：死亡效果四写 API 的悬垂句柄腿——各自 no-op + `contract_viol` +
+    /// `STATUS_STALE_HANDLE`（照 `move_to_bad_args_contract` 口径）。四条分开跑，
+    /// 免得某一个漏写 guard 被另一个的计数掩盖。
+    #[test]
+    fn enemy_drop_and_kill_apis_degrade_on_stale_handle() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        w.body.enemies.free(h);
+
+        let mut expect = w.body.diag.contract_viol;
+        let mut check = |w: &mut crate::step::World, what: &str| {
+            expect += 1;
+            assert_eq!(w.body.diag.contract_viol, expect, "{what} 应计一次 viol");
+            assert_eq!(
+                w.body.last_status,
+                crate::world::STATUS_STALE_HANDLE,
+                "{what} 的 last_status"
+            );
+        };
+
+        w.body.clear_enemy_drops(h);
+        check(&mut w, "clear_enemy_drops");
+        w.body.add_enemy_drop(h, crate::items::ITEM_POINT as i32, 1);
+        check(&mut w, "add_enemy_drop");
+        w.body.spill_enemy_drops(h, &crate::tables::TABLES_V0);
+        check(&mut w, "spill_enemy_drops");
+        w.body.kill_enemy_by_handle(h, &crate::tables::TABLES_V0);
+        check(&mut w, "kill_enemy_by_handle");
+
+        assert_eq!(
+            w.body.items.iter_alive().count(),
+            0,
+            "悬垂句柄不得撒出任何道具"
+        );
+        assert!(w.body.frame_events().is_empty(), "悬垂句柄不得发死亡事件");
     }
 
     #[test]

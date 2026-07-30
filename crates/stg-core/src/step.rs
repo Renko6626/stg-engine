@@ -2175,9 +2175,10 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            3,
-            "bump 必须是有意识决定(评审 + 改本测试)——2→3：ECL parity 刀 Task 2 新增 \
-             SYS_CLEAR_BULLETS(54)"
+            4,
+            "bump 必须是有意识决定(评审 + 改本测试)——3→4：敌人死亡效果刀 T3,两条理由 \
+             ①syscall 号表新增 58-61(drop_clear/drop_add/drop_items/die) \
+             ②敌人池字段布局变更(drop_table:u16 → drop_count:[u8;5],T1)导致存档载荷编码变化"
         );
     }
 

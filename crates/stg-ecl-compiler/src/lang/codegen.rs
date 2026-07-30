@@ -122,6 +122,12 @@ fn is_self_bullet_setter(name: &str) -> bool {
     )
 }
 
+/// 降低后要追发 `OP_KILL_SELF` 的内建（当前仅 `die`）。名字键控，与
+/// [`is_self_bullet_setter`] 同款——集中在一处，免得散落在 `gen_builtin_call` 里。
+fn emits_kill_self_after(name: &str) -> bool {
+    name == "die"
+}
+
 /// 循环栈簿记（clox 惯用法）：`break`/`continue` 各自的跳转占位位置列表，循环结构生成
 /// 完毕、`continue`/`break` 的真实目标（本地 code 位置）已知后统一回填。
 #[derive(Default)]
@@ -771,6 +777,13 @@ impl<'p> Gen<'p> {
             b.raw_emit_op(bi.syscall as u8);
         } else {
             b.sys(bi.syscall);
+            if emits_kill_self_after(bi.name) {
+                // `die()` 降低成两条指令：`SYS(SYS_DIE)` 跑死亡效果，`OP_KILL_SELF` 终止本
+                // 任务（人类裁定 D-4）。这样做是因为 `syscall::dispatch` 的签名是
+                // `Result<(), u8>`，没有"结束本任务"的返回通道——与其给六十个 match arm
+                // 换返回类型，不如在这里发第二条指令（零 VM 改动、零 op 表改动）。
+                b.raw_emit_op(stg_core::ecl::ops::OP_KILL_SELF);
+            }
         }
     }
 }
@@ -1709,5 +1722,46 @@ mod tests {
         assert_eq!((reqs[0].id, reqs[0].seq), (64, 0));
         assert_eq!(reqs[0].args, [98304, -3, 16384, 5, 0, 0]);
         assert_eq!(w.body.view().diag().task_faults, 0);
+    }
+
+    // ── 敌人死亡效果：`die()` 的两指令降低（T3；人类裁定 D-4）────────────────
+
+    /// D-4 判别腿：`die()` 立即终止调用它的任务——后续语句不执行。
+    ///
+    /// **必须走真编译产物**：`die()` 降低成 `SYS(SYS_DIE)` + `OP_KILL_SELF` 两条指令是
+    /// **编译器**的事，手拼字节码时作者自己会记得发 `OP_KILL_SELF`，那就测不到"编译器
+    /// 有没有发它"。故本测试住这里（有编译 + 跑真世界的现成脚手架），不住 `syscall.rs`。
+    ///
+    /// 两条断言缺一不可：
+    /// - `globals[21] != 777` —— 后续语句没跑（若 codegen 漏发 `OP_KILL_SELF`，任务继续
+    ///   执行到 `set_global`，这条立刻红）；
+    /// - 通道 B 有 `REQ_ENEMY_DEATH` —— `die()` 本身真生效了，排除"根本没执行到 die"的
+    ///   假绿。**不能用"敌没了"当判据**：`on_enemy` 是这只敌的 main_task，即便 `die()`
+    ///   从未执行，主协程自然返回也会触发 D9 自燃把敌收走——但自燃是**静默退场**，
+    ///   不掉道具不加分**不发这条请求**，故请求的有无恰好把两条路径分开。
+    #[test]
+    fn die_terminates_the_calling_task_immediately() {
+        let src = "sub main() {\n\
+                     _ = spawn_enemy(0.0fx, 96.0fx, 100, 1, 500, 3, on_enemy);\n\
+                     loop { wait(1); }\n\
+                   }\n\
+                   async sub on_enemy() {\n\
+                     die();\n\
+                     set_global(21, 777);\n\
+                   }";
+        // 帧序：0=main 出生跳过；1=main 首跑（spawn_enemy 挂 on_enemy）；2=on_enemy 首跑。
+        let w = run(src, 3);
+        assert_ne!(
+            w.body.view().globals()[21],
+            777,
+            "die() 之后的语句不得执行（codegen 漏发 OP_KILL_SELF 就会执行）"
+        );
+        assert_eq!(w.body.view().diag().task_faults, 0);
+        let reqs = w.body.take_requests();
+        assert!(
+            reqs.iter()
+                .any(|r| r.id == stg_core::consts::REQ_ENEMY_DEATH),
+            "die() 本身必须生效（D9 自燃是静默退场、不发 REQ_ENEMY_DEATH）"
+        );
     }
 }

@@ -64,12 +64,26 @@ engine_consts! {
         REQ_BG:              u16 as int = 6;
         REQ_BG_PHASE:        u16 as int = 7;
         REQ_SCRIPT_BASE:     u16 as int = 64;
+        //  道具类型编号（`items.rs` 冻结编号；`drop_add` 的第 1 参）。**放①不放②**：
+        //  ②段 join 校验（`tables.rs`）是用来抓"符号 vs 可加载表行"漂移的，而
+        //  `item_cfg: [ItemTypeCfg; ITEM_TYPE_COUNT]` 是定长数组、类型数编译期冻结，
+        //  没有可抓的漂移。
+        ITEM_POWER:          u8 as int = crate::items::ITEM_POWER;
+        ITEM_POINT:          u8 as int = crate::items::ITEM_POINT;
+        ITEM_LIFE_PIECE:     u8 as int = crate::items::ITEM_LIFE_PIECE;
+        ITEM_BOMB_PIECE:     u8 as int = crate::items::ITEM_BOMB_PIECE;
+        ITEM_STAR:           u8 as int = crate::items::ITEM_STAR;
     }
     //  ② 段目前**空**（颜色轴刀 2026-07-26）：弹型名/色名归**内容包**——由各内容包
     //  自己的 `.ecl` 用 `const` 声明（内建 demo 的一份见 `godot/ecl/demo/bullets.ecl`），
     //  mod 作者与内建内容地位对等，引擎不再替某一份内容包注册词汇。段本身保留：
-    //  机制（宏分段 + `validate` 的 join 校验）仍在，将来真有"引擎必须知道名字"的表行
-    //  （如道具类型符号）时直接加行即可。
+    //  机制（宏分段 + `validate` 的 join 校验）仍在，将来真有"引擎必须知道名字"的
+    //  **可加载表行**时直接加行即可。
+    //
+    //  **道具类型符号不是那种行**（敌人死亡效果刀 T3 评估）：它们进的是 ① 段——
+    //  `item_cfg` 是定长数组、类型数编译期冻结，②段的 join 校验没有可抓的漂移；
+    //  而且当前 join 硬编码校验对象是 `appearances`，放 ② 只会得到一个拿
+    //  `appearances.len()` 校验道具 id 的假检查。
     table_symbols {}
 }
 
