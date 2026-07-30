@@ -525,11 +525,11 @@ const BUILTINS: &[Builtin] = &[
         doc: "就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)",
         param_names: &[],
     },
-    // ── Shooter：预存发射参数集（syscall 62-75；参照 ZUN et* 族 600-641）───────
-    //    `sh_reset` 重置编号槽 → 一堆以 `id` 打头的 setter 逐项配 → 开火。改一个字段
-    //    再开一次火就是下一波。每任务 4 个槽（id ∈ 0..4），槽号越界一律 no-op+计数。
-    //    **这 14 条只写字段、无副作用**：appearance 在册/xform 区间/sub 号在册的校验
-    //    全部推迟到开火那一刻（设参数时弹还不存在，没有可拒绝的对象）。
+    // ── Shooter：预存发射参数集（syscall 62-76；参照 ZUN et* 族 600-641）───────
+    //    `sh_reset` 重置编号槽 → 一堆以 `id` 打头的 setter 逐项配 → `sh_fire(id)` 开火。
+    //    改一个字段再开一次火就是下一波。每任务 4 个槽（id ∈ 0..4），槽号越界一律 no-op+计数。
+    //    **前 14 条只写字段、无副作用**：appearance 在册/xform 区间/sub 号在册的校验
+    //    全部推迟到 `sh_fire` 那一刻（设参数时弹还不存在，没有可拒绝的对象）。
     Builtin {
         name: "sh_reset",
         syscall: syscall::SYS_SH_RESET,
@@ -657,6 +657,17 @@ const BUILTINS: &[Builtin] = &[
         ret: None,
         doc: "设开火时顺带发的通道 B 请求 id(音效等);0 = 不发",
         param_names: &["id", "req_id"],
+    },
+    Builtin {
+        name: "sh_fire",
+        syscall: syscall::SYS_SH_FIRE,
+        is_op: false,
+        params: &[Val(Int)],
+        // **无返回值是人类裁定 D-8**：本语言要求值必须消费,有返回值就得写
+        // `_ = sh_fire(0);`,而开火是循环里最高频的语句。别"补全"成返回实发数。
+        ret: None,
+        doc: "用发射器槽 id 的参数开火;无返回值;池满走 P4-a 计数",
+        param_names: &["id"],
     },
 ];
 
@@ -797,6 +808,7 @@ mod tests {
             "sh_xform",
             "sh_task",
             "sh_req",
+            "sh_fire",
         ];
         for n in names {
             assert!(lookup(n).is_some(), "内建函数 '{n}' 应在表中");
@@ -996,6 +1008,7 @@ mod tests {
             "sh_xform",
             "sh_task",
             "sh_req",
+            "sh_fire",
         ] {
             assert_eq!(lookup(n).unwrap().ret, None, "'{n}' 应无返回值");
         }

@@ -53,6 +53,7 @@
     {"name": "sh_ring", "signature": "sh_ring(id: int, on: int)", "ret": null, "doc": "开/关整周环(on!=0 为开):开则 n_angle 颗自动均分整周;关则是以基准方向为中心对称展开的 fan", "params": [{"name": "id", "ty": "int"}, {"name": "on", "ty": "int"}]},
     {"name": "sh_xform", "signature": "sh_xform(id: int, xf: xform|none)", "ret": null, "doc": "给发射器挂 xformdef(名或 none);开火时每颗弹都带上", "params": [{"name": "id", "ty": "int"}, {"name": "xf", "ty": "xform|none"}]},
     {"name": "sh_task", "signature": "sh_task(id: int, sub: sub|none)", "ret": null, "doc": "给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹", "params": [{"name": "id", "ty": "int"}, {"name": "sub", "ty": "sub|none"}]},
-    {"name": "sh_req", "signature": "sh_req(id: int, req_id: int)", "ret": null, "doc": "设开火时顺带发的通道 B 请求 id(音效等);0 = 不发", "params": [{"name": "id", "ty": "int"}, {"name": "req_id", "ty": "int"}]}
+    {"name": "sh_req", "signature": "sh_req(id: int, req_id: int)", "ret": null, "doc": "设开火时顺带发的通道 B 请求 id(音效等);0 = 不发", "params": [{"name": "id", "ty": "int"}, {"name": "req_id", "ty": "int"}]},
+    {"name": "sh_fire", "signature": "sh_fire(id: int)", "ret": null, "doc": "用发射器槽 id 的参数开火;无返回值;池满走 P4-a 计数", "params": [{"name": "id", "ty": "int"}]}
   ]
 }

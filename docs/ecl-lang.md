@@ -379,6 +379,7 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `sh_xform(id: int, xf: xform|none)` — 给发射器挂 xformdef(名或 none);开火时每颗弹都带上
 - `sh_task(id: int, sub: sub|none)` — 给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹
 - `sh_req(id: int, req_id: int)` — 设开火时顺带发的通道 B 请求 id(音效等);0 = 不发
+- `sh_fire(id: int)` — 用发射器槽 id 的参数开火;无返回值;池满走 P4-a 计数
 <!-- gen:builtins:end -->
 
 > **弹 setter 族的 handle 参数是陷阱位**（`set_speed`/`set_angle`/`turn`/`set_vel`/

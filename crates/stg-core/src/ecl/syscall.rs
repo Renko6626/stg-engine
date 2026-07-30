@@ -155,9 +155,9 @@ pub const SYS_DIE: u16 = 61;
 //
 // 每任务 4 个编号槽（[`crate::ecl::shooter::SHOOTERS_PER_TASK`]）。`id ≥ SHOOTERS_PER_TASK`
 // 一律 no-op + `contract_viol`（P4-b）——不 Fault，因为"槽号写错"是常见笔误而非结构性违约，
-// 降级比杀任务更有用。判据集中在 [`shooter_mut`] 一处，14 个派发臂共用。
+// 降级比杀任务更有用。判据集中在 [`shooter_mut`] 一处，15 个派发臂共用（`sh_fire` 同口径）。
 //
-// 下面 14 条**都只是写字段，无副作用**：不查 appearance 是否在册、不查 xform 区间、不查
+// 下面**前 14 条**都只是写字段、无副作用：不查 appearance 是否在册、不查 xform 区间、不查
 // sub 号在册——那些校验统一在**开火那一刻**做（同 `fire` 的"先验后建"口径：设参数时弹还
 // 不存在，没有可拒绝的对象）。`sh_fire`(76) 的语义见其自身文档。
 pub const SYS_SH_RESET: u16 = 62;
@@ -174,6 +174,14 @@ pub const SYS_SH_RING: u16 = 72;
 pub const SYS_SH_XFORM: u16 = 73;
 pub const SYS_SH_TASK: u16 = 74;
 pub const SYS_SH_REQ: u16 = 75;
+/// 开火（76）：用发射器槽 `id` 的参数造弹。**无返回值**（人类裁定 D-8——本语言要求值必须
+/// 消费，有返回值就得写 `_ = sh_fire(0);`，而开火是循环里最高频的语句）。
+///
+/// 七步见 spec §10。要点三条，都有判别式测试钉着，**别"顺手改好"**：
+/// - **fan 以基准方向为中心对称展开**（D-7）；ring 不居中。
+/// - `dist` 逐颗沿**各自**角度位移，不是整环平移。
+/// - 直角偏移与极坐标偏移**相加**（ZUN 626 明写 stacks），不是覆盖。
+pub const SYS_SH_FIRE: u16 = 76;
 
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
@@ -638,8 +646,221 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             }
             Ok(())
         }
+        SYS_SH_FIRE => sys_sh_fire(task, ctx),
         _ => Err(FAULT_BAD_OP),
     }
+}
+
+/// 开火（SYS 76）：按 spec §10 的七步用发射器槽 `id` 的参数造弹。1 参、**无返回值**。
+///
+/// **为什么开火循环住这儿而不是扩 `create_bullets_batch`**：P1——world 不知道"任务"存在，
+/// 没法逐颗挂 `task_script`（`fire` 的挂任务也因此发生在 ECL 层）。代价是网格循环有了
+/// 第二份实现，故 `shooter_fan_matches_batch_with_centering_compensation` 那条等价测试
+/// 是**必需**而非顺带的。
+///
+/// 校验序照抄 `sys_create_bullet` 的"先验后建"：退化网格（P4-b no-op）→ appearance
+/// （Fault）→ xform 区间（Fault）→ 挂弹任务号（Fault）——一切拒绝都发生在任何世界写之前。
+fn sys_sh_fire(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let id = pop(task)?;
+    // 先取一份**拷贝**：后面要可变借用 `ctx.body`/`ctx.tasks` 建弹派任务，不能持着
+    // `shooters` 的引用。顺带一层安全网——`tasks.spawn` 的"复用槽写满"会把新槽的
+    // shooter 抹成默认，拿引用读到一半被抹是个隐蔽的自伤。
+    let Some(sh) = shooter_mut(id, ctx.self_index, ctx).map(|s| *s) else {
+        return Ok(()); // 越界 id：`shooter_mut` 已记 contract_viol + BAD_ARGS（P4-b）
+    };
+
+    // ① 退化网格（对齐 `create_bullets_batch` 的既有口径：不发 + contract_viol，不 Fault）。
+    let total = sh.n_angle as u32 * sh.n_speed as u32;
+    if sh.n_angle == 0 || sh.n_speed == 0 || total > crate::bullets::BulletPool::CAP as u32 {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+        ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+        return Ok(());
+    }
+
+    // ② 外观：越界/空格一律拒（同 `fire`——放行会造出"有判定但画面上什么都没有"的隐形弹，
+    //    而校验和不关心贴图内容，金向量/冒烟都抓不到它）。T2 的 `sh_sprite` 收窄之所以
+    //    必须保号越界性，就是为了让这一步还拒得掉。
+    let tables = ctx.tables;
+    let Some(cfg) = tables.appearances.get(sh.appearance as usize) else {
+        return Err(FAULT_BAD_OP);
+    };
+    if !cfg.valid {
+        return Err(FAULT_BAD_OP);
+    }
+    let (sprite, radius) = (cfg.sprite, cfg.radius);
+
+    // ③ xform 解包（照抄 `sys_create_bullet` 的 LOCALS 边界校验与解包循环）。数据住
+    //    **本任务的 locals**，由 codegen 在 sub 入口一次性 staging、`slots` 的调用图着色
+    //    保证区间不被复用 ⇒ 存 `(off, cnt)`、开火时才读是安全的（跨帧亦然，有测试钉着）。
+    //    存储侧已是 u8/u16，负值不可达；只剩长度与区间两条。
+    let mut xform_buf = [XformSlot::default(); 16];
+    let xform_len: usize = if sh.xform_cnt == 0 {
+        0
+    } else {
+        let cnt = sh.xform_cnt as usize;
+        if cnt > 16 {
+            return Err(FAULT_BAD_OP);
+        }
+        let off = sh.xform_off as usize;
+        let Some(end) = off.checked_add(cnt * 3) else {
+            return Err(FAULT_BAD_OP);
+        };
+        if end > LOCALS {
+            return Err(FAULT_BAD_OP);
+        }
+        for (k, slot) in xform_buf.iter_mut().take(cnt).enumerate() {
+            let base = off + k * 3;
+            let word0 = task.locals[base] as u32;
+            *slot = XformSlot {
+                wait: (word0 >> 16) as u16,
+                op: ((word0 >> 8) & 0xFF) as u8,
+                _pad: 0,
+                args: [task.locals[base + 1], task.locals[base + 2]],
+            };
+        }
+        cnt
+    };
+
+    // ④ 挂弹任务号先验（照抄 `sys_create_bullet`：坏号 → Fault，零副作用，弹未建）。
+    let task_sub: Option<SubId> = if sh.task_script == SH_NO_TASK {
+        None
+    } else {
+        let sub = ctx.ecl.sub_id(sh.task_script).ok_or(FAULT_BAD_OP)?;
+        let meta = ctx.ecl.sub_meta(sub).ok_or(FAULT_BAD_OP)?;
+        if meta.kind() != SubKind::Async
+            || ctx
+                .ecl
+                .param_types(sub)
+                .is_none_or(|params| !params.is_empty())
+        {
+            return Err(FAULT_BAD_OP);
+        }
+        Some(sub)
+    };
+
+    // ⑤ 原点（spec §10 步 2）：直角偏移与极坐标偏移**相加**（ZUN 626 明写 stacks），
+    //    不是覆盖——判别腿见 `rect_and_polar_offsets_stack_rather_than_override`。
+    let (bx, by) = if sh.flags & SH_ABS_OFFSET != 0 {
+        (Fx::ZERO, Fx::ZERO)
+    } else {
+        self_pos(task, ctx)
+    };
+    let (px, py) = polar_to_vec(sh.polar_r, sh.polar_ang);
+    let origin_x = bx + sh.off_x + px;
+    let origin_y = by + sh.off_y + py;
+
+    // ⑥ 基准角（spec §10 步 3）——**在这一刻**解析 aim（无存活自机时的取值沿用既有
+    //    `aim_player` 口径：直接对 `players[0]` 求 atan2，不另立规矩）。
+    //    角度算术一律在 `i32` 里做、最后才回绕成 `Angle`（`Angle` 底层 u16，直接加会在
+    //    debug 触发 overflow-checks）。
+    let base: i32 = if sh.flags & SH_AIMED != 0 {
+        let a = crate::math::cordic::atan2(
+            ctx.body.players[0].y - origin_y,
+            ctx.body.players[0].x - origin_x,
+        );
+        a.raw() as i32 + sh.angle0.raw() as i32
+    } else {
+        sh.angle0.raw() as i32
+    };
+
+    // ⑦ 网格：角度外层、速度内层（照抄 `create_bullets_batch` 的序 = 池槽分配序，I4）。
+    //    fan  以基准方向为**中心**对称展开（D-7）：angle_i = base + i·step − ((n−1)·step)/2
+    //    ring 不居中、逐颗算 (i×65536)/n 把余数**均摊**（精确闭合；`i ≤ 254` 故 i32 不溢出）
+    //         且 `angle_step` 转义成**逐层**偏移。
+    let ring = sh.flags & SH_RING != 0;
+    let n_angle = sh.n_angle as i32;
+    let step = sh.angle_step.raw() as i32;
+    // 奇数路时 (n−1) 为偶数、除 2 精确；偶数路截断半个 BAM 单位（1/65536 圈，确定且可忽略）。
+    let fan_center = ((n_angle - 1) * step) / 2;
+    let mut created: u32 = 0;
+    'grid: for i in 0..n_angle {
+        let mut cur_speed = sh.speed0;
+        for j in 0..sh.n_speed as i32 {
+            let raw = if ring {
+                base + (i * 65536) / n_angle + j * step
+            } else {
+                base + i * step - fan_center
+            };
+            let angle = Angle((raw as u32 & 0xFFFF) as u16);
+            // `dist`：逐颗沿**各自**角度推出去，不是整环平移（判别腿
+            // `dist_pushes_each_bullet_along_its_own_angle`）。dist=0 时 polar_to_vec
+            // 恒返 (0,0)，故不必分支。
+            let (dx, dy) = polar_to_vec(sh.dist, angle);
+            let (vx, vy) = polar_to_vec(cur_speed, angle);
+            let init = BulletInit {
+                x: origin_x + dx,
+                y: origin_y + dy,
+                vx,
+                vy,
+                speed: cur_speed,
+                angle,
+                ang_vel: 0,
+                accel: Fx::ZERO,
+                ax: Fx::ZERO,
+                ay: Fx::ZERO,
+                sprite,
+                radius,
+                delay: 0,
+                life: 0xFFFF,
+                flags: 0,
+                grazed_by: 0,
+                transform_head: crate::xform::XFORM_NONE,
+                xform_wait: 0,
+                xform_next: 0,
+            };
+            let handle = if xform_len == 0 {
+                ctx.body.create_bullet(init)
+            } else {
+                ctx.body
+                    .create_bullet_with_xform(init, &xform_buf[..xform_len])
+            };
+            if handle == BulletHandle::NULL {
+                // 短路（同 `batch` 的 `'grid`）：同相位无回收 ⇒ 后续必然同败。
+                // **故意不做 `batch` 那样的"剩余批量补计"**——shooter 的失败因不止池满
+                // 一种（坏 xform 内容 → `create_bullet_with_xform` 记 contract_viol +
+                // BAD_ARGS），批量补 `pool_full[POOL_BULLET]` 会张冠李戴。本颗的计数已由
+                // `create_bullet*` 自己按真实原因记过，就到此为止。
+                break 'grid;
+            }
+            created += 1;
+
+            if let Some(task_sub) = task_sub {
+                // 号已在 ④ 校验过在册；池满 → 静默计数（P4-a），**弹保留**、不 Fault（同 `fire`）。
+                let pc0 = ctx
+                    .ecl
+                    .sub_meta(task_sub)
+                    .expect("已在 ④ 校验过")
+                    .code_entry();
+                let owner = (OWNER_BULLET, handle.index, handle.generation);
+                let parent = ctx.self_index + 1;
+                if ctx
+                    .tasks
+                    .spawn(task_sub, pc0, owner, parent, ctx.frame)
+                    .is_none()
+                {
+                    ctx.body.diag.pool_full[crate::world::POOL_TASK] =
+                        ctx.body.diag.pool_full[crate::world::POOL_TASK].wrapping_add(1);
+                }
+            }
+            cur_speed = cur_speed + sh.speed_step;
+        }
+    }
+
+    // ⑧ 开火请求（spec §8）：`args[3]` 是**实际**创建数而非请求数（池满时要能区分）。
+    if sh.on_fire_req != 0 {
+        ctx.body.emit_req(
+            sh.on_fire_req,
+            [
+                origin_x.raw(),
+                origin_y.raw(),
+                sh.appearance as i32,
+                created as i32,
+                0,
+                0,
+            ],
+        );
+    }
+    Ok(())
 }
 
 /// 5x 族锚点写口的三种目标字段（`sys_anchor_u16` 判据）。
@@ -3724,5 +3945,671 @@ mod tests {
         let s = w.tasks.shooters[0][0];
         assert_eq!(s.n_angle, 255, "256 上钳到 255（裸 `as u8` 会回绕成 0）");
         assert_eq!(s.n_speed, 0, "-256 下钳到 0");
+    }
+
+    // ── Shooter 开火面（syscall 76；shooter 刀 T3 2026-07-31）────────────────────
+    //
+    // 开火循环住 **ECL 层**（spec §10 末：P1 使然——world 不知道任务存在、没法逐颗挂
+    // `task_script`），于是网格逻辑有了**第二份实现**。故下面第一条等价测试是**必需**
+    // 而非顺带的：它一次押住网格序、坐标算法、速度递增、以及居中公式本身。
+
+    /// 配置/开火用的 `call` 包装：顺带把"实参必须全部弹栈"这条查到每一次调用上
+    /// （越界腿也算——shooter 族的栈效应与成功路径一致，见 `shooter_mut` 文档）。
+    fn sh(w: &mut World, ecl: &EclImage, task: &mut Task, no: u16, args: &[i32]) {
+        assert!(
+            call(w, ecl, task, no, args).is_ok(),
+            "shooter syscall {no} 不应 Fault"
+        );
+        assert_eq!(task.sp, 0, "shooter syscall {no} 未把实参全部弹栈");
+    }
+
+    /// 灌池用的哑弹模板。
+    fn filler_bullet() -> BulletInit {
+        BulletInit {
+            x: Fx::ZERO,
+            y: Fx::ZERO,
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            ang_vel: 0,
+            accel: Fx::ZERO,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            sprite: 0,
+            radius: Fx::from_int(2),
+            delay: 0,
+            life: 0xFFFF,
+            flags: 0,
+            grazed_by: 0,
+            transform_head: crate::xform::XFORM_NONE,
+            xform_wait: 0,
+            xform_next: 0,
+        }
+    }
+
+    /// shooter 的 fan 与手写 `batch` 等价——**带居中补偿**。
+    /// 一次押住网格序、坐标算法、速度递增、**以及居中公式本身**。
+    ///
+    /// 为什么必需：开火循环住 ECL 层（P1 使然，见 spec §10 末），网格逻辑有了第二份实现。
+    /// 补偿写错、或实现忘了居中，这条都会红。
+    #[test]
+    fn shooter_fan_matches_batch_with_centering_compensation() {
+        const N_ANGLE: i32 = 5;
+        const N_SPEED: i32 = 3;
+        const BASE: i32 = 0x1234;
+        const STEP: i32 = 0x0400;
+        let x = Fx::from_int(30).raw();
+        let y = Fx::from_int(-40).raw();
+        let speed0 = Fx::from_int(2).raw();
+        let speed_step = 0x0000_8000; // 0.5
+
+        // 世界 A：shooter。owner 是 STAGE ⇒ `self_pos` 恒 (0,0)，故 `sh_offset` 就是原点。
+        // 其余全默认：无 aim / ring / dist / polar / xform / 挂弹任务。
+        let (mut wa, ecl) = fresh_with_shooters();
+        let mut ta = Task::default();
+        sh(&mut wa, &ecl, &mut ta, SYS_SH_SPRITE, &[0, ROW_C]);
+        sh(&mut wa, &ecl, &mut ta, SYS_SH_OFFSET, &[0, x, y]);
+        sh(&mut wa, &ecl, &mut ta, SYS_SH_COUNT, &[0, N_ANGLE, N_SPEED]);
+        sh(&mut wa, &ecl, &mut ta, SYS_SH_ANGLE, &[0, BASE, STEP]);
+        sh(
+            &mut wa,
+            &ecl,
+            &mut ta,
+            SYS_SH_SPEED,
+            &[0, speed0, speed_step],
+        );
+        sh(&mut wa, &ecl, &mut ta, SYS_SH_FIRE, &[0]);
+
+        // 世界 B：手写 `batch`，基准角**自带居中补偿**。
+        let compensated = BASE - (N_ANGLE - 1) * STEP / 2;
+        assert_ne!(
+            compensated, BASE,
+            "前置条件：这组参数下补偿必须非恒等，否则'两边都忘了居中'也能绿"
+        );
+        let (mut wb, _) = fresh();
+        let mut tb = Task::default();
+        let args = [
+            ROW_C,
+            x,
+            y,
+            N_ANGLE,
+            compensated,
+            STEP,
+            N_SPEED,
+            speed0,
+            speed_step,
+        ];
+        assert!(call(&mut wb, &ecl, &mut tb, SYS_CREATE_BULLETS_BATCH, &args).is_ok());
+        assert_eq!(tb.stack[0], N_ANGLE * N_SPEED, "batch 侧应发满 5×3");
+
+        let ia: Vec<usize> = wa.body.bullets.iter_alive().collect();
+        let ib: Vec<usize> = wb.body.bullets.iter_alive().collect();
+        assert_eq!(
+            ia.len(),
+            (N_ANGLE * N_SPEED) as usize,
+            "shooter 侧应发满 5×3"
+        );
+        assert_eq!(ia.len(), ib.len());
+        for (k, (&a, &b)) in ia.iter().zip(ib.iter()).enumerate() {
+            assert_eq!(wa.body.bullets.x[a], wb.body.bullets.x[b], "第 {k} 颗 x");
+            assert_eq!(wa.body.bullets.y[a], wb.body.bullets.y[b], "第 {k} 颗 y");
+            assert_eq!(wa.body.bullets.vx[a], wb.body.bullets.vx[b], "第 {k} 颗 vx");
+            assert_eq!(wa.body.bullets.vy[a], wb.body.bullets.vy[b], "第 {k} 颗 vy");
+            assert_eq!(
+                wa.body.bullets.speed[a], wb.body.bullets.speed[b],
+                "第 {k} 颗 speed"
+            );
+            assert_eq!(
+                wa.body.bullets.angle[a], wb.body.bullets.angle[b],
+                "第 {k} 颗 angle"
+            );
+            assert_eq!(
+                wa.body.bullets.sprite[a], wb.body.bullets.sprite[b],
+                "第 {k} 颗 sprite"
+            );
+            assert_eq!(
+                wa.body.bullets.radius[a], wb.body.bullets.radius[b],
+                "第 {k} 颗 radius"
+            );
+        }
+        // 判别腿的判别腿：网格里必须真的出现过多个不同角、多个不同速，否则上面逐一比
+        // 是在比一堆相同的弹（`n_angle`/`n_speed` 被实现忽略掉也能绿）。
+        let mut angles: Vec<u16> = ia.iter().map(|&i| wa.body.bullets.angle[i].raw()).collect();
+        let mut speeds: Vec<i32> = ia.iter().map(|&i| wa.body.bullets.speed[i].raw()).collect();
+        angles.sort_unstable();
+        angles.dedup();
+        speeds.sort_unstable();
+        speeds.dedup();
+        assert_eq!(angles.len(), N_ANGLE as usize, "网格里应出现 5 个不同角");
+        assert_eq!(speeds.len(), N_SPEED as usize, "网格里应出现 3 个不同速");
+    }
+
+    /// `dist` 是**逐颗沿各自角度**位移，不是整环朝同一方向平移。
+    /// 判别腿：取一个 n_angle=4、angle_step=90deg 的十字环，四颗弹的位移方向必须两两不同；
+    /// 错误实现（整体平移）会让四颗的 (x,y) 相对无 dist 时的偏移量**完全相同**。
+    #[test]
+    fn dist_pushes_each_bullet_along_its_own_angle() {
+        let fire = |dist: i32| -> Vec<(i32, i32)> {
+            let (mut w, ecl) = fresh_with_shooters();
+            let mut t = Task::default();
+            sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+            sh(&mut w, &ecl, &mut t, SYS_SH_COUNT, &[0, 4, 1]);
+            sh(&mut w, &ecl, &mut t, SYS_SH_ANGLE, &[0, 0, 16384]); // 十字：90° 一颗
+            sh(&mut w, &ecl, &mut t, SYS_SH_DIST, &[0, dist]);
+            sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+            w.body
+                .bullets
+                .iter_alive()
+                .map(|i| (w.body.bullets.x[i].raw(), w.body.bullets.y[i].raw()))
+                .collect()
+        };
+        let base = fire(0);
+        let pushed = fire(Fx::from_int(20).raw());
+        assert_eq!(base.len(), 4);
+        assert_eq!(pushed.len(), 4);
+        let off: Vec<(i32, i32)> = base
+            .iter()
+            .zip(&pushed)
+            .map(|(b, p)| (p.0 - b.0, p.1 - b.1))
+            .collect();
+        for (k, o) in off.iter().enumerate() {
+            assert_ne!(*o, (0, 0), "第 {k} 颗根本没被 dist 推开");
+        }
+        for i in 0..4 {
+            for j in (i + 1)..4 {
+                assert_ne!(
+                    off[i], off[j],
+                    "第 {i}/{j} 颗的 dist 位移量相同 ⇒ 实现把整环朝同一方向平移了"
+                );
+            }
+        }
+    }
+
+    /// `sh_offset` 与 `sh_offset_rad` 同时设 → 两者**相加**（ZUN 626 明写 stacks）。
+    /// 判别腿：只设其一 / 只设另一 / 两个都设，第三种的原点必须等于前两种偏移量之和。
+    #[test]
+    fn rect_and_polar_offsets_stack_rather_than_override() {
+        let x = Fx::from_int(30).raw();
+        let y = Fx::from_int(-10).raw();
+        let ang = 8192; // 45°
+        let r = Fx::from_int(25).raw();
+        // owner 是 STAGE ⇒ 基准原点 (0,0)，故"原点"就是偏移量本身。
+        let fire = |rect: bool, polar: bool| -> (i32, i32) {
+            let (mut w, ecl) = fresh_with_shooters();
+            let mut t = Task::default();
+            sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+            if rect {
+                sh(&mut w, &ecl, &mut t, SYS_SH_OFFSET, &[0, x, y]);
+            }
+            if polar {
+                sh(&mut w, &ecl, &mut t, SYS_SH_OFFSET_RAD, &[0, ang, r]);
+            }
+            sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+            let i = w
+                .body
+                .bullets
+                .iter_alive()
+                .next()
+                .expect("默认 1×1 应恰发一颗");
+            (w.body.bullets.x[i].raw(), w.body.bullets.y[i].raw())
+        };
+        let only_rect = fire(true, false);
+        let only_polar = fire(false, true);
+        let both = fire(true, true);
+        assert_ne!(
+            only_rect, only_polar,
+            "前置条件：两种偏移必须给出不同原点，否则'覆盖'与'相加'不可辨"
+        );
+        assert_eq!(
+            both,
+            (only_rect.0 + only_polar.0, only_rect.1 + only_polar.1),
+            "两种偏移必须**相加**（后设覆盖先设就会红）"
+        );
+    }
+
+    /// `aim` 在**开火那一刻**解析，不是 `sh_aim` 时。
+    /// 判别腿：sh_aim(0,1) → 移动自机 → sh_fire，基准角必须跟着新位置变。
+    /// 错误实现（设的时候就把角算死）会让两次开火的角相同。
+    #[test]
+    fn aim_resolves_at_fire_time_not_at_set_time() {
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_AIM, &[0, 1]);
+
+        // 第一发：自机在出场点。原点是 (0,0)（STAGE owner、无偏移），故基准角 = atan2(自机)。
+        let p0 = (w.body.players[0].x, w.body.players[0].y);
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+        // 挪自机——shooter 的参数一个字节都没改。
+        w.body.players[0].x = Fx::from_int(200);
+        w.body.players[0].y = Fx::from_int(-150);
+        let p1 = (w.body.players[0].x, w.body.players[0].y);
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+
+        let idx: Vec<usize> = w.body.bullets.iter_alive().collect();
+        assert_eq!(idx.len(), 2);
+        let a0 = w.body.bullets.angle[idx[0]];
+        let a1 = w.body.bullets.angle[idx[1]];
+        assert_eq!(
+            a0,
+            crate::math::cordic::atan2(p0.1, p0.0),
+            "第一发朝旧自机位"
+        );
+        assert_eq!(
+            a1,
+            crate::math::cordic::atan2(p1.1, p1.0),
+            "第二发朝新自机位——aim 必须在开火那一刻解析"
+        );
+        assert_ne!(a0, a1, "两发同角 ⇒ 实现在 sh_aim 那一刻就把角算死了");
+    }
+
+    /// ring 精确闭合：n_angle=28 时 28 颗**铺满整 65536**、收尾无缝。
+    /// 防照抄 demo 的 `65536/n` 预乘写法（2340×28 = 65520，收尾留 16 BAM 的缝）。
+    #[test]
+    fn ring_distributes_exactly_around_the_full_circle() {
+        const N: usize = 28;
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_RING, &[0, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_COUNT, &[0, N as i32, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+        let a: Vec<u16> = w
+            .body
+            .bullets
+            .iter_alive()
+            .map(|i| w.body.bullets.angle[i].raw())
+            .collect();
+        assert_eq!(a.len(), N);
+
+        // 主判据一：逐颗算 (i×65536)/N，把余数均摊——**不是** i×(65536/N)。
+        for (i, &got) in a.iter().enumerate() {
+            let want = ((i as i32 * 65536) / N as i32) as u16;
+            assert_eq!(got, want, "第 {i} 颗角不是均摊余数的 (i×65536)/N");
+        }
+        // 主判据二：把**闭合那一段**也算进来，全部相邻角差的极差 ≤ 1。
+        // 预乘写法前 27 段都是 2340、闭合段却是 2356 ⇒ 极差 16，红在这里。
+        let gaps: Vec<u32> = (0..N)
+            .map(|i| a[(i + 1) % N].wrapping_sub(a[i]) as u32)
+            .collect();
+        let lo = *gaps.iter().min().unwrap();
+        let hi = *gaps.iter().max().unwrap();
+        assert!(hi - lo <= 1, "相邻角差极差 {} ⇒ 收尾留了缝", hi - lo);
+        // 顺带：一整圈。**这条单独是弱判据**——任何绕行一圈的排布都满足它（预乘写法
+        // 也满足：27×2340 + 2356 = 65536），故主力是上面两条。
+        assert_eq!(gaps.iter().sum::<u32>(), 65536);
+    }
+
+    /// ring 模式下 `angle_step` 是**逐层**偏移（而非逐弹）——两层的同序号弹角差 == angle_step。
+    #[test]
+    fn ring_angle_step_offsets_layers_not_bullets() {
+        const STEP: i32 = 0x0300;
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_RING, &[0, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_COUNT, &[0, 4, 2]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_ANGLE, &[0, 0, STEP]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+        let a: Vec<u16> = w
+            .body
+            .bullets
+            .iter_alive()
+            .map(|i| w.body.bullets.angle[i].raw())
+            .collect();
+        assert_eq!(a.len(), 8, "序 = 角度外层、速度内层 ⇒ 索引 2i+j");
+        for i in 0..4 {
+            assert_eq!(
+                a[i * 2 + 1].wrapping_sub(a[i * 2]),
+                STEP as u16,
+                "第 {i} 组两层的角差应恰是 angle_step（逐层，不是逐弹）"
+            );
+        }
+        assert_eq!(
+            a[2].wrapping_sub(a[0]),
+            (65536 / 4) as u16,
+            "同层相邻两颗的角差是均分整周，不是 angle_step"
+        );
+    }
+
+    /// xform 延迟读安全：`sh_xform` 之后 **wait 跨帧** 再 `sh_fire`，xform 仍生效。
+    ///
+    /// xform 数据住**本任务的 `locals`**（`task.locals[xform_off..]`），由编译器在 sub 入口
+    /// 一次性 staging，`slots` 的调用图着色保证区间不被复用——所以存 `(off, cnt)`、开火时
+    /// 才读是安全的。这条用真字节码跑完整 `run_tasks` 循环把它钉死。
+    #[test]
+    fn xform_survives_a_frame_boundary_between_set_and_fire() {
+        // 槽 0：wait=3, op=OP_SET_SPEED(10), args=[Fx::from_int(2).raw(), 0]
+        let word0 = ((3u32 << 16) | ((crate::xform::OP_SET_SPEED as u32) << 8)) as i32;
+        let arg0 = Fx::from_int(2).raw();
+        let code = vec![
+            crate::ecl::ops::OP_END as u32,   //  0  sub0 Root（占位）
+            crate::ecl::ops::OP_PUSHI as u32, //  1  sub1 Async 入口：locals[0..3] = xform 槽
+            word0 as u32,                     //  2
+            crate::ecl::ops::OP_POPL as u32,  //  3
+            0,                                //  4
+            crate::ecl::ops::OP_PUSHI as u32, //  5
+            arg0 as u32,                      //  6
+            crate::ecl::ops::OP_POPL as u32,  //  7
+            1,                                //  8
+            crate::ecl::ops::OP_PUSHI as u32, //  9
+            0,                                // 10
+            crate::ecl::ops::OP_POPL as u32,  // 11
+            2,                                // 12
+            crate::ecl::ops::OP_PUSHI as u32, // 13  sh_sprite(0, ROW_A)
+            0,                                // 14
+            crate::ecl::ops::OP_PUSHI as u32, // 15
+            ROW_A as u32,                     // 16
+            crate::ecl::ops::OP_SYS as u32,   // 17
+            SYS_SH_SPRITE as u32,             // 18
+            crate::ecl::ops::OP_PUSHI as u32, // 19  sh_xform(0, off=0, cnt=1)
+            0,                                // 20
+            crate::ecl::ops::OP_PUSHI as u32, // 21
+            0,                                // 22
+            crate::ecl::ops::OP_PUSHI as u32, // 23
+            1,                                // 24
+            crate::ecl::ops::OP_SYS as u32,   // 25
+            SYS_SH_XFORM as u32,              // 26
+            crate::ecl::ops::OP_PUSHI as u32, // 27  wait(1) ← **跨帧**
+            1,                                // 28
+            crate::ecl::ops::OP_WAIT as u32,  // 29
+            crate::ecl::ops::OP_PUSHI as u32, // 30  sh_fire(0)
+            0,                                // 31
+            crate::ecl::ops::OP_SYS as u32,   // 32
+            SYS_SH_FIRE as u32,               // 33
+            crate::ecl::ops::OP_PUSHI as u32, // 34  wait(999)：停在这里别自然结束
+            999,                              // 35
+            crate::ecl::ops::OP_WAIT as u32,  // 36
+            crate::ecl::ops::OP_END as u32,   // 37
+        ];
+        let ecl = test_image(
+            code,
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(1, SubKind::Async, vec![]),
+            ],
+            vec![EntryInit::new("xf_task", 1)],
+            Some(0),
+        );
+        let mut w = World::new(1);
+        let idx = w
+            .spawn_sub_internal(&ecl, ecl.sub_id(1).unwrap(), &[], (OWNER_STAGE, 0, 0))
+            .expect("应能派一个任务");
+
+        // 帧 1：跑到 wait(1) 让出（此时 sh_xform 已设、还没开火）。
+        w.body.frame = 1;
+        crate::ecl::vm::run_tasks(&mut w.tasks, &mut w.body, &ecl, &TABLES_V0);
+        assert_eq!(w.body.bullets.iter_alive().count(), 0, "跨帧前还没开火");
+        assert_ne!(
+            w.tasks.shooters[idx as usize][0].xform_cnt, 0,
+            "前置条件：sh_xform 应已写进槽"
+        );
+        // 帧 2：wait 递减，本帧不执行。
+        w.body.frame = 2;
+        crate::ecl::vm::run_tasks(&mut w.tasks, &mut w.body, &ecl, &TABLES_V0);
+        assert_eq!(w.body.bullets.iter_alive().count(), 0);
+        // 帧 3：开火——xform 必须仍生效。
+        w.body.frame = 3;
+        crate::ecl::vm::run_tasks(&mut w.tasks, &mut w.body, &ecl, &TABLES_V0);
+
+        let b = w
+            .body
+            .bullets
+            .iter_alive()
+            .next()
+            .expect("跨帧后应发出一颗弹");
+        let seg = w.body.bullets.transform_head[b];
+        assert_ne!(
+            seg,
+            crate::xform::XFORM_NONE,
+            "跨帧后 xform 丢了（延迟读没读到本任务 locals）"
+        );
+        assert_eq!(
+            w.body.xforms.seg_slots(seg)[0],
+            XformSlot {
+                wait: 3,
+                op: crate::xform::OP_SET_SPEED,
+                _pad: 0,
+                args: [arg0, 0],
+            },
+            "跨帧后段内容应与设 xform 时的 locals 逐位相同"
+        );
+    }
+
+    /// 挂弹任务：每颗弹各派一个任务，owner = (BULLET, 该弹 index/gen)。
+    #[test]
+    fn sh_task_spawns_one_task_per_bullet() {
+        let ecl = async_pattern_image(); // sub raw=1 是 0 参 Async
+        let mut w = World::new(1);
+        w.tasks.shooters[0] = [ShooterSlot::default(); SHOOTERS_PER_TASK];
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_COUNT, &[0, 3, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_TASK, &[0, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+
+        let bullets: Vec<usize> = w.body.bullets.iter_alive().collect();
+        assert_eq!(bullets.len(), 3);
+        let spawned: Vec<usize> = (0..crate::ecl::task::TASK_CAP)
+            .filter(|&i| w.tasks.is_alive(i))
+            .collect();
+        assert_eq!(spawned.len(), 3, "每颗弹各派一个任务");
+        for (k, (&ti, &bi)) in spawned.iter().zip(&bullets).enumerate() {
+            assert_eq!(w.tasks.slots[ti].owner_kind, OWNER_BULLET, "第 {k} 个");
+            assert_eq!(w.tasks.slots[ti].owner_index, bi as u16, "第 {k} 个");
+            assert_eq!(
+                w.tasks.slots[ti].owner_gen, w.body.bullets.generation[bi],
+                "第 {k} 个"
+            );
+        }
+    }
+
+    /// P4-a：任务池满 → 弹**保留**、`pool_full[POOL_TASK]` 逐颗计数、不 Fault（同 `fire` 口径）。
+    #[test]
+    fn sh_task_degrades_when_task_pool_is_full() {
+        let ecl = async_pattern_image();
+        let mut w = World::new(1);
+        // **先灌满任务池、再配 shooter**：`TaskPool::spawn` 的"复用槽写满"纪律会把
+        // 每个新槽的 shooter 抹成默认值（含 0 号槽），先配后灌会被抹掉。
+        while w
+            .tasks
+            .spawn(ecl.sub_id(1).unwrap(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .is_some()
+        {}
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_COUNT, &[0, 3, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_TASK, &[0, 1]);
+
+        let before = w.body.diag.pool_full[crate::world::POOL_TASK];
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            3,
+            "任务池满不影响弹——弹保留"
+        );
+        assert_eq!(
+            w.body.diag.pool_full[crate::world::POOL_TASK],
+            before + 3,
+            "逐颗计一次 pool_full[POOL_TASK]"
+        );
+    }
+
+    /// `on_fire_req`：发一条请求，`args[3]` 是**实际**创建数而非请求数。
+    /// 判别腿：把弹池灌到只剩 2 格再发 5 颗的环，args[3] 必须是 2。
+    #[test]
+    fn on_fire_req_reports_actual_count_not_requested() {
+        let (mut w, ecl) = fresh_with_shooters();
+        for _ in 0..(crate::bullets::BulletPool::CAP - 2) {
+            w.body.create_bullet(filler_bullet());
+        }
+        let ox = Fx::from_int(12).raw();
+        let oy = Fx::from_int(-34).raw();
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_C]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_OFFSET, &[0, ox, oy]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_RING, &[0, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_COUNT, &[0, 5, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_REQ, &[0, 77]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            crate::bullets::BulletPool::CAP,
+            "只剩 2 格 ⇒ 请求 5 颗只发得出 2 颗"
+        );
+        let r = *w
+            .body
+            .take_requests()
+            .iter()
+            .find(|r| r.id == 77)
+            .expect("on_fire_req ≠ 0 应发一条请求");
+        assert_eq!(r.args[0], ox, "args[0] = 原点 x");
+        assert_eq!(r.args[1], oy, "args[1] = 原点 y");
+        assert_eq!(r.args[2], ROW_C, "args[2] = appearance");
+        assert_eq!(r.args[3], 2, "args[3] 必须是**实际**创建数（不是请求的 5）");
+    }
+
+    /// `on_fire_req == 0` = 不发（默认值的语义，别发一条 id=0 的垃圾请求）。
+    #[test]
+    fn on_fire_req_zero_emits_nothing() {
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+        assert_eq!(w.body.bullets.iter_alive().count(), 1);
+        assert!(
+            w.body.take_requests().is_empty(),
+            "on_fire_req=0 不该发请求"
+        );
+    }
+
+    /// P4-b：n_angle 或 n_speed 为 0、或乘积超弹池 CAP → 不发 + contract_viol
+    /// （对齐 `create_bullets_batch` 的既有口径）。
+    #[test]
+    fn sh_fire_rejects_degenerate_grid() {
+        const {
+            assert!(
+                255 * 255 > crate::bullets::BulletPool::CAP,
+                "前置条件：255×255 必须真的超弹池 CAP"
+            )
+        };
+        for (n_angle, n_speed, why) in [
+            (0, 1, "n_angle=0"),
+            (1, 0, "n_speed=0"),
+            (255, 255, "超CAP"),
+        ] {
+            let (mut w, ecl) = fresh_with_shooters();
+            let mut t = Task::default();
+            sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+            sh(&mut w, &ecl, &mut t, SYS_SH_COUNT, &[0, n_angle, n_speed]);
+            let viol = w.body.diag.contract_viol;
+            w.body.last_status = crate::world::STATUS_OK;
+            sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+            assert_eq!(
+                w.body.bullets.iter_alive().count(),
+                0,
+                "{why}：一颗都不该发"
+            );
+            assert_eq!(
+                w.body.diag.contract_viol,
+                viol + 1,
+                "{why}：应记一次 contract_viol"
+            );
+            assert_eq!(
+                w.body.last_status,
+                crate::world::STATUS_BAD_ARGS,
+                "{why}：应置 STATUS_BAD_ARGS"
+            );
+        }
+    }
+
+    /// `sh_fire` 的 `id` 越界走**与 14 个 setter 同一口径**：no-op + contract_viol +
+    /// STATUS_BAD_ARGS，不 Fault（判据集中在 `shooter_mut` 一处）。
+    #[test]
+    fn sh_fire_rejects_out_of_range_id() {
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut t = Task::default();
+        for bad in [SHOOTERS_PER_TASK as i32, -1] {
+            let viol = w.body.diag.contract_viol;
+            w.body.last_status = crate::world::STATUS_OK;
+            assert!(
+                call(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[bad]).is_ok(),
+                "id={bad} 是 no-op 而非 Fault"
+            );
+            assert_eq!(t.sp, 0, "id={bad} 腿也应把实参弹栈");
+            assert_eq!(w.body.bullets.iter_alive().count(), 0, "id={bad} 不该发弹");
+            assert_eq!(w.body.diag.contract_viol, viol + 1, "id={bad}");
+            assert_eq!(
+                w.body.last_status,
+                crate::world::STATUS_BAD_ARGS,
+                "id={bad}"
+            );
+        }
+    }
+
+    /// appearance 的在册/空格校验**推迟到开火那一刻**（T2 的 14 个 setter 只写字段）——
+    /// 越界号与空格都 Fault，且零副作用。这条正是 T2 复审 ① 那条"收窄必须保号越界性"
+    /// 的下游消费者：`sh_sprite` 若把负值钳成 0，这里就再也拒不掉了。
+    #[test]
+    fn sh_fire_faults_on_out_of_range_or_blank_appearance() {
+        // ① 越界号（`sh_sprite` 收窄成 u16::MAX，远超表长）
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, -4]);
+        assert_eq!(
+            call(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]),
+            Err(FAULT_BAD_OP),
+            "越界 appearance 必须 Fault"
+        );
+        assert_eq!(w.body.bullets.iter_alive().count(), 0, "先验后建：零副作用");
+
+        // ② 空格（合成表）
+        const BLANK: i32 = 3 * 16 + 7;
+        let holed = tables_with_hole(BLANK as usize);
+        let (mut w, ecl) = fresh_with_shooters();
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, BLANK]);
+        assert_eq!(
+            call_with_tables(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0], &holed),
+            Err(FAULT_BAD_OP),
+            "空格 appearance 必须 Fault（隐形弹）"
+        );
+        assert_eq!(w.body.bullets.iter_alive().count(), 0);
+    }
+
+    /// `SH_ABS_OFFSET`：绝对偏移**不跟随 owner**，相对偏移跟随。
+    /// 必须用非 STAGE 的 owner 才判别得了——STAGE 的 `self_pos` 恒 (0,0)，两条分支同结果。
+    #[test]
+    fn abs_offset_ignores_owner_position_while_relative_follows_it() {
+        let dx = Fx::from_int(7).raw();
+        let dy = Fx::from_int(9).raw();
+        let fire = |abs: bool| -> (i32, i32) {
+            let (mut w, ecl) = fresh_with_shooters();
+            let eh = crate::world::test_support::spawn_enemy(&mut w, 100, -60, 5);
+            let mut t = Task {
+                owner_kind: OWNER_ENEMY,
+                owner_index: eh.index,
+                owner_gen: eh.generation,
+                ..Task::default()
+            };
+            sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+            let no = if abs {
+                SYS_SH_OFFSET_ABS
+            } else {
+                SYS_SH_OFFSET
+            };
+            sh(&mut w, &ecl, &mut t, no, &[0, dx, dy]);
+            sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+            let i = w.body.bullets.iter_alive().next().expect("应发一颗");
+            (w.body.bullets.x[i].raw(), w.body.bullets.y[i].raw())
+        };
+        assert_eq!(fire(true), (dx, dy), "绝对偏移：原点就是偏移量本身");
+        assert_eq!(
+            fire(false),
+            (Fx::from_int(100).raw() + dx, Fx::from_int(-60).raw() + dy),
+            "相对偏移：原点 = owner 位置 + 偏移量"
+        );
     }
 }
