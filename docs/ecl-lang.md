@@ -20,6 +20,8 @@
 - 角度字面量必须带 `deg`/`bam` 后缀——裸 `90` 是 `int`，用在角度位**不会隐式转换**
   （报"期待 Angle，实际 Int"）；`int as angle` cast 也救不了，它是**位穿透**不是"转成度"
   （`90 as angle` ≠ 90°）。
+- **`wait(n)` 的 `n` 被静默截成低 16 位**：`wait(65536)` 等 **0** 帧、`wait(-1)` 等 **65535**
+  帧、`wait(70000)` 变成 4464——没有任何诊断。上限 65535 帧（≈18 分钟），要等更久套循环。
 - 有返回值的 builtin **不作表达式用时必须 `_ = ` 显式弃值**（如 `_ = fire(...);`）——不丢弃
   是编译错误（"返回值未消费"）。
 - **void builtin 只能裸语句**——它前面加 `_ = ` 反而是编译错误（"无返回值，无值可丢弃"）；
@@ -57,6 +59,8 @@
   这是照 ZUN 的字面语义，不是 bug；只想掉一份就别在 `die()` 前调它。详见下方"敌人的三条
   死亡路径与掉落控制"。
 - **`die()` 立即终止本任务**（降低成两条指令，第二条是终止），它后面的语句一句都不执行。
+- **`atan2(y, x)` 的 `y` 在前**（同 libm），两参同为 `fx` ⇒ 写反了**不报错**，只会把角度
+  沿 45° 对角线镜像；`dist(dx, dy)` 是**向量模**不是两点距离（两点距离自己减）。
 - 发射器（`sh_*` 族）两条最容易搞混的：**fan 以基准方向为中心对称展开**（改颗数不用重算
   `angle0`），而 **ring 下 `angle_step` 转义成逐层偏移**、不再是逐弹增量；以及
   **`sh_task` 是每颗弹派一个任务**——`sh_count(0, 28, 1)` + `sh_task` 一句话吃 28 个任务槽
@@ -116,11 +120,20 @@ sub main() {
 ## 语句
 
 `var name: type = expr;` · 赋值 · `if c {} else {}` · `while c {}` · `loop {}` ·
-`for i in a..b {}`（半开区间，`i` 为 `int`）· `break`/`continue` · `wait(n);`（n: int 帧）·
+`for i in a..b {}`（半开区间，`i` 为 `int`）· `break`/`continue` ·
+`wait(n);`（n: int 帧，**低 16 位截断**，见下）·
 `spawn f(args);` · `return;` · `wait_spell();`（符卡等待语法糖，纯前端展开为
 `while spell_timer() >= 0 { wait(1); }`，见下"符卡"节）· 表达式语句（**值必须消费**——
 有返回的内建不接收就 `_ = fire(...);` 显式丢弃，不丢弃 = 编译错误；这是"忘 POP 远处爆栈"
 足枪的语言层灭除）。
+
+> ⚠️ **`wait(n)` 的 `n` 被截成 `u16`（取低 16 位），静默、无诊断**：任务的等待计数器是
+> `u16`，`OP_WAIT` 的实现就是 `task.wait = frames as u16`。所以
+> **`wait(65536)` = 等 0 帧**（不是等 65536 帧）、**`wait(-1)` = 等 **65535** 帧**
+> （不是"立即继续"），`wait(70000)` 悄悄变成 4464。语义有测试钉死
+> （`ecl/vm.rs` 的 `wait_truncates_to_low_16_bits`），**不是 bug、不会改**。
+> 一帧 1/60 秒，65535 帧 ≈ 18 分钟——正常关卡碰不到上限；要等更久就套循环
+> （`for i in 0..10 { wait(30000); }`），别写一个大数上去。
 
 ## mark（中段启动标记）
 
@@ -249,6 +262,11 @@ cargo run -p stg-harness -- check stage/
   文件，跨文件重名在编译期报错，错误信息带**两处位置**（本次撞上的文件:行 + 另一处定义
   所在的文件:行）。这意味着多文件不是模块系统——不能靠文件名做命名空间隔离，两个文件各写
   一个同名 `sub helper()` 就是重复定义，不会因为在不同文件里而相安无事。
+- **`const` 跨文件可见**（同一张扁平符号表的直接推论）：一个文件里 `const RICE: int = 64;`，
+  别的文件直接写 `RICE` 就能用，**不需要重复声明、也不受文件先后序影响**（合并后单管线
+  编译，不是逐文件独立编译再链接）。所以整局脚本的**共享词表**——弹型/色号、`globals`
+  自由段槽号、符卡 id——就该单独摊一个 `00_defs.ecl` 放 `const`，别在每个文件里各抄一份
+  （抄岔了是静默的：数值不同但都能编过）。`godot/ecl/demo/bullets.ecl` 就是这个用法。
 - **收集顺序不影响产物字节**：不管传入的文件先后序是 A→B 还是 B→A，合并后的 `EclImage`
   逐位相同——codegen 本就按 sub 名排序出 canonical id，与源码收集顺序无关；目录收集仍然
   固定按文件名字节序，只是"结果不随之改变"，不是"顺序随意写"。
@@ -343,6 +361,9 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `global(slot: int) -> int` — 读 globals 槽(GVAR_RANK=0 为难度)
 - `set_global(slot: int, value: int)` — 写 globals 槽;系统段(slot<16)脚本写为 no-op+计数,不 Fault(GVAR_RANK=0 建议脚本只读)
 - `aim_player() -> angle` — 自身(敌/弹属主)指向自机的 BAM 角
+- `atan2(y: fx, x: fx) -> angle` — 任意向量的方向角(整数 CORDIC,16 轮);参数序 (y, x) 同 libm;(0,0) 返 0 不报错;比 aim_player 通用——能瞄任意点
+- `dist(dx: fx, dy: fx) -> fx` — 向量 (dx,dy) 的模长(开根,不是平方);**不是两点距离**——两点距离自己减: dist(bx-ax, by-ay)
+- `nearest_enemy(x: fx, y: fx) -> int` — 离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的是池 index,可直接喂 enemy_hp(悬垂/复用不可辨,同 enemy_hp)
 - `sin(angle: angle) -> fx` — 查表三角,返 fx(VM op 直发,非 syscall)
 - `cos(angle: angle) -> fx` — 查表三角,返 fx(VM op 直发,非 syscall)
 - `set_speed(handle: int, speed: fx)` — 弹 setter:改速率;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定
@@ -391,6 +412,52 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 > `handle:int` **求值后即丢弃**，setter 恒作用于**当前任务的 owner 弹**（`self` 语义）——
 > 不能借句柄定向操纵别的弹；owner 不是弹的任务调它 → 任务 Fault。想操纵 `fire(...)`
 > 出来的那颗弹，用 xformdef 或 `fire` 的 `task` 参数挂子任务。
+
+## 数学与查询（`atan2` / `dist` / `nearest_enemy`）
+
+三个都是引擎里早就有、脚本此前够不着的东西（小清洗刀 2026-07-31 通电），零新机制。
+
+- **`atan2(y, x) -> angle`**——任意向量的方向角。**参数序是 `(y, x)`**（`y` 在前，同 libm
+  惯例），两位都是 `fx`。这一位最容易写反：两参同型，写成 `atan2(dx, dy)` **不会有任何
+  编译错误**，只会让角度沿 45° 对角线镜像。`(0, 0)` 返 `0deg`，不报错。
+  与 `aim_player()` 的分工：`aim_player()` 只能瞄自机（0 参、基点是自己），`atan2` 能瞄
+  任意点——瞄某只敌就是 `atan2(ey - $self_y, ex - $self_x)`。
+- **`dist(dx, dy) -> fx`**——**向量的模长，不是两点距离**。要两点距离自己减：
+  `dist(bx - ax, by - ay)`。开的是真根（`dist(3.0fx, 4.0fx)` 正好 `5.0fx`），不是平方距离。
+- **`nearest_enemy(x, y) -> int`**——离 `(x, y)` 最近的活敌，返**池 index**；场上无敌返 **-1**。
+  候选是"存活且未在死亡态"的敌，并列时取低索引，无距离上限。
+  返回值可以直接喂 `enemy_hp(h)`——两者是配对的（拿号 → 轮询血量）。
+  ⚠️ **返的是池 index，不带 generation**：那只敌死了、槽被新敌复用之后，你手上这个号会
+  静默指向**新的那只**（和 `enemy_hp` 同一个已知口子）。别把它当长期句柄存着，每次要用
+  就现查一次。
+  ⚠️ **能拿它做的事目前只有 `enemy_hp`**：按敌号读坐标的读口**还没暴露**（脚本侧没有
+  `enemy_x`/`enemy_y`），所以"查到最近的敌然后朝它开火"这条链路**现在还接不通**——
+  想瞄自己生成的敌，用生成时自己记下的坐标喂 `atan2`。
+
+```ecl
+// 关卡编排：等某个区域附近最后一只敌死掉再往下走
+sub wait_area_cleared() {
+    loop {
+        var e: int = nearest_enemy(0.0fx, -96.0fx);
+        if e < 0 || enemy_hp(e) <= 0 { return; }
+        wait(4);
+    }
+}
+
+// 瞄一个自己知道坐标的点：先算方向、再按距离决定发不发
+sub snipe_at(px: fx, py: fx) {
+    var a: angle = atan2(py - $self_y, px - $self_x);
+    var d: fx = dist(px - $self_x, py - $self_y);
+    if d < 240.0fx {
+        _ = fire(64, 2, $self_x, $self_y, 3.0fx, a, none, none);
+    }
+}
+
+sub main() {
+    snipe_at(0.0fx, -96.0fx);
+    wait_area_cleared();
+}
+```
 
 ## `spawn_enemy` 的 `task` 参与 `enemy_hp`（敌生成与轮询，A5 乙案）
 
@@ -1034,6 +1101,6 @@ sub main() {
 
 - 错误：`文件:行:列: 说明` + 源行摘录 + `^` 定位；一个错误不吞后续（恢复到语句边界）。
 - 已知限制（v1）：禁递归 · locals 静态分配（同 sub 内变量名不可重名）· sub 无返回值 ·
-  **跨 `.ecl` 文件无共享的自定义常量机制**（脚本各自的 `const`/自由段槽号约定不互通，纯靠
-  作者自律对齐；引擎侧命名常量——appearance id/`GVAR_RANK` 等——已由预置注入解决，见上文
-  "引擎常量"节与 `follow-ups.md` C14）· 时间标签 `+N:` 未进 v1（显式 `wait`）。
+  时间标签 `+N:` 未进 v1（显式 `wait`）。
+  > 曾列在这里的"**跨 `.ecl` 文件无共享的自定义常量机制**"**已作废**（2026-07-31 实测
+  > 否定）：多文件是"合并后单管线编译"，`const` 天然跨文件可见，见上文"多文件"节。
