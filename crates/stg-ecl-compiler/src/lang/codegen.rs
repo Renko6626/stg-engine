@@ -1794,4 +1794,97 @@ mod tests {
         assert_eq!(g[22], g[23], "查询点就在那只敌旁边，返的就是它的池 index");
         assert_eq!(w.body.view().diag().task_faults, 0);
     }
+
+    /// 敌坐标读口刀（syscall 80/81）**存在的全部理由**：把上一刀留下的断头路接上——
+    /// 脚本拿得到敌号（`nearest_enemy`）却读不到它的坐标，于是"查最近的敌 → 朝它开火"
+    /// 算不出角度。本条走**真编译 + 真 VM** 的 `.ecl` 源码，一路
+    /// `nearest_enemy → 探活 → enemy_x/enemy_y → atan2 → fire`，落到弹池里那颗弹的角度上。
+    ///
+    /// 为什么必须是 e2e：`enemy_x` 的世界侧单测绿证明不了"脚本够得着"——`nearest_enemy`
+    /// 的世界实现自 M0-13 就有测试一直绿着，绿的却是**没人能调的死代码**，上一刀才发现。
+    ///
+    /// 判别力：敌放在 **x ≠ y** 的 (60, −80)，故"两条读口写反"会让 `atan2` 落到
+    /// 另一个象限——`swapped` 那条 `assert_ne!` 就是把这个变异钉死的靶子。
+    #[test]
+    fn nearest_enemy_to_enemy_pos_to_atan2_to_fire_is_wired_end_to_end() {
+        use stg_core::math::{Fx, cordic};
+        let src = "sub main() {\n\
+                     var e: int = spawn_enemy(60.0fx, -80.0fx, 100, 0, 0, 3, none);\n\
+                     set_global(20, e);\n\
+                     var n: int = nearest_enemy(64.0fx, -84.0fx);\n\
+                     set_global(21, n);\n\
+                     if enemy_hp(n) != -1 {\n\
+                       var ex: fx = enemy_x(n);\n\
+                       var ey: fx = enemy_y(n);\n\
+                       set_global(22, ex as int);\n\
+                       set_global(23, ey as int);\n\
+                       _ = fire(0, 0, 0.0fx, 0.0fx, 3.0fx, atan2(ey, ex), none, none);\n\
+                     }\n\
+                     loop { wait(1); }\n\
+                   }";
+        let w = run(src, 2);
+        let view = w.body.view();
+        let g = view.globals();
+        assert!(g[20] >= 0, "敌应建成（否则后面几条断言全退化成假绿）");
+        assert_eq!(g[21], g[20], "nearest_enemy 返的就是刚建的那只敌");
+        assert_eq!(g[22], 60, "enemy_x 读的是 x=60（读成 y 会是 -80）");
+        assert_eq!(g[23], -80, "enemy_y 读的是 y=-80（读成 x 会是 60）");
+
+        let expect = cordic::atan2(Fx::from_int(-80), Fx::from_int(60));
+        let swapped = cordic::atan2(Fx::from_int(60), Fx::from_int(-80));
+        assert_ne!(expect, swapped, "x≠y 的位置才让'两条读口写反'可辨");
+        let p = view.bullets();
+        let i = p
+            .iter_alive()
+            .next()
+            .expect("链路接通 ⇒ 必须真的开出一颗弹");
+        assert_eq!(
+            p.angle()[i],
+            expect,
+            "弹的角度 = atan2(敌 y, 敌 x)，即真的朝那只敌打"
+        );
+        assert_eq!(view.diag().task_faults, 0);
+    }
+
+    /// 探活读口刀（syscall 82）：同一条链路换成 **`enemy_alive(n) == 1`** 探活。
+    ///
+    /// **与上一条并存、不是替换**——上一条用旧探针 `enemy_hp(n) != -1` 走同一条链路，
+    /// 两条同时绿正好证明新旧判据在**正常路径上等效**（新口只在"活敌血量恰为 −1"那一格
+    /// 与旧探针分岔，那一格由 `syscall.rs` 侧的判别腿②押着）。
+    ///
+    /// 本条证的是**通电**：typeck 认这个名字、`enemy_alive` 返 `int` 能直接进 `if` 条件、
+    /// codegen 发得出 `OP_SYS 82`、派发臂接得住，并且它对**真的活着的敌**返 1
+    /// （返 0 的话整个 `if` 体不执行 ⇒ 那颗弹压根不存在，`expect` 就地红）。
+    #[test]
+    fn enemy_alive_probe_drives_the_same_snipe_chain_end_to_end() {
+        use stg_core::math::{Fx, cordic};
+        let src = "sub main() {\n\
+                     var e: int = spawn_enemy(60.0fx, -80.0fx, 100, 0, 0, 3, none);\n\
+                     set_global(20, e);\n\
+                     var n: int = nearest_enemy(64.0fx, -84.0fx);\n\
+                     set_global(21, n);\n\
+                     set_global(22, enemy_alive(n));\n\
+                     set_global(23, enemy_alive(9999));\n\
+                     if enemy_alive(n) == 1 {\n\
+                       _ = fire(0, 0, 0.0fx, 0.0fx, 3.0fx, atan2(enemy_y(n), enemy_x(n)), none, none);\n\
+                     }\n\
+                     loop { wait(1); }\n\
+                   }";
+        let w = run(src, 2);
+        let view = w.body.view();
+        let g = view.globals();
+        assert!(g[20] >= 0, "敌应建成（否则后面几条断言全退化成假绿）");
+        assert_eq!(g[21], g[20], "nearest_enemy 返的就是刚建的那只敌");
+        assert_eq!(g[22], 1, "活敌 ⇒ 1");
+        assert_eq!(g[23], 0, "越界句柄 ⇒ 0（恒返 1 的实现在这里红）");
+
+        let expect = cordic::atan2(Fx::from_int(-80), Fx::from_int(60));
+        let p = view.bullets();
+        let i = p
+            .iter_alive()
+            .next()
+            .expect("探活为真 ⇒ if 体执行 ⇒ 必须真的开出一颗弹");
+        assert_eq!(p.angle()[i], expect, "弹真的朝那只敌打（链路整条接通）");
+        assert_eq!(view.diag().task_faults, 0);
+    }
 }

@@ -223,6 +223,46 @@ pub const SYS_DIST: u16 = 78;
 /// （`nearest_enemy` 拿号 → `enemy_hp` 轮询）。owner 类别无限制（关卡任务也该能查）。
 pub const SYS_NEAREST_ENEMY: u16 = 79;
 
+// ── 敌坐标读口（80-81；敌坐标读口刀 2026-07-31）──────────────────────────────
+/// 按敌号读 **x**（80）：1 参 `handle`（池 index，与 [`SYS_ENEMY_HP`]/[`SYS_NEAREST_ENEMY`]
+/// 同口径——直读、不比对 generation，句柄复用不可辨），押 `Fx` raw。
+///
+/// 补的是上一刀（77-79 通电）暴露的断头路：脚本拿得到敌号却读不到坐标，
+/// "查最近的敌 → 朝它开火"算不出角度。数据本就在敌池里躺着，缺的只是读口。
+///
+/// P4-b 降级（照 `sys_enemy_hp`）：**负句柄 / 越界 / 死槽 → 返 `0`**，不 Fault、
+/// **不计 `contract_viol`**（纯读族口径）；`ENEMY_DYING` 的敌**仍可读**（`is_alive` 是
+/// 存活位，dying 只是 flag，槽活到相位 9 才回收）；owner 类别**无限制**（关卡任务也该能查）。
+///
+/// **为什么降级值是 `0` 而不是哨兵**：`enemy_hp` 能用 `-1` 是因为 hp 天然非负；坐标没有
+/// 这个便利——`-1` 是完全合法的 `Fx` raw（≈ −0.0000153），**没有哨兵位可用**。取 `Fx::ZERO`
+/// 与 `self_pos` 对 STAGE owner 的第三分支同款。代价是"敌恰在原点"与"号无效"读起来一样，
+/// 故探活归脚本：先 `enemy_hp(e) != -1` 再读坐标（手册 `docs/ecl-lang.md` 写死了这条惯例）。
+/// ⚠️ 探活判据**不是** `enemy_hp(e) >= 0`——overkill 的敌 hp 是真实负值
+/// （`settle::kill_enemy` 只 `min(0)`，不抹平负血），`>= 0` 会把"刚被打穿、槽还在"的敌误判成无效。
+pub const SYS_ENEMY_X: u16 = 80;
+/// 按敌号读 **y**（81）——镜像 [`SYS_ENEMY_X`]，语义/降级/owner 口径逐条相同。
+pub const SYS_ENEMY_Y: u16 = 81;
+
+// ── 探活读口（82；探活读口刀 2026-07-31）────────────────────────────────────
+/// 敌**探活**（82，ZUN `555 enmAlive`）：1 参 `handle`（池 index，同读族口径），
+/// 押 **1 或 0**。
+///
+/// 补的是上一刀留下的残余缝：探活此前只能拿 `enemy_hp(e) != -1` 当探针，而 `-1`
+/// **同时是降级值和一个合法血量**——overkill 的敌 hp 是真实负值（`settle::kill_enemy`
+/// 只 `min(0)`，不抹平），血量恰为 −1 的活敌会被旧探针误判成"号无效"。本号是专用口，
+/// 与血量取值无关。
+///
+/// **判据逐字同 [`SYS_ENEMY_HP`]/`sys_enemy_pos`**：`handle >= 0 && idx < CAP &&
+/// is_alive(idx)`。不 Fault、**不计 `contract_viol`**（纯读族口径）；owner 类别**无限制**。
+///
+/// **语义裁定（人类拍板）：判的是「槽有效」，含 `ENEMY_DYING` 的敌 → 返 1，不是「还能打」。**
+/// 理由是读族四条（`enemy_hp`/`enemy_x`/`enemy_y`/`enemy_alive`）必须用**完全相同**的三判据
+/// ——dying 的槽要活到相位 9（坐标仍读得到），四条里单独给一条换判据会让这组口径散掉。
+/// 配套建议写在手册：[`crate::world::WorldBody::nearest_enemy`] **本身已排除 dying**
+/// （候选 = 存活且非 dying），所以"从它拿到的号后来变 dying"应当**重查**而不是继续用。
+pub const SYS_ENEMY_ALIVE: u16 = 82;
+
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
 fn pop(task: &mut Task) -> Result<i32, u8> {
@@ -296,6 +336,38 @@ fn sys_enemy_hp(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let idx = handle as usize;
     let alive = handle >= 0 && idx < crate::enemy::EnemyPool::CAP && ctx.body.enemies.is_alive(idx);
     push(task, if alive { ctx.body.enemies.hp[idx] } else { -1 })
+}
+
+/// `SYS_ENEMY_X`(80)/`SYS_ENEMY_Y`(81) 共享的读法——存活判据逐字同 `sys_enemy_hp`
+/// （负句柄/越界/死槽降级；dying 仍算活），只有降级值不同（坐标无哨兵位可用 → `Fx::ZERO`，
+/// 理由见 [`SYS_ENEMY_X`] 号表注释）。`want_y` 选轴：`false`=x，`true`=y。
+fn sys_enemy_pos(task: &mut Task, ctx: &mut VmCtx, want_y: bool) -> Result<(), u8> {
+    let handle = pop(task)?;
+    let idx = handle as usize;
+    let alive = handle >= 0 && idx < crate::enemy::EnemyPool::CAP && ctx.body.enemies.is_alive(idx);
+    let v = if alive {
+        if want_y {
+            ctx.body.enemies.y[idx]
+        } else {
+            ctx.body.enemies.x[idx]
+        }
+    } else {
+        Fx::ZERO
+    };
+    push(task, v.raw())
+}
+
+/// `SYS_ENEMY_ALIVE`(82)：存活判据**逐字同** `sys_enemy_hp`/`sys_enemy_pos`（负句柄/越界/
+/// 死槽 → 0；`ENEMY_DYING` 仍算活——`is_alive` 是存活位，dying 只是 flag，槽活到相位 9
+/// 才回收），只是把那个判据**本身**押出去而不是拿它选一个值。
+///
+/// 存在的理由见 [`SYS_ENEMY_ALIVE`] 号表注释：`enemy_hp(e) != -1` 这个旧探针在"活敌血量
+/// 恰为 −1"那一格会误判，专用口没有这条缝。
+fn sys_enemy_alive(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let handle = pop(task)?;
+    let idx = handle as usize;
+    let alive = handle >= 0 && idx < crate::enemy::EnemyPool::CAP && ctx.body.enemies.is_alive(idx);
+    push(task, if alive { 1 } else { 0 })
 }
 
 /// self owner 必须是 BULLET，否则脚本作者违约 → `Fault`（misuse 策略，见模块文档）。
@@ -714,6 +786,11 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             };
             push(task, idx)
         }
+        // ── 敌坐标读口 80/81（敌坐标读口刀）──────────────────────────────────
+        SYS_ENEMY_X => sys_enemy_pos(task, ctx, false),
+        SYS_ENEMY_Y => sys_enemy_pos(task, ctx, true),
+        // ── 探活读口 82（探活读口刀）────────────────────────────────────────
+        SYS_ENEMY_ALIVE => sys_enemy_alive(task, ctx),
         _ => Err(FAULT_BAD_OP),
     }
 }
@@ -4935,6 +5012,203 @@ mod tests {
         let mut t = Task::default();
         assert!(call(&mut w, &ecl, &mut t, SYS_NEAREST_ENEMY, &[0, 0]).is_ok());
         assert_eq!(t.stack[0], -1);
+    }
+
+    /// **轴判别腿**：敌放在 **x ≠ y** 的位置（30, −70）分别断言——放 (5,5) 的话把两条
+    /// 派发臂写反是完全看不出来的（同「圆心重合式测试对半径映射是瞎的」那条推论）。
+    /// 负坐标那一半还顺带钉死"别把 `Fx` raw 当无符号搬"。
+    #[test]
+    fn enemy_x_and_enemy_y_read_their_own_axis() {
+        let (mut w, ecl) = fresh();
+        let h = crate::world::test_support::spawn_enemy(&mut w, 30, -70, 5);
+        let mut t = Task::default();
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_X, &[h.index as i32]).is_ok());
+        assert_eq!(t.sp, 1, "enemy_x 押一个返回值");
+        assert_eq!(
+            t.stack[0],
+            Fx::from_int(30).raw(),
+            "enemy_x 读的是 x（30），不是 y（-70）"
+        );
+
+        t.sp = 0;
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_Y, &[h.index as i32]).is_ok());
+        assert_eq!(
+            t.stack[0],
+            Fx::from_int(-70).raw(),
+            "enemy_y 读的是 y（-70），不是 x（30）"
+        );
+    }
+
+    /// 无效句柄三腿（负 / 越界 / 死槽）一律 **0**（P4-b 纯读族降级，不 Fault、不计
+    /// `contract_viol`）。坐标没有 `enemy_hp` 那样的哨兵位可用（−1 是合法 `fx`），故取
+    /// `Fx::ZERO`——探活归脚本（`enemy_hp(e) != -1`），手册写死了这条惯例。
+    #[test]
+    fn enemy_pos_on_invalid_handle_degrades_to_zero() {
+        let (mut w, ecl) = fresh();
+        let h = crate::world::test_support::spawn_enemy(&mut w, 30, -70, 5);
+        let before = w.body.diag.contract_viol;
+        let mut t = Task::default();
+
+        for (no, name) in [(SYS_ENEMY_X, "enemy_x"), (SYS_ENEMY_Y, "enemy_y")] {
+            t.sp = 0;
+            assert!(call(&mut w, &ecl, &mut t, no, &[-1]).is_ok());
+            assert_eq!(t.stack[0], 0, "{name}：负句柄降级返 0");
+
+            t.sp = 0;
+            assert!(call(&mut w, &ecl, &mut t, no, &[9999]).is_ok());
+            assert_eq!(t.stack[0], 0, "{name}：越界句柄降级返 0");
+        }
+
+        w.body.enemies.free(h);
+        for (no, name) in [(SYS_ENEMY_X, "enemy_x"), (SYS_ENEMY_Y, "enemy_y")] {
+            t.sp = 0;
+            assert!(call(&mut w, &ecl, &mut t, no, &[h.index as i32]).is_ok());
+            assert_eq!(t.stack[0], 0, "{name}：死槽降级返 0");
+        }
+        assert_eq!(
+            w.body.diag.contract_viol, before,
+            "纯读族降级不计违约（同 enemy_hp 口径）"
+        );
+    }
+
+    /// `ENEMY_DYING` 的敌**仍可读**——`is_alive` 是存活位，dying 只是 flag，槽要活到相位 9
+    /// 才回收。别顺手把 dying 也降级了，那与 `enemy_hp` 的既有读族口径不一致。
+    #[test]
+    fn enemy_pos_is_readable_while_dying() {
+        let (mut w, ecl) = fresh();
+        let h = crate::world::test_support::spawn_enemy(&mut w, 30, -70, 5);
+        w.body.enemies.flags[h.index as usize] |= crate::enemy::ENEMY_DYING;
+        let mut t = Task::default();
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_X, &[h.index as i32]).is_ok());
+        assert_eq!(t.stack[0], Fx::from_int(30).raw(), "dying 的敌坐标仍读得到");
+        t.sp = 0;
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_Y, &[h.index as i32]).is_ok());
+        assert_eq!(t.stack[0], Fx::from_int(-70).raw());
+    }
+
+    /// owner 类别无限制（同 `enemy_hp`/`nearest_enemy`）：STAGE 任务照样能读。
+    #[test]
+    fn enemy_pos_is_callable_from_a_stage_task() {
+        let (mut w, ecl) = fresh();
+        let h = crate::world::test_support::spawn_enemy(&mut w, 30, -70, 5);
+        let mut t = Task {
+            owner_kind: OWNER_STAGE,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_X, &[h.index as i32]).is_ok());
+        assert_eq!(t.stack[0], Fx::from_int(30).raw());
+    }
+
+    // ── 探活读口 82（enemy_alive；探活读口刀 2026-07-31）──────────────────────
+
+    /// 活敌返 **1**、三种无效句柄（负 / 越界 / 死槽）各返 **0**，且**不计 `contract_viol`**
+    /// （纯读族口径，同 `enemy_hp`/`sys_enemy_pos`）。
+    #[test]
+    fn enemy_alive_is_one_for_a_live_enemy_and_zero_for_invalid_handles() {
+        let (mut w, ecl) = fresh();
+        let h = crate::world::test_support::spawn_enemy(&mut w, 30, -70, 5);
+        let before = w.body.diag.contract_viol;
+        let mut t = Task::default();
+
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_ALIVE, &[h.index as i32]).is_ok());
+        assert_eq!(t.sp, 1, "enemy_alive 押一个返回值");
+        assert_eq!(t.stack[0], 1, "活敌返 1");
+
+        t.sp = 0;
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_ALIVE, &[-1]).is_ok());
+        assert_eq!(t.stack[0], 0, "负句柄返 0");
+
+        t.sp = 0;
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_ALIVE, &[9999]).is_ok());
+        assert_eq!(t.stack[0], 0, "越界句柄返 0");
+
+        w.body.enemies.free(h);
+        t.sp = 0;
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_ALIVE, &[h.index as i32]).is_ok());
+        assert_eq!(t.stack[0], 0, "死槽返 0");
+
+        assert_eq!(
+            w.body.diag.contract_viol, before,
+            "纯读族降级不计违约（同 enemy_hp 口径）"
+        );
+    }
+
+    /// **判别腿①——本刀唯一的语义裁定**：`ENEMY_DYING` 的敌 `enemy_alive` 仍返 **1**。
+    /// 判的是「槽有效」而不是「还能打」：读族四条（`enemy_hp`/`enemy_x`/`enemy_y`/
+    /// `enemy_alive`）必须用**完全相同**的三判据——dying 的槽要活到相位 9（坐标仍读得到），
+    /// 四条里单独给一条换判据会让这组口径散掉。
+    ///
+    /// "排除 dying"是最自然的错法（名字读起来就像"还能打"），而它**只有这条测试逮得住**：
+    /// dying 在正常路径上是个转瞬即逝的中间态，e2e 与其余各腿全都照绿。
+    /// 顺带钉住与 `enemy_x` 的同判：同一个 dying 句柄，两条口必须给出同一个"槽有效"结论。
+    #[test]
+    fn enemy_alive_stays_one_while_dying() {
+        let (mut w, ecl) = fresh();
+        let h = crate::world::test_support::spawn_enemy(&mut w, 30, -70, 5);
+        w.body.enemies.flags[h.index as usize] |= crate::enemy::ENEMY_DYING;
+        let mut t = Task::default();
+
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_ALIVE, &[h.index as i32]).is_ok());
+        assert_eq!(
+            t.stack[0], 1,
+            "判的是「槽有效」不是「还能打」——dying 的敌仍返 1"
+        );
+
+        t.sp = 0;
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_X, &[h.index as i32]).is_ok());
+        assert_eq!(
+            t.stack[0],
+            Fx::from_int(30).raw(),
+            "坐标读口对 dying 同判（读族四条判据逐字一致）"
+        );
+    }
+
+    /// **判别腿②——与 `enemy_hp` 的判据一致性**：同一个句柄，`enemy_alive == 1` ⟺
+    /// `enemy_hp` **不因"槽无效"**降级。三种无效（负 / 越界 / 死槽）各断言两者同步
+    /// （`0` ⟺ `-1`）。
+    ///
+    /// 外加本 syscall **存在的全部理由**那一格：活敌血量**恰为 −1** 时（overkill 的敌 hp
+    /// 是真实负值，`settle::kill_enemy` 只 `min(0)` 不抹平）`enemy_hp` 返 −1，与降级值
+    /// 撞车——旧探针 `enemy_hp(e) != -1` 就在这一格误判，而 `enemy_alive` 照返 1。
+    /// 这一格红了就说明新口只是 `enemy_hp` 的花哨包装、白加一号。
+    #[test]
+    fn enemy_alive_agrees_with_enemy_hp_and_closes_the_minus_one_seam() {
+        let (mut w, ecl) = fresh();
+        let h = crate::world::test_support::spawn_enemy(&mut w, 30, -70, 5);
+        let mut t = Task::default();
+
+        // ① 缝本身：活敌的 hp 恰好撞上降级哨兵 −1。
+        w.body.enemies.hp[h.index as usize] = -1;
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_HP, &[h.index as i32]).is_ok());
+        assert_eq!(t.stack[0], -1, "旧探针的盲区：活敌 hp 与降级值不可辨");
+        t.sp = 0;
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_ALIVE, &[h.index as i32]).is_ok());
+        assert_eq!(t.stack[0], 1, "槽有效 ⇒ 1（这一格是本刀存在的全部理由）");
+
+        // ② 三种无效：两条口必须同步（alive=0 ⟺ hp 降级成 −1）。
+        w.body.enemies.free(h);
+        for (handle, name) in [(-1i32, "负句柄"), (9999, "越界"), (h.index as i32, "死槽")] {
+            t.sp = 0;
+            assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_ALIVE, &[handle]).is_ok());
+            let alive = t.stack[0];
+            t.sp = 0;
+            assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_HP, &[handle]).is_ok());
+            let hp = t.stack[0];
+            assert_eq!((alive, hp), (0, -1), "{name}：两条口同步降级");
+        }
+    }
+
+    /// owner 类别无限制（同 `enemy_hp`/`enemy_x`/`nearest_enemy`）：STAGE 任务照样能探。
+    #[test]
+    fn enemy_alive_is_callable_from_a_stage_task() {
+        let (mut w, ecl) = fresh();
+        let h = crate::world::test_support::spawn_enemy(&mut w, 30, -70, 5);
+        let mut t = Task {
+            owner_kind: OWNER_STAGE,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_ALIVE, &[h.index as i32]).is_ok());
+        assert_eq!(t.stack[0], 1);
     }
 
     /// owner 类别无限制：STAGE 任务（关卡编排）照样能查。

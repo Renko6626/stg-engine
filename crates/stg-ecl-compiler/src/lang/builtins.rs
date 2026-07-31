@@ -281,8 +281,39 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Fx), Val(Fx)],
         ret: Some(Int),
-        doc: "离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的是池 index,可直接喂 enemy_hp(悬垂/复用不可辨,同 enemy_hp)",
+        doc: "离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的是池 index,可直接喂 enemy_alive/enemy_hp/enemy_x/enemy_y(悬垂/复用不可辨,同 enemy_hp);它已排除 dying,故拿到的号过几帧可能已变 dying——该重查而不是继续用",
         param_names: &["x", "y"],
+    },
+    // 敌坐标读口刀（2026-07-31）：上一刀通电 `nearest_enemy` 后暴露的断头路——拿得到敌号
+    // 读不到坐标，"查最近的敌 → 朝它开火"接不通。数据本就在敌池里，缺的只是读口。
+    Builtin {
+        name: "enemy_x",
+        syscall: syscall::SYS_ENEMY_X,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Fx),
+        doc: "按敌号读 x;死/悬垂/越界句柄返 0(**不是哨兵**——0 是合法坐标,先用 enemy_alive(e) == 1 探活再读)",
+        param_names: &["handle"],
+    },
+    Builtin {
+        name: "enemy_y",
+        syscall: syscall::SYS_ENEMY_Y,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Fx),
+        doc: "按敌号读 y;死/悬垂/越界句柄返 0(同 enemy_x,先探活再读);配 enemy_x + atan2 即可朝任意敌开火",
+        param_names: &["handle"],
+    },
+    // 探活读口刀（2026-07-31）：专用探活口，堵 `enemy_hp(e) != -1` 那条残余缝
+    // （−1 同时是降级值和一个合法血量 ⇒ overkill 的活敌会被旧探针误判）。
+    Builtin {
+        name: "enemy_alive",
+        syscall: syscall::SYS_ENEMY_ALIVE,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Int),
+        doc: "敌号是否指向一个有效敌槽,返 1/0(探活首选,比 enemy_hp(e) != -1 稳——血量恰为 -1 的活敌不会被误判);**含正在死的敌**(判的是槽有效不是还能打)",
+        param_names: &["handle"],
     },
     Builtin {
         name: "sin",
@@ -796,6 +827,9 @@ mod tests {
             "atan2",
             "dist",
             "nearest_enemy",
+            "enemy_x",
+            "enemy_y",
+            "enemy_alive",
             "sin",
             "cos",
             "set_speed",
@@ -1115,6 +1149,38 @@ mod tests {
         assert_eq!(n.ret, Some(Int), "返的是池 index，不是 fx");
         assert_eq!(n.syscall, syscall::SYS_NEAREST_ENEMY);
         assert!(!n.is_op);
+    }
+
+    /// 敌坐标读口刀（80/81）：**返回型必须是 `fx`**——它们存在的全部理由就是拿去减、
+    /// 喂 `atan2`/`dist`，返 `int` 会让作者每处都补一记穿透 cast。号也逐条钉死，防
+    /// 80/81 两条派发臂在表里写反（两条内建同签名，写反了 typeck 一声不吭）。
+    #[test]
+    fn enemy_pos_builtins_return_fx_and_carry_their_own_syscall_numbers() {
+        let x = lookup("enemy_x").expect("enemy_x 应在表中");
+        assert_eq!(x.params, &[Val(Int)], "1 参：池 index");
+        assert_eq!(x.param_names, &["handle"]);
+        assert_eq!(x.ret, Some(Fx), "返 fx（直接可减/可喂 atan2）");
+        assert_eq!(x.syscall, syscall::SYS_ENEMY_X);
+        assert!(!x.is_op);
+
+        let y = lookup("enemy_y").expect("enemy_y 应在表中");
+        assert_eq!(y.params, &[Val(Int)]);
+        assert_eq!(y.ret, Some(Fx));
+        assert_eq!(y.syscall, syscall::SYS_ENEMY_Y);
+        assert!(!y.is_op);
+        assert_ne!(x.syscall, y.syscall, "两条不能共用一个号");
+    }
+
+    /// 探活读口刀（82）：`enemy_alive` 返 **`int`**（1/0 的布尔面孔，直接进 `if` 条件），
+    /// **不是** `fx`——返 `fx` 会让 `enemy_alive(e) == 1` 这个招牌写法判型失败。
+    #[test]
+    fn enemy_alive_builtin_returns_int_and_carries_its_own_syscall_number() {
+        let a = lookup("enemy_alive").expect("enemy_alive 应在表中");
+        assert_eq!(a.params, &[Val(Int)], "1 参：池 index");
+        assert_eq!(a.param_names, &["handle"]);
+        assert_eq!(a.ret, Some(Int), "返 1/0（可直接进 if 条件）");
+        assert_eq!(a.syscall, syscall::SYS_ENEMY_ALIVE);
+        assert!(!a.is_op);
     }
 
     #[test]
