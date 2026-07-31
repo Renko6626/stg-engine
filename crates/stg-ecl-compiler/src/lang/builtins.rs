@@ -73,7 +73,7 @@ use Ty::{Angle, Fx, Int};
 
 /// v1.1 内建函数全集（源码序即本表序——`lookup` 线性扫描，条目 <30、无序容器无必要）。
 const BUILTINS: &[Builtin] = &[
-    // ── 创建/世界变更（syscall 2x）───────────────────────────────────────
+    // ── 创建/世界变更（syscall 2xx/4xx/7xx）───────────────────────────────────────
     Builtin {
         name: "fire",
         syscall: syscall::SYS_CREATE_BULLET,
@@ -372,7 +372,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "查表三角,返 fx(VM op 直发,非 syscall)",
         param_names: &["angle"],
     },
-    // ── 弹 setter 族九连（syscall 3x；按 syscall.rs/motion.rs 顺序编号；handle:int 首参，
+    // ── 弹 setter 族九连（syscall 3xx；按 syscall.rs/motion.rs 顺序编号；handle:int 首参，
     // 见 plan 核心接口块——VM 侧 setter 语义实取 self owner，handle 参数的落地方式留 T3
     // 定，T2 只钉表层签名，见本刀报告"contract notes for T3"）───────────────────────
     //
@@ -465,7 +465,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "弹 setter:指向自机方向再加 offset 偏移角;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定",
         param_names: &["handle", "offset"],
     },
-    // ── 符卡计器（syscall 28/29/11；符卡机构 spec 2026-07-24 §5）─────────────
+    // ── 符卡计器（syscall 740/741/130；符卡机构 spec 2026-07-24 §5）─────────────
     Builtin {
         name: "spell_begin",
         syscall: syscall::SYS_SPELL_BEGIN,
@@ -511,7 +511,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "当前卡剩余帧数",
         param_names: &[],
     },
-    // ── 表现锚点四字段（syscall 5x；整局流程刀 Task 2/3）─────────────────────
+    // ── 表现锚点四字段（syscall 5xx；整局流程刀 Task 2/3）─────────────────────
     Builtin {
         name: "add_score",
         syscall: syscall::SYS_ADD_SCORE,
@@ -558,7 +558,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧",
         param_names: &[],
     },
-    // ── B20：账面增量三件套（syscall 55/56/57）。只有 add_*、没有 set_*——绝对赋值场景
+    // ── B20：账面增量三件套（syscall 510/511/512）。只有 add_*、没有 set_*——绝对赋值场景
     //    已被 Loadout（开局装备）收编，是人类裁定，别"补全"（裁定详见 syscall.rs 号表注释）。
     Builtin {
         name: "add_lives",
@@ -587,7 +587,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout",
         param_names: &["delta"],
     },
-    // ── 敌人死亡效果（syscall 58-61；参照 ZUN ECL 506/507/509/561）───────────
+    // ── 敌人死亡效果（syscall 520-530；参照 ZUN ECL 506/507/509/561）───────────
     Builtin {
         name: "drop_clear",
         syscall: syscall::SYS_DROP_CLEAR,
@@ -624,7 +624,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)",
         param_names: &[],
     },
-    // ── Shooter：预存发射参数集（syscall 62-76；参照 ZUN et* 族 600-641）───────
+    // ── Shooter：预存发射参数集（syscall 600-660；参照 ZUN et* 族 600-641）───────
     //    `sh_reset` 重置编号槽 → 一堆以 `id` 打头的 setter 逐项配 → `sh_fire(id)` 开火。
     //    改一个字段再开一次火就是下一波。每任务 4 个槽（id ∈ 0..4），槽号越界一律 no-op+计数。
     //    **前 14 条只写字段、无副作用**：appearance 在册/xform 区间/sub 号在册的校验
@@ -1178,7 +1178,7 @@ mod tests {
         }
     }
 
-    /// 小清洗刀（77-79）：三条新内建的**返回型**与 syscall 号。返回型是契约——
+    /// 小清洗刀（110/140/141）：三条新内建的**返回型**与 syscall 号。返回型是契约——
     /// `atan2` 返 `angle`（拿去喂 `fire` 的角度位不用 cast）、`dist` 返 `fx`、
     /// `nearest_enemy` 返 `int`（池 index）；写错任何一个都会让作者被迫加位穿透 cast。
     #[test]
@@ -1203,7 +1203,7 @@ mod tests {
         assert!(!n.is_op);
     }
 
-    /// 敌坐标读口刀（80/81）：**返回型必须是 `fx`**——它们存在的全部理由就是拿去减、
+    /// 敌坐标读口刀（101/102）：**返回型必须是 `fx`**——它们存在的全部理由就是拿去减、
     /// 喂 `atan2`/`dist`，返 `int` 会让作者每处都补一记穿透 cast。号也逐条钉死，防
     /// 80/81 两条派发臂在表里写反（两条内建同签名，写反了 typeck 一声不吭）。
     #[test]
@@ -1223,7 +1223,7 @@ mod tests {
         assert_ne!(x.syscall, y.syscall, "两条不能共用一个号");
     }
 
-    /// 探活读口刀（82）：`enemy_alive` 返 **`int`**（1/0 的布尔面孔，直接进 `if` 条件），
+    /// 探活读口刀（103）：`enemy_alive` 返 **`int`**（1/0 的布尔面孔，直接进 `if` 条件），
     /// **不是** `fx`——返 `fx` 会让 `enemy_alive(e) == 1` 这个招牌写法判型失败。
     #[test]
     fn enemy_alive_builtin_returns_int_and_carries_its_own_syscall_number() {

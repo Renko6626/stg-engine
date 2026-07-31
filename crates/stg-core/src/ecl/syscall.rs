@@ -168,24 +168,24 @@ pub const SYS_ADD_BOMBS: u16 = 511;
 /// = 显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 索引就 OOB（见
 /// `world::WorldBody::set_player_power` 文档）。增量形态同为人类裁定。
 pub const SYS_ADD_POWER: u16 = 512;
-/// 清空自身待掉落计数（58；0 参、无返回。敌人死亡效果刀，参照 ZUN ECL 的 `dropClear` 506）。
+/// 清空自身待掉落计数（520；0 参、无返回。敌人死亡效果刀，参照 ZUN ECL 的 `dropClear` 506）。
 /// self owner 必须是 ENEMY，否则 Fault（misuse 策略，同 `move_enemy_to`）。
 pub const SYS_DROP_CLEAR: u16 = 520;
-/// 给自身待掉落计数增量加 `n` 颗 `type`（59；2 参、无返回。参照 ZUN `dropExtra` 507）。
+/// 给自身待掉落计数增量加 `n` 颗 `type`（521；2 参、无返回。参照 ZUN `dropExtra` 507）。
 /// **只增不减**是人类裁定——要清空用 `drop_clear()`。坏类型/负 n 的处置见
 /// [`crate::world::WorldBody::add_enemy_drop`]。
 pub const SYS_DROP_ADD: u16 = 521;
-/// 立刻把自身待掉落计数撒出去（60；0 参、无返回。参照 ZUN `dropItems` 509）。
+/// 立刻把自身待掉落计数撒出去（522；0 参、无返回。参照 ZUN `dropItems` 509）。
 /// **吐完不清空**（人类裁定 D-3，照 ZUN 字面）——故 `drop_items(); die();` 掉**双份**，
 /// 作者自负。这条语义有测试钉死（`drop_items_does_not_clear_counts_...`），别"顺手修好"。
 pub const SYS_DROP_ITEMS: u16 = 522;
-/// 就地阵亡：跑完整死亡效果（61；0 参、无返回。参照 ZUN `die` 561）。
+/// 就地阵亡：跑完整死亡效果（530；0 参、无返回。参照 ZUN `die` 561）。
 /// **表层 `die()` 降低成本 syscall + `OP_KILL_SELF` 两条指令**（见 codegen），故调用它的
 /// 任务立即终止（人类裁定 D-4）。ZUN 的 561 还经 `setDeath`(556) 间接一层——那半留给
 /// `death_script` 通电那一刀，届时与 ZUN 完全同构。
 pub const SYS_DIE: u16 = 530;
 
-// ── Shooter：预存发射参数集（62-76；shooter 刀 2026-07-31，参照 ZUN et* 族 600-641）──
+// ── Shooter：预存发射参数集（600-660；shooter 刀 2026-07-31，参照 ZUN et* 族 600-641）──
 //
 // 每任务 4 个编号槽（[`crate::ecl::shooter::SHOOTERS_PER_TASK`]）。`id ≥ SHOOTERS_PER_TASK`
 // 一律 no-op + `contract_viol`（P4-b）——不 Fault，因为"槽号写错"是常见笔误而非结构性违约，
@@ -193,7 +193,7 @@ pub const SYS_DIE: u16 = 530;
 //
 // 下面**前 14 条**都只是写字段、无副作用：不查 appearance 是否在册、不查 xform 区间、不查
 // sub 号在册——那些校验统一在**开火那一刻**做（同 `fire` 的"先验后建"口径：设参数时弹还
-// 不存在，没有可拒绝的对象）。`sh_fire`(76) 的语义见其自身文档。
+// 不存在，没有可拒绝的对象）。`sh_fire`(660) 的语义见其自身文档。
 pub const SYS_SH_RESET: u16 = 600;
 pub const SYS_SH_SPRITE: u16 = 610;
 pub const SYS_SH_OFFSET: u16 = 620;
@@ -208,7 +208,7 @@ pub const SYS_SH_RING: u16 = 641;
 pub const SYS_SH_XFORM: u16 = 650;
 pub const SYS_SH_TASK: u16 = 651;
 pub const SYS_SH_REQ: u16 = 652;
-/// 开火（76）：用发射器槽 `id` 的参数造弹。**无返回值**（人类裁定 D-8——本语言要求值必须
+/// 开火（660）：用发射器槽 `id` 的参数造弹。**无返回值**（人类裁定 D-8——本语言要求值必须
 /// 消费，有返回值就得写 `_ = sh_fire(0);`，而开火是循环里最高频的语句）。
 ///
 /// 七步见 spec §10。要点三条，都有判别式测试钉着，**别"顺手改好"**：
@@ -217,15 +217,15 @@ pub const SYS_SH_REQ: u16 = 652;
 /// - 直角偏移与极坐标偏移**相加**（ZUN 626 明写 stacks），不是覆盖。
 pub const SYS_SH_FIRE: u16 = 660;
 
-// ── 数学/查询面（77-79；小清洗刀 2026-07-31）────────────────────────────────
-/// 反正切（77）：2 参 `y, x`（**都是 `Fx` raw**），押 BAM 角。核里的
+// ── 数学/查询面（110/140/141；小清洗刀 2026-07-31）────────────────────────────────
+/// 反正切（140）：2 参 `y, x`（**都是 `Fx` raw**），押 BAM 角。核里的
 /// [`crate::math::cordic::atan2`]（整数 CORDIC，钉死 16 轮）此前脚本够不着——`aim_player`
 /// 只能瞄自机，这条能瞄任意点/任意敌。
 ///
 /// **无 P4 分支**：CORDIC 对任意 `(y, x)` 都有定义，含 `(0, 0)`（返 `Angle::ZERO`）——
 /// 没有"坏参数"这个概念，故不计 `contract_viol`、不 Fault。
 pub const SYS_ATAN2: u16 = 140;
-/// 向量模（78）：2 参 `dx, dy`（`Fx` raw），押 `Fx` raw。**不是两点距离**——两点距离由
+/// 向量模（141）：2 参 `dx, dy`（`Fx` raw），押 `Fx` raw。**不是两点距离**——两点距离由
 /// 脚本自己减（`dist(bx - ax, by - ay)`）。
 ///
 /// 实现 = `isqrt(len_sq(dx, dy))`：[`crate::math::geom::len_sq`] 返的是 **Q32.32**
@@ -247,19 +247,19 @@ pub const SYS_ATAN2: u16 = 140;
 /// 无 P4 计数分支：饱和是正常语义（同 `add_score`/`add_lives` 族的钳位口径），
 /// 不计 `contract_viol`、不 Fault。
 pub const SYS_DIST: u16 = 141;
-/// 最近敌查询（79）：2 参 `x, y`（`Fx` raw），押**打包敌号**；场上无敌（或全 dying）→ **-1**。
+/// 最近敌查询（110）：2 参 `x, y`（`Fx` raw），押**打包敌号**；场上无敌（或全 dying）→ **-1**。
 ///
 /// [`crate::world::WorldBody::nearest_enemy`] 自 M0-13 建完就是死代码（有实现、有测试、
 /// 从没有 syscall 暴露过），本条只是给它通电，世界侧一行未改。
 ///
-/// 编码同 [`SYS_ENEMY_HP`]（12）/[`SYS_SPAWN_ENEMY`]（22）——三条本就是配对使用的
+/// 编码同 [`SYS_ENEMY_HP`]（100）/[`SYS_SPAWN_ENEMY`]（210）——三条本就是配对使用的
 /// （拿号 → 轮询）。世界侧返的一直是**完整句柄**，敌句柄打包刀（2026-07-31）之前
 /// 这里只押 `index`、把 generation 丢了；接上之后槽复用可辨。
 /// owner 类别无限制（关卡任务也该能查）。
 pub const SYS_NEAREST_ENEMY: u16 = 110;
 
-// ── 敌坐标读口（80-81；敌坐标读口刀 2026-07-31）──────────────────────────────
-/// 按敌号读 **x**（80）：1 参 `handle`（**打包敌号**，与 [`SYS_ENEMY_HP`]/
+// ── 敌坐标读口（101-102；敌坐标读口刀 2026-07-31）──────────────────────────────
+/// 按敌号读 **x**（101）：1 参 `handle`（**打包敌号**，与 [`SYS_ENEMY_HP`]/
 /// [`SYS_NEAREST_ENEMY`] 同口径——含 generation，槽复用可辨），押 `Fx` raw。
 ///
 /// 补的是上一刀（77-79 通电）暴露的断头路：脚本拿得到敌号却读不到坐标，
@@ -276,11 +276,11 @@ pub const SYS_NEAREST_ENEMY: u16 = 110;
 /// ⚠️ 探活判据**不是** `enemy_hp(e) >= 0`——overkill 的敌 hp 是真实负值
 /// （`settle::kill_enemy` 只 `min(0)`，不抹平负血），`>= 0` 会把"刚被打穿、槽还在"的敌误判成无效。
 pub const SYS_ENEMY_X: u16 = 101;
-/// 按敌号读 **y**（81）——镜像 [`SYS_ENEMY_X`]，语义/降级/owner 口径逐条相同。
+/// 按敌号读 **y**（102）——镜像 [`SYS_ENEMY_X`]，语义/降级/owner 口径逐条相同。
 pub const SYS_ENEMY_Y: u16 = 102;
 
-// ── 探活读口（82；探活读口刀 2026-07-31）────────────────────────────────────
-/// 敌**探活**（82，ZUN `555 enmAlive`）：1 参 `handle`（**打包敌号**，同读族口径），
+// ── 探活读口（103；探活读口刀 2026-07-31）────────────────────────────────────
+/// 敌**探活**（103，ZUN `555 enmAlive`）：1 参 `handle`（**打包敌号**，同读族口径），
 /// 押 **1 或 0**。
 ///
 /// 补的是上一刀留下的残余缝：探活此前只能拿 `enemy_hp(e) != -1` 当探针，而 `-1`
@@ -299,20 +299,20 @@ pub const SYS_ENEMY_Y: u16 = 102;
 /// （候选 = 存活且非 dying），所以"从它拿到的号后来变 dying"应当**重查**而不是继续用。
 pub const SYS_ENEMY_ALIVE: u16 = 103;
 
-// ── 敌人运动动词族（83-86；T4，对标 ZUN ECL `move` 400-447 族）────────────────
+// ── 敌人运动动词族（410-421；T4，对标 ZUN ECL `move` 400-447 族）────────────────
 // 四条 syscall 都是 `world/motion.rs` 四个 `set_enemy_*` 写 API 的薄封装：owner 违约
 // （非 ENEMY）→ Fault，悬垂句柄/`easing>=8` 的 P4-b 校验全在世界层做过，本层不重复计数。
 
-/// 极坐标速度（83；ZUN `404 moveVel` / `405 moveVelTime`）：4 参正序
+/// 极坐标速度（410；ZUN `404 moveVel` / `405 moveVelTime`）：4 参正序
 /// `dur, angle, speed, easing`。self owner 非 ENEMY → Fault（同 [`SYS_MOVE_ENEMY_TO`]）。
 /// `dur == 0` 是合法退化 = 立即设。
 pub const SYS_MOVE_VEL: u16 = 410;
-/// 笛卡尔速度（84）：4 参正序 `dur, vx, vy, easing`。**`dur > 0` 时在笛卡尔空间插值**
+/// 笛卡尔速度（411）：4 参正序 `dur, vx, vy, easing`。**`dur > 0` 时在笛卡尔空间插值**
 /// ——不转极坐标，否则它就退化成 [`SYS_MOVE_VEL`] 的语法糖（spec §3.3）。
 pub const SYS_MOVE_VEL_XY: u16 = 411;
-/// 只转向、保持速率（85；ZUN `440 moveAngle`）：3 参正序 `dur, angle, easing`。
+/// 只转向、保持速率（420；ZUN `440 moveAngle`）：3 参正序 `dur, angle, easing`。
 pub const SYS_MOVE_ANGLE: u16 = 420;
-/// 只调速、保持方向（86；ZUN `444 moveSpeed`）：3 参正序 `dur, speed, easing`。
+/// 只调速、保持方向（421；ZUN `444 moveSpeed`）：3 参正序 `dur, speed, easing`。
 pub const SYS_MOVE_SPEED: u16 = 421;
 
 // （原 "── $self_* 速度引擎变量（87-90）──" 族——本四条新表里落 0xx `$` 引擎变量族，
@@ -321,14 +321,14 @@ pub const SYS_MOVE_SPEED: u16 = 421;
 // `self_pos`（ENEMY→敌池/BULLET→弹池/其余→0）。存在的理由：笛卡尔没有单轴动词
 // （`move_vel_xy` 两轴齐写），"只插 vy、保住 vx"唯一的写法就是把当前 vx 读出来填回去。
 
-/// owner 的笛卡尔速度 x（87）：ENEMY → 敌池、BULLET → 弹池、其余 → 0（同 [`SYS_SELF_X`]）。
+/// owner 的笛卡尔速度 x（022）：ENEMY → 敌池、BULLET → 弹池、其余 → 0（同 [`SYS_SELF_X`]）。
 /// 存在的理由：笛卡尔没有单轴动词，"只插 vy 保住 vx"唯一的写法是把当前 vx 读出来填回去。
 pub const SYS_SELF_VX: u16 = 22;
-/// owner 的笛卡尔速度 y（88）——镜像 [`SYS_SELF_VX`]。
+/// owner 的笛卡尔速度 y（023）——镜像 [`SYS_SELF_VX`]。
 pub const SYS_SELF_VY: u16 = 23;
-/// owner 的速率（89，作者视图）：与 [`SYS_SELF_VX`]/[`SYS_SELF_VY`] 恒同步（双表示）。
+/// owner 的速率（024，作者视图）：与 [`SYS_SELF_VX`]/[`SYS_SELF_VY`] 恒同步（双表示）。
 pub const SYS_SELF_SPEED: u16 = 24;
-/// owner 的朝向（90，作者视图，BAM）。近停时冻结（`BACKFILL_MIN_SPEED`），故零速下
+/// owner 的朝向（025，作者视图，BAM）。近停时冻结（`BACKFILL_MIN_SPEED`），故零速下
 /// 读到的是**最后一次有效朝向**而非垃圾角。
 pub const SYS_SELF_ANGLE: u16 = 25;
 
@@ -409,7 +409,7 @@ fn self_hp_max(task: &Task, ctx: &VmCtx) -> i32 {
     }
 }
 
-/// `SYS_SPELL_TIMER`（11）：owner 非 ENEMY → 直接押 -1（同 `SYS_SELF_HP` 误用降级口径，
+/// `SYS_SPELL_TIMER`（130）：owner 非 ENEMY → 直接押 -1（同 `SYS_SELF_HP` 误用降级口径，
 /// 不 Fault——读族误用是"确定性安全结果"而非脚本作者违约）；敌 → 押
 /// `spell_frames_left_of`（世界侧核已处理"无绑定 → -1"）。
 fn sys_spell_timer(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -469,7 +469,7 @@ fn resolve_enemy_handle(packed: i32, ctx: &VmCtx) -> Option<usize> {
     }
 }
 
-/// `SYS_ENEMY_HP`（12；A5 补遗）：1 参 `handle`（**打包敌号**，含 generation——槽复用后
+/// `SYS_ENEMY_HP`（100；A5 补遗）：1 参 `handle`（**打包敌号**，含 generation——槽复用后
 /// 旧句柄可辨，见 [`resolve_enemy_handle`]；无效句柄仍是读族误用降级口径，不 Fault）。
 /// 活敌返当前 hp；越界/死槽/gen 不符/负值一律 -1——stage 编排"等 boss 死"的轮询原语。
 fn sys_enemy_hp(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -481,7 +481,7 @@ fn sys_enemy_hp(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     push(task, hp)
 }
 
-/// `SYS_ENEMY_X`(80)/`SYS_ENEMY_Y`(81) 共享的读法——存活判据逐字同 `sys_enemy_hp`
+/// `SYS_ENEMY_X`(101)/`SYS_ENEMY_Y`(102) 共享的读法——存活判据逐字同 `sys_enemy_hp`
 /// （同一个 [`resolve_enemy_handle`]；dying 仍算活），只有降级值不同（坐标无哨兵位可用
 /// → `Fx::ZERO`，理由见 [`SYS_ENEMY_X`] 号表注释）。`want_y` 选轴：`false`=x，`true`=y。
 fn sys_enemy_pos(task: &mut Task, ctx: &mut VmCtx, want_y: bool) -> Result<(), u8> {
@@ -499,7 +499,7 @@ fn sys_enemy_pos(task: &mut Task, ctx: &mut VmCtx, want_y: bool) -> Result<(), u
     push(task, v.raw())
 }
 
-/// `SYS_ENEMY_ALIVE`(82)：存活判据**逐字同** `sys_enemy_hp`/`sys_enemy_pos`（同一个
+/// `SYS_ENEMY_ALIVE`(103)：存活判据**逐字同** `sys_enemy_hp`/`sys_enemy_pos`（同一个
 /// [`resolve_enemy_handle`]：负句柄/越界/死槽/gen 不符 → 0；`ENEMY_DYING` 仍算活——
 /// `is_alive` 是存活位，dying 只是 flag，槽活到相位 9 才回收），只是把那个判据**本身**
 /// 押出去而不是拿它选一个值。
@@ -535,7 +535,7 @@ fn self_enemy_handle(task: &Task) -> Result<EnemyHandle, u8> {
 }
 
 /// 取本任务的第 `id` 个 shooter（可变）。`id` 越界 → `None` + `contract_viol` + `BAD_ARGS`
-/// （P4-b：no-op，不 Fault——见 62-76 号表注释）。`id` 是脚本给的任意 `i32`，负数与超界同处置。
+/// （P4-b：no-op，不 Fault——见 600-660 号表注释）。`id` 是脚本给的任意 `i32`，负数与超界同处置。
 ///
 /// **必须在参数全部 `pop` 完之后再调**：栈效应与成功路径一致（同 `sys_emit_req` 的"先弹后验"
 /// 口径），否则越界腿会给下一条指令留下垃圾栈。
@@ -744,7 +744,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
                 .clamp(0, crate::items::POWER_MAX as i32) as u16;
             Ok(())
         }
-        // 敌人死亡效果四件（58-61）：一律经 `WorldBody` 的 handle 写 API（P1：调用方
+        // 敌人死亡效果四件（520-530）：一律经 `WorldBody` 的 handle 写 API（P1：调用方
         // 永不直接摸池内存），self owner 必须是敌（misuse → Fault，同 `move_enemy_to`）。
         SYS_DROP_CLEAR => {
             let h = self_enemy_handle(task)?;
@@ -976,7 +976,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
     }
 }
 
-/// 开火（SYS 76）：按 spec §10 的七步用发射器槽 `id` 的参数造弹。1 参、**无返回值**。
+/// 开火（SYS 660）：按 spec §10 的七步用发射器槽 `id` 的参数造弹。1 参、**无返回值**。
 ///
 /// **为什么开火循环住这儿而不是扩 `create_bullets_batch`**：P1——world 不知道"任务"存在，
 /// 没法逐颗挂 `task_script`（`fire` 的挂任务也因此发生在 ECL 层）。代价是网格循环有了
@@ -1248,7 +1248,7 @@ fn sys_rand_range(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     push(task, v)
 }
 
-/// 丙方案 create_bullet（SYS 20）：8 参逆序弹出；appearance 越界/xform 区间越界 → Fault；
+/// 丙方案 create_bullet（SYS 200）：8 参逆序弹出；appearance 越界/xform 区间越界 → Fault；
 /// task_script ≥0 时脚本号必须在册（否则 Fault，同 `OP_SPAWN` 口径）——**先查后建**：
 /// 一切校验在任何世界写之前完成，避免"弹已建、任务绑定失败"的半成品状态。
 /// 创建失败（appearance/xform 校验过关后，池满或 xform 内容仍被 `create_bullet_with_xform`
@@ -1378,7 +1378,7 @@ fn sys_create_bullet(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 批量环（SYS 21）：9 参逆序弹出，无 xform（性能语义原语，dumb 弹批量铺环）。
+/// 批量环（SYS 201）：9 参逆序弹出，无 xform（性能语义原语，dumb 弹批量铺环）。
 /// appearance 越界 → Fault；池满/坏轴由 `create_bullets_batch` 自身 P4 处置（压实发数，
 /// 可能为 0——not 视为 Fault，与单发 create_bullet 的"NULL→-1"口径不同因为返回语义本就是数量）。
 fn sys_create_bullets_batch(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -1436,7 +1436,7 @@ fn sys_create_bullets_batch(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> 
     push(task, n as i32)
 }
 
-/// 敌人创建（SYS 22；A5 乙案，append-only：旧 5 参前缀不动，尾追 sprite/task）：
+/// 敌人创建（SYS 210；A5 乙案，append-only：旧 5 参前缀不动，尾追 sprite/task）：
 /// 7 参逆序弹出。半径/受击盒用固定默认值（同 `world::test_support::spawn_enemy` 惯例）；
 /// `task` 号先验后建（镜像 `sys_create_bullet` 的 task 路径：坏号/非 0 参 Async → Fault，
 /// 零副作用，敌未建）；`main_task` 在敌句柄产出**之后**回填（任务的 owner 三元组需要敌
@@ -1538,7 +1538,7 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 道具掉落（SYS 23）：3 参逆序弹出。坏类型 → `drop_item` 自身 P4-b 处置（NULL + BAD_ARGS
+/// 道具掉落（SYS 220）：3 参逆序弹出。坏类型 → `drop_item` 自身 P4-b 处置（NULL + BAD_ARGS
 /// 计数，不 Fault——世界既有 write API 契约，syscall 层不重复判定）。
 fn sys_drop_item(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let item_type = pop(task)?;
@@ -1556,7 +1556,7 @@ fn sys_drop_item(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     push(task, handle.index as i32)
 }
 
-/// 敌人限时缓动位移（SYS 24）：self owner 必须是 ENEMY（否则 Fault，misuse 策略）；
+/// 敌人限时缓动位移（SYS 400）：self owner 必须是 ENEMY（否则 Fault，misuse 策略）；
 /// 4 参逆序弹出：`easing, y, x, dur`。无返回值。
 fn sys_move_enemy_to(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
@@ -1574,7 +1574,7 @@ fn sys_move_enemy_to(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `SYS_MOVE_VEL`（83）：逆序弹出 `easing, speed, angle, dur`。
+/// `SYS_MOVE_VEL`（410）：逆序弹出 `easing, speed, angle, dur`。
 fn sys_move_vel(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
     let easing = pop(task)?;
@@ -1591,7 +1591,7 @@ fn sys_move_vel(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `SYS_MOVE_VEL_XY`（84）：逆序弹出 `easing, vy, vx, dur`。
+/// `SYS_MOVE_VEL_XY`（411）：逆序弹出 `easing, vy, vx, dur`。
 fn sys_move_vel_xy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
     let easing = pop(task)?;
@@ -1608,7 +1608,7 @@ fn sys_move_vel_xy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `SYS_MOVE_ANGLE`（85）：逆序弹出 `easing, angle, dur`。
+/// `SYS_MOVE_ANGLE`（420）：逆序弹出 `easing, angle, dur`。
 fn sys_move_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
     let easing = pop(task)?;
@@ -1623,7 +1623,7 @@ fn sys_move_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `SYS_MOVE_SPEED`（86）：逆序弹出 `easing, speed, dur`。
+/// `SYS_MOVE_SPEED`（421）：逆序弹出 `easing, speed, dur`。
 fn sys_move_speed(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
     let easing = pop(task)?;
@@ -1634,7 +1634,7 @@ fn sys_move_speed(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// boss 公告板整槽写（SYS 25）：`enemy` 字段取自 self owner（非 ENEMY → `EnemyHandle::NULL`，
+/// boss 公告板整槽写（SYS 730）：`enemy` 字段取自 self owner（非 ENEMY → `EnemyHandle::NULL`，
 /// 不 Fault——见模块文档"误用策略"boss_set 例外）；6 参逆序弹出：
 /// `active, phase_left, timer_frames, spell_id, hp_ratio, slot`。无返回值。
 fn sys_boss_set(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -1668,7 +1668,7 @@ fn sys_boss_set(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `SYS_EMIT_REQ`（27）：通道 B 推送。id 收窄 P4-b——栈值超出 `0..=65535` →
+/// `SYS_EMIT_REQ`（720）：通道 B 推送。id 收窄 P4-b——栈值超出 `0..=65535` →
 /// no-op + `contract_viol` + `BAD_ARGS`，**不 Fault**（作者违约 → 确定性安全结果）；
 /// 值域内转交 `WorldBody::emit_req`（满缓冲处置 TRUNCATED + 计数在那边）。
 fn sys_emit_req(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -1820,7 +1820,7 @@ fn sys_spell_end(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 瞄准角查询（SYS 40）：0 参；self 位置（owner 未知/STAGE→原点）朝向 P0 的 `atan2`，
+/// 瞄准角查询（SYS 120）：0 参；self 位置（owner 未知/STAGE→原点）朝向 P0 的 `atan2`，
 /// 押回 BAM raw（不消 RNG、不改世界，纯读）。
 fn sys_aim_player_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let (sx, sy) = self_pos(task, ctx);
@@ -3080,7 +3080,7 @@ mod tests {
         assert_eq!(w.body.diag.task_faults, 0, "owner 死不是 Fault");
     }
 
-    /// `enemy_hp`（SYS 12）：活敌返当前 hp（判别值 77，非默认）；死敌/越界句柄均返 -1
+    /// `enemy_hp`（SYS 100）：活敌返当前 hp（判别值 77，非默认）；死敌/越界句柄均返 -1
     /// （P4-b，不 Fault）。
     #[test]
     fn enemy_hp_reads_alive_and_rejects_dead() {
@@ -3171,7 +3171,7 @@ mod tests {
         assert_eq!(r, Err(FAULT_BAD_OP));
     }
 
-    /// move_vel（83）：4 参正序 dur,angle,speed,easing；owner 取自 self。
+    /// move_vel（410）：4 参正序 dur,angle,speed,easing；owner 取自 self。
     #[test]
     fn sys_move_vel_arms_polar_interpolator() {
         let (mut w, ecl) = fresh();
@@ -3201,7 +3201,7 @@ mod tests {
         assert_eq!(w.body.enemies.vel_easing[i], 3);
     }
 
-    /// move_vel_xy（84）：落 CART 空间——**参数序 dur,vx,vy,easing**（vx 在前）。
+    /// move_vel_xy（411）：落 CART 空间——**参数序 dur,vx,vy,easing**（vx 在前）。
     #[test]
     fn sys_move_vel_xy_arms_cartesian_interpolator() {
         let (mut w, ecl) = fresh();
@@ -3229,7 +3229,7 @@ mod tests {
         );
     }
 
-    /// move_angle（85）/ move_speed（86）：3 参，各自保持另一分量。
+    /// move_angle（420）/ move_speed（421）：3 参，各自保持另一分量。
     #[test]
     fn sys_move_angle_and_speed_are_single_axis() {
         let (mut w, ecl) = fresh();
@@ -4054,7 +4054,7 @@ mod tests {
         assert_eq!(w.body.players[0].power, 0, "i32::MIN 应钳到 0");
     }
 
-    // ── 敌人死亡效果四 syscall（58-61；敌人死亡效果刀 T3）────────────────────
+    // ── 敌人死亡效果四 syscall（520-530；敌人死亡效果刀 T3）────────────────────
 
     /// 造一只 owner 敌 + 指向它的任务（掉落计数**空**——要灌表 1 用 `load_drop_table_1`）。
     fn enemy_owner_task(w: &mut World, hp: i32, score: u16) -> (EnemyHandle, Task) {
@@ -4307,7 +4307,7 @@ mod tests {
         }
     }
 
-    // ── Shooter 配置面（syscall 62-75；shooter 刀 T2 2026-07-31）──────────────
+    // ── Shooter 配置面（syscall 600-652；shooter 刀 T2 2026-07-31）──────────────
     //
     // 四条测试全是**表驱动**的：14 个 setter 各写一段复制粘贴既臃肿、又保证将来加第 15 个
     // 时漏掉——而漏掉的那个恰恰是最可能忘写边界检查/写串字段的那个。表在一处，加一行即入网。
@@ -4689,7 +4689,7 @@ mod tests {
         assert_eq!(s.n_speed, 0, "-256 下钳到 0");
     }
 
-    // ── Shooter 开火面（syscall 76；shooter 刀 T3 2026-07-31）────────────────────
+    // ── Shooter 开火面（syscall 660；shooter 刀 T3 2026-07-31）────────────────────
     //
     // 开火循环住 **ECL 层**（spec §10 末：P1 使然——world 不知道任务存在、没法逐颗挂
     // `task_script`），于是网格逻辑有了**第二份实现**。故下面第一条等价测试是**必需**
@@ -5460,7 +5460,7 @@ mod tests {
         );
     }
 
-    // ── 数学/查询面（77-79；小清洗刀 2026-07-31）────────────────────────────────
+    // ── 数学/查询面（110/140/141；小清洗刀 2026-07-31）────────────────────────────────
 
     /// **参数序判别腿**：`atan2(y, x)` 两位同为 `Fx`，对调不会有任何判型报错，只会静默
     /// 把角度镜像到另一条对角线上。故必须**两个取值**一起断言——只测 `atan2(1,0)==16384`
@@ -5682,7 +5682,7 @@ mod tests {
         assert_eq!(t.stack[0], Fx::from_int(30).raw());
     }
 
-    // ── 探活读口 82（enemy_alive；探活读口刀 2026-07-31）──────────────────────
+    // ── 探活读口 103（enemy_alive；探活读口刀 2026-07-31）──────────────────────
 
     /// 活敌返 **1**、三种无效句柄（负 / 越界 / 死槽）各返 **0**，且**不计 `contract_viol`**
     /// （纯读族口径，同 `enemy_hp`/`sys_enemy_pos`）。
@@ -5858,7 +5858,7 @@ mod tests {
 
     // ── 敌句柄打包 generation（敌句柄打包刀 2026-07-31）─────────────────────────
 
-    /// 用 `spawn_enemy`(22) 造敌并取**脚本视角**的敌号——即 syscall 真正押出去的那个值。
+    /// 用 `spawn_enemy`(210) 造敌并取**脚本视角**的敌号——即 syscall 真正押出去的那个值。
     /// 本族测试必须走 syscall 边界：被测的就是那个边界上的编码，绕过它（直接拿
     /// `test_support::spawn_enemy` 的 `EnemyHandle`）就把要证的东西假设掉了。
     fn spawn_enemy_via_syscall(w: &mut World, ecl: &EclImage, x: i32, y: i32, hp: i32) -> i32 {
