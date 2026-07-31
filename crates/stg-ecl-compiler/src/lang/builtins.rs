@@ -807,8 +807,9 @@ pub fn all() -> &'static [Builtin] {
     BUILTINS
 }
 
-/// `$` 引擎变量的 syscall 号 + 判型（拍板 6 的 v1 白名单 8 个；`lang::parse` 已把 `$name` 解析
-/// 成 [`EngVar`] 枚举，这里不需要再按字符串查——直接穷尽 `match`）。
+/// `$` 引擎变量的 syscall 号 + 判型（拍板 6 的 v1 白名单 8 个；敌人运动动词族刀
+/// 2026-07-31 扩到 12 个；`lang::parse` 已把 `$name` 解析成 [`EngVar`] 枚举，
+/// 这里不需要再按字符串查——直接穷尽 `match`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EngVarInfo {
     pub syscall: u16,
@@ -825,6 +826,10 @@ pub fn engine_var_info(ev: EngVar) -> EngVarInfo {
         EngVar::SelfHp => (syscall::SYS_SELF_HP, Int),
         EngVar::SelfHpMax => (syscall::SYS_SELF_HP_MAX, Int),
         EngVar::SelfAge => (syscall::SYS_SELF_AGE, Int),
+        EngVar::SelfVx => (syscall::SYS_SELF_VX, Fx),
+        EngVar::SelfVy => (syscall::SYS_SELF_VY, Fx),
+        EngVar::SelfSpeed => (syscall::SYS_SELF_SPEED, Fx),
+        EngVar::SelfAngle => (syscall::SYS_SELF_ANGLE, Angle),
     };
     EngVarInfo { syscall, ty }
 }

@@ -288,6 +288,22 @@ pub const SYS_MOVE_ANGLE: u16 = 85;
 /// 只调速、保持方向（86；ZUN `444 moveSpeed`）：3 参正序 `dur, speed, easing`。
 pub const SYS_MOVE_SPEED: u16 = 86;
 
+// ── $self_* 速度引擎变量（87-90；T5；白名单 8→12）───────────────────────────
+// 与 `$self_x`/`$self_y` 同族同形状：不收参数，owner 从 task 取，派发规则逐条同
+// `self_pos`（ENEMY→敌池/BULLET→弹池/其余→0）。存在的理由：笛卡尔没有单轴动词
+// （`move_vel_xy` 两轴齐写），"只插 vy、保住 vx"唯一的写法就是把当前 vx 读出来填回去。
+
+/// owner 的笛卡尔速度 x（87）：ENEMY → 敌池、BULLET → 弹池、其余 → 0（同 [`SYS_SELF_X`]）。
+/// 存在的理由：笛卡尔没有单轴动词，"只插 vy 保住 vx"唯一的写法是把当前 vx 读出来填回去。
+pub const SYS_SELF_VX: u16 = 87;
+/// owner 的笛卡尔速度 y（88）——镜像 [`SYS_SELF_VX`]。
+pub const SYS_SELF_VY: u16 = 88;
+/// owner 的速率（89，作者视图）：与 [`SYS_SELF_VX`]/[`SYS_SELF_VY`] 恒同步（双表示）。
+pub const SYS_SELF_SPEED: u16 = 89;
+/// owner 的朝向（90，作者视图，BAM）。近停时冻结（`BACKFILL_MIN_SPEED`），故零速下
+/// 读到的是**最后一次有效朝向**而非垃圾角。
+pub const SYS_SELF_ANGLE: u16 = 90;
+
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
 fn pop(task: &mut Task) -> Result<i32, u8> {
@@ -320,6 +336,33 @@ fn self_pos(task: &Task, ctx: &VmCtx) -> (Fx, Fx) {
             (ctx.body.bullets.x[i], ctx.body.bullets.y[i])
         }
         _ => (Fx::ZERO, Fx::ZERO),
+    }
+}
+
+/// owner 的速度四件（`$self_vx`/`$self_vy`/`$self_speed`/`$self_angle` 共用）。
+/// 派发规则逐条同 [`self_pos`]：ENEMY → 敌池、BULLET → 弹池、其余 → 全零。
+/// 返回 `(vx, vy, speed, angle_raw)`，四个都已是可直接押栈的 raw。
+fn self_vel(task: &Task, ctx: &VmCtx) -> (i32, i32, i32, i32) {
+    match task.owner_kind {
+        OWNER_ENEMY => {
+            let i = task.owner_index as usize;
+            (
+                ctx.body.enemies.vx[i].raw(),
+                ctx.body.enemies.vy[i].raw(),
+                ctx.body.enemies.speed[i].raw(),
+                ctx.body.enemies.angle[i].raw() as i32,
+            )
+        }
+        OWNER_BULLET => {
+            let i = task.owner_index as usize;
+            (
+                ctx.body.bullets.vx[i].raw(),
+                ctx.body.bullets.vy[i].raw(),
+                ctx.body.bullets.speed[i].raw(),
+                ctx.body.bullets.angle[i].raw() as i32,
+            )
+        }
+        _ => (0, 0, 0, 0),
     }
 }
 
@@ -868,6 +911,23 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_MOVE_VEL_XY => sys_move_vel_xy(task, ctx),
         SYS_MOVE_ANGLE => sys_move_angle(task, ctx),
         SYS_MOVE_SPEED => sys_move_speed(task, ctx),
+        // ── $self_* 速度引擎变量 87-90（T5）──────────────────────────────────
+        SYS_SELF_VX => {
+            let (vx, _, _, _) = self_vel(task, ctx);
+            push(task, vx)
+        }
+        SYS_SELF_VY => {
+            let (_, vy, _, _) = self_vel(task, ctx);
+            push(task, vy)
+        }
+        SYS_SELF_SPEED => {
+            let (_, _, sp, _) = self_vel(task, ctx);
+            push(task, sp)
+        }
+        SYS_SELF_ANGLE => {
+            let (_, _, _, a) = self_vel(task, ctx);
+            push(task, a)
+        }
         _ => Err(FAULT_BAD_OP),
     }
 }
@@ -1984,6 +2044,66 @@ mod tests {
         };
         assert!(call(&mut w, &ecl, &mut stage_task, SYS_SELF_X, &[]).is_ok());
         assert_eq!(stage_task.stack[0], 0, "STAGE self_x 恒 0");
+    }
+
+    /// 四个 $self_* 在敌 owner 下读到池字段。取 (3, -7) 这个 x≠y 且异号的速度——
+    /// 派发臂写反立刻可辨。
+    #[test]
+    fn self_velocity_vars_read_enemy_pool() {
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let i = eh.index as usize;
+        w.body.enemies.vx[i] = Fx::from_int(3);
+        w.body.enemies.vy[i] = Fx::from_int(-7);
+        w.body.enemies.speed[i] = Fx::from_int(9);
+        w.body.enemies.angle[i] = crate::math::Angle::QUARTER;
+        let mk = || Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        for (sys, want) in [
+            (SYS_SELF_VX, Fx::from_int(3).raw()),
+            (SYS_SELF_VY, Fx::from_int(-7).raw()),
+            (SYS_SELF_SPEED, Fx::from_int(9).raw()),
+            (SYS_SELF_ANGLE, crate::math::Angle::QUARTER.raw() as i32),
+        ] {
+            let mut task = mk();
+            assert!(call(&mut w, &ecl, &mut task, sys, &[]).is_ok());
+            assert_eq!(pop(&mut task).unwrap(), want, "syscall {sys}");
+        }
+    }
+
+    /// 弹 owner 下同样有效（弹池本就有这四个字段——双表示是从弹抄来的）。
+    #[test]
+    fn self_velocity_vars_dispatch_to_bullet_pool() {
+        let (mut w, ecl) = fresh();
+        let bh = crate::world::test_support::bullet_at(&mut w, 0, 0);
+        let i = bh.index as usize;
+        w.body.bullets.vx[i] = Fx::from_int(2);
+        let mut task = Task {
+            owner_kind: OWNER_BULLET,
+            owner_index: bh.index,
+            owner_gen: bh.generation,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut task, SYS_SELF_VX, &[]).is_ok());
+        assert_eq!(pop(&mut task).unwrap(), Fx::from_int(2).raw());
+    }
+
+    /// 非敌非弹 owner → 0（同 $self_x 的既有降级）。
+    #[test]
+    fn self_velocity_vars_degrade_to_zero_for_stage_owner() {
+        let (mut w, ecl) = fresh();
+        for sys in [SYS_SELF_VX, SYS_SELF_VY, SYS_SELF_SPEED, SYS_SELF_ANGLE] {
+            let mut task = Task {
+                owner_kind: OWNER_STAGE,
+                ..Task::default()
+            };
+            assert!(call(&mut w, &ecl, &mut task, sys, &[]).is_ok());
+            assert_eq!(pop(&mut task).unwrap(), 0, "syscall {sys} 非敌非弹应降级 0");
+        }
     }
 
     #[test]
