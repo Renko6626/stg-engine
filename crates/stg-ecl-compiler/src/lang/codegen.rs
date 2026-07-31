@@ -1964,7 +1964,7 @@ mod tests {
         assert_eq!(
             w.body.view().globals()[21],
             186,
-            "$self_y：wait(6) 醒来那帧（相位 2）位置是 180 + 2×3"
+            "$self_y：wait(5) 醒来那帧（相位 2）位置是 180 + 2×3"
         );
         assert_eq!(w.body.view().globals()[22], 80, "$self_x 停在终点 x");
         assert_eq!(w.body.view().diag().task_faults, 0);

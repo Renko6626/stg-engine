@@ -10,7 +10,7 @@ use crate::math::cordic::atan2;
 use crate::math::geom::{len_sq, polar_to_vec};
 use crate::math::isqrt::isqrt;
 use crate::player::{LIFE_ABSENT, LIFE_GAMEOVER};
-use crate::world::STATUS_STALE_HANDLE;
+use crate::world::{STATUS_BAD_ARGS, STATUS_STALE_HANDLE};
 
 /// 低速回填阈值 = 1/16 px/帧。契约常量：`speed` 恒回填、`angle` 仅 `speed >= 此值` 时回填
 /// （近停冻结朝向：防 CORDIC 低幅垃圾角污染作者视图与 sprite 朝向）。
@@ -221,7 +221,7 @@ impl WorldBody {
         };
         if easing >= 8 {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
-            self.last_status = crate::world::STATUS_BAD_ARGS;
+            self.last_status = STATUS_BAD_ARGS;
             return None;
         }
         Some(i)

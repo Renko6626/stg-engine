@@ -681,6 +681,27 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 `gen-ecl-meta` 加第三个 sink 导出它，扩展读来做补全/hover，手册那张表也改成生成块。
 **触发点 = 下一次动引擎变量**，或者编辑体验再做一刀时顺手。
 
+### D19. 运动动词 `easing`/`dur` 的**五处裸截断**——`easing = 256` 绕过 P4-b 检查（敌人运动动词族刀终审记档，2026-07-31）
+
+`syscall.rs` 把栈上弹出的 `i32` 直接 `as u8` / `as u16` 交给世界层写 API，**五处**：
+`sys_move_enemy_to`（1527/1528）与四条新动词 `sys_move_vel` / `sys_move_vel_xy` /
+`sys_move_angle` / `sys_move_speed`（1544/1545、1561/1562、1576/1577、1589）。
+
+后果两条：
+- `easing = 256` → `256 as u8 == 0` → **静默变成 Linear**，绕过 `enemy_vel_precheck` /
+  `move_enemy_to` 的 `easing >= 8` 判据（那条判据收到的已经是截断后的值）。写 `easing = 264`
+  同理落 8、反而被正确拒掉——**能不能拒，取决于越界值模 256 落在哪里**，毫无规律。
+- `dur = -1` → `-1 as u16 == 65535` → 一条本该报错的笔误变成"缓动 18 分钟"。
+
+**这是既有洞**（`sys_move_enemy_to` 一直如此），本刀只是把入口从一个变成五个。
+
+**修法**：五处一起收窄成 `u8::try_from(easing)` / `u16::try_from(dur)`，失败即按 P4-b
+计一次 `contract_viol` + `BAD_ARGS` + 整条 no-op（与既有的 `easing >= 8` 同一条腿，
+判据顺势前移到收窄这一步）。**没放进终审修复波的理由**：它会**改变 `move_to` 的既有行为**
+——此前越界 `easing` 是静默变 Linear（脚本可能已经依赖），改成拒收是行为变更，
+且 `ENGINE_VER`/金向量都要跟着动，属于需要单独裁定的一刀。
+**触发点 = 下一次动运动动词族**，或做 syscall 参数收窄的统一整理时。
+
 ### D10. 部分设运行期只护 stride、不查 `valid`——编译期空格闸只覆盖 `.ecl` 源码路径（颜色轴刀 T6 记档，2026-07-26）
 
 `OP_SET_SPRITE`/`OP_SET_SHAPE`/`OP_SET_COLOR`（`world/transform.rs::fire_op`）三个解释臂
