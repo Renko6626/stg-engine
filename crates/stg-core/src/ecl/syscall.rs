@@ -272,6 +272,22 @@ pub const SYS_ENEMY_Y: u16 = 81;
 /// （候选 = 存活且非 dying），所以"从它拿到的号后来变 dying"应当**重查**而不是继续用。
 pub const SYS_ENEMY_ALIVE: u16 = 82;
 
+// ── 敌人运动动词族（83-86；T4，对标 ZUN ECL `move` 400-447 族）────────────────
+// 四条 syscall 都是 `world/motion.rs` 四个 `set_enemy_*` 写 API 的薄封装：owner 违约
+// （非 ENEMY）→ Fault，悬垂句柄/`easing>=8` 的 P4-b 校验全在世界层做过，本层不重复计数。
+
+/// 极坐标速度（83；ZUN `404 moveVel` / `405 moveVelTime`）：4 参正序
+/// `dur, angle, speed, easing`。self owner 非 ENEMY → Fault（同 [`SYS_MOVE_ENEMY_TO`]）。
+/// `dur == 0` 是合法退化 = 立即设。
+pub const SYS_MOVE_VEL: u16 = 83;
+/// 笛卡尔速度（84）：4 参正序 `dur, vx, vy, easing`。**`dur > 0` 时在笛卡尔空间插值**
+/// ——不转极坐标，否则它就退化成 [`SYS_MOVE_VEL`] 的语法糖（spec §3.3）。
+pub const SYS_MOVE_VEL_XY: u16 = 84;
+/// 只转向、保持速率（85；ZUN `440 moveAngle`）：3 参正序 `dur, angle, easing`。
+pub const SYS_MOVE_ANGLE: u16 = 85;
+/// 只调速、保持方向（86；ZUN `444 moveSpeed`）：3 参正序 `dur, speed, easing`。
+pub const SYS_MOVE_SPEED: u16 = 86;
+
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
 fn pop(task: &mut Task) -> Result<i32, u8> {
@@ -847,6 +863,11 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_ENEMY_Y => sys_enemy_pos(task, ctx, true),
         // ── 探活读口 82（探活读口刀）────────────────────────────────────────
         SYS_ENEMY_ALIVE => sys_enemy_alive(task, ctx),
+        // ── 敌人运动动词族 83-86（T4）────────────────────────────────────────
+        SYS_MOVE_VEL => sys_move_vel(task, ctx),
+        SYS_MOVE_VEL_XY => sys_move_vel_xy(task, ctx),
+        SYS_MOVE_ANGLE => sys_move_angle(task, ctx),
+        SYS_MOVE_SPEED => sys_move_speed(task, ctx),
         _ => Err(FAULT_BAD_OP),
     }
 }
@@ -1446,6 +1467,66 @@ fn sys_move_enemy_to(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
         dur as u16,
         easing as u8,
     );
+    Ok(())
+}
+
+/// `SYS_MOVE_VEL`（83）：逆序弹出 `easing, speed, angle, dur`。
+fn sys_move_vel(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    let easing = pop(task)?;
+    let speed = pop(task)?;
+    let angle = pop(task)?;
+    let dur = pop(task)?;
+    ctx.body.set_enemy_vel_polar(
+        h,
+        crate::math::Angle(angle as u16),
+        Fx::from_raw(speed),
+        dur as u16,
+        easing as u8,
+    );
+    Ok(())
+}
+
+/// `SYS_MOVE_VEL_XY`（84）：逆序弹出 `easing, vy, vx, dur`。
+fn sys_move_vel_xy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    let easing = pop(task)?;
+    let vy = pop(task)?;
+    let vx = pop(task)?;
+    let dur = pop(task)?;
+    ctx.body.set_enemy_vel_cart(
+        h,
+        Fx::from_raw(vx),
+        Fx::from_raw(vy),
+        dur as u16,
+        easing as u8,
+    );
+    Ok(())
+}
+
+/// `SYS_MOVE_ANGLE`（85）：逆序弹出 `easing, angle, dur`。
+fn sys_move_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    let easing = pop(task)?;
+    let angle = pop(task)?;
+    let dur = pop(task)?;
+    ctx.body.set_enemy_angle(
+        h,
+        crate::math::Angle(angle as u16),
+        dur as u16,
+        easing as u8,
+    );
+    Ok(())
+}
+
+/// `SYS_MOVE_SPEED`（86）：逆序弹出 `easing, speed, dur`。
+fn sys_move_speed(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    let easing = pop(task)?;
+    let speed = pop(task)?;
+    let dur = pop(task)?;
+    ctx.body
+        .set_enemy_speed(h, Fx::from_raw(speed), dur as u16, easing as u8);
     Ok(())
 }
 
@@ -2806,6 +2887,115 @@ mod tests {
         let args = [30, 0, 0, 0];
         let r = call(&mut w, &ecl, &mut task, SYS_MOVE_ENEMY_TO, &args);
         assert_eq!(r, Err(FAULT_BAD_OP));
+    }
+
+    /// move_vel（83）：4 参正序 dur,angle,speed,easing；owner 取自 self。
+    #[test]
+    fn sys_move_vel_arms_polar_interpolator() {
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let mut task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        let args = [
+            20,
+            crate::math::Angle::QUARTER.raw() as i32,
+            Fx::from_int(4).raw(),
+            3,
+        ];
+        assert!(call(&mut w, &ecl, &mut task, SYS_MOVE_VEL, &args).is_ok());
+        let i = eh.index as usize;
+        assert_eq!(w.body.enemies.vel_active[i], 1);
+        assert_eq!(w.body.enemies.vel_space[i], crate::enemy::VEL_SPACE_POLAR);
+        assert_eq!(w.body.enemies.vel_to_0[i], Fx::from_int(4).raw());
+        assert_eq!(
+            w.body.enemies.vel_to_1[i],
+            crate::math::Angle::QUARTER.raw() as i32
+        );
+        assert_eq!(w.body.enemies.vel_dur[i], 20);
+        assert_eq!(w.body.enemies.vel_easing[i], 3);
+    }
+
+    /// move_vel_xy（84）：落 CART 空间——**参数序 dur,vx,vy,easing**（vx 在前）。
+    #[test]
+    fn sys_move_vel_xy_arms_cartesian_interpolator() {
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let mut task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        // vx=3, vy=-7：**x≠y 且异号**，两条派发臂写反立刻可辨
+        let args = [12, Fx::from_int(3).raw(), Fx::from_int(-7).raw(), 0];
+        assert!(call(&mut w, &ecl, &mut task, SYS_MOVE_VEL_XY, &args).is_ok());
+        let i = eh.index as usize;
+        assert_eq!(w.body.enemies.vel_space[i], crate::enemy::VEL_SPACE_CART);
+        assert_eq!(
+            w.body.enemies.vel_to_0[i],
+            Fx::from_int(3).raw(),
+            "slot0 = vx"
+        );
+        assert_eq!(
+            w.body.enemies.vel_to_1[i],
+            Fx::from_int(-7).raw(),
+            "slot1 = vy"
+        );
+    }
+
+    /// move_angle（85）/ move_speed（86）：3 参，各自保持另一分量。
+    #[test]
+    fn sys_move_angle_and_speed_are_single_axis() {
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let mut task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        let i = eh.index as usize;
+        // 先摆一个 speed=7、angle=0 的起点（dur=0 瞬时）
+        let seed = [0, 0, Fx::from_int(7).raw(), 0];
+        assert!(call(&mut w, &ecl, &mut task, SYS_MOVE_VEL, &seed).is_ok());
+        // move_angle(0, QUARTER, 0) → 只转向
+        let a = [0, crate::math::Angle::QUARTER.raw() as i32, 0];
+        assert!(call(&mut w, &ecl, &mut task, SYS_MOVE_ANGLE, &a).is_ok());
+        assert_eq!(w.body.enemies.speed[i], Fx::from_int(7), "转向不改速率");
+        assert_eq!(w.body.enemies.angle[i], crate::math::Angle::QUARTER);
+        // move_speed(0, 2.0, 0) → 只调速
+        let s = [0, Fx::from_int(2).raw(), 0];
+        assert!(call(&mut w, &ecl, &mut task, SYS_MOVE_SPEED, &s).is_ok());
+        assert_eq!(
+            w.body.enemies.angle[i],
+            crate::math::Angle::QUARTER,
+            "调速不改方向"
+        );
+        assert_eq!(w.body.enemies.speed[i], Fx::from_int(2));
+    }
+
+    /// 四条动词 self owner != ENEMY → Fault（同 move_to 现状）。
+    #[test]
+    fn motion_verbs_fault_on_non_enemy_owner() {
+        let (mut w, ecl) = fresh();
+        for (sys, argc) in [
+            (SYS_MOVE_VEL, 4),
+            (SYS_MOVE_VEL_XY, 4),
+            (SYS_MOVE_ANGLE, 3),
+            (SYS_MOVE_SPEED, 3),
+        ] {
+            let mut task = Task {
+                owner_kind: OWNER_STAGE,
+                ..Task::default()
+            };
+            let args = vec![0i32; argc];
+            let r = call(&mut w, &ecl, &mut task, sys, &args);
+            assert_eq!(r, Err(FAULT_BAD_OP), "syscall {sys} 非敌 owner 应 Fault");
+        }
     }
 
     /// boss_set：self owner=ENEMY 时 `enemy` 字段自动取自 owner；6 参落槽逐位命中。

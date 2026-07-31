@@ -1092,6 +1092,19 @@ sub main() {
         );
     }
 
+    /// 四条动词在表层语言里可用、类型正确（angle 参数收 angle 型、speed 收 fx 型）。
+    #[test]
+    fn motion_verbs_compile_from_source() {
+        let src = "sub main() {\n\
+            move_vel(20, 90deg, 4.0fx, 3);\n\
+            move_vel_xy(12, 3.0fx, -7.0fx, 0);\n\
+            move_angle(30, 45deg, 2);\n\
+            move_speed(15, 2.5fx, 1);\n\
+        }";
+        let image = compile(src, "motion.ecl").expect("四条动词应能编译");
+        assert!(!image.code().is_empty());
+    }
+
     // ── 终审必修 I-1：一张非 16 宽的表串起全部四个 stride 消费者 ───────────────
     //
     // 现有测试全在 `TABLES_V0`（stride=16）上跑：`bound_table_injects_color_stride_const`
