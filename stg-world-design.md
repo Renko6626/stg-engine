@@ -425,11 +425,13 @@ loop {
 
 ## D5 敌人池
 
-SoA，~64 B/敌，256 敌 ≈ 16 KB：
+SoA，~94 B/敌，256 敌 ≈ 23.5 KB（敌人运动动词族刀 2026-07-31 T1：+30 B/敌，见下两行）：
 
 | 组 | 字段 | 说明 |
 |---|---|---|
-| 运动 | `x y vx vy: Fx×4` | 与弹同构（笛卡尔执行面） |
+| 运动 | `x y vx vy: Fx×4` | 与弹同构（笛卡尔执行面），vx/vy 是积分真相 |
+| 双表示 | `speed: Fx, angle: Angle` | 作者视图；改任一侧后必须调对应同步核回填另一侧（`refresh_enemy_vel_from_polar` / `backfill_enemy_polar`，规则同弹 D3，近停阈值 `BACKFILL_MIN_SPEED` 冻结朝向） |
+| 速度插值器 | `vel_from_0/1, vel_to_0/1: i32×4, vel_t: u16, vel_dur: u16, vel_easing: u8, vel_active: u8, vel_space: u8, vel_touched: u8` | 极坐标/笛卡尔速度插值一组共用；`vel_space` 判别载体槽怎么读（`VEL_SPACE_POLAR=0` 装 `(speed, angle)`，`VEL_SPACE_CART=1` 装 `(vx, vy)`，裸 `i32` 是载体不是标量，同 xform 槽按 op 重解释）；`vel_touched` 是黏滞位（脚本是否表达过速度意图），位置插值到点只在它为 0 时清速——**不能拿 `vel_active` 当判据**（速度插值可能先于位置插值到期）；后续运动动词族 Task 消费 |
 | 移动插值器 | `mv_from_x/y, mv_to_x/y: Fx×4, mv_t: u16, mv_dur: u16, mv_easing: u8, mv_active: u8` | `move_to(t, x, y, easing)` 的世界侧状态机——到点即停（精确终点+清 vx/vy）、绝对插值防漂移、dur=0 瞬移=硬停（清在飞插值）、进行中重下=覆盖重启（spec 2026-07-17 / M0-13 实现定稿） |
 | 生命 | `hp: i32, hp_max: i32` | max 供 boss_ui 血条比例 |
 | 判定 | `radius: Fx`（体碰）, `hurtbox: Fx`（受击） | **双半径**，映射见 D8 |
@@ -607,7 +609,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | 弹池 | 8192 | ~54 B | ~450 KB |
 | 变换段池 | 2048 段 × 16 槽 | 12 B/槽 | 384 KB |
 | 自机弹池 | 1024 | ~28 B | 29 KB |
-| 敌人池 | 256 | ~64 B | 16 KB |
+| 敌人池 | 256 | ~94 B（敌人运动动词族刀 2026-07-31 T1：+30 B/敌，speed/angle 双表示 + 速度插值器十件，实测 World 尺寸哨兵增量 7680 B ÷ 256） | 23.5 KB |
 | 道具池 | 512 | ~22 B | 11 KB |
 | FieldPool（通用作用区，M0-8） | 16 | ~18 B（x/y/radius 3×4B + dmg_per_frame 2B + life 2B + owner 1B + flags 1B） | ≈320 B（+ generation/alive） |
 | 任务池（ECL 类型，住组装层 World） | 512 | ~600 B | 307 KB |

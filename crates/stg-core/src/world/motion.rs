@@ -63,6 +63,33 @@ impl WorldBody {
         }
     }
 
+    /// 敌人：极坐标 → 积分真相。**改动 `speed`/`angle` 的每条路径改完必须调它。**
+    /// 与弹的 `refresh_vel_from_polar` 是同一件事，只是池不同（敌无 POLAR_FX 连续效果，
+    /// 故不涉及模式位）。**T1 尚无消费者**（运动动词族 op/syscall 是后续 Task）——同
+    /// `spawn_sub_internal` 先例，非 test 构建里 dead_code 需显式豁免。
+    #[inline]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn refresh_enemy_vel_from_polar(&mut self, i: usize) {
+        let (vx, vy) = polar_to_vec(self.enemies.speed[i], self.enemies.angle[i]);
+        self.enemies.vx[i] = vx;
+        self.enemies.vy[i] = vy;
+    }
+
+    /// 敌人：笛卡尔 → 作者视图回填。阈值规则同弹（[`BACKFILL_MIN_SPEED`]）：`speed` 恒回填，
+    /// `angle` 仅在 `speed >= 阈值` 时回填——近停冻结朝向，防 CORDIC 低幅垃圾角。
+    /// sqrt(Q32.32) = Q16.16，故 `isqrt(len_sq)` 的 raw 直接是 `Fx` raw。**T1 尚无消费者**，
+    /// 豁免理由同上。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn backfill_enemy_polar(&mut self, i: usize) {
+        let vx = self.enemies.vx[i];
+        let vy = self.enemies.vy[i];
+        let sp = Fx::from_raw(isqrt(len_sq(vx, vy) as u64) as i32);
+        self.enemies.speed[i] = sp;
+        if sp.raw() >= BACKFILL_MIN_SPEED.raw() {
+            self.enemies.angle[i] = atan2(vy, vx);
+        }
+    }
+
     /// 句柄查验（P4-b）：悬垂 → None + contract_viol 一次 + last_status。
     fn bullet_index_checked(&mut self, h: BulletHandle) -> Option<usize> {
         match self.bullets.get(h) {
@@ -430,5 +457,64 @@ mod tests {
         let cv0 = w.body.diag.contract_viol;
         w.body.aim_bullet_at_player(h, Angle::ZERO);
         assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+    }
+
+    // ── 敌人运动动词族刀 2026-07-31（T1）：双表示同步核 ─────────────────────
+
+    /// 正向：写 speed/angle → refresh 刷出 vx/vy。取 angle=QUARTER(90°，屏幕坐标朝下)、
+    /// speed=5.0：cos=0/sin=1 ⇒ (0, 5)。**判别性**：若两条派发臂写反（vx 拿 sin），
+    /// 这里会得到 (5, 0)，一眼可辨；取 45° 则两分量相等、写反不可辨。
+    #[test]
+    fn enemy_polar_to_cart_refresh_is_exact_at_quarter() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let i = w.body.enemies.get(h).unwrap();
+        w.body.enemies.speed[i] = Fx::from_int(5);
+        w.body.enemies.angle[i] = Angle::QUARTER;
+        w.body.refresh_enemy_vel_from_polar(i);
+        assert_eq!(w.body.enemies.vx[i], Fx::ZERO, "90° 的 cos 分量应为 0");
+        assert_eq!(
+            w.body.enemies.vy[i],
+            Fx::from_int(5),
+            "90° 的 sin 分量应为满速"
+        );
+    }
+
+    /// 反向：写 vx/vy → backfill 反算 speed/angle。取 (3, 4) 这个 x≠y 且勾股整齐的点：
+    /// speed 应精确为 5.0，angle 应是 atan2(4, 3)。**判别性**：(3,4) 而非 (3,3)——
+    /// 后者 speed=4.24 不整、且 atan2 参数写反不可辨。
+    #[test]
+    fn enemy_cart_to_polar_backfill_is_pythagorean() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let i = w.body.enemies.get(h).unwrap();
+        w.body.enemies.vx[i] = Fx::from_int(3);
+        w.body.enemies.vy[i] = Fx::from_int(4);
+        w.body.backfill_enemy_polar(i);
+        assert_eq!(w.body.enemies.speed[i], Fx::from_int(5), "3-4-5 直角三角形");
+        assert_eq!(
+            w.body.enemies.angle[i],
+            crate::math::cordic::atan2(Fx::from_int(4), Fx::from_int(3)),
+            "atan2(vy, vx) 的参数序：y 在前"
+        );
+    }
+
+    /// 低速冻结朝向（BACKFILL_MIN_SPEED = 1/16 px/帧）：速度归零时 speed 归 0 但
+    /// **angle 保持不变**——防 CORDIC 在零向量上吐垃圾角。逐条同弹的既有规则。
+    #[test]
+    fn enemy_backfill_freezes_angle_below_min_speed() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let i = w.body.enemies.get(h).unwrap();
+        w.body.enemies.angle[i] = Angle::QUARTER;
+        w.body.enemies.vx[i] = Fx::ZERO;
+        w.body.enemies.vy[i] = Fx::ZERO;
+        w.body.backfill_enemy_polar(i);
+        assert_eq!(w.body.enemies.speed[i], Fx::ZERO);
+        assert_eq!(
+            w.body.enemies.angle[i],
+            Angle::QUARTER,
+            "零向量不得改写朝向"
+        );
     }
 }

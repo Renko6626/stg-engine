@@ -3,15 +3,35 @@
 //! `flags` 的 dying 位由 settle 置、cleanup 回收（敌人槽活到相位 8 供死亡脚本/表现层读）。
 
 use crate::define_pool;
-use crate::math::Fx;
+use crate::math::{Angle, Fx};
 
 /// `flags` 的 dying 标记位（D5 预留位）：settle 命中致死置位，cleanup 回收。
 pub const ENEMY_DYING: u8 = 1 << 0;
+
+/// `vel_space`：极坐标插值空间（载体槽 = `(speed.raw(), angle.raw() as i32)`）。
+pub const VEL_SPACE_POLAR: u8 = 0;
+/// `vel_space`：笛卡尔插值空间（载体槽 = `(vx.raw(), vy.raw())`）。
+pub const VEL_SPACE_CART: u8 = 1;
 
 define_pool! {
     Enemy, cap = 256,
     fields {
         x: Fx, y: Fx, vx: Fx, vy: Fx,
+        // ── 双表示（敌人运动动词族刀 2026-07-31）：vx/vy 是积分真相，speed/angle 是
+        //    作者视图。改任一侧后必须同步另一侧（正向 refresh_enemy_vel_from_polar /
+        //    反向 backfill_enemy_polar）——"忘了回填"是弹那边被称作火药桶的同一个坑。
+        speed: Fx, angle: Angle,
+        // ── 速度插值器（一组，极坐标/笛卡尔共用；vel_space 决定四个载体槽怎么读）。
+        //    裸 i32 是**载体**不是标量：polar 空间要装 (Fx, Angle)，cart 空间要装 (Fx, Fx)，
+        //    把 Angle 塞进 Fx 字段是 newtype 破坏。同 xform 槽 args:[i32;2] 按 op 重解释。
+        vel_from_0: i32, vel_from_1: i32,
+        vel_to_0: i32, vel_to_1: i32,
+        vel_t: u16, vel_dur: u16,
+        vel_easing: u8, vel_active: u8, vel_space: u8,
+        // ── 黏滞位：脚本**是否表达过**速度意图（四条速度动词任一置 1，move_to 武装归 0）。
+        //    位置插值到点只在它为 0 时清速。**不能拿 vel_active 当判据**——速度插值若先于
+        //    位置插值到期（常见写法），到点时 vel_active 已是 0，速度会被误清。
+        vel_touched: u8,
         mv_from_x: Fx, mv_from_y: Fx, mv_to_x: Fx, mv_to_y: Fx,
         mv_t: u16, mv_dur: u16, mv_easing: u8, mv_active: u8,
         hp: i32, hp_max: i32,
@@ -50,6 +70,18 @@ mod tests {
             y: Fx::from_int(y),
             vx: Fx::ZERO,
             vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            vel_from_0: 0,
+            vel_from_1: 0,
+            vel_to_0: 0,
+            vel_to_1: 0,
+            vel_t: 0,
+            vel_dur: 0,
+            vel_easing: 0,
+            vel_active: 0,
+            vel_space: 0,
+            vel_touched: 0,
             mv_from_x: Fx::ZERO,
             mv_from_y: Fx::ZERO,
             mv_to_x: Fx::ZERO,

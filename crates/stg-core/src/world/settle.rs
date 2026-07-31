@@ -309,7 +309,7 @@ impl WorldBody {
 
 #[cfg(test)]
 mod tests {
-    use crate::math::Fx;
+    use crate::math::{Angle, Fx};
     use crate::world::PH_COLLIDE;
     use crate::world::test_support::*;
 
@@ -684,6 +684,18 @@ mod tests {
             y: Fx::from_int(80),
             vx: Fx::ZERO,
             vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            vel_from_0: 0,
+            vel_from_1: 0,
+            vel_to_0: 0,
+            vel_to_1: 0,
+            vel_t: 0,
+            vel_dur: 0,
+            vel_easing: 0,
+            vel_active: 0,
+            vel_space: 0,
+            vel_touched: 0,
             mv_from_x: Fx::ZERO,
             mv_from_y: Fx::ZERO,
             mv_to_x: Fx::ZERO,
@@ -1080,6 +1092,18 @@ mod tests {
             y: Fx::from_int(80),
             vx: Fx::ZERO,
             vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            vel_from_0: 0,
+            vel_from_1: 0,
+            vel_to_0: 0,
+            vel_to_1: 0,
+            vel_t: 0,
+            vel_dur: 0,
+            vel_easing: 0,
+            vel_active: 0,
+            vel_space: 0,
+            vel_touched: 0,
             mv_from_x: Fx::ZERO,
             mv_from_y: Fx::ZERO,
             mv_to_x: Fx::ZERO,
