@@ -176,6 +176,45 @@ const BUILTINS: &[Builtin] = &[
         doc: "敌自身(self owner 非 ENEMY → Fault)按 easing 缓动、dur 帧内平移到 (x,y);四参数皆真实压栈(不同于下方弹 setter 族的占位 handle 首参)",
         param_names: &["dur", "x", "y", "easing"],
     },
+    // 敌人运动动词族刀（T4，2026-07-31）：对标 ZUN ECL `move` 400-447 族，四条 syscall
+    // 是 `world/motion.rs` 四个 `set_enemy_*` 写 API 的薄封装。全部 self-only，参数逆序
+    // 弹出（正序即文档序，同 move_to）。设计见 spec §4.1。
+    Builtin {
+        name: "move_vel",
+        syscall: syscall::SYS_MOVE_VEL,
+        is_op: false,
+        params: &[Val(Int), Val(Angle), Val(Fx), Val(Int)],
+        ret: None,
+        doc: "敌自身(self owner 非 ENEMY → Fault)按 easing 在 dur 帧内把速度缓动到「angle 方向、speed 速率」;dur=0 = 立即设。**极坐标空间插值**(匀速扫弧,速率按曲线走)——要笛卡尔直线插值用 move_vel_xy",
+        param_names: &["dur", "angle", "speed", "easing"],
+    },
+    Builtin {
+        name: "move_vel_xy",
+        syscall: syscall::SYS_MOVE_VEL_XY,
+        is_op: false,
+        params: &[Val(Int), Val(Fx), Val(Fx), Val(Int)],
+        ret: None,
+        doc: "同 move_vel 但收笛卡尔分量,且 dur>0 时**在笛卡尔空间插值**(两分量各自线性插,中途速率会掉——线性缓动即恒定加速度);要匀速转向用 move_vel。保住一轴的写法:move_vel_xy(30, $self_vx, 4.0fx, 2)",
+        param_names: &["dur", "vx", "vy", "easing"],
+    },
+    Builtin {
+        name: "move_angle",
+        syscall: syscall::SYS_MOVE_ANGLE,
+        is_op: false,
+        params: &[Val(Int), Val(Angle), Val(Int)],
+        ret: None,
+        doc: "只转向、速率一字不动;dur>0 走**最短弧**(350deg→10deg 走 +20deg 不走 -340deg)。相对转向:move_angle(60, $self_angle + 15deg, 3)",
+        param_names: &["dur", "angle", "easing"],
+    },
+    Builtin {
+        name: "move_speed",
+        syscall: syscall::SYS_MOVE_SPEED,
+        is_op: false,
+        params: &[Val(Int), Val(Fx), Val(Int)],
+        ret: None,
+        doc: "只调速、方向一字不动。相对加速:move_speed(30, $self_speed * 2.0fx, 2)",
+        param_names: &["dur", "speed", "easing"],
+    },
     Builtin {
         name: "boss_set",
         syscall: syscall::SYS_BOSS_SET,
@@ -768,8 +807,9 @@ pub fn all() -> &'static [Builtin] {
     BUILTINS
 }
 
-/// `$` 引擎变量的 syscall 号 + 判型（拍板 6 的 v1 白名单 8 个；`lang::parse` 已把 `$name` 解析
-/// 成 [`EngVar`] 枚举，这里不需要再按字符串查——直接穷尽 `match`）。
+/// `$` 引擎变量的 syscall 号 + 判型（拍板 6 的 v1 白名单 8 个；敌人运动动词族刀
+/// 2026-07-31 扩到 12 个；`lang::parse` 已把 `$name` 解析成 [`EngVar`] 枚举，
+/// 这里不需要再按字符串查——直接穷尽 `match`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EngVarInfo {
     pub syscall: u16,
@@ -786,6 +826,10 @@ pub fn engine_var_info(ev: EngVar) -> EngVarInfo {
         EngVar::SelfHp => (syscall::SYS_SELF_HP, Int),
         EngVar::SelfHpMax => (syscall::SYS_SELF_HP_MAX, Int),
         EngVar::SelfAge => (syscall::SYS_SELF_AGE, Int),
+        EngVar::SelfVx => (syscall::SYS_SELF_VX, Fx),
+        EngVar::SelfVy => (syscall::SYS_SELF_VY, Fx),
+        EngVar::SelfSpeed => (syscall::SYS_SELF_SPEED, Fx),
+        EngVar::SelfAngle => (syscall::SYS_SELF_ANGLE, Angle),
     };
     EngVarInfo { syscall, ty }
 }
@@ -817,6 +861,10 @@ mod tests {
             "enemy_hp",
             "drop_item",
             "move_to",
+            "move_vel",
+            "move_vel_xy",
+            "move_angle",
+            "move_speed",
             "boss_set",
             "pulse_signal",
             "emit_req",
@@ -1028,6 +1076,10 @@ mod tests {
     fn void_builtins_have_none_return_type() {
         for n in [
             "move_to",
+            "move_vel",
+            "move_vel_xy",
+            "move_angle",
+            "move_speed",
             "boss_set",
             "pulse_signal",
             "emit_req",

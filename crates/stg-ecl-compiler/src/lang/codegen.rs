@@ -1501,6 +1501,18 @@ mod tests {
             y: stg_core::math::Fx::ZERO,
             vx: stg_core::math::Fx::ZERO,
             vy: stg_core::math::Fx::ZERO,
+            speed: stg_core::math::Fx::ZERO,
+            angle: stg_core::math::Angle::ZERO,
+            vel_from_0: 0,
+            vel_from_1: 0,
+            vel_to_0: 0,
+            vel_to_1: 0,
+            vel_t: 0,
+            vel_dur: 0,
+            vel_easing: 0,
+            vel_active: 0,
+            vel_space: 0,
+            vel_touched: 0,
             mv_from_x: stg_core::math::Fx::ZERO,
             mv_from_y: stg_core::math::Fx::ZERO,
             mv_to_x: stg_core::math::Fx::ZERO,
@@ -1886,6 +1898,76 @@ mod tests {
             .expect("探活为真 ⇒ if 体执行 ⇒ 必须真的开出一颗弹");
         assert_eq!(p.angle()[i], expect, "弹真的朝那只敌打（链路整条接通）");
         assert_eq!(view.diag().task_faults, 0);
+    }
+
+    /// 敌人运动动词族刀（2026-07-31）的 e2e：复刻 spec §3.2 那个编排——杂兵**被拉到点位**
+    /// 的同时把速度缓动到朝下，**到点后继续按那个速度飘走**。走真编译 + 真 VM，链路是
+    /// `.ecl 源码 → move_to/move_vel → syscall 20/83 → 世界层写 API → 相位 5 分层仲裁`，
+    /// 外加 `$self_vy`/`$self_y`（syscall 88/85 那批引擎变量）把结果读回脚本侧。
+    ///
+    /// **两个 dur 必须严格不等且速度那条先到期**（位置 `dur=4` / 速度 `dur=2`）：这正是
+    /// 黏滞位 `vel_touched` 存在的全部理由。到点那帧 `vel_active` 早已归 0，若判据写成
+    /// `vel_active != 0` 就会把刚缓好的速度误清 ⇒ 敌人到点即死站，本条的 `vy == 3.0`
+    /// 与"又飘了两帧"两格同时红。dur 取相等会让这条 e2e 退化成假守卫（那时两个判据等价）。
+    ///
+    /// 帧序（`run` 的 `step` 序号）：
+    /// 0 = main 出生跳过；1 = main 首跑（`spawn_enemy` 挂 `on_enemy`）；
+    /// 2 = `on_enemy` 首跑，两条动词武装，同帧相位 5 走第 1 帧插值（`mv_t=1`/`vel_t=1`）；
+    /// 3 = `vel_t=2` 到期（速度落 3.0 朝下、`vel_active=0`），`mv_t=2`；4 = `mv_t=3`；
+    /// 5 = `mv_t=4` 到点（精确 (80,180)、`mv_active=0`、**不清速**）；
+    /// 6/7 = 无位置插值 ⇒ `pos += vel`，y 各 +3 → 186；
+    /// 8 = `on_enemy` 的 `wait(5)` 醒来（睡过 3~7 共 5 帧；相位 2 早于相位 5），读到的
+    /// 正是 186 / 3.0，本帧相位 5 再走一步 → 189。
+    #[test]
+    fn e2e_enemy_lands_and_keeps_drifting() {
+        use stg_core::math::Fx;
+        let src = "sub main() {\n\
+                     _ = spawn_enemy(0.0fx, 100.0fx, 100, 0, 0, 3, on_enemy);\n\
+                     loop { wait(1); }\n\
+                   }\n\
+                   async sub on_enemy() {\n\
+                     move_to(4, 80.0fx, 180.0fx, 0);\n\
+                     move_vel(2, 90deg, 3.0fx, 0);\n\
+                     wait(5);\n\
+                     set_global(20, $self_vy as int);\n\
+                     set_global(21, $self_y as int);\n\
+                     set_global(22, $self_x as int);\n\
+                     loop { wait(1); }\n\
+                   }";
+        let w = run(src, 9);
+        let view = w.body.view();
+        let e = view.enemies();
+        let i = e.iter_alive().next().expect("杂兵应还活着（否则全是假绿）");
+
+        // ── 位置插值：到点了，且落在精确终点的 x 上（x 方向速度为 0，到点后不再动）──
+        assert_eq!(e.mv_active()[i], 0, "位置插值 dur=4 早已到点");
+        assert_eq!(e.x()[i], Fx::from_int(80), "到点 x 精确 80，此后 vx=0 不漂");
+
+        // ── 黏滞位那格：速度插值先到期，但到点**不得**清速 ──
+        assert_eq!(e.vel_active()[i], 0, "速度插值 dur=2 更早到期（前提）");
+        assert_eq!(
+            e.vy()[i],
+            Fx::from_int(3),
+            "到点不清速——判据写成 vel_active 的话这里是 0"
+        );
+        assert_eq!(e.vx()[i], Fx::ZERO, "90deg 是正下方，x 分量恰为 0");
+
+        // ── 落地继续飘：到点(y=180) 之后 step 6/7/8 各走 3.0 ──
+        assert_eq!(
+            e.y()[i],
+            Fx::from_int(180 + 9),
+            "到点后 3 帧 × 3.0/帧 = 189（死站的话恒 180）"
+        );
+
+        // ── 脚本侧读回（$self_* 引擎变量真读活值，不是快照/常量）──
+        assert_eq!(w.body.view().globals()[20], 3, "$self_vy 读到 3.0fx");
+        assert_eq!(
+            w.body.view().globals()[21],
+            186,
+            "$self_y：wait(5) 醒来那帧（相位 2）位置是 180 + 2×3"
+        );
+        assert_eq!(w.body.view().globals()[22], 80, "$self_x 停在终点 x");
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
     /// 敌句柄打包刀（2026-07-31）：`godot/ecl/demo/boss_windchime.ecl` 的**等 boss 死**

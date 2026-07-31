@@ -46,7 +46,8 @@ fn infix_binding(kind: &TokenKind) -> Option<(u8, BinOp)> {
     }
 }
 
-/// `$` 引擎变量白名单（拍板 6，v1 固定 8 个）——词法层只切词，这里判定是否合法。
+/// `$` 引擎变量白名单（v1 固定 8 个；敌人运动动词族刀 2026-07-31 扩到 12 个）——
+/// 词法层只切词，这里判定是否合法。
 fn resolve_engine_var(name: &str) -> Option<EngVar> {
     match name {
         "frame" => Some(EngVar::Frame),
@@ -57,6 +58,10 @@ fn resolve_engine_var(name: &str) -> Option<EngVar> {
         "self_hp" => Some(EngVar::SelfHp),
         "self_hp_max" => Some(EngVar::SelfHpMax),
         "self_age" => Some(EngVar::SelfAge),
+        "self_vx" => Some(EngVar::SelfVx),
+        "self_vy" => Some(EngVar::SelfVy),
+        "self_speed" => Some(EngVar::SelfSpeed),
+        "self_angle" => Some(EngVar::SelfAngle),
         _ => None,
     }
 }
@@ -729,7 +734,8 @@ impl<'s> Parser<'s> {
                             span,
                             format!(
                                 "未知的引擎变量 '${name}'（v1 支持：frame/player_x/player_y/\
-                                 self_x/self_y/self_hp/self_hp_max/self_age）"
+                                 self_x/self_y/self_hp/self_hp_max/self_age/\
+                                 self_vx/self_vy/self_speed/self_angle）"
                             ),
                         );
                         Err(())

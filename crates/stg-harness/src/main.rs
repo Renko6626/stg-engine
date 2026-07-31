@@ -220,6 +220,18 @@ fn bench_mix(frames: u32) {
         y: Fx::from_int(80),
         vx: Fx::ZERO,
         vy: Fx::ZERO,
+        speed: Fx::ZERO,
+        angle: Angle::ZERO,
+        vel_from_0: 0,
+        vel_from_1: 0,
+        vel_to_0: 0,
+        vel_to_1: 0,
+        vel_t: 0,
+        vel_dur: 0,
+        vel_easing: 0,
+        vel_active: 0,
+        vel_space: 0,
+        vel_touched: 0,
         mv_from_x: Fx::ZERO,
         mv_from_y: Fx::ZERO,
         mv_to_x: Fx::ZERO,
@@ -441,6 +453,18 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
         y: Fx::from_int(y),
         vx: Fx::ZERO,
         vy: Fx::ZERO,
+        speed: Fx::ZERO,
+        angle: Angle::ZERO,
+        vel_from_0: 0,
+        vel_from_1: 0,
+        vel_to_0: 0,
+        vel_to_1: 0,
+        vel_t: 0,
+        vel_dur: 0,
+        vel_easing: 0,
+        vel_active: 0,
+        vel_space: 0,
+        vel_touched: 0,
         mv_from_x: Fx::ZERO,
         mv_from_y: Fx::ZERO,
         mv_to_x: Fx::ZERO,
@@ -929,7 +953,7 @@ fn build_rainbow_world(
 ) {
     use stg_core::ecl::binding::EclOwner;
     use stg_core::enemy::EnemyInit;
-    use stg_core::math::Fx;
+    use stg_core::math::{Angle, Fx};
     use stg_core::step::World;
 
     let image = compile_rainbow_image();
@@ -941,6 +965,18 @@ fn build_rainbow_world(
         y: Fx::from_int(BOSS_Y),
         vx: Fx::ZERO,
         vy: Fx::ZERO,
+        speed: Fx::ZERO,
+        angle: Angle::ZERO,
+        vel_from_0: 0,
+        vel_from_1: 0,
+        vel_to_0: 0,
+        vel_to_1: 0,
+        vel_t: 0,
+        vel_dur: 0,
+        vel_easing: 0,
+        vel_active: 0,
+        vel_space: 0,
+        vel_touched: 0,
         mv_from_x: Fx::ZERO,
         mv_from_y: Fx::ZERO,
         mv_to_x: Fx::ZERO,
@@ -1054,7 +1090,7 @@ mod ecl_rainbow_tests {
     use stg_core::ecl::image::ResolveError;
     use stg_core::enemy::EnemyInit;
     use stg_core::input::InputFrame;
-    use stg_core::math::Fx;
+    use stg_core::math::{Angle, Fx};
     use stg_core::step::{World, step_with_director};
 
     fn boss_init() -> EnemyInit {
@@ -1063,6 +1099,18 @@ mod ecl_rainbow_tests {
             y: Fx::from_int(BOSS_Y),
             vx: Fx::ZERO,
             vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            vel_from_0: 0,
+            vel_from_1: 0,
+            vel_to_0: 0,
+            vel_to_1: 0,
+            vel_t: 0,
+            vel_dur: 0,
+            vel_easing: 0,
+            vel_active: 0,
+            vel_space: 0,
+            vel_touched: 0,
             mv_from_x: Fx::ZERO,
             mv_from_y: Fx::ZERO,
             mv_to_x: Fx::ZERO,

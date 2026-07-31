@@ -79,7 +79,17 @@ extern crate self as stg_core;
 /// 世界逐位不变，且校验**只在开机 API 上**——`load_bytes` 不校验 rank，故没有一份既有存档
 /// 因此不可读。号表/op 表/池布局/`SaveBytes` 编码/相位序全未动。记在这里是为了让"这刀想过
 /// 但判定不需要"留痕，免得后人以为漏了。
-pub const ENGINE_VER: u32 = 9;
+///
+/// **9 → 10**（敌人运动动词族刀 T6，2026-07-31）：**敌池 SoA 布局变更**——新增 12 个并行
+/// 数组（`speed`/`angle` 双表示 + 速度插值器 `vel_from_0/1`、`vel_to_0/1`、`vel_t`、
+/// `vel_dur`、`vel_easing`、`vel_active`、`vel_space`、`vel_touched`）⇒ **`World` 快照
+/// 字节数与 `SaveBytes` 载荷编码都变了**，旧存档/旧回放按新布局解读会走出另一条世界线，
+/// 必须拒载。
+///
+/// **理由是布局，不是号表**：本刀同时新增 syscall 83–90（四条动词 + 四个 `$self_*`），
+/// 但号表新增单独只让旧引擎跑不了新脚本（同 2→3 那次的单理由口径，硬度低一档）；
+/// 这次真正逼着 bump 的是存档 wire format。
+pub const ENGINE_VER: u32 = 10;
 
 pub use stg_derive::define_pool;
 

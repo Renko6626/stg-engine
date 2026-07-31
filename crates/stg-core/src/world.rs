@@ -475,8 +475,12 @@ impl WorldBody {
     }
 
     /// 敌人限时缓动位移（D5；杂鱼"飘入-停-飘出"的世界侧状态机，将来 ECL syscall 直通）。
-    /// 语义：绝对插值、到点即停（精确终点 + 清 vx/vy）；进行中重下 = 覆盖重启；
-    /// dur=0 = 瞬移（合法退化）。P4-b：悬垂/easing 越界 → no-op + 计数。目标点不钳制场界。
+    /// 语义：绝对插值、到点即停（精确终点 + 条件化清 vx/vy，判据 `vel_touched`）；
+    /// 进行中重下 = 覆盖重启；dur=0 = 瞬移（合法退化）。
+    /// **它是一次完整的运动接管**：武装（两条路径都算）会清掉此前的速度意图——
+    /// 既清黏滞位 `vel_touched`、也清在飞的速度插值 `vel_active`。要落地后继续飘，
+    /// 把速度动词写在 `move_to` **之后**。P4-b：悬垂/easing 越界 → no-op + 计数。
+    /// 目标点不钳制场界。
     pub fn move_enemy_to(&mut self, h: EnemyHandle, x: Fx, y: Fx, dur: u16, easing: u8) {
         let Some(i) = self.enemies.get(h) else {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
@@ -496,7 +500,18 @@ impl WorldBody {
             self.enemies.y[i] = y;
             self.enemies.vx[i] = Fx::ZERO;
             self.enemies.vy[i] = Fx::ZERO;
+            // 双表示同步（终审 Critical 1）：清 vx/vy 之后必须回填作者视图，否则
+            // speed/angle 留着陈值说谎——紧跟一次 move_angle（"只转向、速率不动"）
+            // 就会拿那个陈速率把刚停住的敌弹射出去。零向量 ⇒ speed=0、angle 冻结。
+            self.backfill_enemy_polar(i);
             self.enemies.mv_active[i] = 0;
+            // move_to 是一条全新的位置命令——它之前的速度意图是陈的，由它接管。
+            // 到点清速的判据（integrate 相）读的就是这一位。
+            self.enemies.vel_touched[i] = 0;
+            // 连"在飞的速度插值"一并作废（终审 Important 4 的控制器裁定）：理由与上一行
+            // 逐字相同——既然连"表达过速度意图"这个事实都作废，"意图正在执行中"更该作废。
+            // 不清的话，本帧刚硬停的敌次帧就被仍在飞的插值器按旧 from/to 写回速度。
+            self.enemies.vel_active[i] = 0;
             return;
         }
         self.enemies.mv_from_x[i] = self.enemies.x[i];
@@ -507,6 +522,13 @@ impl WorldBody {
         self.enemies.mv_dur[i] = dur;
         self.enemies.mv_easing[i] = easing;
         self.enemies.mv_active[i] = 1;
+        // move_to 是一条全新的位置命令——它之前的速度意图是陈的，由它接管。
+        // 到点清速的判据（integrate 相）读的就是这一位。
+        self.enemies.vel_touched[i] = 0;
+        // 同 dur==0 路径：在飞的速度插值一并作废（终审 Important 4）。move_to 是一次
+        // **完整**的运动接管。想让敌落地后继续飘，把速度动词写在 move_to **之后**
+        // （spec §3.2 样例本来就是那个顺序，故不受影响）。
+        self.enemies.vel_active[i] = 0;
     }
 
     /// 清空敌人的待掉落计数（敌人死亡效果刀）。P4-b：悬垂 → no-op + 计数。
@@ -1111,6 +1133,18 @@ pub(crate) mod test_support {
             y: Fx::from_int(y),
             vx: Fx::ZERO,
             vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: crate::math::Angle::ZERO,
+            vel_from_0: 0,
+            vel_from_1: 0,
+            vel_to_0: 0,
+            vel_to_1: 0,
+            vel_t: 0,
+            vel_dur: 0,
+            vel_easing: 0,
+            vel_active: 0,
+            vel_space: 0,
+            vel_touched: 0,
             mv_from_x: Fx::ZERO,
             mv_from_y: Fx::ZERO,
             mv_to_x: Fx::ZERO,
@@ -1207,6 +1241,18 @@ mod tests {
             y: Fx::ZERO,
             vx: Fx::ZERO,
             vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            vel_from_0: 0,
+            vel_from_1: 0,
+            vel_to_0: 0,
+            vel_to_1: 0,
+            vel_t: 0,
+            vel_dur: 0,
+            vel_easing: 0,
+            vel_active: 0,
+            vel_space: 0,
+            vel_touched: 0,
             mv_from_x: Fx::ZERO,
             mv_from_y: Fx::ZERO,
             mv_to_x: Fx::ZERO,
@@ -1412,6 +1458,18 @@ mod tests {
             y: Fx::from_int(50),
             vx: Fx::from_int(1),
             vy: Fx::from_int(2),
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            vel_from_0: 0,
+            vel_from_1: 0,
+            vel_to_0: 0,
+            vel_to_1: 0,
+            vel_t: 0,
+            vel_dur: 0,
+            vel_easing: 0,
+            vel_active: 0,
+            vel_space: 0,
+            vel_touched: 0,
             mv_from_x: Fx::ZERO,
             mv_from_y: Fx::ZERO,
             mv_to_x: Fx::ZERO,
@@ -1533,6 +1591,18 @@ mod tests {
             y: Fx::ZERO,
             vx: Fx::ZERO,
             vy: Fx::ZERO,
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            vel_from_0: 0,
+            vel_from_1: 0,
+            vel_to_0: 0,
+            vel_to_1: 0,
+            vel_t: 0,
+            vel_dur: 0,
+            vel_easing: 0,
+            vel_active: 0,
+            vel_space: 0,
+            vel_touched: 0,
             mv_from_x: Fx::ZERO,
             mv_from_y: Fx::ZERO,
             mv_to_x: Fx::ZERO,

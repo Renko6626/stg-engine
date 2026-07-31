@@ -2187,11 +2187,18 @@ mod tests {
         // 自动全量入（无 skip）；③ D10 容量预算：新增 45056 B/world，非池 cap 变更；
         // ④ SaveBytes 同 ② 走 derive + 泛型 impl，自动入档 ⇒ 存档 wire format 变化，
         // 故 `ENGINE_VER` 4→5（见 lib.rs）。
+        // 敌人运动动词族刀 2026-07-31（T1）：敌池 +12 字段（speed/angle 双表示 + 速度插值器
+        // 十件），30 B/敌 × 256 = **+7680**，无对齐吸收（Fx=4/Angle(u16)=2/i32=4/u16=2/u8=1
+        // 逐项相加恰为 30，字段表本就 4 对齐、插入处不跨对齐边界）：WorldBody
+        // 970144→977824、World 1129944→1137624，增量 1:1（无新池/无 Task 字段改动）。
+        // ① `copy_into` 走 `s.enemies.copy_into(...)`（`define_pool!` 生成，非手写，无需
+        // 同步）；② checksum 走 derive 默认全量入（未加 skip）；③ 不是新池，D10 容量预算
+        // 不适用（cap 仍 256，只是每槽宽了 30 B）；④ SaveBytes 走 derive 自动。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (970144, 1129944);
+        const EXPECTED: (usize, usize) = (977824, 1137624);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (970144, 1129944);
+        const EXPECTED: (usize, usize) = (977824, 1137624);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2220,11 +2227,13 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            9,
-            "bump 必须是有意识决定(评审 + 改本测试)——8→9：敌句柄打包刀,**号表一个没长**,\
-             但六条既有 syscall 的取值编码变了(敌号从裸池 index 变成含 generation 的打包值)。\
-             改既有取值语义比加号更硬:旧回放/存档在新引擎上会静默走出另一条世界线,必须拒载。\
-             前一次 7→8 是探活读口刀(号表新增 82 enemy_alive,单理由机械 bump)"
+            10,
+            "bump 必须是有意识决定(评审 + 改本测试)——9→10：敌人运动动词族刀,\
+             **敌池 SoA 布局变更**(+12 个并行数组:speed/angle 双表示 + 速度插值器十件)\
+             ⇒ 快照字节数与 SaveBytes 载荷编码都变了,旧档按新布局解读会走出另一条世界线,\
+             必须拒载。**理由是布局不是号表**——本刀同时新增 syscall 83-90(四条动词 + 四个\
+             $self_*),但号表新增单独只让旧引擎跑不了新脚本,硬度低一档(同 2→3 的单理由口径)。\
+             前一次 8→9 是敌句柄打包刀(号表一个没长,但六条既有 syscall 的取值编码变了)"
         );
     }
 
@@ -2259,6 +2268,18 @@ mod tests {
             y: Fx::from_int(60),
             vx: Fx::from_int(1),
             vy: Fx::from_int(-1),
+            speed: Fx::ZERO,
+            angle: Angle::ZERO,
+            vel_from_0: 0,
+            vel_from_1: 0,
+            vel_to_0: 0,
+            vel_to_1: 0,
+            vel_t: 0,
+            vel_dur: 0,
+            vel_easing: 0,
+            vel_active: 0,
+            vel_space: 0,
+            vel_touched: 0,
             mv_from_x: Fx::ZERO,
             mv_from_y: Fx::ZERO,
             mv_to_x: Fx::ZERO,

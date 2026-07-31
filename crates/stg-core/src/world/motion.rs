@@ -10,7 +10,7 @@ use crate::math::cordic::atan2;
 use crate::math::geom::{len_sq, polar_to_vec};
 use crate::math::isqrt::isqrt;
 use crate::player::{LIFE_ABSENT, LIFE_GAMEOVER};
-use crate::world::STATUS_STALE_HANDLE;
+use crate::world::{STATUS_BAD_ARGS, STATUS_STALE_HANDLE};
 
 /// 低速回填阈值 = 1/16 px/帧。契约常量：`speed` 恒回填、`angle` 仅 `speed >= 此值` 时回填
 /// （近停冻结朝向：防 CORDIC 低幅垃圾角污染作者视图与 sprite 朝向）。
@@ -60,6 +60,29 @@ impl WorldBody {
         self.bullets.speed[i] = sp;
         if sp.raw() >= BACKFILL_MIN_SPEED.raw() {
             self.bullets.angle[i] = atan2(vy, vx);
+        }
+    }
+
+    /// 敌人：极坐标 → 积分真相。**改动 `speed`/`angle` 的每条路径改完必须调它。**
+    /// 与弹的 `refresh_vel_from_polar` 是同一件事，只是池不同（敌无 POLAR_FX 连续效果，
+    /// 故不涉及模式位）。
+    #[inline]
+    pub(crate) fn refresh_enemy_vel_from_polar(&mut self, i: usize) {
+        let (vx, vy) = polar_to_vec(self.enemies.speed[i], self.enemies.angle[i]);
+        self.enemies.vx[i] = vx;
+        self.enemies.vy[i] = vy;
+    }
+
+    /// 敌人：笛卡尔 → 作者视图回填。阈值规则同弹（[`BACKFILL_MIN_SPEED`]）：`speed` 恒回填，
+    /// `angle` 仅在 `speed >= 阈值` 时回填——近停冻结朝向，防 CORDIC 低幅垃圾角。
+    /// sqrt(Q32.32) = Q16.16，故 `isqrt(len_sq)` 的 raw 直接是 `Fx` raw。
+    pub(crate) fn backfill_enemy_polar(&mut self, i: usize) {
+        let vx = self.enemies.vx[i];
+        let vy = self.enemies.vy[i];
+        let sp = Fx::from_raw(isqrt(len_sq(vx, vy) as u64) as i32);
+        self.enemies.speed[i] = sp;
+        if sp.raw() >= BACKFILL_MIN_SPEED.raw() {
+            self.enemies.angle[i] = atan2(vy, vx);
         }
     }
 
@@ -186,6 +209,178 @@ impl WorldBody {
             return;
         };
         self.aim_at_player_at(i, delta);
+    }
+
+    /// 四条速度动词共用的前置校验（P4-b）：悬垂 → None + 计数；`easing >= 8` → None + 计数。
+    /// **两条都必须在任何字段落地之前**——坏参数是 no-op，不能留半个武装好的插值器。
+    fn enemy_vel_precheck(&mut self, h: crate::enemy::EnemyHandle, easing: u8) -> Option<usize> {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return None;
+        };
+        if easing >= 8 {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return None;
+        }
+        Some(i)
+    }
+
+    /// 武装速度插值器（`dur > 0` 专用；`dur == 0` 的瞬时路径由各 setter 自己走完）。
+    /// `from_*` 一律取**当前**值 —— 重新武装 = 从此刻重新起算（同 `STEP_*` 的
+    /// "scratch 无条件重初始化"）。
+    #[allow(clippy::too_many_arguments)] // 插值器武装的天然参数面（同 create_bullets_batch 先例）
+    fn arm_enemy_vel(
+        &mut self,
+        i: usize,
+        space: u8,
+        from_0: i32,
+        from_1: i32,
+        to_0: i32,
+        to_1: i32,
+        dur: u16,
+        easing: u8,
+    ) {
+        self.enemies.vel_space[i] = space;
+        self.enemies.vel_from_0[i] = from_0;
+        self.enemies.vel_from_1[i] = from_1;
+        self.enemies.vel_to_0[i] = to_0;
+        self.enemies.vel_to_1[i] = to_1;
+        self.enemies.vel_t[i] = 0;
+        self.enemies.vel_dur[i] = dur;
+        self.enemies.vel_easing[i] = easing;
+        self.enemies.vel_active[i] = 1;
+    }
+
+    /// 极坐标速度（ZUN `404 moveVel` / `405 moveVelTime`）。`dur == 0` = 立即设。
+    pub fn set_enemy_vel_polar(
+        &mut self,
+        h: crate::enemy::EnemyHandle,
+        angle: Angle,
+        speed: Fx,
+        dur: u16,
+        easing: u8,
+    ) {
+        let Some(i) = self.enemy_vel_precheck(h, easing) else {
+            return;
+        };
+        self.enemies.vel_touched[i] = 1;
+        if dur == 0 {
+            self.enemies.speed[i] = speed;
+            self.enemies.angle[i] = angle;
+            self.refresh_enemy_vel_from_polar(i);
+            self.enemies.vel_active[i] = 0;
+            return;
+        }
+        self.arm_enemy_vel(
+            i,
+            crate::enemy::VEL_SPACE_POLAR,
+            self.enemies.speed[i].raw(),
+            self.enemies.angle[i].raw() as i32,
+            speed.raw(),
+            angle.raw() as i32,
+            dur,
+            easing,
+        );
+    }
+
+    /// 笛卡尔速度。`dur > 0` 时**在笛卡尔空间插值**（spec §3.3：不转极坐标，否则它就
+    /// 退化成 `set_enemy_vel_polar` 的语法糖）。
+    pub fn set_enemy_vel_cart(
+        &mut self,
+        h: crate::enemy::EnemyHandle,
+        vx: Fx,
+        vy: Fx,
+        dur: u16,
+        easing: u8,
+    ) {
+        let Some(i) = self.enemy_vel_precheck(h, easing) else {
+            return;
+        };
+        self.enemies.vel_touched[i] = 1;
+        if dur == 0 {
+            self.enemies.vx[i] = vx;
+            self.enemies.vy[i] = vy;
+            self.backfill_enemy_polar(i);
+            self.enemies.vel_active[i] = 0;
+            return;
+        }
+        self.arm_enemy_vel(
+            i,
+            crate::enemy::VEL_SPACE_CART,
+            self.enemies.vx[i].raw(),
+            self.enemies.vy[i].raw(),
+            vx.raw(),
+            vy.raw(),
+            dur,
+            easing,
+        );
+    }
+
+    /// 只转向、保持速率（ZUN `440 moveAngle` / `441`）。走极坐标空间，速率分量填当前值。
+    /// **不委托** `set_enemy_vel_polar`——自己 precheck 一次，避免坏参数被计两次
+    /// `contract_viol`（该计数参与校验和，多计一次即行为 bug，见 brief 裁定）。
+    pub fn set_enemy_angle(
+        &mut self,
+        h: crate::enemy::EnemyHandle,
+        angle: Angle,
+        dur: u16,
+        easing: u8,
+    ) {
+        let Some(i) = self.enemy_vel_precheck(h, easing) else {
+            return;
+        };
+        self.enemies.vel_touched[i] = 1;
+        let speed = self.enemies.speed[i];
+        if dur == 0 {
+            self.enemies.angle[i] = angle;
+            self.refresh_enemy_vel_from_polar(i);
+            self.enemies.vel_active[i] = 0;
+            return;
+        }
+        self.arm_enemy_vel(
+            i,
+            crate::enemy::VEL_SPACE_POLAR,
+            speed.raw(),
+            self.enemies.angle[i].raw() as i32,
+            speed.raw(),
+            angle.raw() as i32,
+            dur,
+            easing,
+        );
+    }
+
+    /// 只调速、保持方向（ZUN `444 moveSpeed` / `445`）。走极坐标空间，角度分量填当前值。
+    /// **不委托** `set_enemy_vel_polar`——理由同 [`WorldBody::set_enemy_angle`]。
+    pub fn set_enemy_speed(
+        &mut self,
+        h: crate::enemy::EnemyHandle,
+        speed: Fx,
+        dur: u16,
+        easing: u8,
+    ) {
+        let Some(i) = self.enemy_vel_precheck(h, easing) else {
+            return;
+        };
+        self.enemies.vel_touched[i] = 1;
+        let angle = self.enemies.angle[i];
+        if dur == 0 {
+            self.enemies.speed[i] = speed;
+            self.refresh_enemy_vel_from_polar(i);
+            self.enemies.vel_active[i] = 0;
+            return;
+        }
+        self.arm_enemy_vel(
+            i,
+            crate::enemy::VEL_SPACE_POLAR,
+            self.enemies.speed[i].raw(),
+            angle.raw() as i32,
+            speed.raw(),
+            angle.raw() as i32,
+            dur,
+            easing,
+        );
     }
 }
 
@@ -430,5 +625,225 @@ mod tests {
         let cv0 = w.body.diag.contract_viol;
         w.body.aim_bullet_at_player(h, Angle::ZERO);
         assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+    }
+
+    // ── 敌人运动动词族刀 2026-07-31（T1）：双表示同步核 ─────────────────────
+
+    /// 正向：写 speed/angle → refresh 刷出 vx/vy。取 angle=QUARTER(90°，屏幕坐标朝下)、
+    /// speed=5.0：cos=0/sin=1 ⇒ (0, 5)。**判别性**：若两条派发臂写反（vx 拿 sin），
+    /// 这里会得到 (5, 0)，一眼可辨；取 45° 则两分量相等、写反不可辨。
+    #[test]
+    fn enemy_polar_to_cart_refresh_is_exact_at_quarter() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let i = w.body.enemies.get(h).unwrap();
+        w.body.enemies.speed[i] = Fx::from_int(5);
+        w.body.enemies.angle[i] = Angle::QUARTER;
+        w.body.refresh_enemy_vel_from_polar(i);
+        assert_eq!(w.body.enemies.vx[i], Fx::ZERO, "90° 的 cos 分量应为 0");
+        assert_eq!(
+            w.body.enemies.vy[i],
+            Fx::from_int(5),
+            "90° 的 sin 分量应为满速"
+        );
+    }
+
+    /// 反向：写 vx/vy → backfill 反算 speed/angle。取 (3, 4) 这个 x≠y 且勾股整齐的点：
+    /// speed 应精确为 5.0，angle 应是 atan2(4, 3)。**判别性**：(3,4) 而非 (3,3)——
+    /// 后者 speed=4.24 不整、且 atan2 参数写反不可辨。
+    #[test]
+    fn enemy_cart_to_polar_backfill_is_pythagorean() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let i = w.body.enemies.get(h).unwrap();
+        w.body.enemies.vx[i] = Fx::from_int(3);
+        w.body.enemies.vy[i] = Fx::from_int(4);
+        w.body.backfill_enemy_polar(i);
+        assert_eq!(w.body.enemies.speed[i], Fx::from_int(5), "3-4-5 直角三角形");
+        assert_eq!(
+            w.body.enemies.angle[i],
+            crate::math::cordic::atan2(Fx::from_int(4), Fx::from_int(3)),
+            "atan2(vy, vx) 的参数序：y 在前"
+        );
+    }
+
+    /// 低速冻结朝向（BACKFILL_MIN_SPEED = 1/16 px/帧）：速度归零时 speed 归 0 但
+    /// **angle 保持不变**——防 CORDIC 在零向量上吐垃圾角。逐条同弹的既有规则。
+    #[test]
+    fn enemy_backfill_freezes_angle_below_min_speed() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let i = w.body.enemies.get(h).unwrap();
+        w.body.enemies.angle[i] = Angle::QUARTER;
+        w.body.enemies.vx[i] = Fx::ZERO;
+        w.body.enemies.vy[i] = Fx::ZERO;
+        w.body.backfill_enemy_polar(i);
+        assert_eq!(w.body.enemies.speed[i], Fx::ZERO);
+        assert_eq!(
+            w.body.enemies.angle[i],
+            Angle::QUARTER,
+            "零向量不得改写朝向"
+        );
+    }
+
+    // ── 敌人运动动词族刀 2026-07-31（T2）：速度插值器的武装 ─────────────────────
+
+    /// dur == 0 是瞬时 set：立刻落 speed/angle 并刷 vx/vy，且**不**武装插值器。
+    #[test]
+    fn set_enemy_vel_polar_dur_zero_is_instant_and_arms_nothing() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(5), 0, 0);
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.speed[i], Fx::from_int(5));
+        assert_eq!(w.body.enemies.angle[i], Angle::QUARTER);
+        assert_eq!(
+            w.body.enemies.vy[i],
+            Fx::from_int(5),
+            "瞬时版也要刷积分真相"
+        );
+        assert_eq!(w.body.enemies.vel_active[i], 0, "dur=0 不武装插值器");
+        assert_eq!(
+            w.body.enemies.vel_touched[i], 1,
+            "瞬时版同样算表达过速度意图"
+        );
+    }
+
+    /// dur > 0 只武装、当帧不动值。from 取**当前**值，to 取目标值，space 落 POLAR。
+    #[test]
+    fn set_enemy_vel_polar_dur_positive_arms_only() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::ZERO, Fx::from_int(2), 0, 0); // 先摆一个起点
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(5), 10, 3);
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.speed[i], Fx::from_int(2), "武装当帧不动值");
+        assert_eq!(w.body.enemies.vel_active[i], 1);
+        assert_eq!(w.body.enemies.vel_space[i], crate::enemy::VEL_SPACE_POLAR);
+        assert_eq!(w.body.enemies.vel_from_0[i], Fx::from_int(2).raw());
+        assert_eq!(w.body.enemies.vel_from_1[i], Angle::ZERO.raw() as i32);
+        assert_eq!(w.body.enemies.vel_to_0[i], Fx::from_int(5).raw());
+        assert_eq!(w.body.enemies.vel_to_1[i], Angle::QUARTER.raw() as i32);
+        assert_eq!(w.body.enemies.vel_t[i], 0);
+        assert_eq!(w.body.enemies.vel_dur[i], 10);
+        assert_eq!(w.body.enemies.vel_easing[i], 3);
+    }
+
+    /// 笛卡尔武装：载体槽装 (vx, vy)，space 落 CART。dur=0 时刷 vx/vy 并**回填** speed/angle。
+    #[test]
+    fn set_enemy_vel_cart_dur_zero_backfills_author_view() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_cart(h, Fx::from_int(3), Fx::from_int(4), 0, 0);
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.vx[i], Fx::from_int(3));
+        assert_eq!(w.body.enemies.vy[i], Fx::from_int(4));
+        assert_eq!(w.body.enemies.speed[i], Fx::from_int(5), "回填 3-4-5");
+    }
+
+    /// 单轴保持另一轴：move_angle 只改方向、速率一字不动。取 speed=7.0（≠1.0，
+    /// 否则"另一分量被填成 ONE"这个错法不可辨）、angle 从 0 到 QUARTER。
+    #[test]
+    fn set_enemy_angle_preserves_speed() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::ZERO, Fx::from_int(7), 0, 0);
+        w.body.set_enemy_angle(h, Angle::QUARTER, 0, 0);
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.speed[i], Fx::from_int(7), "只转向不改速率");
+        assert_eq!(w.body.enemies.angle[i], Angle::QUARTER);
+    }
+
+    /// 单轴保持另一轴（对偶）：move_speed 只改速率、方向一字不动。
+    #[test]
+    fn set_enemy_speed_preserves_angle() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(7), 0, 0);
+        w.body.set_enemy_speed(h, Fx::from_int(2), 0, 0);
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.angle[i], Angle::QUARTER, "只调速不改方向");
+        assert_eq!(w.body.enemies.speed[i], Fx::from_int(2));
+    }
+
+    /// 重新武装：插值途中再调 → 无条件重初始化，from 取**当前**值、space 可切换。
+    #[test]
+    fn rearming_switches_space_and_restarts_from_current() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_cart(h, Fx::from_int(9), Fx::ZERO, 10, 0); // 笛卡尔在飞
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(5), 4, 0); // 切极坐标
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.vel_space[i], crate::enemy::VEL_SPACE_POLAR);
+        assert_eq!(w.body.enemies.vel_t[i], 0, "重新武装即清计时");
+        assert_eq!(w.body.enemies.vel_dur[i], 4);
+    }
+
+    /// P4-b：easing 越界 → no-op + contract_viol 计数，不 panic、不落任何字段。
+    /// 覆盖全部四条 setter——每条各只计一次（不是委托两次的 +2）。
+    #[test]
+    fn bad_easing_is_noop_and_counted() {
+        let mut w = crate::step::World::new(1);
+
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let before = w.body.diag.contract_viol;
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(5), 10, 8);
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.vel_active[i], 0, "坏参数不得武装");
+        assert_eq!(w.body.enemies.vel_touched[i], 0, "坏参数不算表达过意图");
+        assert_eq!(
+            w.body.diag.contract_viol,
+            before + 1,
+            "set_enemy_vel_polar 只计一次"
+        );
+
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let before = w.body.diag.contract_viol;
+        w.body
+            .set_enemy_vel_cart(h, Fx::from_int(3), Fx::from_int(4), 10, 8);
+        assert_eq!(
+            w.body.diag.contract_viol,
+            before + 1,
+            "set_enemy_vel_cart 只计一次"
+        );
+
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let before = w.body.diag.contract_viol;
+        w.body.set_enemy_angle(h, Angle::QUARTER, 10, 8);
+        assert_eq!(
+            w.body.diag.contract_viol,
+            before + 1,
+            "set_enemy_angle 只计一次（不得委托二次 precheck）"
+        );
+
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let before = w.body.diag.contract_viol;
+        w.body.set_enemy_speed(h, Fx::from_int(2), 10, 8);
+        assert_eq!(
+            w.body.diag.contract_viol,
+            before + 1,
+            "set_enemy_speed 只计一次（不得委托二次 precheck）"
+        );
+    }
+
+    /// P4-b：悬垂句柄 → no-op + 计数（同 move_enemy_to 既有做法）。
+    #[test]
+    fn stale_handle_is_noop_and_counted() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        assert!(w.body.enemies.free(h));
+        let before = w.body.diag.contract_viol;
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(5), 0, 0);
+        assert_eq!(w.body.diag.contract_viol, before + 1);
     }
 }

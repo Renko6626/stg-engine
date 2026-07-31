@@ -4,8 +4,10 @@
 //!
 //! 弹：delay 门 → 模式效果（POLAR/CART 互斥）→ `pos += vel` → life 倒数。
 //! 自机弹：`pos += vel`。
-//! 敌人：move_to 插值器优先（D5）——`mv_active` 时绝对插值代替 `pos += vel`，到点即停清速；
-//! 否则照常 `pos += vel`（另 tick `invuln`/`hit_flash`，两个计时器分支外照常）。
+//! 敌人：**分层**（敌人运动动词族刀 / spec §3.2、§6.1）——① 速度插值恒跑（只改速度，
+//! 极坐标插 speed/angle 再刷 vx/vy，笛卡尔插 vx/vy 再回填），② `mv_active` 时位置插值
+//! 接管位置（不读 vx/vy），否则照常 `pos += vel`。到点清速条件化：判据是黏滞位
+//! `vel_touched`（§6.3）。另 tick `invuln`/`hit_flash`，两个计时器分支外照常。
 //! 道具：触发判定（PoC / 近距磁吸）先于移动 —— 磁吸=直追终速、未锁定/解锁=重力到终速钉住。
 //! 作用区：`life` 倒数 —— `life=1` 本帧减到 0、相位 6 仍参与判定、相位 9 才回收（"每帧重铺=跟随"的时序基础）。
 
@@ -64,13 +66,19 @@ impl WorldBody {
                 self.shots.y[i] = self.shots.y[i] + self.shots.vy[i];
             }
         }
-        // 敌人：move_to 插值器优先（D5），否则 pos += vel；计时器 tick 分支外照常
+        // 敌人：分层 —— ① 速度插值恒跑，② move_to 插值器接管位置（D5），否则 pos += vel；
+        // 计时器 tick 分支外照常。遍历按池索引升序（I4）。
         let nw = self.enemies.alive.len();
         for w in 0..nw {
             let mut bits = self.enemies.alive[w];
             while bits != 0 {
                 let i = w * 64 + bits.trailing_zeros() as usize;
                 bits &= bits - 1;
+                // ① 速度插值恒跑（分层：它只改速度，不决定位置归谁）
+                if self.enemies.vel_active[i] != 0 {
+                    self.tick_enemy_vel(i);
+                }
+                // ② 位置插值接管位置，否则匀速积分
                 if self.enemies.mv_active[i] != 0 {
                     // D5 插值器优先：绝对插值（每帧从 from 重算，不累积误差；e≤1.0 白名单乘法）
                     self.enemies.mv_t[i] += 1;
@@ -78,8 +86,18 @@ impl WorldBody {
                         // 到点即停（精确终点，不吃舍入；清速防残留漂移）
                         self.enemies.x[i] = self.enemies.mv_to_x[i];
                         self.enemies.y[i] = self.enemies.mv_to_y[i];
-                        self.enemies.vx[i] = Fx::ZERO;
-                        self.enemies.vy[i] = Fx::ZERO;
+                        // 到点清速**条件化**（敌人运动动词族刀）：只在脚本从未表达过速度
+                        // 意图时清。判据是黏滞位 vel_touched 而**不是** vel_active——
+                        // 速度插值常常先于位置插值到期，那时 vel_active 已归 0，
+                        // 拿它当判据会把刚缓好的速度误清（spec §6.3 的修订记录）。
+                        if self.enemies.vel_touched[i] == 0 {
+                            self.enemies.vx[i] = Fx::ZERO;
+                            self.enemies.vy[i] = Fx::ZERO;
+                            // 双表示同步（终审 Critical 1）：清速必回填，否则 speed/angle
+                            // 留陈值说谎，紧跟一次 move_angle 就把停住的敌按陈速率弹射。
+                            // 零向量 ⇒ speed=0、angle 按 BACKFILL_MIN_SPEED 冻结。
+                            self.backfill_enemy_polar(i);
+                        }
                         self.enemies.mv_active[i] = 0;
                     } else {
                         let t = Fx::from_raw(
@@ -137,6 +155,63 @@ impl WorldBody {
                     self.fields.life[i] -= 1;
                 }
             }
+        }
+    }
+
+    /// 推进一只敌人的速度插值一帧（敌人运动动词族刀）。绝对插值：每帧从 `from` 重算，
+    /// 不累积误差；终帧写精确终值。两条空间路径的差别是**这刀的全部要点**——
+    /// 极坐标插 `speed`/`angle` 再刷 `vx/vy`（匀速扫弧），笛卡尔插 `vx/vy` 再回填
+    /// `speed`/`angle`（直线穿过、中途掉速）。把笛卡尔那条改成转极坐标去插，
+    /// `move_vel_xy` 就退化成 `move_vel` 的语法糖了（spec §3.3）。
+    fn tick_enemy_vel(&mut self, i: usize) {
+        self.enemies.vel_t[i] += 1;
+        let done = self.enemies.vel_t[i] >= self.enemies.vel_dur[i];
+        // e ∈ [0,1]：done 帧不参与运算（走 to/delta 直写路径），故只在未完成时求
+        let e = if done {
+            Fx::ZERO
+        } else {
+            let t = Fx::from_raw(
+                (((self.enemies.vel_t[i] as i64) << 16) / self.enemies.vel_dur[i] as i64) as i32,
+            );
+            crate::math::easing::ease(crate::math::easing::from_id(self.enemies.vel_easing[i]), t)
+        };
+        let (f0, f1) = (self.enemies.vel_from_0[i], self.enemies.vel_from_1[i]);
+        let (t0, t1) = (self.enemies.vel_to_0[i], self.enemies.vel_to_1[i]);
+        if self.enemies.vel_space[i] == crate::enemy::VEL_SPACE_CART {
+            // 笛卡尔：两个分量各自线性插（负 delta 的 `>>16` 是算术右移，两平台一致）
+            let vx = if done {
+                t0
+            } else {
+                (f0 as i64 + (((t0 as i64 - f0 as i64) * e.raw() as i64) >> 16)) as i32
+            };
+            let vy = if done {
+                t1
+            } else {
+                (f1 as i64 + (((t1 as i64 - f1 as i64) * e.raw() as i64) >> 16)) as i32
+            };
+            self.enemies.vx[i] = Fx::from_raw(vx);
+            self.enemies.vy[i] = Fx::from_raw(vy);
+            self.backfill_enemy_polar(i);
+        } else {
+            // 极坐标：速率线性插；角度走**最短弧**（同 transform.rs 的 STEP_ANGLE）
+            let sp = if done {
+                t0
+            } else {
+                (f0 as i64 + (((t0 as i64 - f0 as i64) * e.raw() as i64) >> 16)) as i32
+            };
+            let start = crate::math::Angle(f1 as u16);
+            let delta = (t1 as u16).wrapping_sub(start.raw()) as i16;
+            let scaled = if done {
+                delta
+            } else {
+                ((delta as i64 * e.raw() as i64) >> 16) as i16
+            };
+            self.enemies.speed[i] = Fx::from_raw(sp);
+            self.enemies.angle[i] = start.add_delta(scaled);
+            self.refresh_enemy_vel_from_polar(i);
+        }
+        if done {
+            self.enemies.vel_active[i] = 0;
         }
     }
 
@@ -689,7 +764,12 @@ mod tests {
         }
         assert_eq!(w.body.enemies.x[i], Fx::from_int(50), "精确到点");
         assert_eq!(w.body.enemies.y[i], Fx::from_int(150));
-        assert_eq!(w.body.enemies.vx[i], Fx::ZERO, "到点清速");
+        assert_eq!(
+            w.body.enemies.vx[i],
+            Fx::ZERO,
+            "到点清速（未表达速度意图的路径；表达过的走 \
+             arrival_preserves_velocity_when_script_expressed_intent_earlier）"
+        );
         assert_eq!(w.body.enemies.mv_active[i], 0);
         crate::world::test_support::step_t(&mut w, &InputFrame::empty(3));
         assert_eq!(w.body.enemies.x[i], Fx::from_int(50), "到点后不得漂移");
@@ -742,6 +822,396 @@ mod tests {
             crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.enemies.x[i], Fx::ZERO, "2 帧回到 0");
+    }
+
+    /// 【招牌判别式】极坐标插值与笛卡尔插值**走的不是同一条路**。两者都从「朝右 5.0」
+    /// 插到「朝下 5.0」（屏幕坐标 y 向下，故 QUARTER=90° 是朝下），取 t=0.5 那帧看速率：
+    ///   极坐标 → 匀速扫弧，速率恒为 5.0
+    ///   笛卡尔 → 直线穿过 (2.5, 2.5)，速率掉到 2.5·√2 ≈ 3.54
+    /// 这一条同时逮住两个错法：笛卡尔实现写成了极坐标；move_vel_xy 被做成 move_vel 的糖。
+    #[test]
+    fn polar_and_cartesian_velocity_interpolation_take_different_paths() {
+        // —— 极坐标腿：速率全程恒定 ——
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::ZERO, Fx::from_int(5), 0, 0);
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(5), 4, 0); // Linear
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1)); // t = 2/4 = 0.5
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(
+            w.body.enemies.speed[i],
+            Fx::from_int(5),
+            "极坐标插值：速率是被直接插的量，5.0→5.0 全程恒定"
+        );
+
+        // —— 笛卡尔腿：同样两端，中途速率必须掉下来 ——
+        let mut w2 = crate::step::World::new(1);
+        let h2 = spawn_enemy(&mut w2, 0, 0, 5);
+        w2.body
+            .set_enemy_vel_cart(h2, Fx::from_int(5), Fx::ZERO, 0, 0);
+        w2.body
+            .set_enemy_vel_cart(h2, Fx::ZERO, Fx::from_int(5), 4, 0); // Linear
+        crate::world::test_support::step_t(&mut w2, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w2, &InputFrame::empty(1));
+        let i2 = w2.body.enemies.get(h2).unwrap();
+        // 分量是精确的线性中点
+        assert_eq!(
+            w2.body.enemies.vx[i2],
+            Fx::from_raw(163840),
+            "5.0 的一半 = 2.5"
+        );
+        assert_eq!(w2.body.enemies.vy[i2], Fx::from_raw(163840));
+        // 回填出来的速率落在 3.5~3.6（2.5·√2 = 3.5355；isqrt 舍入留余量）
+        let sp = w2.body.enemies.speed[i2];
+        assert!(
+            sp > Fx::from_raw(229376) && sp < Fx::from_raw(235930),
+            "笛卡尔插值中点速率应约 3.54，实得 {sp:?}——若这里是 5.0 说明走了极坐标空间"
+        );
+    }
+
+    /// 最短弧：350° → 10° 应走 **+20°**（顺时针跨 0° 缝），而不是 −340°。
+    /// 取 dur=2、Linear，中点应落在 0°（即 360°）附近而非 180° 那边。
+    #[test]
+    fn angle_interpolation_takes_shortest_arc_across_the_seam() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 0, 5);
+        let a350 = Angle(63715); // 350° ≈ 65536*350/360
+        let a10 = Angle(1820); //  10° ≈ 65536*10/360
+        w.body.set_enemy_vel_polar(h, a350, Fx::from_int(3), 0, 0);
+        w.body.set_enemy_vel_polar(h, a10, Fx::from_int(3), 2, 0);
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0)); // t = 1/2
+        let i = w.body.enemies.get(h).unwrap();
+        let mid = w.body.enemies.angle[i].raw();
+        // 中点应在缝上（接近 0 或接近 65536），绝不在 180° 附近
+        assert!(
+            !(1500..=64000).contains(&mid),
+            "中点应落在 0° 缝附近，实得 {mid}——若在 32768 附近说明走了长弧"
+        );
+    }
+
+    /// 仲裁腿 (a)：move_to 单独 → 到点**仍清速**（守住原契约，一字不变）。
+    #[test]
+    fn arrival_still_clears_velocity_when_script_never_touched_it() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        let i = w.body.enemies.get(h).unwrap();
+        w.body.enemies.vx[i] = Fx::from_int(7); // 残留速度
+        w.body
+            .move_enemy_to(h, Fx::from_int(80), Fx::from_int(180), 2, 0);
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1)); // 到点
+        assert_eq!(w.body.enemies.mv_active[i], 0, "已到点");
+        assert_eq!(w.body.enemies.vx[i], Fx::ZERO, "未表达速度意图 ⇒ 到点清速");
+    }
+
+    /// 仲裁腿 (b)：move_to 途中调速度动词，且**速度插值先于位置插值到期**
+    /// → 到点**不清速**、速度立刻接管。
+    /// 这条正是「拿 vel_active 当判据」会漏掉的那格——速度那条 dur=2 在第 2 帧就结束、
+    /// vel_active 归 0，而位置那条 dur=4 到第 4 帧才到点。必须让 dur 严格不等。
+    #[test]
+    fn arrival_preserves_velocity_when_script_expressed_intent_earlier() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        w.body
+            .move_enemy_to(h, Fx::from_int(80), Fx::from_int(180), 4, 0);
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(3), 2, 0); // 先到期
+        for k in 0..4 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(k));
+        }
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.mv_active[i], 0, "位置插值已到点");
+        assert_eq!(w.body.enemies.vel_active[i], 0, "速度插值早已到期");
+        assert_eq!(
+            w.body.enemies.vy[i],
+            Fx::from_int(3),
+            "到点不得清速——速度意图表达在先，落地即接管"
+        );
+    }
+
+    /// 仲裁腿 (c)：速度动词在前、move_to 在后 → 到点**清速**（武装时 vel_touched 归零）。
+    /// 缺了这条的话，「move_enemy_to 忘了清 vel_touched」这个错法照样绿。
+    #[test]
+    fn move_to_rearm_resets_touched_so_arrival_clears_again() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(3), 0, 0); // 先设速度
+        w.body
+            .move_enemy_to(h, Fx::from_int(80), Fx::from_int(180), 2, 0); // 再 move_to
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(
+            w.body.enemies.vy[i],
+            Fx::ZERO,
+            "move_to 武装即归零 vel_touched ⇒ 到点照清"
+        );
+    }
+
+    /// 【终审 Critical 1】到点清速**必须同时回填作者视图**。清 `vx/vy` 而不回填的话，
+    /// `speed`/`angle` 留着陈值——`$self_speed` 与 `$self_vx/$self_vy`「恒同步」的契约
+    /// （`docs/ecl-lang.md` / `docs/ecl-ops.md` / `syscall.rs` 三处白纸黑字）当场被证伪。
+    ///
+    /// **两段断言，第二段才是真正押住后果的那一格**：第一段只看 `speed == 0`；第二段紧跟
+    /// 一次 `move_angle`（契约是"只转向、速率一字不动"），它会拿 `speed` 去刷 `vx/vy`——
+    /// 陈速率还在的话，刚停住的敌当场以 3.0 px/帧弹射出去。
+    #[test]
+    fn arrival_backfills_author_view_so_a_later_move_angle_cannot_relaunch() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(3), 0, 0); // speed = 3.0
+        w.body
+            .move_enemy_to(h, Fx::from_int(80), Fx::from_int(180), 2, 0); // 抹掉黏滞位
+        for f in 0..2u32 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+        }
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.mv_active[i], 0, "前提：已到点");
+        assert_eq!(w.body.enemies.vx[i], Fx::ZERO);
+        assert_eq!(w.body.enemies.vy[i], Fx::ZERO);
+        assert_eq!(
+            w.body.enemies.speed[i],
+            Fx::ZERO,
+            "清速必回填作者视图，否则 $self_speed 说谎"
+        );
+        // 押后果：只转向的动词不得把停住的敌弹射出去
+        w.body.set_enemy_angle(h, Angle::ZERO, 0, 0);
+        assert_eq!(
+            w.body.enemies.vx[i],
+            Fx::ZERO,
+            "停住的敌被 move_angle 一转就以陈速率弹射 = 双表示断链"
+        );
+        assert_eq!(w.body.enemies.vy[i], Fx::ZERO);
+    }
+
+    /// 【终审 Critical 1 · 瞬移腿】`move_enemy_to(dur == 0)` 的硬停同样要回填作者视图。
+    /// 两段断言的结构与到点腿逐条相同。
+    #[test]
+    fn teleport_backfills_author_view_so_a_later_move_angle_cannot_relaunch() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(3), 0, 0);
+        w.body
+            .move_enemy_to(h, Fx::from_int(-30), Fx::from_int(40), 0, 0); // 瞬移 = 硬停
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.vx[i], Fx::ZERO);
+        assert_eq!(w.body.enemies.vy[i], Fx::ZERO);
+        assert_eq!(w.body.enemies.speed[i], Fx::ZERO, "硬停必回填作者视图");
+        w.body.set_enemy_angle(h, Angle::ZERO, 0, 0);
+        assert_eq!(
+            w.body.enemies.vx[i],
+            Fx::ZERO,
+            "硬停的敌被 move_angle 一转就弹射 = 双表示断链"
+        );
+        assert_eq!(w.body.enemies.vy[i], Fx::ZERO);
+    }
+
+    /// 【终审 Important 2】四条速度动词的 `dur == 0` 必须**解除在飞的插值**。
+    ///
+    /// 失败场景：`move_vel(30, …)` 在飞时脚本急停 `move_vel(0, …, 0.0fx, 0)`——瞬时值当帧
+    /// 生效，但次帧仍在飞的插值器按旧 `from/to` 把它覆盖回去，急停静默失效。
+    ///
+    /// 既有的 `set_enemy_vel_polar_dur_zero_is_instant_and_arms_nothing` 是在**全新敌**上
+    /// 断言 `vel_active == 0`，那个位本来就是 `0` ⇒ 假守卫（同 M0-7「圆心重合式测试对
+    /// 半径映射是瞎的」那次的形状）。**必须先武装再急停**，且要押到次帧。
+    /// 位置插值那边的孪生是 `move_to_teleport_overrides_inflight_interpolation`。
+    #[test]
+    fn dur_zero_disarms_inflight_velocity_interpolation() {
+        for verb in 0..4u8 {
+            let mut w = crate::step::World::new(1);
+            let h = spawn_enemy(&mut w, 0, 0, 5);
+            w.body
+                .set_enemy_vel_polar(h, Angle::ZERO, Fx::from_int(4), 0, 0); // 起点：朝右 4.0
+            w.body
+                .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(8), 10, 0); // 在飞
+            let i = w.body.enemies.get(h).unwrap();
+            assert_eq!(w.body.enemies.vel_active[i], 1, "前提：插值确实在飞");
+            match verb {
+                0 => w.body.set_enemy_vel_polar(h, Angle::ZERO, Fx::ZERO, 0, 0),
+                1 => w.body.set_enemy_vel_cart(h, Fx::ZERO, Fx::ZERO, 0, 0),
+                2 => w.body.set_enemy_angle(h, Angle::ZERO, 0, 0),
+                _ => w.body.set_enemy_speed(h, Fx::ZERO, 0, 0),
+            }
+            assert_eq!(
+                w.body.enemies.vel_active[i], 0,
+                "verb {verb}：dur == 0 必须解除在飞插值"
+            );
+            let frozen = (w.body.enemies.vx[i], w.body.enemies.vy[i]);
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+            assert_eq!(
+                (w.body.enemies.vx[i], w.body.enemies.vy[i]),
+                frozen,
+                "verb {verb}：次帧不得被旧 from/to 覆盖回去（急停静默失效）"
+            );
+        }
+    }
+
+    /// 【终审 Important 3】仲裁腿 (b) 的**四条动词参数化版**：黏滞位不能只有 `move_vel`
+    /// 一条腿有守卫。从 `set_enemy_vel_cart`/`set_enemy_angle`/`set_enemy_speed` 三处删掉
+    /// `vel_touched = 1` 时，全仓曾**一条不红**——失败场景是
+    /// `move_to(60, x, y); move_speed(30, 3.0fx, 0);` 落地即死站。
+    ///
+    /// 直接押"到点不清速"这个**后果**（而不是断言 `vel_touched == 1` 这个中间量），
+    /// 判别力更强。四条动词的终态统一收敛到「朝下 3.0」，故起点按动词各配一份。
+    #[test]
+    fn arrival_preserves_velocity_for_every_velocity_verb() {
+        for verb in 0..4u8 {
+            let mut w = crate::step::World::new(1);
+            let h = spawn_enemy(&mut w, 0, 100, 5);
+            // 起点：move_angle 需要现成速率、move_speed 需要现成方向
+            let (a0, s0) = match verb {
+                2 => (Angle::ZERO, 3),    // 朝右 3.0，等 move_angle 把它转到朝下
+                3 => (Angle::QUARTER, 1), // 朝下 1.0，等 move_speed 把它提到 3.0
+                _ => (Angle::ZERO, 1),
+            };
+            w.body.set_enemy_vel_polar(h, a0, Fx::from_int(s0), 0, 0);
+            w.body
+                .move_enemy_to(h, Fx::from_int(80), Fx::from_int(180), 4, 0);
+            let i = w.body.enemies.get(h).unwrap();
+            assert_eq!(
+                w.body.enemies.vel_touched[i], 0,
+                "verb {verb} 前提：move_to 武装即抹记号"
+            );
+            // 途中表达速度意图（dur=2 严格短于位置那条的 4 ⇒ 先到期，vel_active 归 0）
+            match verb {
+                0 => w
+                    .body
+                    .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(3), 2, 0),
+                1 => w
+                    .body
+                    .set_enemy_vel_cart(h, Fx::ZERO, Fx::from_int(3), 2, 0),
+                2 => w.body.set_enemy_angle(h, Angle::QUARTER, 2, 0),
+                _ => w.body.set_enemy_speed(h, Fx::from_int(3), 2, 0),
+            }
+            for k in 0..4 {
+                crate::world::test_support::step_t(&mut w, &InputFrame::empty(k));
+            }
+            assert_eq!(
+                w.body.enemies.mv_active[i], 0,
+                "verb {verb}：位置插值已到点"
+            );
+            assert_eq!(
+                w.body.enemies.vel_active[i], 0,
+                "verb {verb}：速度插值早已到期"
+            );
+            assert_eq!(
+                w.body.enemies.vy[i],
+                Fx::from_int(3),
+                "verb {verb}：到点不得清速——落地即死站说明这条动词没立黏滞位"
+            );
+        }
+    }
+
+    /// 【终审 Important 4 · 控制器裁定】`move_to` 武装时把**在飞的速度插值**一并作废。
+    ///
+    /// 理由与它清 `vel_touched` 的理由逐字相同：`move_to` 是一次全新的位置命令，此前的
+    /// 速度意图是陈的。既然连"表达过意图"这个事实都作废，"意图正在执行中"更该作废。
+    /// 不裁这一刀的话，`move_vel(dur>0)` → `move_to(更短 dur)` 会让敌**只停一帧**：
+    /// 到点那帧按 `vel_touched == 0` 清了速，次帧仍在飞的插值器按旧 `from/to` 写回去。
+    ///
+    /// **到点后多跑两帧**才是判别腿——只断言到点那帧的话，清速动作本身就把它盖住了。
+    #[test]
+    fn move_to_arm_disarms_inflight_velocity_interpolation() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 100, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(4), 4, 0); // 速度插值在飞
+        w.body
+            .move_enemy_to(h, Fx::from_int(80), Fx::from_int(180), 2, 0); // 更短的位置命令
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(
+            w.body.enemies.vel_active[i], 0,
+            "move_to 武装即作废在飞的速度意图"
+        );
+        assert_eq!(w.body.enemies.vel_touched[i], 0);
+        for f in 0..2u32 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+        }
+        assert_eq!(w.body.enemies.x[i], Fx::from_int(80), "位置精确到点");
+        assert_eq!(w.body.enemies.y[i], Fx::from_int(180));
+        assert_eq!(w.body.enemies.vy[i], Fx::ZERO, "到点即停");
+        for f in 2..4u32 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+        }
+        assert_eq!(
+            w.body.enemies.vy[i],
+            Fx::ZERO,
+            "到点后速度不得被仍在飞的插值器写回（否则只停一帧就继续飘）"
+        );
+        assert_eq!(
+            w.body.enemies.y[i],
+            Fx::from_int(180),
+            "位置随之必须钉在终点"
+        );
+    }
+
+    /// 死代码通电的正面证据：move_vel 之后，位置纯靠 `x += vx` 推进。
+    /// 这条分支此前永远在加零（没有任何 syscall 能写 vx/vy），世界层测试绿的是够不着的代码。
+    #[test]
+    fn uniform_velocity_actually_moves_the_enemy_now() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(2), 0, 0);
+        let i = w.body.enemies.get(h).unwrap();
+        let y0 = w.body.enemies.y[i];
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(2));
+        assert_eq!(
+            w.body.enemies.y[i],
+            y0 + Fx::from_int(6),
+            "3 帧 × 2.0/帧 = 6.0"
+        );
+    }
+
+    /// 速度插值到期写**精确终值**（不吃插值舍入）并清 vel_active。
+    #[test]
+    fn velocity_interpolation_lands_on_exact_target_and_disarms() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_polar(h, Angle::ZERO, Fx::from_int(1), 0, 0);
+        w.body
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(5), 3, 4); // CubicIn
+        for k in 0..3 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(k));
+        }
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.speed[i], Fx::from_int(5), "终帧精确终值");
+        assert_eq!(w.body.enemies.angle[i], Angle::QUARTER);
+        assert_eq!(w.body.enemies.vel_active[i], 0, "到期即解除武装");
+    }
+
+    /// 上一条的**笛卡尔孪生**：终帧写精确终值 + 解除武装，在笛卡尔路径上同样成立。
+    ///
+    /// 单独一条而不是把招牌判别式跑完——招牌判别式只要中点（`dur=4` 只走 2 帧），
+    /// 复审实测：对调笛卡尔 `done` 分支的 `t0`/`t1`（vx 写成 vy 的终值）全仓 570 条**全绿**，
+    /// spec §6.2 的「终帧写精确终值」在笛卡尔腿上是无守卫的存活变异。
+    ///
+    /// **两个分量必须取不相等的值**（2.0 / 6.0）：取相等值的话 `t0`/`t1` 对调仍不可辨，
+    /// 等于补了个假守卫。
+    #[test]
+    fn cartesian_velocity_interpolation_lands_on_exact_target_and_disarms() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_cart(h, Fx::from_int(-4), Fx::from_int(1), 0, 0);
+        w.body
+            .set_enemy_vel_cart(h, Fx::from_int(2), Fx::from_int(6), 3, 4); // CubicIn
+        for k in 0..3 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(k));
+        }
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.vx[i], Fx::from_int(2), "终帧精确终值 vx");
+        assert_eq!(w.body.enemies.vy[i], Fx::from_int(6), "终帧精确终值 vy");
+        assert_eq!(w.body.enemies.vel_active[i], 0, "到期即解除武装");
     }
 
     /// P4：悬垂句柄计数；easing≥8 拒绝 no-op。

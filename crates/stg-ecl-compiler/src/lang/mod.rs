@@ -1092,6 +1092,33 @@ sub main() {
         );
     }
 
+    /// 四条动词在表层语言里可用、类型正确（angle 参数收 angle 型、speed 收 fx 型）。
+    #[test]
+    fn motion_verbs_compile_from_source() {
+        let src = "sub main() {\n\
+            move_vel(20, 90deg, 4.0fx, 3);\n\
+            move_vel_xy(12, 3.0fx, -7.0fx, 0);\n\
+            move_angle(30, 45deg, 2);\n\
+            move_speed(15, 2.5fx, 1);\n\
+        }";
+        let image = compile(src, "motion.ecl").expect("四条动词应能编译");
+        assert!(!image.code().is_empty());
+    }
+
+    /// 【白名单完整性的判别式】"保住一轴"用例：只插 vy、vx 一字不动。
+    /// 这是 §4.2 那个用例的正面证据，也是**白名单只加 $self_speed/$self_angle
+    /// 而漏掉两个笛卡尔变量时唯一会红的测试**。
+    #[test]
+    fn keeping_one_cartesian_axis_compiles() {
+        let src = "sub main() {\n\
+            move_vel_xy(30, $self_vx, 4.0fx, 2);\n\
+            move_angle(60, $self_angle + 15deg, 3);\n\
+            move_speed(30, $self_speed * 2.0fx, 2);\n\
+            move_vel_xy(0, 1.0fx, $self_vy, 0);\n\
+        }";
+        compile(src, "self_vel.ecl").expect("四个 $self_* 都要在白名单里");
+    }
+
     // ── 终审必修 I-1：一张非 16 宽的表串起全部四个 stride 消费者 ───────────────
     //
     // 现有测试全在 `TABLES_V0`（stride=16）上跑：`bound_table_injects_color_stride_const`

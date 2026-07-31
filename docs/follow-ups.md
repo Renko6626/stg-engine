@@ -624,6 +624,84 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 就丢；道具句柄没有任何内建吃它。**触发点 = 谁要给它们加读口**（`bullet_x`/`item_type` 之类）：
 **加之前先照 `pack_enemy_handle` 打包**，别照 `create_bullet` 现在的返值口径重犯一次。
 
+### D16. 敌人运动的四条非目标（`spec §4.4`，敌人运动动词族刀 T6 记档，2026-07-31）
+
+本刀只做**匀速/线性缓动的速度层**，ZUN `move` 400-447 族剩下的四类明确不做，各随触发点：
+
+1. **高阶轨迹**——`moveCircle`(408) / `moveEllipse`(420) / `moveBezier`(425) / `moveCurve`(434)。
+   另一个量级（要么每帧算参数方程、要么存控制点），单独立项。**届时未必照抄 ZUN**：仓里已有
+   `xform` 变换段那套"按时间轴发 op"的机器，圆周运动完全可能是段序列而不是新动词。
+   ⚠️ 参数方程走大数坐标时的定点坑见 [`fixed-point-corners.md`](fixed-point-corners.md)。
+2. **敌人的连续效果**——`ang_vel`/`accel`/`ax`/`ay`，即弹身上早就有的 `BULLET_POLAR_FX` /
+   `BULLET_CART_FX` 两个模式位。本刀的插值器是**有终点、有时长**的（`dur` 帧后自己解除
+   武装），连续效果是**无终点**的（每帧加一个增量直到被改），两者是不同的机制、不是同一个
+   东西的两种参数。触发点 = 高阶轨迹立项时一并评估（`xform.rs` 的 `7x 笛卡尔族` 至今仍标着
+   "预留，若将来立项"，是同一笔账）。
+3. **`moveEnm`(432，对齐到另一只敌) / `moveRand` / `moveLimit`**。`moveRand` 尤其要留神：
+   它消耗世界 RNG，抽取序直接进校验和（同 D13 那条随机 aimmode 的账），做之前先定 spec。
+4. **句柄版的 `enemy_speed(e)` / `enemy_angle(e)`**（读**别人**的速度）。位置那边
+   `$self_x` 与 `enemy_x(e)` 两套都有，速度这边先只做 `$self_*`——读别人的**位置**有明确
+   用途（瞄准/聚集/跟随），读别人的**速度**暂时想不出非它不可的场景，而 `nearest_enemy`
+   返的敌大多是拿来打的不是拿来跟的。真需要时补两个 syscall 号即可，**不影响本刀任何设计**
+   （敌池里 `speed`/`angle` 本来就逐敌存着，缺的只是读口，同 80/81 号当初的形状）。
+
+另有一条已裁定不做且**不留触发点**：笛卡尔单轴动词 `move_vx`/`move_vy`——
+`move_vel_xy(30, $self_vx, 4.0fx, 2)` composed 已等价且更通用。
+
+### D17. `vel_touched` 现有 **5 个写点**——加新的位置动词必须同样清它（敌人运动动词族刀 T6 复审记档，2026-07-31）
+
+到点清速的判据是黏滞位 `vel_touched`（spec §6.3）：四条速度动词各置 1（`set_enemy_vel_polar`
+/`set_enemy_vel_cart`/`set_enemy_angle`/`set_enemy_speed`），`move_enemy_to` **武装时归 0**
+——共 5 个写点，全在 `world/motion.rs`。语义靠"位置动词武装 = 一次重新表态"这条约定维持。
+
+**缝在哪**：将来若加**新的位置动词**（`move_to_rel`、圆周轨迹落点、任何会置 `mv_active` 的
+东西），它**必须同样把 `vel_touched` 清 0**，否则 spec §6.3 那张表的第三行（"速度动词在前、
+位置动词在后 ⇒ 到点仍清速"）在新动词上就破了：残留的 `vel_touched=1` 会让新动词到点时不
+清速，敌人落地后带着一个脚本早已不打算要的速度飘走。
+
+**现有测试盖不到**：`move_to_rearm_resets_touched_so_arrival_clears_again` 押的是
+`move_enemy_to` 这一个入口，新动词自带一条新路径，那条测试对它是瞎的。**没有编译期强制**
+（不像 `Init` 那种 exhaustive 结构体），只能靠这条记录 + 新动词自带一条同款仲裁腿测试。
+**触发点 = 下一个位置动词落地时**（大概率是 D16 的高阶轨迹那刀）。
+
+### D18. 编辑器补全/hover **不覆盖任何 `$engine_var`**——既有工具链缺口（敌人运动动词族刀 T6 撞见，2026-07-31）
+
+**不是本刀引入的**：`$frame`/`$player_x`/`$self_x` 等原有 8 个引擎变量一样没被覆盖，本刀只是
+把数量从 8 加到 12 时撞见。
+
+链路缺口在源头：`gen-ecl-meta` 只导出 **builtins**（`builtins::all()` 的 `name`/`params`/
+`param_names`/`doc`），产出的 `ecl-meta.json` **没有引擎变量节**；VS Code 扩展
+（`editors/vscode/stg-ecl/`）对 `$name` 只有一条**通配正则**做高亮，于是：`$` 打出来没有
+补全候选、悬停没有 hover、写错名字（`$self_vel`）编辑器不吭声——要到 `check` 才报错。
+`docs/ecl-lang.md` 的引擎变量表是**手写**的，也就不受 `<!-- gen -->` 漂移测试保护（生成块只
+盖 builtins 那一段）：加了引擎变量却忘了改表，没有任何东西会红。
+
+**修法**（一起做才划算）：`builtins.rs` 侧把 `EngVar` 的名字/类型/doc 也做成一张可枚举的表
+（现在只有 `engine_var_info` 给号和型，**没有名字也没有 doc**——名字散在 lex/parse 侧），
+`gen-ecl-meta` 加第三个 sink 导出它，扩展读来做补全/hover，手册那张表也改成生成块。
+**触发点 = 下一次动引擎变量**，或者编辑体验再做一刀时顺手。
+
+### D19. 运动动词 `easing`/`dur` 的**五处裸截断**——`easing = 256` 绕过 P4-b 检查（敌人运动动词族刀终审记档，2026-07-31）
+
+`syscall.rs` 把栈上弹出的 `i32` 直接 `as u8` / `as u16` 交给世界层写 API，**五处**：
+`sys_move_enemy_to`（1527/1528）与四条新动词 `sys_move_vel` / `sys_move_vel_xy` /
+`sys_move_angle` / `sys_move_speed`（1544/1545、1561/1562、1576/1577、1589）。
+
+后果两条：
+- `easing = 256` → `256 as u8 == 0` → **静默变成 Linear**，绕过 `enemy_vel_precheck` /
+  `move_enemy_to` 的 `easing >= 8` 判据（那条判据收到的已经是截断后的值）。写 `easing = 264`
+  同理落 8、反而被正确拒掉——**能不能拒，取决于越界值模 256 落在哪里**，毫无规律。
+- `dur = -1` → `-1 as u16 == 65535` → 一条本该报错的笔误变成"缓动 18 分钟"。
+
+**这是既有洞**（`sys_move_enemy_to` 一直如此），本刀只是把入口从一个变成五个。
+
+**修法**：五处一起收窄成 `u8::try_from(easing)` / `u16::try_from(dur)`，失败即按 P4-b
+计一次 `contract_viol` + `BAD_ARGS` + 整条 no-op（与既有的 `easing >= 8` 同一条腿，
+判据顺势前移到收窄这一步）。**没放进终审修复波的理由**：它会**改变 `move_to` 的既有行为**
+——此前越界 `easing` 是静默变 Linear（脚本可能已经依赖），改成拒收是行为变更，
+且 `ENGINE_VER`/金向量都要跟着动，属于需要单独裁定的一刀。
+**触发点 = 下一次动运动动词族**，或做 syscall 参数收窄的统一整理时。
+
 ### D10. 部分设运行期只护 stride、不查 `valid`——编译期空格闸只覆盖 `.ecl` 源码路径（颜色轴刀 T6 记档，2026-07-26）
 
 `OP_SET_SPRITE`/`OP_SET_SHAPE`/`OP_SET_COLOR`（`world/transform.rs::fire_op`）三个解释臂

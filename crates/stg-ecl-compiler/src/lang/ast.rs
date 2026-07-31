@@ -197,6 +197,10 @@ pub enum EngVar {
     SelfHp,
     SelfHpMax,
     SelfAge,
+    SelfVx,
+    SelfVy,
+    SelfSpeed,
+    SelfAngle,
 }
 
 /// 表达式。

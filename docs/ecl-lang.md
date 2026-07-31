@@ -67,6 +67,13 @@
 - **`enemy_alive` 判的是「这个号还认得那只敌」，不是「还能打」**——正在死（`ENEMY_DYING`）的敌它照样
   返 **1**，因为那只敌的槽要活到本帧末才回收、坐标仍读得到。要"还能不能打"的语义，配
   `nearest_enemy` 现查一次（它**本身就排除了 dying**）。
+- **`move_vel` 与 `move_vel_xy` 不是同一个动作的两种写法**：前者在**极坐标**空间插值
+  （匀速扫弧、角度走最短弧），后者在**笛卡尔**空间插值（速度矢量走直线穿过，线性缓动
+  = 恒定加速度、中途速率会掉）。同一对端点两条动词的轨迹不同。详见下方"敌人运动"。
+- **`move_to` 到点清不清速，看脚本这一轮碰没碰过速度动词**——碰过就不清（落地继续飘），
+  没碰过才清成 0。`move_to` 每次武装不光抹掉这个记号，**还会把在跑的速度缓动一并停掉**
+  （它是一次完整的运动接管），所以 `move_vel` 与 `move_to` 的先后顺序会改变结果：
+  要落地继续飘，速度动词得写在 `move_to` **之后**。
 - 发射器（`sh_*` 族）两条最容易搞混的：**fan 以基准方向为中心对称展开**（改颗数不用重算
   `angle0`），而 **ring 下 `angle_step` 转义成逐层偏移**、不再是逐弹增量；以及
   **`sh_task` 是每颗弹派一个任务**——`sh_count(0, 28, 1)` + `sh_task` 一句话吃 28 个任务槽
@@ -289,6 +296,16 @@ cargo run -p stg-harness -- check stage/
 | `$self_hp` | `int` | owner 当前血量——仅敌（ENEMY）有意义，其余 owner 种类恒 0 |
 | `$self_hp_max` | `int` | owner 上限血量——仅敌（ENEMY）有意义，其余 owner 种类恒 0 |
 | `$self_age` | `int` | **任务**（不是 owner 实体）出生以来的帧数，对全部 owner 种类（含关卡）均有意义 |
+| `$self_vx` / `$self_vy` | `fx` | owner 的笛卡尔速度分量（px/帧）——敌→敌池，弹→弹池，其余 owner 恒 0 |
+| `$self_speed` | `fx` | owner 的速率（作者视图，与 `$self_vx/$self_vy` 恒同步） |
+| `$self_angle` | `angle` | owner 的朝向（作者视图，BAM）。**注意类型是 `angle` 不是 `fx`**——它能直接喂 `move_angle`/`fire`，但和 `fx` 之间没有隐式转换 |
+
+后四个是敌人运动动词族刀（2026-07-31）加的，全部**读活值**（不是发起动词那刻的快照）：
+速度插值在飞的过程中逐帧读会读到中途值。它们让"相对运动"不需要专门的 Rel 版动词——
+见下面运动一节的 composed 写法。
+
+`$self_angle` 在**近乎静止**时不更新（回填有速度下限），故零速下读到的是"最后一次有效
+朝向"而不是垃圾角——这条是刻意的，否则停一帧就会把朝向抹掉。
 
 ## 引擎提供的全局状态：`globals` / `boss_ui` / `signals`
 
@@ -381,6 +398,10 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `enemy_hp(handle: int) -> int` — 查敌当前 hp;死/悬垂/越界句柄返 -1(P4-b;敌号带 generation,槽被另一只敌复用后旧号照样返 -1)——stage 编排等 boss 死用
 - `drop_item(x: fx, y: fx, item_type: int) -> int` — 掉一颗道具(带随机喷发速度,消耗模拟 RNG);返句柄,失败 -1
 - `move_to(dur: int, x: fx, y: fx, easing: int)` — 敌自身(self owner 非 ENEMY → Fault)按 easing 缓动、dur 帧内平移到 (x,y);四参数皆真实压栈(不同于下方弹 setter 族的占位 handle 首参)
+- `move_vel(dur: int, angle: angle, speed: fx, easing: int)` — 敌自身(self owner 非 ENEMY → Fault)按 easing 在 dur 帧内把速度缓动到「angle 方向、speed 速率」;dur=0 = 立即设。**极坐标空间插值**(匀速扫弧,速率按曲线走)——要笛卡尔直线插值用 move_vel_xy
+- `move_vel_xy(dur: int, vx: fx, vy: fx, easing: int)` — 同 move_vel 但收笛卡尔分量,且 dur>0 时**在笛卡尔空间插值**(两分量各自线性插,中途速率会掉——线性缓动即恒定加速度);要匀速转向用 move_vel。保住一轴的写法:move_vel_xy(30, $self_vx, 4.0fx, 2)
+- `move_angle(dur: int, angle: angle, easing: int)` — 只转向、速率一字不动;dur>0 走**最短弧**(350deg→10deg 走 +20deg 不走 -340deg)。相对转向:move_angle(60, $self_angle + 15deg, 3)
+- `move_speed(dur: int, speed: fx, easing: int)` — 只调速、方向一字不动。相对加速:move_speed(30, $self_speed * 2.0fx, 2)
 - `boss_set(slot: int, hp_ratio: fx, spell_id: int, timer_frames: int, phase_left: int, active: int)` — 整槽写 boss_ui 公告板(脚本写/UI 读);enemy 字段取自 self owner(非 ENEMY → NULL,不 Fault);符卡 active 期 enemy/spell_id/timer_frames/hp_ratio 由引擎逐帧自动覆写,phase_left 不受影响仍归脚本
 - `pulse_signal(channel: int)` — 脉冲一条信号通道(边沿语义,仅当帧有效);放行处于弹变换 WAIT_SIGNAL 停驻态的弹(非 ECL 任务)
 - `emit_req(id: int, a0: int|fx|angle, a1: int|fx|angle, a2: int|fx|angle, a3: int|fx|angle, a4: int|fx|angle, a5: int|fx|angle)` — 通道 B 渲染请求;void 只能裸语句;args 裸载荷(fx 过 raw/angle 过 BAM/int 原样)
@@ -631,6 +652,108 @@ sub main() {
 （不 panic，静默产出一个无意义的 `fx`），血条手喂公式因此隐含"敌 hp ≤32767"这条前提；
 真出现更高血量的敌，`hp_ratio` 换个不直接 cast 整段 hp 的算法（比如先各自钳到安全范围
 再除）。
+
+## 敌人运动（`move_to` + 四条速度动词）
+
+五条动词全是 **`self` 作用**（无句柄参、够不着别的敌），owner 不是敌的任务调它们一律
+**Fault(0)**、任务当场被杀——和 `die()`/`spell_begin` 同一条门禁。它们全都**发起后立即返回**，
+真正的推进在引擎的积分相位里逐帧走，所以要"等它走完"得自己 `wait` 够帧数。
+
+分两层：**位置层**只有 `move_to` 一条，**速度层**四条。
+
+| 动词 | 作用 | 插值空间 |
+|---|---|---|
+| `move_to(dur, x, y, easing)` | 把敌拉到绝对点位（这期间位置由插值器全权决定） | 位置（x/y 各自插） |
+| `move_vel(dur, angle, speed, easing)` | 同时改朝向和速率 | **极坐标** |
+| `move_vel_xy(dur, vx, vy, easing)` | 同时改两个速度分量 | **笛卡尔** |
+| `move_angle(dur, angle, easing)` | 只转向，速率一字不动 | 极坐标 |
+| `move_speed(dur, speed, easing)` | 只调速，方向一字不动 | 极坐标 |
+
+`dur == 0` 对五条都是**立即设**（不是"插值 0 帧"），是合法写法、不计违约。它同时是**急停键**：
+若此刻正有一条同层的缓动在跑，`dur == 0` 会把它当场停掉，新值不会在次帧被旧缓动覆盖回去
+（速度层四条互相之间如此，位置层的 `move_to(0, …)` 对在飞的位置缓动也如此）。`easing` 是缓动
+曲线号 `0..=7`（`0` = 线性）；越界的 `easing` 走 P4-b：**整条调用 no-op** + 计一次违约，
+不 Fault、不钳位——写错了敌就是不动，别指望它退化成线性。
+
+### 位置层与速度层谁说了算
+
+- `move_to` **在飞**的时候，位置全归插值器，`vx/vy` 一概不参与。速度动词此时照样能跑、
+  照样在改速度，只是**暂时看不见效果**——落地那一刻才接管。
+- 没有在飞的 `move_to` 时，位置就是老老实实的 `pos += (vx, vy)`。
+- **`move_to` 是一次完整的运动接管**：它一发起就把此前的速度意图全部作废——不光抹掉"碰过"
+  的记号，**连正在跑的速度缓动也当场停掉**。所以 `move_vel(30, …); move_to(10, …);`
+  是"缓到一半被位置命令截胡"，到点就是真停住，不会再飘。要落地后继续飘，速度动词必须写在
+  `move_to` **之后**（下面"典型编排"就是那个顺序）。
+- **到点那帧清不清速**，看脚本这一轮**有没有碰过速度动词**：
+  - 没碰过 → 到点清速成 0（老契约：到点即停，一字未改）；
+  - 碰过 → **不清**，落地即按那个速度继续飘。
+
+  `move_to` 每次武装都会把"碰过"这个记号抹掉，所以两种写法结果不同：
+
+  ```text
+  move_vel(...); move_to(...);   → 到点即停（move_to 在后，记号被抹、缓动被停）
+  move_to(...);  move_vel(...);  → 到点继续飘（记号在 move_to 之后被立起来）
+  ```
+
+  注意判据是"碰没碰过"而**不是**"速度插值还在不在跑"：速度那条的 `dur` 常常比位置那条短、
+  先到期，那时速度插值早就停了，但刚缓好的速度必须留住。
+
+### ⚠️ `move_vel` 与 `move_vel_xy` 的插值空间不同（最容易踩的一格）
+
+两条**不是**同一个动作的两种写法。拿同一对端点看——从「朝右 5.0」缓到「朝下 5.0」、
+`dur` 相同、线性缓动：
+
+- `move_vel` 走**极坐标**：分别插 `speed` 和 `angle`。速率全程恒为 5.0，敌**匀速扫出一段弧**；
+  角度走**最短弧**（`350deg → 10deg` 是 `+20deg`，不是绕回去的 `-340deg`）。
+- `move_vel_xy` 走**笛卡尔**：`vx`、`vy` 各自线性插。中点是 `(2.5, 2.5)`，速率掉到
+  `2.5·√2 ≈ 3.54` 再涨回 5.0——速度矢量是**走直线穿过去**的。线性缓动在这条路上就等于
+  **恒定加速度**。
+
+要匀速转向（扫描弹幕、绕圈）用 `move_vel`；要恒定加速度、或者要**保住一个轴**
+（`move_vel_xy(30, $self_vx, 4.0fx, 2)` = x 分量原样留着、只把 y 缓到 4.0）用 `move_vel_xy`。
+
+`move_angle` / `move_speed` 是 `move_vel` 的"只动一半"，两条都走极坐标空间。
+
+### 相对运动没有 Rel 版动词——用 `$self_*` 组合
+
+引擎不提供 `move_angle_rel` 之类的相对版本：`$self_speed`/`$self_angle`/`$self_vx`/`$self_vy`
+读的是**活值**，在参数位上算一下就是相对量，语义还更透明（相对谁、相对哪一刻，写在脸上）。
+
+```ecl
+async sub weave() {
+    move_vel(0, 90deg, 2.0fx, 0);       // 先给个初速：朝下 2.0
+    loop {
+        move_angle(60, $self_angle + 15deg, 3);   // 相对转向：每轮再偏 15°
+        move_speed(30, $self_speed * 2.0fx, 2);   // 相对加速：速率翻倍
+        move_vel_xy(30, $self_vx, 4.0fx, 2);      // 保住 x 分量，只把 y 缓到 4.0
+        wait(90);
+    }
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 40.0fx, 60, 1, 0, 0, weave);
+    loop { wait(1); }
+}
+```
+
+（`$self_*` 是**读取即 syscall** 的活值，不是发起动词那刻的快照——速度插值在飞的中途读
+会读到中途值。想固定住某个瞬时值就自己 `var` 存一份。）
+
+### 典型编排：拉到点位 + 落地继续飘
+
+```ecl
+async sub dive_and_drift() {
+    move_to(40, 80.0fx, 180.0fx, 2);   // 位置：40 帧缓到 (80,180)
+    move_vel(20, 90deg, 3.0fx, 0);     // 速度：20 帧缓到「朝下 3.0」——比位置那条早到期
+    wait(40);                          // 到点。速度动词碰过 ⇒ 不清速
+    loop { wait(1); }                  // 此后每帧 y += 3.0，一路飘出下边界
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 100.0fx, 100, 1, 0, 3, dive_and_drift);
+    loop { wait(1); }
+}
+```
 
 ## 敌人的三条死亡路径与掉落控制（`drop_clear` / `drop_add` / `drop_items` / `die`）
 
