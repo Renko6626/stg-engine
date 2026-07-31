@@ -255,6 +255,35 @@ const BUILTINS: &[Builtin] = &[
         doc: "自身(敌/弹属主)指向自机的 BAM 角",
         param_names: &[],
     },
+    // 小清洗刀（2026-07-31）：核里现成的三件东西通电——CORDIC `atan2`、`isqrt∘len_sq`、
+    // `world::nearest_enemy`（后者自 M0-13 起是死代码）。零新机制，只是脚本够得着了。
+    Builtin {
+        name: "atan2",
+        syscall: syscall::SYS_ATAN2,
+        is_op: false,
+        params: &[Val(Fx), Val(Fx)],
+        ret: Some(Angle),
+        doc: "任意向量的方向角(整数 CORDIC,16 轮);参数序 (y, x) 同 libm;(0,0) 返 0 不报错;比 aim_player 通用——能瞄任意点",
+        param_names: &["y", "x"],
+    },
+    Builtin {
+        name: "dist",
+        syscall: syscall::SYS_DIST,
+        is_op: false,
+        params: &[Val(Fx), Val(Fx)],
+        ret: Some(Fx),
+        doc: "向量 (dx,dy) 的模长(开根,不是平方);**不是两点距离**——两点距离自己减: dist(bx-ax, by-ay)",
+        param_names: &["dx", "dy"],
+    },
+    Builtin {
+        name: "nearest_enemy",
+        syscall: syscall::SYS_NEAREST_ENEMY,
+        is_op: false,
+        params: &[Val(Fx), Val(Fx)],
+        ret: Some(Int),
+        doc: "离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的是池 index,可直接喂 enemy_hp(悬垂/复用不可辨,同 enemy_hp)",
+        param_names: &["x", "y"],
+    },
     Builtin {
         name: "sin",
         syscall: OP_SINB as u16,
@@ -764,6 +793,9 @@ mod tests {
             "global",
             "set_global",
             "aim_player",
+            "atan2",
+            "dist",
+            "nearest_enemy",
             "sin",
             "cos",
             "set_speed",
@@ -1058,6 +1090,31 @@ mod tests {
                 "'{n}' 首参应为 handle:int"
             );
         }
+    }
+
+    /// 小清洗刀（77-79）：三条新内建的**返回型**与 syscall 号。返回型是契约——
+    /// `atan2` 返 `angle`（拿去喂 `fire` 的角度位不用 cast）、`dist` 返 `fx`、
+    /// `nearest_enemy` 返 `int`（池 index）；写错任何一个都会让作者被迫加位穿透 cast。
+    #[test]
+    fn math_and_query_builtins_return_types_and_syscall_numbers() {
+        let a = lookup("atan2").expect("atan2 应在表中");
+        assert_eq!(a.params, &[Val(Fx), Val(Fx)], "atan2 两参都是 fx");
+        assert_eq!(a.param_names, &["y", "x"], "参数序是 (y, x)，同 libm 惯例");
+        assert_eq!(a.ret, Some(Angle));
+        assert_eq!(a.syscall, syscall::SYS_ATAN2);
+        assert!(!a.is_op);
+
+        let d = lookup("dist").expect("dist 应在表中");
+        assert_eq!(d.params, &[Val(Fx), Val(Fx)]);
+        assert_eq!(d.ret, Some(Fx));
+        assert_eq!(d.syscall, syscall::SYS_DIST);
+        assert!(!d.is_op);
+
+        let n = lookup("nearest_enemy").expect("nearest_enemy 应在表中");
+        assert_eq!(n.params, &[Val(Fx), Val(Fx)]);
+        assert_eq!(n.ret, Some(Int), "返的是池 index，不是 fx");
+        assert_eq!(n.syscall, syscall::SYS_NEAREST_ENEMY);
+        assert!(!n.is_op);
     }
 
     #[test]

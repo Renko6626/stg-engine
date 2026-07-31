@@ -49,7 +49,12 @@ extern crate self as stg_core;
 /// **为什么在 T1 就 bump**：布局在本步就变了。上一刀（敌人死亡效果）把 bump 拖到第三步，
 /// 结果中间几个 commit 处于"存档格式变了而身份三元组没变"的状态——这次提前。
 /// ① 是对**本刀余下两步**的预告，落地时不再二次 bump。
-pub const ENGINE_VER: u32 = 5;
+///
+/// **5 → 6**（小清洗刀，2026-07-31）：syscall 号表新增 `SYS_ATAN2`(77)/`SYS_DIST`(78)/
+/// `SYS_NEAREST_ENEMY`(79)。**只有号表这一条理由**——本刀不动 `World` 布局（尺寸哨兵
+/// 未变）、不动存档编码、不动任何既有 syscall 的语义，故旧档形状上仍可读；bump 是号表
+/// 冻结纪律的机械要求（同 2→3 那次的单理由 bump 口径）。
+pub const ENGINE_VER: u32 = 6;
 
 pub use stg_derive::define_pool;
 
