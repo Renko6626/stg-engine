@@ -715,7 +715,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         }
         SYS_AIM_PLAYER_ANGLE => sys_aim_player_angle(task, ctx),
         SYS_SPELL_TIMER => sys_spell_timer(task, ctx),
-        // ── 数学/查询面 140/141/110（参数**逆序弹出**，照 `sys_move_enemy_to`）────────────
+        // ── 数学/查询面 110/140/141（参数**逆序弹出**，照 `sys_move_enemy_to`）────────────
         SYS_ATAN2 => {
             let x = pop(task)?;
             let y = pop(task)?;
@@ -2041,8 +2041,9 @@ mod tests {
     /// **全仓 947 条测试无一转红**——这不是覆盖漏洞，因为号本身是任意的，族内换值在行为上
     /// 确实是 no-op（调用方一律符号引用，`ecl-meta.json` 也不含号）。但上面那句"有没有
     /// 搬错"要按字面读会读出过强的承诺：**「值错、族对」这一格本测试是瞎的**。
-    /// 真正把具体取值钉死的是 `docs/ecl-ops.md`（号表的权威呈现面，由
-    /// [`ecl_ops_doc_syscall_numbers_match_the_constants`] 双向钉在常量上）。
+    /// 那一格**全仓唯一**的网是 [`ecl_ops_doc_syscall_numbers_match_the_constants`]——
+    /// 它拿 `docs/ecl-ops.md`（号表的权威呈现面）里的**字面数字**双向对常量，
+    /// 别把它当成只防文档漂移的东西而删掉。
     ///
     /// **「搬重」比本测试更早被抓住——是编译期错误。** 把 `SYS_DIST` 改成与 `SYS_ATAN2`
     /// 同值，rustc 在**两处**报 `unreachable pattern`：[`syscall_implemented`] 的白名单
@@ -2220,8 +2221,12 @@ mod tests {
     /// - **文档 → 常量**：文档里出现的每个 `(号, 名)` 对都得在 [`frozen_table`] 里；
     /// - **常量 → 文档**：74 条常量每条都得在文档里出现，**漏记一条即红**。
     ///
-    /// 这条也是 [`syscall_table_is_hundred_partitioned_and_unique`] 那个"抓不到族内互换"
-    /// 缺口的补丁：结构测试是符号引用的、对具体取值免疫，本条按**字面数字**比对。
+    /// **它还有第二重职责，别只当它是"防文档漂移"**：本条是**全仓唯一**能抓到
+    /// **族内互换**（号换了、族没换，如 `SYS_ATAN2` ↔ `SYS_DIST`）的测试。
+    /// [`syscall_table_is_hundred_partitioned_and_unique`] 那张表**符号引用**常量，对具体
+    /// 取值免疫；实测把这一对的值对调后，**全仓 947 条测试无一转红**（终审复跑，2026-07-31）。
+    /// 本条按**字面数字**比对，是那一格唯一的网——变异实证见下（对调文档号列即红，
+    /// 而结构测试照绿）。删本条 = 把那一格重新变瞎。
     ///
     /// 解析靠的是文档自己既有的排版（号列 + 反引号名），没有新加机器可读标记。排版真变了
     /// 本测试会**带着行内容响亮失败**并要求同步改解析器——号表是冻结面，这个代价是对的。

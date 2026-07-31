@@ -939,3 +939,29 @@ PC 推进，操作数永远不会被当成 opcode 解码，**运行期不存在�
 
 **触发点**：若将来撞到**第三处**由这个重叠引发的真实麻烦，再把 `0xx` 整族挪到 `8xx`（届时
 又是一次冻结面变更 + `ENGINE_VER` bump，且两条守卫测试仍然有效、与号无关）。撞到了往这条底下追加。
+
+### F7. release 下 `NUM_PHASES` 报 `dead_code`——`cargo clippy --release` 现在跑不绿（syscall 号表重排刀终审修复波撞见，2026-07-31）
+
+```
+warning: constant `NUM_PHASES` is never used
+   --> crates/stg-core/src/world.rs:113:18
+```
+
+`pub(crate) const NUM_PHASES: u8 = 11;` 只被 **`PhaseGuard`** 用，而 `PhaseGuard` 整个住在
+`#[cfg(debug_assertions)]` 里（P2：debug 押运 §3.5 相位时序，release 不检查）。于是
+**release 编译时它真的没有任何使用者**。
+
+**先于本波存在，与本波无关**（本波只改了 `world.rs` 的两行注释）。之所以一直没人撞见：
+CI 的 clippy 步跑的是 **debug**（`cargo clippy --workspace --all-targets -- -D warnings`），
+`debug_assertions` 成立 ⇒ 有使用者 ⇒ 不报。`cargo build --release` 只是 warning 不是 error，
+所以 `storm`/`bench` 那几条 release 命令照跑不误。
+
+**没有顺手修**：三条修法各有取舍，都是行为面选择，不该混进一把纯注释刀——
+
+1. `#[cfg(debug_assertions)]` 挂在常量上 —— 最诚实（它本来就是 debug 专用），但要确认没有
+   将来的 release 使用者；
+2. `#[allow(dead_code)]` —— 一行了事，代价是把"它在 release 里没人用"这个事实盖住；
+3. 让它在 release 也有用（例如相位数进某个诊断/校验面）—— 那是**加东西**，得单独立项。
+
+**触发点 = 谁要让 `cargo clippy --release -- -D warnings` 进 CI**（或谁被这条 warning 挡住），
+届时连同 ①②③ 一并裁。在那之前它只是噪声一行。
