@@ -55,7 +55,7 @@ time/rank_mask/param_mask 字段（时间轴混编 + 难度过滤 + 栈引用替
 | 83/84 | negi / negf | — | 取负 | `NEG 25`（wrapping） |
 | 85 | distSq | … | %1 = %2²+%3² | 世界侧 `len_sq`（脚本层无直通——需求出现走 syscall） |
 | 86 | dist | … | 开根距离 | 核内禁开根比较（I1 平方距离），脚本要距离再议 |
-| 87 | angleToPoint | … | 两点方位角 | `SYS 40 aim_player_angle`（特化版）；通用版候补 |
+| 87 | angleToPoint | … | 两点方位角 | `SYS 120 aim_player_angle`（特化版）；通用版候补 |
 | 88 | sqrt | — | 栈顶开根 | `isqrt` 核内有，脚本未暴露 |
 | 89 | mulAssign | … | %1 = %2×%3 | 合成 |
 | 90 | rotatePoint | … | 点绕角旋转 | 合成/候补 |
@@ -67,11 +67,11 @@ time/rank_mask/param_mask 字段（时间轴混编 + 难度过滤 + 栈引用替
 
 | ID | 含义 | 我们的对应 |
 |---|---|---|
-| -10000 | 随机整数（**每次引用即抽号**） | **拒绝**——显式 `SYS 6 rand_range`（消耗序必须显式，C13⑥） |
+| -10000 | 随机整数（**每次引用即抽号**） | **拒绝**——显式 `SYS 150 rand_range`（消耗序必须显式，C13⑥） |
 | -9999 / -9998 | 随机 float [0,1) / [-π,π] | 同上 + I1 禁浮点 |
-| -9995 / -9994 | 敌（自身）x / y | `SYS 3/4 self_x/y` |
-| -9991 / -9990 | 自机 x / y | `SYS 1/2 player_x/y` |
-| -9988 | 敌出生以来帧数 | `SYS 9 self_age`（M1.5 落地）。**注语义偏离**：ZUN 这条只对敌有意义
+| -9995 / -9994 | 敌（自身）x / y | `SYS 20/21 self_x/y` |
+| -9991 / -9990 | 自机 x / y | `SYS 10/11 player_x/y` |
+| -9988 | 敌出生以来帧数 | `SYS 32 self_age`（M1.5 落地）。**注语义偏离**：ZUN 这条只对敌有意义
   （"敌出生以来"）；我们量的是**任务**出生以来的帧数（`frame - task.born_frame`），对全部
   owner 种类（含 STAGE）均有意义，零新状态（复用既有 `Task.born_frame`）——代价是"任务"与
   "owner 实体"生命周期不严格重合时两者会分叉（如任务在 owner 存活期间被脚本重新 `SPAWN`
@@ -79,8 +79,8 @@ time/rank_mask/param_mask 字段（时间轴混编 + 难度过滤 + 栈引用替
   该条目。 |
 | -9960 | rank 数值（-1024..1024，连续难度！） | `globals` 约定槽（拍板 5；ZUN 双轨实证变量式是刚需） |
 | -9959 | 难度档（E0/N1/H2/L3/EX4） | 同上 |
-| -9954 | 敌当前 HP | `SYS 5 self_hp` |
-| （无对应 ZUN 特殊变量） | 敌上限 HP | `SYS 10 self_hp_max`（M1.5 新增，无 ZUN 对照——引擎侧
+| -9954 | 敌当前 HP | `SYS 30 self_hp` |
+| （无对应 ZUN 特殊变量） | 敌上限 HP | `SYS 31 self_hp_max`（M1.5 新增，无 ZUN 对照——引擎侧
   补齐 `self_hp` 的自然邻居，非对照驱动；非敌 owner 恒 0，同 `self_hp` 误用策略） |
 
 ## 结构性差异备忘（设计对照的核心五条）

@@ -549,7 +549,7 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 
 ### C23. `SHOOTERS_PER_TASK` 没作为 C14 引擎常量注入，脚本只能硬编码 `0..=3`（shooter 刀终审记档，2026-07-31）
 
-`crate::ecl::shooter::SHOOTERS_PER_TASK = 4` 是 `sh_*` 族（syscall 62-76）**槽号 `id` 的
+`crate::ecl::shooter::SHOOTERS_PER_TASK = 4` 是 `sh_*` 族（syscall 600-660）**槽号 `id` 的
 合法上界**，越界走 P4-b（no-op + `contract_viol`，不 Fault）。但它**没有进 `consts.rs` 的
 ① 结构常量段**，而它的每一个同类兄弟都进了：`GLOBALS_SYS_SEGMENT`（同样是"脚本必须知道的
 边界值"）、`REQ_SCRIPT_BASE`、`ITEM_*` 五个；连表派生的 `BULLET_COLOR_STRIDE` 都由
@@ -618,7 +618,7 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 与 D7 一并重估。届时的修法：要么把 index 收窄到 8 位（敌池 cap 256，只需 8 位）给 gen 腾出
 23 位，要么改用两个 `i32`（脚本侧要配对存，很难看）。
 
-**弹 / 道具句柄仍是裸 index**（`create_bullet`(20) 押 `BulletHandle.index`、`drop_item`(23) 押
+**弹 / 道具句柄仍是裸 index**（`create_bullet`(200) 押 `BulletHandle.index`、`drop_item`(220) 押
 `ItemHandle.index`）。今天**物理上够不着**这个 ABA 面，不是"危害小"——引擎侧根本没有解析口：
 弹的九个 setter 全走 `self_bullet_handle(task)` 从 owner 三元组取句柄，脚本传的首参 pop 完
 就丢；道具句柄没有任何内建吃它。**触发点 = 谁要给它们加读口**（`bullet_x`/`item_type` 之类）：
@@ -761,7 +761,7 @@ mod 提供的二进制 xform 段格式、M4 rollback 对端镜像重放）——
 ### D13. 随机 aimmode（ZUN 的 `6`/`7`/`8`）不做——它们消耗世界 RNG，消耗序直接进校验和（shooter 刀 T4 记档，2026-07-31）
 
 ZUN 的 `607 etAim` 是个九值枚举，本刀（D-6）把它塌成 `aimed`/`ring` 两个正交布尔
-（`sh_aim`/`sh_ring`，syscall 71/72），**塌得下的只有 `0-5` 那六个**。剩下三个是另一类东西：
+（`sh_aim`/`sh_ring`，syscall 640/641），**塌得下的只有 `0-5` 那六个**。剩下三个是另一类东西：
 
 | ZUN mode | 语义 | 参数转义 |
 |---|---|---|

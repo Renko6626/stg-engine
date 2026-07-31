@@ -262,7 +262,7 @@ pub const SYS_NEAREST_ENEMY: u16 = 110;
 /// 按敌号读 **x**（101）：1 参 `handle`（**打包敌号**，与 [`SYS_ENEMY_HP`]/
 /// [`SYS_NEAREST_ENEMY`] 同口径——含 generation，槽复用可辨），押 `Fx` raw。
 ///
-/// 补的是上一刀（77-79 通电）暴露的断头路：脚本拿得到敌号却读不到坐标，
+/// 补的是上一刀（110/140/141 通电）暴露的断头路：脚本拿得到敌号却读不到坐标，
 /// "查最近的敌 → 朝它开火"算不出角度。数据本就在敌池里躺着，缺的只是读口。
 ///
 /// P4-b 降级（照 `sys_enemy_hp`）：**负句柄 / 越界 / 死槽 / gen 不符 → 返 `0`**，不 Fault、
@@ -666,7 +666,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             let (_, y) = self_pos(task, ctx);
             push(task, y.raw())
         }
-        // ── $self_* 速度引擎变量 87-90（T5）──────────────────────────────────
+        // ── $self_* 速度引擎变量 022-025（T5）──────────────────────────────────
         SYS_SELF_VX => {
             let (vx, _, _, _) = self_vel(task, ctx);
             push(task, vx)
@@ -698,10 +698,10 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
 
         // ── 1xx 查询 ─────────────────────────────────────────────────────────
         SYS_ENEMY_HP => sys_enemy_hp(task, ctx),
-        // ── 敌坐标读口 80/81（敌坐标读口刀）──────────────────────────────────
+        // ── 敌坐标读口 101/102（敌坐标读口刀）──────────────────────────────────
         SYS_ENEMY_X => sys_enemy_pos(task, ctx, false),
         SYS_ENEMY_Y => sys_enemy_pos(task, ctx, true),
-        // ── 探活读口 82（探活读口刀）────────────────────────────────────────
+        // ── 探活读口 103（探活读口刀）────────────────────────────────────────
         SYS_ENEMY_ALIVE => sys_enemy_alive(task, ctx),
         SYS_NEAREST_ENEMY => {
             let y = pop(task)?;
@@ -715,7 +715,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         }
         SYS_AIM_PLAYER_ANGLE => sys_aim_player_angle(task, ctx),
         SYS_SPELL_TIMER => sys_spell_timer(task, ctx),
-        // ── 数学/查询面 77-79（参数**逆序弹出**，照 `sys_move_enemy_to`）────────────
+        // ── 数学/查询面 140/141/110（参数**逆序弹出**，照 `sys_move_enemy_to`）────────────
         SYS_ATAN2 => {
             let x = pop(task)?;
             let y = pop(task)?;
@@ -802,7 +802,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
 
         // ── 4xx 敌运动 ───────────────────────────────────────────────────────
         SYS_MOVE_ENEMY_TO => sys_move_enemy_to(task, ctx),
-        // ── 敌人运动动词族 83-86（T4）────────────────────────────────────────
+        // ── 敌人运动动词族 410-421（T4）────────────────────────────────────────
         SYS_MOVE_VEL => sys_move_vel(task, ctx),
         SYS_MOVE_VEL_XY => sys_move_vel_xy(task, ctx),
         SYS_MOVE_ANGLE => sys_move_angle(task, ctx),
@@ -878,7 +878,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_BG_PHASE => sys_anchor_u16(task, ctx, AnchorKind::BgPhase),
 
         // ── 6xx shooter ──────────────────────────────────────────────────────
-        // Shooter 配置面 62-75（参数**逆序弹出**，照 `sys_move_enemy_to`；`id` 是首参、
+        // Shooter 配置面 600-652（参数**逆序弹出**，照 `sys_move_enemy_to`；`id` 是首参、
         // 故最后弹）。每条都是"弹完全部参数 → 取槽（越界即 no-op）→ 写字段"三段式。
         SYS_SH_RESET => {
             let id = pop(task)?;
@@ -1306,7 +1306,7 @@ fn sys_sh_fire(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 5x 族锚点写口的三种目标字段（`sys_anchor_u16` 判据）。
+/// 5xx 族锚点写口的三种目标字段（`sys_anchor_u16` 判据）。
 enum AnchorKind {
     Bgm,
     Bg,
@@ -1787,7 +1787,7 @@ fn sys_emit_req(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 符卡宣言（`SYS_SPELL_BEGIN`=28；符卡机构 spec 2026-07-24 §5）：7 参逆序弹出；
+/// 符卡宣言（`SYS_SPELL_BEGIN`=740；符卡机构 spec 2026-07-24 §5）：7 参逆序弹出；
 /// `self_enemy_handle`（非敌 misuse → Fault，同 `move_enemy_to` 误用策略）。
 ///
 /// **四条控制器补充决策**（复审 T1-m3/T1-m1/Task2 复审落地，spec 未写全，本刀新增，
@@ -1910,7 +1910,7 @@ fn sys_spell_begin(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 符卡逃生舱口（`SYS_SPELL_END`=29；符卡机构 spec 2026-07-24 §5）：无参；
+/// 符卡逃生舱口（`SYS_SPELL_END`=741；符卡机构 spec 2026-07-24 §5）：无参；
 /// `self_enemy_handle`（非敌 misuse → Fault）；转交 `spell_end_by_owner`（无绑定 →
 /// no-op，重复调用安全，见该 API 文档）。
 fn sys_spell_end(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -2032,6 +2032,23 @@ mod tests {
     ///
     /// 这一刀是大规模机械重排，判别力要求与常规刀不同——不是"新行为对不对"，而是
     /// "**有没有搬错、搬漏、搬重**"。故判据是号表自身的结构性质，不是某条 syscall 的行为。
+    ///
+    /// # 判别力边界（终审实测，2026-07-31——别高估这条测试）
+    ///
+    /// **抓不到「族内互换」。** [`frozen_table`] 是**符号引用**常量的（`(SYS_ATAN2, "atan2",
+    /// 1)`），所以把 `SYS_ATAN2` 与 `SYS_DIST` 的值对调（140 ↔ 141）之后，本测试的三条
+    /// 断言**全部照过**：仍是 74 条、仍两两不等、仍都落在 `1xx`。实测把这对值对调后
+    /// **全仓 947 条测试无一转红**——这不是覆盖漏洞，因为号本身是任意的，族内换值在行为上
+    /// 确实是 no-op（调用方一律符号引用，`ecl-meta.json` 也不含号）。但上面那句"有没有
+    /// 搬错"要按字面读会读出过强的承诺：**「值错、族对」这一格本测试是瞎的**。
+    /// 真正把具体取值钉死的是 `docs/ecl-ops.md`（号表的权威呈现面，由
+    /// [`ecl_ops_doc_syscall_numbers_match_the_constants`] 双向钉在常量上）。
+    ///
+    /// **「搬重」比本测试更早被抓住——是编译期错误。** 把 `SYS_DIST` 改成与 `SYS_ATAN2`
+    /// 同值，rustc 在**两处**报 `unreachable pattern`：[`syscall_implemented`] 的白名单
+    /// `matches!` 与 [`dispatch`] 的 `match`（两处都是 `const` 模式匹配）。CI 的
+    /// `-D warnings` 下这是硬失败，压根编译不过来跑测试。故 (b) 那条唯一性断言实际是
+    /// **第二道网**，价值在于把这条性质写成可读的意图，而不是它先发现问题。
     #[test]
     fn syscall_table_is_hundred_partitioned_and_unique() {
         let table = frozen_table();
@@ -2067,6 +2084,182 @@ mod tests {
                     "{name}(={num}) 应与 op 号空间(u8,最大 60)错开，但仍 <100",
                 );
             }
+        }
+    }
+
+    // ── `docs/ecl-ops.md` 号表 ↔ 常量的双向钉死（终审补，2026-07-31）────────────────
+
+    /// `"000"` / `"140"` → `Some(0)` / `Some(140)`；其余（`---`、`300-330`、正文词）→ `None`。
+    /// **只认三位补零形式**，这是号表列的排版约定（见 `ecl-ops.md` 0xx 族那条排版说明）。
+    fn doc_num(tok: &str) -> Option<u16> {
+        let t = tok.trim();
+        (t.len() == 3 && t.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| t.parse().ok())
+            .flatten()
+    }
+
+    /// 依次取出 cell 里所有反引号包起来的**原样** token（不判字符集，`$` 前缀剥掉）。
+    fn backticked(cell: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let mut rest = cell;
+        while let Some(i) = rest.find('`') {
+            let after = &rest[i + 1..];
+            let Some(j) = after.find('`') else { break };
+            out.push(after[..j].trim_start_matches('$'));
+            rest = &after[j + 1..];
+        }
+        out
+    }
+
+    fn is_ident(s: &str) -> bool {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    }
+
+    /// 从 `docs/ecl-ops.md` 的 `## syscall 号表` 一节抽出全部 `(号, 名)` 对。
+    ///
+    /// 两个来源，都是文档**自己既有的**排版，不是为测试新加的标记：
+    /// - **表行** `| 号 | 名 | 参数 | 返回 |`：首格是号（`NNN` 或 `NNN/NNN`），
+    ///   次格开头是反引号名。`| 010/011 | `player_x/y` |` 这种合并写法按 `_` 词干展开。
+    /// - **围栏块**里相邻的 `NNN name`（3xx 弹 setter 九连只在围栏里逐条列名，
+    ///   表行是聚合的 `| 300-330 | 弹 setter 族 |`）。
+    ///
+    /// 第二个返回值 = 那些**没能配上名**的格子里的三位数（如 `300-330` 的两个端点），
+    /// 只做"必须是真号"的弱检查。
+    fn parse_doc_number_table() -> (Vec<(u16, String)>, Vec<u16>) {
+        const DOC: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/ecl-ops.md"
+        ));
+
+        let start = DOC
+            .find("\n## syscall 号表")
+            .expect("ecl-ops.md 缺 `## syscall 号表` 节标题——文档结构变了，本测试要跟着改");
+        let sec = &DOC[start + 1..];
+        let end = sec[3..].find("\n## ").map_or(sec.len(), |i| i + 4);
+        let sec = &sec[..end];
+
+        let mut pairs: Vec<(u16, String)> = Vec::new();
+        let mut loose: Vec<u16> = Vec::new();
+        let mut in_fence = false;
+
+        for line in sec.lines() {
+            if line.trim_start().starts_with("```") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if in_fence {
+                // 围栏：相邻两 token 形如 `NNN name`
+                let toks: Vec<&str> = line.split_whitespace().collect();
+                for w in toks.windows(2) {
+                    if let (Some(n), true) = (doc_num(w[0]), is_ident(w[1])) {
+                        pairs.push((n, w[1].to_string()));
+                    }
+                }
+                continue;
+            }
+            let Some(body) = line.strip_prefix('|') else {
+                continue;
+            };
+            let mut cells = body.split('|');
+            let (Some(num_cell), Some(name_cell)) = (cells.next(), cells.next()) else {
+                continue;
+            };
+            let nums: Vec<Option<u16>> = num_cell.trim().split('/').map(doc_num).collect();
+            if nums.iter().any(Option::is_none) {
+                // 聚合格（`300-330`）或表头分隔行（`---`）：只捞里面的三位数弱检查
+                let bytes = num_cell.as_bytes();
+                for i in 0..bytes.len() {
+                    if bytes[i].is_ascii_digit()
+                        && (i == 0 || !bytes[i - 1].is_ascii_digit())
+                        && let Some(n) = doc_num(&num_cell[i..(i + 3).min(num_cell.len())])
+                    {
+                        loose.push(n);
+                    }
+                }
+                continue;
+            }
+            let nums: Vec<u16> = nums.into_iter().flatten().collect();
+            let ticked = backticked(name_cell);
+            let mut names: Vec<String> = ticked
+                .iter()
+                .filter(|s| is_ident(s))
+                .map(|s| s.to_string())
+                .collect();
+            // 合并写法 `player_x/y` → player_x / player_y
+            if names.len() < nums.len()
+                && let Some((a, b)) = ticked.first().and_then(|t| t.split_once('/'))
+                && let Some((stem, _)) = a.rsplit_once('_')
+            {
+                names = vec![a.to_string(), format!("{stem}_{b}")];
+            }
+            assert!(
+                names.len() >= nums.len(),
+                "ecl-ops.md 号表行 `{}` 的号有 {} 个、认得出的反引号名只有 {} 个——\
+                 排版变了就得改 `parse_doc_number_table`（别把这条测试关掉）",
+                line.chars().take(60).collect::<String>(),
+                nums.len(),
+                names.len(),
+            );
+            for (n, name) in nums.into_iter().zip(names) {
+                pairs.push((n, name));
+            }
+        }
+        (pairs, loose)
+    }
+
+    /// **`docs/ecl-ops.md` 的号表必须与 `SYS_*` 常量两向一致**（终审补，2026-07-31）。
+    ///
+    /// 补的是一个**沉默漂移面**：`ecl-ops.md` 是号表层的权威呈现面（M4 对端与回放头要认的
+    /// 冻结契约），而在此之前**仓内没有任何东西把它和常量绑住**——一次手滑编辑就能让文档
+    /// 与代码分家，且不会有任何测试转红。号表重排那一刀是靠**手工写脚本**比对才确认干净的，
+    /// 那种一次性验证保不住下一次。
+    ///
+    /// 两个方向都断言（缺一个就只是半张网）：
+    /// - **文档 → 常量**：文档里出现的每个 `(号, 名)` 对都得在 [`frozen_table`] 里；
+    /// - **常量 → 文档**：74 条常量每条都得在文档里出现，**漏记一条即红**。
+    ///
+    /// 这条也是 [`syscall_table_is_hundred_partitioned_and_unique`] 那个"抓不到族内互换"
+    /// 缺口的补丁：结构测试是符号引用的、对具体取值免疫，本条按**字面数字**比对。
+    ///
+    /// 解析靠的是文档自己既有的排版（号列 + 反引号名），没有新加机器可读标记。排版真变了
+    /// 本测试会**带着行内容响亮失败**并要求同步改解析器——号表是冻结面，这个代价是对的。
+    #[test]
+    fn ecl_ops_doc_syscall_numbers_match_the_constants() {
+        let table = frozen_table();
+        let (doc_pairs, loose) = parse_doc_number_table();
+
+        assert!(
+            doc_pairs.len() >= 74,
+            "只从 ecl-ops.md 解析出 {} 个 (号,名) 对，远少于 74——解析器多半没跟上排版变更",
+            doc_pairs.len()
+        );
+
+        // 方向一：文档有而常量无（含"号对名错"与"名对号错"）
+        for (num, name) in &doc_pairs {
+            assert!(
+                table.iter().any(|&(n, nm, _)| n == *num && nm == name),
+                "ecl-ops.md 记着 `{num} = {name}`，但 `SYS_*` 常量里没有这一对；\
+                 号表以 `ecl::syscall` 的常量为唯一权威，改文档别改代码"
+            );
+        }
+
+        // 方向二：常量有而文档无（漏记一条）
+        for &(num, name, _) in table {
+            assert!(
+                doc_pairs.iter().any(|(n, nm)| *n == num && nm == name),
+                "`SYS_{}` = {num} 在 `docs/ecl-ops.md` 的号表里查无此条——新增/改号必须同步文档",
+                name.to_uppercase()
+            );
+        }
+
+        // 聚合格（如 `| 300-330 | 弹 setter 族 |`）的端点也得是真号
+        for n in loose {
+            assert!(
+                syscall_implemented(n),
+                "ecl-ops.md 号表的聚合格里出现了 {n}，但它不是任何 syscall 的号"
+            );
         }
     }
 
@@ -3950,7 +4143,7 @@ mod tests {
         assert_eq!(task.stack[0], -1);
     }
 
-    // ── SYS_ADD_SCORE/SYS_BGM/SYS_BG/SYS_BG_PHASE（整局流程刀 Task 2；5x 族）────────
+    // ── SYS_ADD_SCORE/SYS_BGM/SYS_BG/SYS_BG_PHASE（整局流程刀 Task 2；5xx 族）────────
 
     #[test]
     fn sys_bgm_writes_field_and_emits_req() {

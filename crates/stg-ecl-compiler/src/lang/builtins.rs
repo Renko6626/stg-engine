@@ -860,9 +860,15 @@ mod tests {
     /// - `is_op=false` → [`stg_core::ecl::syscall::syscall_implemented`]（号表白名单，由
     ///   core 侧 `syscall_whitelist_matches_the_frozen_table` 钉在冻结的 74 条上）。
     ///
-    /// ⚠️ **第三格不能省**：只有前两条断言时，"把 `sin` 误标成 `is_op=false`" **抓不到**
-    /// ——`OP_SINB` 是 32，而 32 恰好就是 `SYS_SELF_AGE`，白名单查询照样通过。所以还要断言
-    /// **走 op 支路的全集恰好是 `sin`/`cos`**，把这一格堵死。
+    /// ⚠️ **第三格（`op_backed == ["sin","cos"]`）守的是闭世界性质，不是 `sin`/`cos` 本身。**
+    /// 前两条断言确实抓不到"把 `sin` 误标成 `is_op=false`"（`OP_SINB` 是 32，而 32 恰好就是
+    /// `SYS_SELF_AGE`，白名单查询照样通过）——但那个具体错法在全量跑里还有
+    /// [`sin_cos_dispatch_via_raw_vm_op_not_syscall`] 按名兜着（它直接断言 `sin.is_op`），
+    /// 所以"只有第三格红"只在**单跑本测试**时成立，别把它当成这一格的存在理由。
+    ///
+    /// 第三格真正新增的是**闭世界**：将来**新加**一个 builtin 并误标成 `is_op=true`，
+    /// 没有任何按名写的测试会管它（按名的测试只覆盖它点名的那几个），而第三格会立刻红。
+    /// 反向同理——把某个 syscall 内建误标成 `is_op=true` 也逃不掉。
     #[test]
     fn builtin_dispatch_kind_matches_what_the_field_holds() {
         use stg_core::ecl::{ops::op_implemented, syscall::syscall_implemented};
@@ -1267,7 +1273,7 @@ mod tests {
 
     /// 敌坐标读口刀（101/102）：**返回型必须是 `fx`**——它们存在的全部理由就是拿去减、
     /// 喂 `atan2`/`dist`，返 `int` 会让作者每处都补一记穿透 cast。号也逐条钉死，防
-    /// 80/81 两条派发臂在表里写反（两条内建同签名，写反了 typeck 一声不吭）。
+    /// 101/102 两条派发臂在表里写反（两条内建同签名，写反了 typeck 一声不吭）。
     #[test]
     fn enemy_pos_builtins_return_fx_and_carry_their_own_syscall_numbers() {
         let x = lookup("enemy_x").expect("enemy_x 应在表中");
