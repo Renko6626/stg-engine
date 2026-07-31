@@ -2211,11 +2211,10 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            6,
-            "bump 必须是有意识决定(评审 + 改本测试)——5→6：小清洗刀,syscall 号表新增 \
-             77 atan2 / 78 dist / 79 nearest_enemy(号表冻结纪律的机械 bump; \
-             World 布局与存档编码均未动)。前一次 4→5 是 shooter 刀 T1(号表 62-76 + \
-             TaskPool 新增 shooters 并行数组导致 SaveBytes 载荷编码变化)"
+            7,
+            "bump 必须是有意识决定(评审 + 改本测试)——6→7：敌坐标读口刀,syscall 号表新增 \
+             80 enemy_x / 81 enemy_y(号表冻结纪律的机械 bump;World 布局与存档编码均未动)。\
+             前一次 5→6 是小清洗刀(号表 77 atan2 / 78 dist / 79 nearest_enemy,同款单理由 bump)"
         );
     }
 

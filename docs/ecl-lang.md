@@ -61,6 +61,10 @@
 - **`die()` 立即终止本任务**（降低成两条指令，第二条是终止），它后面的语句一句都不执行。
 - **`atan2(y, x)` 的 `y` 在前**（同 libm），两参同为 `fx` ⇒ 写反了**不报错**，只会把角度
   沿 45° 对角线镜像；`dist(dx, dy)` 是**向量模**不是两点距离（两点距离自己减）。
+- **`enemy_x`/`enemy_y` 的无效句柄返 `0`，那不是哨兵**——坐标没有哨兵位可用（任何 `fx`
+  都可能是真坐标），所以"敌恰在原点"与"号无效"读起来一样。读坐标前先
+  `enemy_hp(e) != -1` 探活；**别用 `enemy_hp(e) >= 0` 探**（被打穿的敌血量是真实负数，
+  那样会把还在场上的敌误判成无效）。详见下方"数学与查询"。
 - 发射器（`sh_*` 族）两条最容易搞混的：**fan 以基准方向为中心对称展开**（改颗数不用重算
   `angle0`），而 **ring 下 `angle_step` 转义成逐层偏移**、不再是逐弹增量；以及
   **`sh_task` 是每颗弹派一个任务**——`sh_count(0, 28, 1)` + `sh_task` 一句话吃 28 个任务槽
@@ -363,7 +367,9 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `aim_player() -> angle` — 自身(敌/弹属主)指向自机的 BAM 角
 - `atan2(y: fx, x: fx) -> angle` — 任意向量的方向角(整数 CORDIC,16 轮);参数序 (y, x) 同 libm;(0,0) 返 0 不报错;比 aim_player 通用——能瞄任意点
 - `dist(dx: fx, dy: fx) -> fx` — 向量 (dx,dy) 的模长(开根,不是平方);**不是两点距离**——两点距离自己减: dist(bx-ax, by-ay)
-- `nearest_enemy(x: fx, y: fx) -> int` — 离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的是池 index,可直接喂 enemy_hp(悬垂/复用不可辨,同 enemy_hp)
+- `nearest_enemy(x: fx, y: fx) -> int` — 离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的是池 index,可直接喂 enemy_hp/enemy_x/enemy_y(悬垂/复用不可辨,同 enemy_hp)
+- `enemy_x(handle: int) -> fx` — 按敌号读 x;死/悬垂/越界句柄返 0(**不是哨兵**——0 是合法坐标,先用 enemy_hp(e) != -1 探活再读)
+- `enemy_y(handle: int) -> fx` — 按敌号读 y;死/悬垂/越界句柄返 0(同 enemy_x,先探活再读);配 enemy_x + atan2 即可朝任意敌开火
 - `sin(angle: angle) -> fx` — 查表三角,返 fx(VM op 直发,非 syscall)
 - `cos(angle: angle) -> fx` — 查表三角,返 fx(VM op 直发,非 syscall)
 - `set_speed(handle: int, speed: fx)` — 弹 setter:改速率;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定
@@ -413,9 +419,10 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 > 不能借句柄定向操纵别的弹；owner 不是弹的任务调它 → 任务 Fault。想操纵 `fire(...)`
 > 出来的那颗弹，用 xformdef 或 `fire` 的 `task` 参数挂子任务。
 
-## 数学与查询（`atan2` / `dist` / `nearest_enemy`）
+## 数学与查询（`atan2` / `dist` / `nearest_enemy` / `enemy_x` / `enemy_y`）
 
-三个都是引擎里早就有、脚本此前够不着的东西（小清洗刀 2026-07-31 通电），零新机制。
+前三个是引擎里早就有、脚本此前够不着的东西（小清洗刀 2026-07-31 通电）；后两个是敌坐标
+读口（敌坐标读口刀 2026-07-31），数据本就在敌池里躺着。五个都零新机制。
 
 - **`atan2(y, x) -> angle`**——任意向量的方向角。**参数序是 `(y, x)`**（`y` 在前，同 libm
   惯例），两位都是 `fx`。这一位最容易写反：两参同型，写成 `atan2(dx, dy)` **不会有任何
@@ -428,13 +435,27 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
   **饱和在最大可表示距离**，不会回绕成负数。
 - **`nearest_enemy(x, y) -> int`**——离 `(x, y)` 最近的活敌，返**池 index**；场上无敌返 **-1**。
   候选是"存活且未在死亡态"的敌，并列时取低索引，无距离上限。
-  返回值可以直接喂 `enemy_hp(h)`——两者是配对的（拿号 → 轮询血量）。
+  返回值可以直接喂 `enemy_hp(h)` / `enemy_x(h)` / `enemy_y(h)`——四者是配对的
+  （拿号 → 轮询血量 / 读坐标）。
   ⚠️ **返的是池 index，不带 generation**：那只敌死了、槽被新敌复用之后，你手上这个号会
   静默指向**新的那只**（和 `enemy_hp` 同一个已知口子）。别把它当长期句柄存着，每次要用
   就现查一次。
-  ⚠️ **能拿它做的事目前只有 `enemy_hp`**：按敌号读坐标的读口**还没暴露**（脚本侧没有
-  `enemy_x`/`enemy_y`），所以"查到最近的敌然后朝它开火"这条链路**现在还接不通**——
-  想瞄自己生成的敌，用生成时自己记下的坐标喂 `atan2`。
+- **`enemy_x(handle) -> fx` / `enemy_y(handle) -> fx`**——按敌号读它的坐标。有了这两条，
+  "查最近的敌 → 朝它开火"才接得通（下面的例子就是那条链路）。句柄口径同 `enemy_hp`：
+  池 index、不比对 generation。
+
+  ⚠️ **降级值是 `0`，不是哨兵**。`enemy_hp` 能用 `-1` 表示"这个号没用"，是因为血量天然
+  非负；坐标没有这个便利——`-1` 是个完全合法的 `fx`，任何取值都可能是真坐标，**没有哨兵
+  位可用**。所以死槽 / 越界 / 负句柄一律返 `0`，代价是**「那只敌恰好停在原点」与「这个号
+  无效」读起来一模一样**。
+
+  ⇒ **探活惯例：先 `enemy_hp(e) != -1` 探一下，再读坐标。**
+  ⚠️ 别写成 `enemy_hp(e) >= 0`——那是错的。被打穿（overkill）的敌血量是**真实负值**，
+  引擎只把它压到 `min(0)`、不抹平，所以"刚被打穿、槽还在场上"的敌 `enemy_hp` 返的是个
+  负数；用 `>= 0` 探活会把它误判成无效句柄，而它其实还在屏幕上、还该被瞄。
+  `!= -1` 是与引擎降级值直接对应的那个判据。（残余的一格缝：某只活敌血量**恰好**是 −1 时
+  探活会误判——`-1` 同时是"无效"的返回值。真要一格不漏，配合 `nearest_enemy` 当帧现查的
+  号用，那个号本来就是活敌。）
 
 ```ecl
 // 关卡编排：等某个区域附近最后一只敌死掉再往下走
@@ -446,18 +467,23 @@ sub wait_area_cleared() {
     }
 }
 
-// 瞄一个自己知道坐标的点：先算方向、再按距离决定发不发
-sub snipe_at(px: fx, py: fx) {
-    var a: angle = atan2(py - $self_y, px - $self_x);
-    var d: fx = dist(px - $self_x, py - $self_y);
-    if d < 240.0fx {
-        _ = fire(64, 2, $self_x, $self_y, 3.0fx, a, none, none);
+// 查最近的敌 → 探活 → 读它的坐标 → 算方向 → 朝它开火（本节的招牌用法）
+sub snipe_nearest() {
+    loop {
+        var e: int = nearest_enemy($self_x, $self_y);
+        if e >= 0 && enemy_hp(e) != -1 {
+            var dx: fx = enemy_x(e) - $self_x;
+            var dy: fx = enemy_y(e) - $self_y;
+            if dist(dx, dy) < 240.0fx {
+                _ = fire(64, 2, $self_x, $self_y, 3.0fx, atan2(dy, dx), none, none);
+            }
+        }
+        wait(20);
     }
 }
 
 sub main() {
-    snipe_at(0.0fx, -96.0fx);
-    wait_area_cleared();
+    snipe_nearest();
 }
 ```
 
