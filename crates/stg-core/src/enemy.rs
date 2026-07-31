@@ -1,4 +1,4 @@
-//! 敌人池（D5）——`define_pool!` 第 3 个实例。SoA ~70 B/敌，cap 256。
+//! 敌人池（D5）——`define_pool!` 第 3 个实例。SoA ~94 B/敌，cap 256。
 //! 本切片：全字段落池 + 直线积分（move_to 插值器/主控 AI 延后，字段惰性）。
 //! `flags` 的 dying 位由 settle 置、cleanup 回收（敌人槽活到相位 8 供死亡脚本/表现层读）。
 

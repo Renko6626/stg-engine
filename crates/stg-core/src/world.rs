@@ -497,6 +497,9 @@ impl WorldBody {
             self.enemies.vx[i] = Fx::ZERO;
             self.enemies.vy[i] = Fx::ZERO;
             self.enemies.mv_active[i] = 0;
+            // move_to 是一条全新的位置命令——它之前的速度意图是陈的，由它接管。
+            // 到点清速的判据（integrate 相）读的就是这一位。
+            self.enemies.vel_touched[i] = 0;
             return;
         }
         self.enemies.mv_from_x[i] = self.enemies.x[i];
@@ -507,6 +510,9 @@ impl WorldBody {
         self.enemies.mv_dur[i] = dur;
         self.enemies.mv_easing[i] = easing;
         self.enemies.mv_active[i] = 1;
+        // move_to 是一条全新的位置命令——它之前的速度意图是陈的，由它接管。
+        // 到点清速的判据（integrate 相）读的就是这一位。
+        self.enemies.vel_touched[i] = 0;
     }
 
     /// 清空敌人的待掉落计数（敌人死亡效果刀）。P4-b：悬垂 → no-op + 计数。
