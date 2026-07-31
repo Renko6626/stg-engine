@@ -5543,8 +5543,10 @@ mod tests {
         assert_eq!(t.stack[0], h, "两条产号口必须同编码");
     }
 
-    /// `-1` 仍是四个读口眼里的唯一无效哨兵——打包后**不得**有哪个 `-1` 意外解包成合法槽
-    /// （`-1` 的低 16 位是 `0xFFFF` = 65535，越界；`>= 0` 那道闸也在）。
+    /// `-1` 仍是四个读口眼里的唯一无效哨兵——打包后**不得**有哪个 `-1` 意外解包成合法槽。
+    ///
+    /// ⚠️ 注意这条**打不中** `resolve_enemy_handle` 的 `packed >= 0` 那道闸：`-1` 的低 16 位
+    /// 是 `0xFFFF` = 65535，越界判据自己就兜住了。专打非负闸的判别腿见下一条。
     #[test]
     fn minus_one_is_still_invalid_for_every_read_port() {
         let (mut w, ecl) = fresh();
@@ -5561,5 +5563,49 @@ mod tests {
             w.body.diag.contract_viol, before,
             "纯读族降级仍不计违约（口径未变）"
         );
+    }
+
+    /// **非负闸的判别腿**（复审 ②）：`resolve_enemy_handle` 的 `packed >= 0` 那道闸此前
+    /// 是**被越界判据遮住的**——常见负值（`-1`）的低 16 位是 `0xFFFF` = 65535 ≥ CAP(256)，
+    /// 删掉非负闸测试照绿。今天没事，但将来谁放宽越界判据或扩了敌池容量，洞就露出来。
+    ///
+    /// 能单独打中它的取值是 **`-65536`**（`0xFFFF0000`）：低 16 位 = `0`（合法槽），
+    /// `(p >> 16) & 0x7FFF` = `0x7FFF`（算术右移把符号位铺满）。拿它去打一只
+    /// `generation & 0x7FFF == 0x7FFF` 的**活敌**——index 合法、gen 也对得上，
+    /// **只有非负闸能拒绝它**。
+    ///
+    /// 反向腿钉住这不是"什么都读不到"：同一只敌的**正**句柄 `0x7FFF0000` 必须照常读通。
+    #[test]
+    fn a_negative_handle_whose_low_bits_alias_a_live_enemy_is_still_rejected() {
+        let (mut w, ecl) = fresh();
+        // alloc 会 +1，故预置 0x7FFE ⇒ 这只敌的 generation = 0x7FFF（低 15 位全 1）。
+        w.body.enemies.generation[0] = 0x7FFE;
+        let good = spawn_enemy_via_syscall(&mut w, &ecl, 30, -70, 77);
+        assert_eq!(
+            w.body.enemies.generation[0], 0x7FFF,
+            "前提：gen 的低 15 位必须全 1，否则 -65536 解出来的 gen 对不上、本腿失去判别力"
+        );
+        assert_eq!(good, 0x7FFF_0000, "前提：正句柄就是 -65536 的非负孪生");
+
+        // 反向腿：正句柄照常读通（否则下面四条退化成"什么都读不到"的假绿）。
+        assert_eq!(read_enemy_port(&mut w, &ecl, SYS_ENEMY_HP, good), 77);
+        assert_eq!(read_enemy_port(&mut w, &ecl, SYS_ENEMY_ALIVE, good), 1);
+
+        // 正题：同 index、同 gen，只差一个符号位 —— 必须被非负闸拒掉。
+        const ALIAS: i32 = -65536; // 0xFFFF0000
+        assert_eq!(ALIAS & 0xFFFF, 0, "低 16 位确实指向 0 号槽（活敌）");
+        assert_eq!(
+            (ALIAS >> 16) & 0x7FFF,
+            0x7FFF,
+            "解出的 gen 确实与那只敌相符"
+        );
+        assert_eq!(
+            read_enemy_port(&mut w, &ecl, SYS_ENEMY_HP, ALIAS),
+            -1,
+            "负句柄必须被拒 —— 删掉 `packed >= 0` 这条就红"
+        );
+        assert_eq!(read_enemy_port(&mut w, &ecl, SYS_ENEMY_X, ALIAS), 0);
+        assert_eq!(read_enemy_port(&mut w, &ecl, SYS_ENEMY_Y, ALIAS), 0);
+        assert_eq!(read_enemy_port(&mut w, &ecl, SYS_ENEMY_ALIVE, ALIAS), 0);
     }
 }
