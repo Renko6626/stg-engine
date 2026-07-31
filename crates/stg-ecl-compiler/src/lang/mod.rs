@@ -824,8 +824,8 @@ sub main() {
         );
     }
 
-    /// `batch` 也走折叠（不只是 `fire`）——`builtins::folds_shape_color` 是两处共用的
-    /// 单一谓词，但只有真跑一遍才钉得死"codegen 那一侧没把 `batch` 漏掉"：漏掉 =
+    /// `batch` 也走折叠（不只是 `fire`）——`builtins::fold_start` 是两处共用的
+    /// 单一权威，但只有真跑一遍才钉得死"codegen 那一侧没把 `batch` 漏掉"：漏掉 =
     /// 给 9 参 syscall 压 10 个值，整条参数序列错位，且没有任何显眼信号。
     #[test]
     fn batch_const_pair_folds_too() {
@@ -846,6 +846,84 @@ sub main() {
                 .any(|pair| pair == [OP_PUSHI as u32, 19]),
             "应折成 `PUSHI 19`：{:?}",
             img.code()
+        );
+    }
+
+    /// **押运测试**（shooter 刀 T2）：颜色轴糖的折叠**起始下标**从硬编码的 0 改成按内建查
+    /// （`fire`/`batch` 折前两参，`sh_sprite` 折第 2、3 参因为第 1 参是 `id`）——这条把改动
+    /// 前的产物**逐字节**钉死，是动既有代码的安全网。数组是改动前跑出来的真实字节流，
+    /// 常量对与变量色两条支路都在里面（一个 sub 里连着两次调用）。
+    ///
+    /// 红了先看 `codegen::gen_builtin_call` 的折叠判据，别急着更新期望值：
+    /// `fire`/`batch` 的字节流变了 = 金向量必然漂移。
+    #[test]
+    fn fire_and_batch_bytecode_is_byte_for_byte_unchanged() {
+        let fire = compile(
+            "sub main() { _ = fire(16, 3, 1fx, 2fx, 3fx, 0deg, none, none); \
+             var c: int = 3; _ = fire(16, c, 1fx, 2fx, 3fx, 0deg, none, none); }",
+            "t.ecl",
+        )
+        .expect("应编译成功");
+        assert_eq!(
+            fire.code(),
+            &[
+                10, 19, 10, 65536, 10, 131072, 10, 196608, 10, 0, 10, 0, 10, 0, 10, 4294967295, 60,
+                20, 14, 10, 3, 12, 0, 10, 16, 11, 0, 20, 10, 65536, 10, 131072, 10, 196608, 10, 0,
+                10, 0, 10, 0, 10, 4294967295, 60, 20, 14, 0
+            ],
+            "fire 的产物必须与折叠下标改动前逐字节相同"
+        );
+
+        let batch = compile(
+            "sub main() { _ = batch(16, 3, 0fx, 0fx, 1, 0deg, 0deg, 1, 1fx, 0fx); \
+             var c: int = 3; _ = batch(16, c, 0fx, 0fx, 1, 0deg, 0deg, 1, 1fx, 0fx); }",
+            "t.ecl",
+        )
+        .expect("应编译成功");
+        assert_eq!(
+            batch.code(),
+            &[
+                10, 19, 10, 0, 10, 0, 10, 1, 10, 0, 10, 0, 10, 1, 10, 65536, 10, 0, 60, 21, 14, 10,
+                3, 12, 0, 10, 16, 11, 0, 20, 10, 0, 10, 0, 10, 1, 10, 0, 10, 0, 10, 1, 10, 65536,
+                10, 0, 60, 21, 14, 0
+            ],
+            "batch 的产物必须与折叠下标改动前逐字节相同"
+        );
+    }
+
+    /// `sh_sprite` 的折叠发生在**第 2、3 参**（第 1 参是 `id`）——常量对折成单个字面量，
+    /// 变量色发一条运行期加法，与 `fire`/`batch` 同构，只是起点不同。
+    #[test]
+    fn sh_sprite_folds_at_index_one_not_zero() {
+        use stg_core::ecl::ops::OP_ADD;
+        let folded = compile("sub main() { sh_sprite(0, 16, 3); }", "t.ecl").expect("应编译成功");
+        assert!(
+            !opcodes_of(folded.code()).contains(&OP_ADD),
+            "常量对应折成单个字面量：{:?}",
+            folded.code()
+        );
+        assert!(
+            folded.code().windows(2).any(|p| p == [OP_PUSHI as u32, 19]),
+            "应折成 `PUSHI 19`：{:?}",
+            folded.code()
+        );
+        // 判别腿：`id` 那一位**没有**被卷进折叠——0(id) 与 16(shape) 若被误折成
+        // `PUSHI 16` 再加上 3，栈上只剩两个值，syscall 参数序列整条错位。
+        assert!(
+            folded.code().windows(2).any(|p| p == [OP_PUSHI as u32, 0]),
+            "id 位必须独立压栈：{:?}",
+            folded.code()
+        );
+
+        let dynamic = compile(
+            "sub main() { var c: int = 3; sh_sprite(0, 16, c); }",
+            "t.ecl",
+        )
+        .expect("应编译成功");
+        assert!(
+            opcodes_of(dynamic.code()).contains(&OP_ADD),
+            "变量色必须发一条运行期加法：{:?}",
+            dynamic.code()
         );
     }
 
@@ -1055,7 +1133,7 @@ sub main() {
             .expect("8 色表里弹型 8 是第 1 形，必须合法");
         }
 
-        /// 消费者③：`batch` 与 `fire` 共用同一套判据（`builtins::folds_shape_color`），但
+        /// 消费者③：`batch` 与 `fire` 共用同一套判据（`builtins::fold_start`），但
         /// 此前从没有一条 mod 表测试盯过 `batch` 这一侧——补上，同一对判别输入。
         #[test]
         fn batch_checks_go_by_the_tables_own_stride_not_16() {

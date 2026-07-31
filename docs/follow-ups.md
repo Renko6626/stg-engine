@@ -42,6 +42,20 @@
 > `add_*`，`set_*` 不做，绝对赋值归 `Loadout`〕。三条的语义均已写进 `docs/ecl-lang.md`
 > 手写节与 `docs/ecl-ops.md` 号表。）
 >
+> shooter 刀收口追记（2026-07-31）：新记两条，均为**本刀有意不做/有意不对齐**的记档，不是
+> 缺陷单——**D13**（ZUN 随机 aimmode `6`/`7`/`8` 不做：消耗世界 RNG，抽取发数与顺序直接进
+> 校验和，要单独一份 spec 钉死）、**D14**（`sh_fire` 与 `create_bullets_batch` 的两处口径
+> 差异：弹池满不做剩余批量补计 / 退化网格与 appearance 的校验先后序相反——**两处都影响
+> 进校验和的值，别"顺手对齐"**）。本刀顺带删掉 `builtins::folds_shape_color`（两个真消费者
+> 已转投 `fold_start`，它只剩测试在调且答的是没用的那一半）。
+>
+> shooter 刀**整支复审修复波**再追一条（2026-07-31）：**C23**（`SHOOTERS_PER_TASK` 没作为
+> C14 引擎常量注入 ⇒ 手册与所有脚本硬编码 `0..=3`，而它每个兄弟都是注入的）。同波顺带
+> 订正、**不入清单**（已改完，不留墓碑）的四处：`ecl/task.rs` 模块文档的容量数字过时 ·
+> `bench-baseline.md` 文件头"贴在旧表上方"与实际的向下追加自相矛盾 ·
+> `ecl-ops.md`/`ecl-lang.md`/`xform-ops.md` 三处漏枚举 `sh_fire` 的 **xform 段池**压力 ·
+> `ecl-ops.md` 75 号补记 `sh_req` 为何与 `emit_req` 收窄口径不同（钳 vs no-op）。
+>
 > 敌人死亡效果刀 T1 追记（2026-07-30）：新记 **D11**——掉落从"生成时定死的表索引"迁成
 > "敌身上按类型计数的可变状态"后，掉落表的**条目顺序不再影响任何东西**（撒的顺序由
 > `spill_drops` 的类型升序决定），而 `validate()` 不要求条目升序 ⇒ 非升序的内容包表会
@@ -524,6 +538,23 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 复审者看到"零覆盖的校验逻辑"误判为遗留 bug 想删掉它。**触发点 = ② 段再长出符号**
 （如道具类型符号表落地）时，记得给这条 join 校验重新配一对正/负测试，别让它继续裸奔。
 
+### C23. `SHOOTERS_PER_TASK` 没作为 C14 引擎常量注入，脚本只能硬编码 `0..=3`（shooter 刀终审记档，2026-07-31）
+
+`crate::ecl::shooter::SHOOTERS_PER_TASK = 4` 是 `sh_*` 族（syscall 62-76）**槽号 `id` 的
+合法上界**，越界走 P4-b（no-op + `contract_viol`，不 Fault）。但它**没有进 `consts.rs` 的
+① 结构常量段**，而它的每一个同类兄弟都进了：`GLOBALS_SYS_SEGMENT`（同样是"脚本必须知道的
+边界值"）、`REQ_SCRIPT_BASE`、`ITEM_*` 五个；连表派生的 `BULLET_COLOR_STRIDE` 都由
+`compile_with_options` 注入。后果是 `docs/ecl-lang.md` 的发射器节与**所有将来的 `.ecl`**
+都只能把 `4` / `0..=3` 写成字面量——正是 C14 那条"跨语言常量引用缺失"要消灭的形态。
+
+**为什么本刀没做**（不是遗漏，是范围判断）：K=4 由 D-1 拍死、短期不会动，而注入它要碰
+`consts.rs` 的 ① 段 ⇒ 改 `ENGINE_CONSTS` 的内容 ⇒ 所有脚本可见词汇表变化，本该和别的
+常量增补一起走一次。**触发点 = 下次动 `consts.rs` ① 段**（或有人真想改 K）时顺手加一行
+`SHOOTERS_PER_TASK: usize as int = crate::ecl::shooter::SHOOTERS_PER_TASK;`，同时把
+`ecl-lang.md` 那句"编号 `0..=3`"改成引用常量。注意 `engine_consts!` 的 v0 限制是
+`$val as i32` 要求原生整数——`usize` 可以，但 ① 段现有各条都是 `u16`/`u8`，加进去时
+顺带确认宏的 `@ty` 分支与 `assert` 口径。
+
 ---
 
 ## D. 设计层面的已知裂缝
@@ -617,6 +648,65 @@ mod 提供的二进制 xform 段格式、M4 rollback 对端镜像重放）——
 （M4 那条线，与 B3 多自机 graze 位、B8 并列自机裁决、B13 磁吸自机选择同批）：届时要一次性
 决定"击杀归属"的口径——是把 `owner` 从 `hits` 一路穿到 `kill_enemy`，还是干脆改成共享分数。
 在那之前别单独修这一处，改一半会让四处记分口彼此不一致。
+
+### D13. 随机 aimmode（ZUN 的 `6`/`7`/`8`）不做——它们消耗世界 RNG，消耗序直接进校验和（shooter 刀 T4 记档，2026-07-31）
+
+ZUN 的 `607 etAim` 是个九值枚举，本刀（D-6）把它塌成 `aimed`/`ring` 两个正交布尔
+（`sh_aim`/`sh_ring`，syscall 71/72），**塌得下的只有 `0-5` 那六个**。剩下三个是另一类东西：
+
+| ZUN mode | 语义 | 参数转义 |
+|---|---|---|
+| `6` | random angles | `ang1`/`ang2` 转义成方向的 max/min |
+| `7` | random speeds | `spd1`/`spd2` 转义成速度的 max/min |
+| `8` | 两者 | 同上两条一起 |
+
+**为什么不是"加个 flag 位"就完事**：随机散布要抽的是**世界 RNG**（I3：PRNG 状态是 `World`
+字段、随快照回滚），于是"每颗弹抽几发、按什么顺序抽"就不再是实现细节，而是**进校验和的
+契约**——写错一次，回放/rollback/三平台对拍全部分岔，而金向量闸门只互比三平台、抓不到
+（`CLAUDE.md`"金向量闸门的能力边界"）。要钉死的至少三条：① 抽取发生在网格循环的哪一步
+（每颗一发？角度与速度各一发？）；② `6`/`7`/`8` 三种模式下的抽取**发数与顺序**互相之间是
+什么关系；③ `n_angle`/`n_speed` 与随机的交互（随机模式下 `angle_step` 已被转义成 min，
+那"居中"还成不成立）。这是一份独立的小 spec，不该塞进 shooter 刀的尾巴。
+
+且"随机散布"本身与 shooter 的核心价值（**预存参数集**）正交——`rand_range` 已经在手，
+今天想要随机弹幕的脚本可以自己 `for` 循环逐颗 `fire`，只是写起来啰嗦。
+
+**将来的形状**（若做）：`flags` 里加 `SH_RAND_ANGLE`/`SH_RAND_SPEED` 两位（`ShooterSlot`
+的 `flags: u8` 现只用了低 3 位，有余量；且槽内还有 2 字节尾部 padding，加字段不涨槽宽——
+见 `step.rs` 哨兵注释），`angle0/angle_step`、`speed0/speed_step` 在置位时转义成 min/max，
+开火循环里逐颗抽。**触发点 = 第一张真需要随机散布的符卡**；届时先补 spec 钉死抽取序，
+再动代码，并且要 bump `ENGINE_VER`（`flags` 语义变化 ⇒ 存档载荷解释变化）。
+
+### D14. `sh_fire` 与 `create_bullets_batch` 的两处口径差异——**都影响进校验和的值，别"顺手对齐"**（shooter 刀 T3 复审记档，2026-07-31）
+
+网格发弹在本仓有**两份实现**：`world.rs` 的 `create_bullets_batch`（world 层）与
+`ecl/syscall.rs` 的 `sys_sh_fire`（ECL 层）。第二份是必须的——P1 下 world 不知道"任务"
+存在，逐颗挂 `task_script` 只能在 ECL 层做。两份实现在**主干上逐位等价**（有等价测试
+`shooter_fan_matches_batch_with_centering_compensation` 押运），但有两处**已知**不同：
+
+**① 弹池满时不做"剩余批量补计"。** `batch` 在短路时把剩余额度**批量**记进
+`diag.pool_full[POOL_BULLET]`，使计数与"逐颗试"严格等价；`sh_fire` **只短路、不补计**，
+故弹池满时它记的是 **1** 而不是"剩余颗数"。这不是偷懒：`batch` 敢批量补计，是因为它在
+循环**之前**就把 xform 内容验过一遍（`WorldBody::xform_args_valid`），进循环后唯一的失败
+因就是池满；`sh_fire` **够不着那个判据**（`xform_args_valid` 是 `WorldBody` 的私有关联
+函数），它的失败因至少两种——池满（记 `pool_full[对应池]`）与坏 xform 内容
+（`create_bullet_with_xform` 记 `contract_viol`）——照抄批量补计会把**坏 xform 导致的失败
+误计成 `pool_full[POOL_BULLET]`**。
+
+⚠️ **`diag` 的计数值进校验和**（P6，`diag` 无 skip）。所以"为对齐 `batch` 而顺手修好"
+会**静默改掉一个入校验和的值**：回放/存档不兼容、三平台仍一致所以金向量闸门照绿。真要
+对齐，正确做法是把 `xform_args_valid` 提权成 `pub(crate)` 谓词、循环**前**验一次再批量
+补计——那是一处 world API 改动，与 shooter 刀 spec §13"零 world API 改动"冲突，故本刀没做。
+**触发点 = 下一次有正当理由改 world API 时**（或有人真的在意两条路径的 `pool_full` 口径
+一致），届时连同 `ENGINE_VER` 一起处理。
+
+**② 校验先后序相反。** `sys_sh_fire` 是"退化网格 → appearance"，`sys_create_bullets_batch`
+是"appearance → 退化网格"。可观察后果：`n_angle=0`（或 `n_speed=0`）**配一个坏
+appearance** 时，`batch` 会 **Fault**（先撞 appearance），`sh_fire` 只 **no-op + 违约计数**
+（先撞退化网格短路返回）。两条单独看都符合各自的 P4 处置，只是**同一份坏参数在两条路径上
+的结局不同**。实现忠实照抄了计划骨架的顺序，不算违约，但**手册里不能写"与 `batch` 同
+口径"**——现在不是。改哪一边都会动金向量（Fault 与 no-op 的世界演化不同），同样要
+bump `ENGINE_VER`。
 
 ---
 

@@ -40,7 +40,16 @@ extern crate self as stg_core;
 ///   `EnemyPool` 的 SoA 字段序/宽度变了 ⇒ SaveBytes 载荷编码随之变化（存档 wire format
 ///   变更）。T1 落地时未 bump（本刀内的中间状态），身份三元组直到本步才动，故理由记在
 ///   这里——只写 ① 会让人误以为旧档还能读。
-pub const ENGINE_VER: u32 = 4;
+/// **4 → 5**（shooter 刀 Task 1，2026-07-31）——**两条理由**：
+/// ① syscall 号表将新增 62–76（`sh_*` 族 setter + `sh_fire`，本刀 T2/T3）；
+/// ② **`TaskPool` 布局变更**（本刀 T1，**就是本次提交**）：新增并行数组
+///   `shooters: [[ShooterSlot; 4]; 256]`（+45056 B），`SaveBytes` derive 自动把它写进载荷
+///   ⇒ 存档 wire format 变化，旧档不可用新版解析。
+///
+/// **为什么在 T1 就 bump**：布局在本步就变了。上一刀（敌人死亡效果）把 bump 拖到第三步，
+/// 结果中间几个 commit 处于"存档格式变了而身份三元组没变"的状态——这次提前。
+/// ① 是对**本刀余下两步**的预告，落地时不再二次 bump。
+pub const ENGINE_VER: u32 = 5;
 
 pub use stg_derive::define_pool;
 

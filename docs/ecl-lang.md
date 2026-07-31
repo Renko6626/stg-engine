@@ -57,6 +57,10 @@
   这是照 ZUN 的字面语义，不是 bug；只想掉一份就别在 `die()` 前调它。详见下方"敌人的三条
   死亡路径与掉落控制"。
 - **`die()` 立即终止本任务**（降低成两条指令，第二条是终止），它后面的语句一句都不执行。
+- 发射器（`sh_*` 族）两条最容易搞混的：**fan 以基准方向为中心对称展开**（改颗数不用重算
+  `angle0`），而 **ring 下 `angle_step` 转义成逐层偏移**、不再是逐弹增量；以及
+  **`sh_task` 是每颗弹派一个任务**——`sh_count(0, 28, 1)` + `sh_task` 一句话吃 28 个任务槽
+  （池共 256），池满时**弹保留、任务丢**，静默无提示。详见下方"发射器"节。
 
 ## 一分钟样例
 
@@ -365,6 +369,21 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `drop_add(type: int, n: int)` — 自身待掉落计数增量加 n 颗 type(只增不减,要清空用 drop_clear);计数上限 255 饱和
 - `drop_items()` — 立刻撒出自身待掉落计数;**吐完不清空**(故 drop_items();die(); 掉双份);不加分不发死亡事件
 - `die()` — 就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)
+- `sh_reset(id: int)` — 重置发射器槽 id 为默认(1×1 单发、无 xform/挂弹任务/请求)
+- `sh_sprite(id: int, shape: int, color: int)` — 设发射器的弹型与颜色;查外观表(越界/空格 编译期或 Fault)
+- `sh_offset(id: int, x: fx, y: fx)` — 设出弹点**相对 owner** 的偏移;与 sh_offset_abs 写同一对字段,后写的赢(本条清绝对位标志)
+- `sh_offset_abs(id: int, x: fx, y: fx)` — 设出弹点的**绝对**坐标(不跟随 owner);与 sh_offset 写同一对字段,后写的赢
+- `sh_offset_rad(id: int, angle: angle, r: fx)` — 设出弹点的极坐标偏移;与 sh_offset/sh_offset_abs **永远叠加**,不是覆盖
+- `sh_dist(id: int, d: fx)` — 出生后沿**各自角度**把弹推出去的距离(逐颗方向不同,不是整体平移)
+- `sh_angle(id: int, angle0: angle, step: angle)` — 设基准角与逐弹角增量;开了 sh_aim 时 angle0 是相对自机方向的偏移,开了 sh_ring 时 step 转义成逐层偏移
+- `sh_speed(id: int, speed0: fx, step: fx)` — 设基准速度与逐层速度增量(层数 = sh_count 的 n_speed)
+- `sh_count(id: int, n_angle: int, n_speed: int)` — 设发弹阵列规模:角度向 n_angle 颗 × 速度向 n_speed 层;双边钳 [0,255] 不回绕
+- `sh_aim(id: int, on: int)` — 开/关自机狙(on!=0 为开):开则 sh_angle 的 angle0 是相对自机方向的偏移,而非绝对方向
+- `sh_ring(id: int, on: int)` — 开/关整周环(on!=0 为开):开则 n_angle 颗自动均分整周;关则是以基准方向为中心对称展开的 fan
+- `sh_xform(id: int, xf: xform|none)` — 给发射器挂 xformdef(名或 none);开火时每颗弹都带上
+- `sh_task(id: int, sub: sub|none)` — 给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹
+- `sh_req(id: int, req_id: int)` — 设开火时顺带发的通道 B 请求 id(音效等);0 = 不发
+- `sh_fire(id: int)` — 用发射器槽 id 的参数开火;无返回值;池满走 P4-a 计数
 <!-- gen:builtins:end -->
 
 > **弹 setter 族的 handle 参数是陷阱位**（`set_speed`/`set_angle`/`turn`/`set_vel`/
@@ -793,6 +812,211 @@ sub main() {
 `batch` 会在编译期/运行期被拒收（两参全设查 `valid`）；换成部分设则不会报错，只会让弹
 在那几帧变透明。两种后果都不是作者通常想要的——轮转全色的写法只对满色弹型安全，稀疏
 弹型要么显式列出可用色，要么整体避开轮转写法。
+
+## 发射器（`sh_*` 族）——配一遍，开多次火
+
+`fire`/`batch` 是"一句话说完全部参数"，参数一多就写成一行几十个逗号；`sh_*` 族是另一条路：
+**先把一组发射参数存进槽里，再按需要反复开火**（参照 ZUN ECL 的 `et*` 族）。改一个字段
+再开一次火，就是下一波。
+
+**槽是每任务私有的四个，编号 `0..=3`**（写 `4` 或负数 = 整条调用 no-op + 违约计数，不
+Fault，也就是**静默不生效**）。四个槽互不干扰，够一只 boss 同时挂"主环 / 点射 / 收尾"再
+留一格。任务槽被复用时四个 shooter 一律抹回默认，**不会继承上一个任务的残留**；但同一个
+任务里跨帧是留着的——这正是"配一遍、开多次火"能成立的原因。子任务不继承父任务的 shooter，
+各自从默认开始。
+
+默认值是 **1 角 × 1 层的单发**（不是"什么都不发"），其余字段全零 / 无 xform / 无挂弹任务 /
+不发请求。`sh_reset(id)` 把槽抹回这个默认——**换一段弹幕前先 reset**，否则会继承上一段
+设过的 `sh_aim`/`sh_ring`/`sh_dist` 这些位，表现为"莫名其妙多了个偏移"。
+
+```ecl
+const RICE: int = 64;      // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const COLOR_RED: int = 0;
+
+xformdef SLOW_DOWN { @30 set_speed(0.6fx); }
+
+async sub windchime() {
+    var base: angle = 0deg;
+    sh_reset(0);                     // 先把 0 号槽抹回默认，别继承上一段的残留
+    sh_sprite(0, RICE, COLOR_RED);
+    sh_ring(0, 1);                   // 整周环
+    sh_count(0, 28, 3);              // 28 颗 × 3 层
+    sh_speed(0, 1.2fx, 0.35fx);      // 层速 1.20 / 1.55 / 1.90
+    sh_xform(0, SLOW_DOWN);
+    sh_req(0, REQ_SCRIPT_BASE);      // 开火时顺带发一条通道 B 请求（音效）
+    loop {
+        sh_angle(0, base, 3deg);     // 只改这一句，就是下一波
+        sh_fire(0);
+        base = base + 7deg;
+        wait(50);
+    }
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 96.0fx, 900, 1, 5000, 1, windchime);
+    wait(600);
+}
+```
+
+发出来的是一张 **`n_angle` × `n_speed` 的网格**（`sh_count` 的两个数）：角度方向 `n_angle`
+颗、速度方向 `n_speed` 层，逐层速度 `speed0 + j × speed_step`（`sh_speed`）。发弹顺序是
+**角度外层、速度内层**，与 `batch` 同序。
+
+### fan 与 ring 是两种排布，`angle_step` 的含义跟着变（最容易搞混的一处）
+
+`sh_ring(id, 0)`（默认）是 **fan**：`n_angle` 颗按 `angle_step` 逐弹排开，**以基准方向为
+中心对称展开**。第 i 颗的角度是 `base + i×step − (n−1)×step/2`。
+
+```
+        n=5, step=8deg              n=4, step=8deg
+             ↑ base                      ↑ base            ← base 落在中间两颗之间
+      ＼  ＼  |  ／  ／            ＼  ＼ | ／  ／
+       ＼  ＼ | ／  ／              ＼  ＼|／  ／
+        -16 -8 0 +8 +16              -12 -4  +4 +12
+      （奇数路：正中一颗正对 base）  （偶数路：base 在正中的缝里）
+```
+
+**推论：改颗数不用重算 `angle0`。** `angle0` 恒是"扇形的中轴"，`sh_count` 从 3 路改到 7 路，
+扇形只是变宽，中轴不动——所以下面这种写法是对的，不需要每次自己算 `−(n−1)·step/2`：
+
+```ecl
+const NEEDLE: int = 16;   // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const COLOR_WHITE: int = 4;
+
+async sub aimed_fan() {
+    sh_reset(1);
+    sh_sprite(1, NEEDLE, COLOR_WHITE);
+    sh_aim(1, 1);                  // 开自机狙：angle0 从此是"相对自机方向的偏移"
+    sh_angle(1, 0deg, 8deg);       // 0deg = 正打；8deg = 相邻两路的夹角
+    sh_speed(1, 2.0fx, 0fx);
+    loop {
+        for ways in 3..8 {
+            sh_count(1, ways, 1);  // 3→7 路轮着来，angle0 一次都不用重算
+            sh_fire(1);
+            wait(20);
+        }
+    }
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 96.0fx, 400, 1, 2000, 1, aimed_fan);
+    wait(600);
+}
+```
+
+`sh_ring(id, 1)` 是 **ring**：`n_angle` 颗**自动均分整周**，`angle_step` **不再是逐弹增量**，
+转义成**逐层**偏移（第 j 层整层多转 `j × angle_step`）。第 i 颗第 j 层的角度是
+`base + (i × 65536)/n + j × step`。
+
+```
+      n=6 的 ring（step 与颗间距无关）        两层、step = 半个间隔
+            ·                                    ·  ∘  ·  ∘  ·
+        ·       ·                              ∘             ∘
+            ✳            间距恒 = 360°/n          ✳              · = 第 0 层
+        ·       ·                              ∘             ∘   ∘ = 第 1 层
+            ·                                    ·  ∘  ·  ∘  ·
+```
+
+均分是**逐颗算 `(i × 65536)/n`**（不是"预乘一个整数步长"），余数被均摊掉，所以环**精确
+闭合**——最后一颗与第一颗的间隔和别处一样（差 ≤1 BAM 单位）。`n` 不整除 65536 时也不会
+攒出一条肉眼可见的缝。
+
+**惯用法：两层错开半个间隔**——ring 下 `angle_step` 就是干这个的，写 `32768 / n`
+（半个间隔 = 半个 `65536/n`）：
+
+```ecl
+const RICE: int = 64;     // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const COLOR_BLUE: int = 8;
+
+async sub two_layer_ring() {
+    var n: int = 24;
+    sh_reset(2);
+    sh_sprite(2, RICE, COLOR_BLUE);
+    sh_ring(2, 1);
+    sh_count(2, n, 2);                       // n 颗均分整周 × 2 层
+    sh_speed(2, 1.0fx, 0.6fx);
+    sh_angle(2, 0deg, (32768 / n) as angle); // 第 2 层错开半个间隔
+    loop {
+        sh_fire(2);
+        wait(40);
+    }
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 96.0fx, 400, 1, 2000, 1, two_layer_ring);
+    wait(600);
+}
+```
+
+（`(32768 / n) as angle` 里的 `as angle` 是**位穿透** cast，不是"转成度"——见上文"类型"节。
+这里要的正是位穿透：`32768/n` 算出来的就是 BAM 原值。）
+
+### `sh_aim` 下 `angle0` 是**偏移**而不是方向
+
+`sh_aim(id, 1)` 之后，`sh_angle` 的 `angle0` 不再是绝对方向，而是**叠在"正对自机"那个方向
+上的偏移**：
+
+- `sh_angle(id, 0deg, ...)` = **正打**（打在自机身上）。
+- `sh_angle(id, 15deg, ...)` = 从正对自机的方向再拧 15°（BAM 增大的一侧 = 屏幕上顺时针，
+  见 [`render-contract.md`](render-contract.md) §2 的朝向约定）。
+
+自机方向是**开火那一刻**才解析的（不是设 `sh_angle` 那一刻），所以"配一遍、循环里反复
+`sh_fire`"每一发都跟着自机走，不会锁死在配置时的角度上。基点是**出弹点**（含各种偏移之后
+的那个点），不是 owner 的位置——`sh_offset_abs` 把出弹点挪到别处时，瞄的是从**那个点**看
+自机的方向。
+
+### 四条坑
+
+**① 直角偏移与极坐标偏移是相加，不是覆盖；但 `sh_offset` 会清掉 `sh_offset_abs` 的位。**
+出弹点 = `基点 + (off_x, off_y) + 极坐标偏移`。`sh_offset` / `sh_offset_abs` 写的是**同一对**
+`off_x/off_y`（后写的赢），区别只在基点：前者相对 owner（并**清掉**绝对位），后者绝对
+（基点固定为世界原点）。`sh_offset_rad` 写的是**另一对**字段、**永远叠加**上去，且**不碰**
+那个绝对位。所以 `sh_offset_abs(0, 300fx, 0fx); sh_offset(0, 10fx, 0fx);` 的净效果是
+"相对 owner 偏 10"——绝对模式被第二句关掉了，这是有意设计（两条互为反向），不是 bug。
+
+**② `dist` 是逐颗沿各自角度推，不是整环平移。** `sh_dist(id, d)` 让每颗弹出生时沿**它自己
+那颗的角度**推 `d`——一个 ring 配上 `dist` 是"半径 d 的圆环出生"，不是"整个环朝某个方向
+挪了 d"。想要后者请用 `sh_offset`。
+
+**③ 挂弹任务很吃任务槽——这是 shooter 新引入的压力面。** `sh_task(id, sub)` 是"**每颗**弹
+派一个任务"，所以 `sh_count(0, 28, 1)` + `sh_task` = **一句 `sh_fire` 吃掉 28 个任务槽**
+（池共 256 个）。池满走 P4-a 降级：**弹保留、任务丢**，不报错、不 Fault，表现为"一环里有
+几颗静默地没有该有的行为"——很难 debug，因为画面上弹都在。
+
+> 今天的 `batch` 没有 `task` 参数，想给一环弹逐颗挂任务只能写 `for` 循环逐颗 `fire`，写的
+> 时候自然会掂量颗数；`sh_task` 让它变成一句话。**给多颗弹挂任务前先算一下 `n_angle ×
+> n_speed × 同时在场的波数` 会不会顶到 256。**弹的自主行为能用 `sh_xform`（xformdef，
+> 零任务槽）表达的就别用 `sh_task`。
+
+**④ `sh_xform` 同样吃池——吃的是 xform 段池，账和 `batch` 一模一样。** 上一条说"能用
+`sh_xform` 表达的就别用 `sh_task`"，但 `sh_xform` 不是免费的：配了它以后**每颗弹都要一份
+自己的段拷贝**，于是 `sh_xform` + `sh_count(0, 28, 5)` = **一句 `sh_fire` 吃 140 个段**
+（段池共 **2048**）。这与 [`xform-ops.md`](xform-ops.md) 给 `batch` 的段消耗警告是逐字
+同一件事——只不过 `batch` 是"一句话传全部参数"，颗数就写在眼前那一行；shooter 把
+`sh_count` 和 `sh_fire` 拆到了两处，循环里那句 `sh_fire(0)` 看上去人畜无害。
+
+> 段满的表现和任务满**不一样**：任务满是"弹在、行为没了"，段满是**这颗弹压根没建出来**
+> ——从满的那一颗起本次开火的剩余部分整个短路（同弹池满），计在 `pool_full[XFORM]`。
+> 多波同时在场时按 `n_angle × n_speed × 同时在场的波数` 估段，和估任务槽是同一笔账，
+> 只是分母换成 2048。
+
+### 什么会 Fault、什么只是静默降级
+
+写 `.ecl` 时值得记住的分界（完整口径见 [`ecl-ops.md`](ecl-ops.md) 62-76 号表）：
+
+- **静默降级（no-op + 违约计数，任务继续跑）**：槽号 `id` 越界；`n_angle` 或 `n_speed` 为
+  0，或两者之积超过弹池容量（整条 `sh_fire` 一颗不发）。**这几种最难查**——脚本照跑、
+  画面上什么都没有。顺带一提 `sh_count` 的两个数各自**先钳进 `[0,255]`**（不回绕），所以
+  写 `sh_count(0, 300, 1)` 得到的是 255 路而不是报错。
+- **Fault（任务当场被杀，发 `EVT_TASK_FAULT`）**：`sh_fire` 时发现 appearance 越界或落在
+  图集空格；`sh_xform` 的区间越界；`sh_task` 的 sub 号不在册 / 不是零参 `async sub`。
+  这些都在**开火那一刻**才查——setter 只写字段、不校验，所以错误的行列会指到 `sh_fire`
+  那一行，不是设错的那一行。
+- **弹池满**：从满的那一颗起**停止本次开火的剩余部分**（同 `batch` 的短路），已发的留着。
+- **xform 段池满**（只在配了 `sh_xform` 时可能）：**和弹池满同样短路**，已发的留着，不
+  Fault。这是**另一个池、另一个计数器**（`pool_full[XFORM]`），别把它和弹池满混作一谈——
+  段池只有 **2048** 个，而配了 `sh_xform` 的一句 `sh_fire` 一次就吃掉 `n_angle × n_speed`
+  个（账见上面坑④）。
 
 ## debug 循环（改代码 → check → 再改）
 

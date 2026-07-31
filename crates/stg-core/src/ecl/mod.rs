@@ -14,6 +14,8 @@
 pub mod binding;
 pub mod image;
 pub mod ops;
+/// 预存发射参数集（shooter 刀 2026-07-31）——每任务 4 个发射器槽，存储挂 `TaskPool`。
+pub mod shooter;
 /// syscall 号表 v1（`SYS_*` 常量，`pub`）——`stg-ecl-compiler` 的 builder DSL 靠它拼
 /// `OP_SYS` 指令（依赖方向 compiler→core 单向，只取常量，不碰 `dispatch`）。`dispatch` 本身
 /// 仍 `pub(crate)`：只有 `vm::exec` 能调用，编译器够不到派发逻辑，只够到号表。

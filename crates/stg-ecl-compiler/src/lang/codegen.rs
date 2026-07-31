@@ -713,26 +713,28 @@ impl<'p> Gen<'p> {
         let discard_first_handle = is_self_bullet_setter(bi.name);
         // 颜色轴糖：表层 (shape, color) 两参 → 字节码单个 appearance 值。折叠掉两位，
         // 故循环改成索引推进式（`zip(...).enumerate()` 一位一步走不了这个合并）。
-        let folds_shape_color = builtins::folds_shape_color(bi.name);
+        // 折叠**起点不总是 0**：`fire`/`batch` 折前两参，`sh_sprite(id, shape, color)` 折的
+        // 是第 2、3 参。起点由 `builtins::fold_start` 单一权威给出（曾硬编码 `i == 0`）。
+        let fold_start = builtins::fold_start(bi.name);
         let mut i = 0usize;
         while i < args.len() {
-            if folds_shape_color && i == 0 {
-                match (const_val(&args[0]), const_val(&args[1])) {
+            if fold_start == Some(i) {
+                match (const_val(&args[i]), const_val(&args[i + 1])) {
                     // 常量对：折成单个字面量——与手写单参字节码逐字节相同（零运行期开销）。
                     // `wrapping_add`：未绑定表时判据被跳过（`fire(i32::MAX, 1, …)` 可编），
                     // 编译器不该因整数溢出在 debug 构建里 abort——诊断拒绝可以，崩不行。
                     // 绑定表时判据已把两参钳在表内，绕不回来。
                     (Some(s), Some(c)) => b.push_i(s.wrapping_add(c)),
                     _ => {
-                        let (CallArg::Val(se), CallArg::Val(ce)) = (&args[0], &args[1]) else {
-                            unreachable!("typeck 已保证 fire/batch 前两参是 Val")
+                        let (CallArg::Val(se), CallArg::Val(ce)) = (&args[i], &args[i + 1]) else {
+                            unreachable!("typeck 已保证两参糖的那两位是 Val")
                         };
                         self.gen_expr(b, slots, se);
                         self.gen_expr(b, slots, ce);
                         b.add();
                     }
                 }
-                i = 2;
+                i += 2;
                 continue;
             }
             let (a, pk) = (&args[i], &bi.params[i]);

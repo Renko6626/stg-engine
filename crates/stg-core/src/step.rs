@@ -1092,11 +1092,25 @@ mod tests {
 
     /// M1 T1：`World.tasks` 快照往返 + 校验和敏感（M0-15 同款判别）——写一个从未 `spawn`
     /// 过的槽字段，checksum 必须变（P6 哈希全槽不看存活位）；`copy_into` 漏拷 `tasks` 即红。
+    ///
+    /// **shooter 并行数组是独立的一条腿**（shooter 刀复审 ①，2026-07-31）：
+    /// `TaskPool::copy_into` 是**手写字段清单**（不是 derive），三行里少写
+    /// `dst.shooters.copy_from_slice(..)` 那一行是个**等价变异**——除非测试让两边的
+    /// shooter 真的不同。金向量与 `storm` 闸都盯不住它（金向量脚本从不调 `sh_*`，
+    /// 两边 shooter 恒等于默认值），漏了这腿就是"回滚静默把 shooter 恢复成默认值、
+    /// 三平台一致、闸门全绿"。M3 环形快照正要靠这个 `copy_into`。
     #[test]
     fn snapshot_covers_tasks_pool() {
         let mut w = World::new(3);
         let ck0 = w.checksum();
         w.tasks.slots[5].pc = 42; // 槽 5 从未 spawn 过——专挑"只哈希占用槽"的变异体
+        // 同一个槽的 shooter 也弄脏（`World::new` 走 alloc_zeroed ⇒ 原值全零，
+        // 不是 `ShooterSlot::default()`，故先存原值再改）。
+        let clean_sh = w.tasks.shooters[5][2];
+        w.tasks.shooters[5][2].n_angle = 17;
+        w.tasks.shooters[5][2].speed0 = Fx::from_int(3);
+        w.tasks.shooters[5][2].task_script = 9;
+        let dirty_sh = w.tasks.shooters[5][2];
         let ck1 = w.checksum();
         assert_ne!(ck1, ck0, "tasks 池必须入校验和（哈希全槽不看 alive）");
 
@@ -1104,11 +1118,16 @@ mod tests {
         w.copy_into(&mut snap);
         assert_eq!(snap.checksum(), ck1, "快照必须带 tasks 池全部字节");
         w.tasks.slots[5].pc = 0;
+        w.tasks.shooters[5][2] = clean_sh;
         snap.copy_into(&mut w); // 恢复
         assert_eq!(
             w.checksum(),
             ck1,
             "restore 必须还原 tasks 池（copy_into 漏拷即红）"
+        );
+        assert_eq!(
+            w.tasks.shooters[5][2], dirty_sh,
+            "restore 必须还原 shooter 并行数组（copy_into 少 shooters 那行即红）"
         );
     }
 
@@ -2142,11 +2161,28 @@ mod tests {
         // ——池内字段清单由 `define_pool!` 生成，非手写，无需同步；② checksum/④ SaveBytes
         // 同样走 `define_pool!` 的 derive（`[T; N]` 有泛型 impl），自动入；③ D10 容量预算
         // 不变（cap 仍 256，只是每槽宽了 3B）。
+        // 2026-07-31（shooter 刀 Task 1）：`TaskPool` 新增并行数组
+        // `shooters: [[ShooterSlot; 4]; 256]`。`ShooterSlot` = 44 B（`repr(C)`）：
+        // 6×Fx(24) + 7×u16(14) + 4×u8(4) = **42 原始字节**，结构对齐 4（Fx = i32）
+        // ⇒ 补 **2 字节尾部 padding** 才到 44。**这 2 字节是隐形余量**：往
+        // `ShooterSlot` 再塞两个 `u8`（或一个 `u16`）字段，结构**不长**——本哨兵与
+        // `shooter::tests::shooter_is_44_bytes` **两条都照绿**，而 checksum 与
+        // SaveBytes 载荷却已经变了（新字段自动入两者）。故给 `ShooterSlot` 加字段时
+        // 尺寸测试**不是网**，`ENGINE_VER` 该不该 bump 要自己判。
+        // 44×4×256 = **+45056**，无对齐吸收
+        // （数组对齐 = Fx 的 4，`TaskPool` 本就 4 对齐）。**加在 `TaskPool` 而非
+        // `WorldBody`**（P1：world 不知道"任务"存在）⇒ 左值 970144 不动、右值
+        // 1084888→1129944，增量 1:1。① `copy_into` 手写清单**已同步**加
+        // `dst.shooters.copy_from_slice(...)`（`TaskPool::copy_into` 是手写的，正是本
+        // 哨兵盯的那种缝）；② checksum 走 `TaskPool` 的 derive + `[T; N]` 泛型 impl，
+        // 自动全量入（无 skip）；③ D10 容量预算：新增 45056 B/world，非池 cap 变更；
+        // ④ SaveBytes 同 ② 走 derive + 泛型 impl，自动入档 ⇒ 存档 wire format 变化，
+        // 故 `ENGINE_VER` 4→5（见 lib.rs）。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (970144, 1084888);
+        const EXPECTED: (usize, usize) = (970144, 1129944);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (970144, 1084888);
+        const EXPECTED: (usize, usize) = (970144, 1129944);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2175,10 +2211,11 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            4,
-            "bump 必须是有意识决定(评审 + 改本测试)——3→4：敌人死亡效果刀 T3,两条理由 \
-             ①syscall 号表新增 58-61(drop_clear/drop_add/drop_items/die) \
-             ②敌人池字段布局变更(drop_table:u16 → drop_count:[u8;5],T1)导致存档载荷编码变化"
+            5,
+            "bump 必须是有意识决定(评审 + 改本测试)——4→5：shooter 刀 T1,两条理由 \
+             ①syscall 号表将新增 62-76(sh_* 族 setter + sh_fire,T2/T3) \
+             ②TaskPool 布局变更(新增并行数组 shooters:[[ShooterSlot;4];256],**本步就变了**)\
+             导致 SaveBytes 载荷编码变化"
         );
     }
 
