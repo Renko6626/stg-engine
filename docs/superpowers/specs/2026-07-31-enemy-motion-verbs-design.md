@@ -15,7 +15,10 @@
 （`cleanup.rs:125` 的出屏测试是 Rust 侧直接写 `vy` 造的场景，所以世界层测试一直绿着，
 绿的是脚本够不着的代码。同 `nearest_enemy` 那次——建完了没接线。）
 
-**② 敌人速度对脚本全黑。** 位置有 `enemy_x`/`enemy_y`，血有 `enemy_hp`，速度一个读口都没有。
+**② 自身速度对脚本全黑。** `$` 引擎变量白名单（`parse.rs:49`，v1 固定 8 个）是
+`$frame`/`$player_x`/`$player_y`/`$self_x`/`$self_y`/`$self_hp`/`$self_hp_max`/`$self_age`
+——**位置有、血有、速度一个都没有**。句柄读口那边同样（`enemy_x`/`enemy_y`/`enemy_hp`/
+`enemy_alive` 四条，无速度）。
 
 **③ 没有速度的过程版本。** 弹有 `STEP_SPEED`/`STEP_ANGLE`（D4 变换 op，带 8 条缓动曲线），
 敌人一条都没有。
@@ -107,27 +110,50 @@ TH17 eclmap 实表（`404 moveVel` 等，签名取自 Priw8 的 `ins.js`）：
 let delta = (to as u16).wrapping_sub(start.raw()) as i16;  // 带方向的最短弧
 ```
 
-### 4.2 读口两条
+### 4.2 四个 `$self_*` 引擎变量（**不是**句柄读口）
 
-`enemy_speed(e)` / `enemy_angle(e)` —— 打包敌号，存活判据**逐字照抄** `enemy_x`/`enemy_y`
-（同一个 `resolve_enemy_handle`），降级返 `0`。补上 §1② 那个空白。
+```
+$self_vx   $self_vy   $self_speed   $self_angle
+```
 
-**降级值 `0` 是有歧义的**（速率 0 = 静止的活敌，角度 0 = 朝右的活敌，都是合法取值），
-同 `enemy_x`/`enemy_y` 返 `Fx::ZERO` 的既有歧义。**探活仍走 `enemy_alive(e)`**，不要拿
-读口取值当探针——这条已是手册里的既定惯例（探活读口刀，2026-07-31），本刀只是再加两个
-适用它的读口，不新增歧义种类。
+引擎变量白名单 **8 → 12**，与 `$self_x`/`$self_y` 同族同形状：不收参数，owner 从 task 上取。
+
+**为什么是引擎变量而不是 `enemy_speed(e)` 那样的句柄读口**（控制器初稿的错，人类提问戳破）：
+这门语言里**没有 `self` 这个表达式**——`move_to` 之所以是 self-only 且不收句柄，正是因为
+owner 从 task 取，脚本手里从来没有"自己的敌号"这个值。初稿写的
+`move_angle(60, enemy_angle(self) + 15deg, 3)` **编译不过**，而 §4.3「不做 Rel」的整个论证
+都架在"能读到 self 当前值"上。形状必须是 `$self_*`。
+
+**为什么四个都要，而不只是 `$self_speed`/`$self_angle`**（人类拍板）：**笛卡尔那边没有单轴
+动词**——极坐标有 `move_angle`/`move_speed` 各保一轴，笛卡尔的 `move_vel_xy` 是两轴齐写。
+所以「只插 `vy`、保住 `vx`」唯一的写法就是把当前值读出来填回去：
+
+```
+move_vel_xy(30, $self_vx, 4.0fx, 2)     // vx 不动,30 帧内把 vy 缓到 4.0
+```
+
+读不到 `$self_vx` 这条路就断了。
+
+**派发照 `$self_x`/`$self_y` 的既有规则**：ENEMY → 敌池、BULLET → 弹池、其余 owner → `0`。
+弹池本来就有 `vx/vy/speed/angle` 四个字段（§3.1 的双表示正是从弹抄来的），所以这四个变量
+**在任务弹的 task 里天然有效**，零额外工作。
+
+**降级值 `0` 有歧义**（速率 0 = 静止，角度 0 = 朝右，都是合法取值），同 `$self_x` 返 `0` 的
+既有歧义，不新增歧义种类。
 
 ### 4.3 不做相对版本（人类拍板：「rel 暂时意义不大，先不做」）
 
-ZUN 有一整列 `Rel`（402/406/442/446…），等于动词数翻倍。不做。有了 §4.2 的读口，相对移动
-可以**精确地**composed 出来：
+ZUN 有一整列 `Rel`（402/406/442/446…），等于动词数翻倍。不做。有了 §4.2 的四个引擎变量，
+相对移动可以**精确地**composed 出来：
 
 ```
-move_angle(60, enemy_angle(self) + 15deg, 3)
+move_angle(60, $self_angle + 15deg, 3)       // 60 帧内右转 15°
+move_speed(30, $self_speed * 2.0fx, 2)       // 30 帧内加速到两倍
+move_vel_xy(30, $self_vx, 4.0fx, 2)          // vx 不动,只把 vy 缓到 4.0
 ```
 
-读发生在**调用时刻**，正好是插值起点，语义与 `moveAngleRelTime` 一致。同上一刀处理敌人位置
-的路子（给读口 `enemy_x`/`enemy_y`，没做相对版 `move_to`）。
+读发生在**调用时刻**，正好是插值起点，语义与 `moveAngleRelTime` 精确等价。同上一刀处理敌人
+位置的路子（给读口，没做相对版 `move_to`）。
 
 ### 4.4 明确的非目标
 
@@ -136,6 +162,12 @@ move_angle(60, enemy_angle(self) + 15deg, 3)
 - **敌人的连续效果**（`ang_vel`/`accel`/`ax`/`ay`，即弹的 `POLAR_FX`/`CART_FX`）——本刀不做。
   圆形轨迹立项时一并评估；`xform.rs` 的 `7x 笛卡尔族` 至今仍是「预留，若将来立项」。
 - **`moveEnm`（432，对齐到另一只敌）**、`moveRand`、`moveLimit`。
+- **句柄版的 `enemy_speed(e)` / `enemy_angle(e)`**（读**别人**的速度）——本刀不做。位置那边
+  `$self_x` 与 `enemy_x(e)` 两套都有，速度这边先只做 `$self_*`：读别人的位置有明确用途
+  （瞄准/聚集/跟随），读别人的**速度**暂无非它不可的场景，而 `nearest_enemy` 返回的敌大多
+  是拿来打的不是拿来跟的。真需要时补两个 syscall 号即可，不影响本刀任何设计。
+- **笛卡尔单轴动词 `move_vx` / `move_vy`**——不做，`$self_vx`/`$self_vy` composed 已等价
+  且更通用（见 §4.2 的例子）。
 
 ## 5. 数据模型
 
@@ -235,7 +267,12 @@ vel_easing: u8, vel_active: u8, vel_space: u8,
 - **`dur == 0` 退化**：五条动词各自的瞬时路径。
 - **P4 降级**：`easing >= 8` → `contract_viol` + no-op（同 `world.rs:486`）；owner 非 ENEMY
   → Fault（同 `move_to` 现状）。
-- **读口**：判据与 `enemy_x`/`enemy_y` 一致的三种无效（负号/越界/死槽）。
+- **四个引擎变量**：(a) 敌 owner 下四个取值与池字段一致；(b) **弹 owner 下同样有效**
+  （派发到弹池，一条足矣——`$self_x` 的既有派发已有测试，这里只证新四个走同一条）；
+  (c) 非敌非弹 owner → `0`。
+- **引擎变量与动词的闭环**：`move_vel_xy(0, $self_vx, 新vy, 0)` 后断言 `vx` **一字不变**——
+  这是 §4.2 那个"保住一轴"用例的正面证据，也是白名单只加两个（漏 `$self_vx`/`$self_vy`）
+  时唯一会红的测试。
 - **`.ecl` 源码级 e2e**：杂兵被拉到点位、同时缓动到朝下，落地继续飘走（§3.2 那个编排）。
 - **死代码通电的正面证据**：一条走 `move_vel` 后纯靠 `x += vx` 位移的断言——
   §1① 那条分支此前永远在加零，世界层单测绿的是够不着的代码。
@@ -262,10 +299,12 @@ vel_easing: u8, vel_active: u8, vel_space: u8,
 
 ## 10. 文档
 
-- `docs/ecl-lang.md`：运动一节补四条动词 + 两个读口；写明 `move_vel` 与 `move_vel_xy` 的
+- `docs/ecl-lang.md`：运动一节补四条动词 + 四个 `$self_*` 引擎变量（白名单表 8 → 12，
+  `parse.rs:732` 的错误提示串也要同步——它把合法名字逐个列了出来）；写明 `move_vel` 与 `move_vel_xy` 的
   **插值空间不同**（这是最容易踩的一格）；相对移动的 composed 写法给例（§4.3）。
   围栏示例真编译，`every_ecl_fenced_example_in_doc_compiles` 押运。
-- `docs/ecl-ops.md`：六个新 syscall 号。
+- `docs/ecl-ops.md`：**八个**新 syscall 号（4 条动词 + 4 个 `$self_*` 引擎变量——引擎变量在
+  号表层同样是 syscall，见 `builtins::engine_var_info` 的映射）。
 - `stg-world-design.md` D5/D10：敌池字段表 + 容量预算。
 - `docs/fixed-point-corners.md`：笛卡尔插值每帧回填的 `isqrt`/`atan2` 精度账（若实现期发现
   有值得记的坑）。
