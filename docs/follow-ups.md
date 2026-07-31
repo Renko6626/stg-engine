@@ -602,6 +602,28 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 仍可外部构造空池——但 `tasks` 字段已封,无注入路径,终审 2026-07-23 判无动作必要,记此防将来
 误判为漏网。）
 
+### D15. 脚本敌号只带 generation 的**低 15 位** —— ABA 检测周期 32768（敌句柄打包刀，2026-07-31）
+
+`syscall.rs::pack_enemy_handle` 把敌号编成 `((gen & 0x7FFF) << 16) | index`，**只押 15 位**。
+理由是打包值必须恒**非负**：`-1` 是四个读口（12/79/80/81/82 那族）唯一的"无效/没有"哨兵，
+押满 16 位会让 `gen >= 0x8000` 的敌号变成负数、与哨兵撞车。
+
+**代价**：同一个池槽复用 **32768** 次之后，`generation & 0x7FFF` 回绕，旧敌号会重新"认领"
+占了那个槽的新敌——即 D7 那条池级 ABA 在脚本敌号这一层被**砍掉一半周期**。
+（D7 是 u16 满周期 65536，且说的是引擎内 `EnemyHandle`；本条只针对**跨 syscall 边界**的
+那个 `i32` 编码。）
+
+**现在够不着**：一局 STG 里同一个敌槽复用 32768 次意味着单槽产出 3 万只敌，远超实际；而且
+脚本持有敌号通常只跨几十帧。**触发点** = M5 headless 长跑（RL 训练百万帧级）真跑起来之后，
+与 D7 一并重估。届时的修法：要么把 index 收窄到 8 位（敌池 cap 256，只需 8 位）给 gen 腾出
+23 位，要么改用两个 `i32`（脚本侧要配对存，很难看）。
+
+**弹 / 道具句柄仍是裸 index**（`create_bullet`(20) 押 `BulletHandle.index`、`drop_item`(23) 押
+`ItemHandle.index`）。今天**物理上够不着**这个 ABA 面，不是"危害小"——引擎侧根本没有解析口：
+弹的九个 setter 全走 `self_bullet_handle(task)` 从 owner 三元组取句柄，脚本传的首参 pop 完
+就丢；道具句柄没有任何内建吃它。**触发点 = 谁要给它们加读口**（`bullet_x`/`item_type` 之类）：
+**加之前先照 `pack_enemy_handle` 打包**，别照 `create_bullet` 现在的返值口径重犯一次。
+
 ### D10. 部分设运行期只护 stride、不查 `valid`——编译期空格闸只覆盖 `.ecl` 源码路径（颜色轴刀 T6 记档，2026-07-26）
 
 `OP_SET_SPRITE`/`OP_SET_SHAPE`/`OP_SET_COLOR`（`world/transform.rs::fire_op`）三个解释臂

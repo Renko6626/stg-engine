@@ -64,7 +64,7 @@
 - **`enemy_x`/`enemy_y` 的无效句柄返 `0`，那不是哨兵**——坐标没有哨兵位可用（任何 `fx`
   都可能是真坐标），所以"敌恰在原点"与"号无效"读起来一样。读坐标前先用
   **`enemy_alive(e) == 1`** 探活（专用探活口，别再拿血量当探针）。详见下方"数学与查询"。
-- **`enemy_alive` 判的是「槽有效」，不是「还能打」**——正在死（`ENEMY_DYING`）的敌它照样
+- **`enemy_alive` 判的是「这个号还认得那只敌」，不是「还能打」**——正在死（`ENEMY_DYING`）的敌它照样
   返 **1**，因为那只敌的槽要活到本帧末才回收、坐标仍读得到。要"还能不能打"的语义，配
   `nearest_enemy` 现查一次（它**本身就排除了 dying**）。
 - 发射器（`sh_*` 族）两条最容易搞混的：**fan 以基准方向为中心对称展开**（改颗数不用重算
@@ -356,8 +356,8 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 <!-- gen:builtins:begin -->
 - `fire(shape: int, color: int, x: fx, y: fx, speed: fx, angle: angle, xf: xform|none, task: sub|none) -> int` — 发一颗弹;shape/color 查外观表(越界/空格 编译期或 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1
 - `batch(shape: int, color: int, x: fx, y: fx, n_angle: int, angle0: angle, angle_step: angle, n_speed: int, speed0: fx, speed_step: fx) -> int` — N-way 批量发环;shape/color 同 fire;返实际创建数
-- `spawn_enemy(x: fx, y: fx, hp: int, drop_table: int, score: int, sprite: int, task: sub|none) -> int` — 造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌;敌死任务亡,任务跑完敌也亡——静默退场,不掉道具不发死亡事件);返敌句柄,失败 -1
-- `enemy_hp(handle: int) -> int` — 查敌当前 hp;死/悬垂/越界句柄返 -1(P4-b;句柄是池 index,槽复用不可辨)——stage 编排等 boss 死用
+- `spawn_enemy(x: fx, y: fx, hp: int, drop_table: int, score: int, sprite: int, task: sub|none) -> int` — 造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌;敌死任务亡,任务跑完敌也亡——静默退场,不掉道具不发死亡事件);返敌号(不透明值,别猜数值/别做算术;两个敌号相等 ⇒ 同一只敌),失败 -1
+- `enemy_hp(handle: int) -> int` — 查敌当前 hp;死/悬垂/越界句柄返 -1(P4-b;敌号带 generation,槽被另一只敌复用后旧号照样返 -1)——stage 编排等 boss 死用
 - `drop_item(x: fx, y: fx, item_type: int) -> int` — 掉一颗道具(带随机喷发速度,消耗模拟 RNG);返句柄,失败 -1
 - `move_to(dur: int, x: fx, y: fx, easing: int)` — 敌自身(self owner 非 ENEMY → Fault)按 easing 缓动、dur 帧内平移到 (x,y);四参数皆真实压栈(不同于下方弹 setter 族的占位 handle 首参)
 - `boss_set(slot: int, hp_ratio: fx, spell_id: int, timer_frames: int, phase_left: int, active: int)` — 整槽写 boss_ui 公告板(脚本写/UI 读);enemy 字段取自 self owner(非 ENEMY → NULL,不 Fault);符卡 active 期 enemy/spell_id/timer_frames/hp_ratio 由引擎逐帧自动覆写,phase_left 不受影响仍归脚本
@@ -369,10 +369,10 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `aim_player() -> angle` — 自身(敌/弹属主)指向自机的 BAM 角
 - `atan2(y: fx, x: fx) -> angle` — 任意向量的方向角(整数 CORDIC,16 轮);参数序 (y, x) 同 libm;(0,0) 返 0 不报错;比 aim_player 通用——能瞄任意点
 - `dist(dx: fx, dy: fx) -> fx` — 向量 (dx,dy) 的模长(开根,不是平方);**不是两点距离**——两点距离自己减: dist(bx-ax, by-ay)
-- `nearest_enemy(x: fx, y: fx) -> int` — 离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的是池 index,可直接喂 enemy_alive/enemy_hp/enemy_x/enemy_y(悬垂/复用不可辨,同 enemy_hp);它已排除 dying,故拿到的号过几帧可能已变 dying——该重查而不是继续用
-- `enemy_x(handle: int) -> fx` — 按敌号读 x;死/悬垂/越界句柄返 0(**不是哨兵**——0 是合法坐标,先用 enemy_alive(e) == 1 探活再读)
-- `enemy_y(handle: int) -> fx` — 按敌号读 y;死/悬垂/越界句柄返 0(同 enemy_x,先探活再读);配 enemy_x + atan2 即可朝任意敌开火
-- `enemy_alive(handle: int) -> int` — 敌号是否指向一个有效敌槽,返 1/0(探活首选,比 enemy_hp(e) != -1 稳——血量恰为 -1 的活敌不会被误判);**含正在死的敌**(判的是槽有效不是还能打)
+- `nearest_enemy(x: fx, y: fx) -> int` — 离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的敌号与 spawn_enemy 同编码,可直接喂 enemy_alive/enemy_hp/enemy_x/enemy_y(带 generation,槽复用后旧号可辨);它已排除 dying,故拿到的号过几帧可能已变 dying——该重查而不是继续用
+- `enemy_x(handle: int) -> fx` — 按敌号读 x;死/悬垂/越界/槽已被别的敌复用 → 返 0(**不是哨兵**——0 是合法坐标,先用 enemy_alive(e) == 1 探活再读)
+- `enemy_y(handle: int) -> fx` — 按敌号读 y;死/悬垂/越界/槽已被别的敌复用 → 返 0(同 enemy_x,先探活再读);配 enemy_x + atan2 即可朝任意敌开火
+- `enemy_alive(handle: int) -> int` — 敌号是否仍指向**它当初那只敌**,返 1/0(探活首选,比 enemy_hp(e) != -1 稳——血量恰为 -1 的活敌不会被误判;敌号带 generation,槽被另一只敌复用后旧号返 0);**含正在死的敌**(判的是槽有效不是还能打)
 - `sin(angle: angle) -> fx` — 查表三角,返 fx(VM op 直发,非 syscall)
 - `cos(angle: angle) -> fx` — 查表三角,返 fx(VM op 直发,非 syscall)
 - `set_speed(handle: int, speed: fx)` — 弹 setter:改速率;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定
@@ -437,16 +437,16 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
   `dist(bx - ax, by - ay)`。开的是真根（`dist(3.0fx, 4.0fx)` 正好 `5.0fx`），不是平方距离。
   屏幕尺度上不会溢出（满屏对角线离上限还有两个数量级）；真喂进天文数字的 `fx` 时结果
   **饱和在最大可表示距离**，不会回绕成负数。
-- **`nearest_enemy(x, y) -> int`**——离 `(x, y)` 最近的活敌，返**池 index**；场上无敌返 **-1**。
+- **`nearest_enemy(x, y) -> int`**——离 `(x, y)` 最近的活敌，返**敌号**（与 `spawn_enemy`
+  同编码的不透明句柄，见上面「敌号是**不透明值**」那节）；场上无敌返 **-1**。
   候选是"存活且未在死亡态"的敌，并列时取低索引，无距离上限。
   返回值可以直接喂 `enemy_alive(h)` / `enemy_hp(h)` / `enemy_x(h)` / `enemy_y(h)`——它们是
   配对的（拿号 → 探活 / 轮询血量 / 读坐标）。
-  ⚠️ **返的是池 index，不带 generation**：那只敌死了、槽被新敌复用之后，你手上这个号会
-  静默指向**新的那只**（和 `enemy_hp` 同一个已知口子）。别把它当长期句柄存着，每次要用
-  就现查一次。
+  敌号**带 generation**，所以那只敌死了、槽被新敌复用之后，你手上这个号**不会**变成新
+  那只的号——四个读口一律降级。存着跨帧用是安全的。
 - **`enemy_x(handle) -> fx` / `enemy_y(handle) -> fx`**——按敌号读它的坐标。有了这两条，
-  "查最近的敌 → 朝它开火"才接得通（下面的例子就是那条链路）。句柄口径同 `enemy_hp`：
-  池 index、不比对 generation。
+  "查最近的敌 → 朝它开火"才接得通（下面的例子就是那条链路）。敌号口径同 `enemy_hp`：
+  带 generation，槽被别的敌复用后旧号读到的是降级值。
 
   ⚠️ **降级值是 `0`，不是哨兵**。`enemy_hp` 能用 `-1` 表示"这个号没用"，是因为血量天然
   非负；坐标没有这个便利——`-1` 是个完全合法的 `fx`，任何取值都可能是真坐标，**没有哨兵
@@ -455,7 +455,7 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 
   ⇒ **探活惯例：先 `enemy_alive(e) == 1` 探一下，再读坐标。**（见下条。）
 
-- **`enemy_alive(handle) -> int`**——这个敌号指不指向一个**有效敌槽**，返 `1` / `0`。
+- **`enemy_alive(handle) -> int`**——这个敌号是不是**仍指向它当初那只敌**，返 `1` / `0`。
   探活就用它，它是专用口。
 
   **旧写法 `enemy_hp(e) != -1` 仍然能用**（引擎的降级值一字未改），但它有一格填不上的缝：
@@ -464,15 +464,16 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
   却把它读成"号无效"。`enemy_alive` 与血量取值完全无关，没有这条缝。
   （顺带：`enemy_hp(e) >= 0` 从来就是错的探针，同一个原因——它会把一切被打穿的敌判成无效。）
 
-  ⚠️ **判的是「槽有效」，不是「还能打」**。正在死（`ENEMY_DYING`）的敌 `enemy_alive` 返
+  ⚠️ **判的是「这个号还认得那只敌」，不是「还能打」**。正在死（`ENEMY_DYING`）的敌 `enemy_alive` 返
   **1**：那只敌的槽要活到本帧末（相位 9）才回收，坐标也仍读得到。这是有意的——读族四条
   （`enemy_hp` / `enemy_x` / `enemy_y` / `enemy_alive`）用的是**完全相同**的判据，谁也不会
   和谁打架。
 
   ⇒ 想要"还能打"的语义，别自己拿 `enemy_alive` 凑：**`nearest_enemy` 本身就排除了 dying**
   （候选 = 存活且非 dying）。所以从它拿到的号**过了几帧之后可能已经变 dying**，那时应当
-  **重查一次 `nearest_enemy`**，而不是继续用手上那个号——反正它也不带 generation、本来就
-  不该长期存着。
+  **重查一次 `nearest_enemy`**，而不是继续用手上那个号——不是因为号会失效（它带
+  generation，指的一直是同一只敌），而是因为**这两条口的 dying 口径本就不对称**：
+  `nearest_enemy` 排除 dying，读族四条含 dying。号还认得那只敌，只是那只敌已经不该打了。
 
 ```ecl
 // 关卡编排：等某个区域附近最后一只敌死掉再往下走
@@ -515,7 +516,8 @@ sub main() {
 **敌死任务亡**：owner-liveness gate（相位 2）在敌死后的下一相位清杀整棵 task 树。
 **反过来也成立**——主任务跑完这只敌就退场，见下一小节；`stage` 侧仍应轮询 `enemy_hp` 而不是
 去猜某个 sub 有没有退出。`enemy_hp(handle) -> int` 是 STAGE 层等 boss/敌死的标准写法：
-死亡/悬垂/越界句柄统一返 `-1`（P4-b，槽复用后句柄不可辨，不区分"真死"与"槽已挪作他用"）：
+死亡/悬垂/越界敌号统一返 `-1`（P4-b），**槽被另一只敌复用之后旧敌号照样返 `-1`**
+（敌句柄打包刀 2026-07-31：敌号带 generation，见下面那条 ⚠️）：
 
 ```ecl
 async sub boss_main() {
@@ -541,6 +543,21 @@ sub main() {
 `enemy_hp` 这条主干；真实关卡编排务必带超时兜底，见该文件注释。上面这个精简版的
 `boss_main` 只 `wait(60)` 就返回了，按下一小节的规则**这只 boss 会在 60 帧后自己退场**，
 等待循环随之结束——它演示的是"怎么轮询"，不是"boss 该怎么写"。）
+
+### ⚠️ 敌号是**不透明值**（敌句柄打包刀 2026-07-31）
+
+`spawn_enemy` / `nearest_enemy` 返的、`enemy_hp` / `enemy_x` / `enemy_y` / `enemy_alive`
+吃的那个 `int`，是引擎给你的**不透明句柄**，不是数组下标：
+
+- **别猜它的数值**、别和 `0` 之外的字面量比、**别做算术**（`e + 1` 不是"下一只敌"）。
+  唯一有意义的取值是 **`-1`**（= 无效 / 没有）。
+- **两个敌号相等 ⇒ 同一只敌。** 它带着 generation，所以敌死、槽被回收、另一只敌落进
+  **同一个槽**之后，你手上那个旧敌号**不会**变成新那只敌的号——四个读口一律降级
+  （`enemy_hp` → `-1`，`enemy_x` / `enemy_y` → `0`，`enemy_alive` → `0`）。
+  打包之前它只保证"同一个槽"，`enemy_hp(boss)` 有可能在 boss 死后读到占了它槽的杂兵的血，
+  "等 boss 死"的轮询就此卡住不退——这类 bug 现在不存在了。
+- 它**可以**存进变量、存进 globals 槽、跨帧带着用；只是别指望它跨局有意义。
+
 
 ### ⚠️ 敌主任务跑完 = 这只敌退场（D9，写敌任务前先读这条）
 

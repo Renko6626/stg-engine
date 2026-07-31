@@ -2211,10 +2211,11 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            8,
-            "bump 必须是有意识决定(评审 + 改本测试)——7→8：探活读口刀,syscall 号表新增 \
-             82 enemy_alive(号表冻结纪律的机械 bump;World 布局与存档编码均未动)。\
-             前一次 6→7 是敌坐标读口刀(号表 80 enemy_x / 81 enemy_y,同款单理由 bump)"
+            9,
+            "bump 必须是有意识决定(评审 + 改本测试)——8→9：敌句柄打包刀,**号表一个没长**,\
+             但六条既有 syscall 的取值编码变了(敌号从裸池 index 变成含 generation 的打包值)。\
+             改既有取值语义比加号更硬:旧回放/存档在新引擎上会静默走出另一条世界线,必须拒载。\
+             前一次 7→8 是探活读口刀(号表新增 82 enemy_alive,单理由机械 bump)"
         );
     }
 
