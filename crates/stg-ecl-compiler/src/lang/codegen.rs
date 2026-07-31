@@ -1845,4 +1845,46 @@ mod tests {
         );
         assert_eq!(view.diag().task_faults, 0);
     }
+
+    /// 探活读口刀（syscall 82）：同一条链路换成 **`enemy_alive(n) == 1`** 探活。
+    ///
+    /// **与上一条并存、不是替换**——上一条用旧探针 `enemy_hp(n) != -1` 走同一条链路，
+    /// 两条同时绿正好证明新旧判据在**正常路径上等效**（新口只在"活敌血量恰为 −1"那一格
+    /// 与旧探针分岔，那一格由 `syscall.rs` 侧的判别腿②押着）。
+    ///
+    /// 本条证的是**通电**：typeck 认这个名字、`enemy_alive` 返 `int` 能直接进 `if` 条件、
+    /// codegen 发得出 `OP_SYS 82`、派发臂接得住，并且它对**真的活着的敌**返 1
+    /// （返 0 的话整个 `if` 体不执行 ⇒ 那颗弹压根不存在，`expect` 就地红）。
+    #[test]
+    fn enemy_alive_probe_drives_the_same_snipe_chain_end_to_end() {
+        use stg_core::math::{Fx, cordic};
+        let src = "sub main() {\n\
+                     var e: int = spawn_enemy(60.0fx, -80.0fx, 100, 0, 0, 3, none);\n\
+                     set_global(20, e);\n\
+                     var n: int = nearest_enemy(64.0fx, -84.0fx);\n\
+                     set_global(21, n);\n\
+                     set_global(22, enemy_alive(n));\n\
+                     set_global(23, enemy_alive(9999));\n\
+                     if enemy_alive(n) == 1 {\n\
+                       _ = fire(0, 0, 0.0fx, 0.0fx, 3.0fx, atan2(enemy_y(n), enemy_x(n)), none, none);\n\
+                     }\n\
+                     loop { wait(1); }\n\
+                   }";
+        let w = run(src, 2);
+        let view = w.body.view();
+        let g = view.globals();
+        assert!(g[20] >= 0, "敌应建成（否则后面几条断言全退化成假绿）");
+        assert_eq!(g[21], g[20], "nearest_enemy 返的就是刚建的那只敌");
+        assert_eq!(g[22], 1, "活敌 ⇒ 1");
+        assert_eq!(g[23], 0, "越界句柄 ⇒ 0（恒返 1 的实现在这里红）");
+
+        let expect = cordic::atan2(Fx::from_int(-80), Fx::from_int(60));
+        let p = view.bullets();
+        let i = p
+            .iter_alive()
+            .next()
+            .expect("探活为真 ⇒ if 体执行 ⇒ 必须真的开出一颗弹");
+        assert_eq!(p.angle()[i], expect, "弹真的朝那只敌打（链路整条接通）");
+        assert_eq!(view.diag().task_faults, 0);
+    }
 }

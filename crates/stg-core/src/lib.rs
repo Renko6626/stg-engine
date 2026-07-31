@@ -58,7 +58,11 @@ extern crate self as stg_core;
 /// **6 → 7**（敌坐标读口刀，2026-07-31）：syscall 号表新增 `SYS_ENEMY_X`(80)/
 /// `SYS_ENEMY_Y`(81)。同上条——**只有号表这一条理由**，不动 `World` 布局（尺寸哨兵未变）、
 /// 不动存档编码、不动任何既有 syscall 的语义。
-pub const ENGINE_VER: u32 = 7;
+///
+/// **7 → 8**（探活读口刀，2026-07-31）：syscall 号表新增 `SYS_ENEMY_ALIVE`(82)。同上条
+/// ——**只有号表这一条理由**，不动 `World` 布局（尺寸哨兵未变）、不动存档编码、不动任何
+/// 既有 syscall 的语义（`enemy_hp` 的降级口径一字未改，旧探针照旧能用）。
+pub const ENGINE_VER: u32 = 8;
 
 pub use stg_derive::define_pool;
 
