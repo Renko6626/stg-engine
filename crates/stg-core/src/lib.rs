@@ -62,7 +62,17 @@ extern crate self as stg_core;
 /// **7 → 8**（探活读口刀，2026-07-31）：syscall 号表新增 `SYS_ENEMY_ALIVE`(82)。同上条
 /// ——**只有号表这一条理由**，不动 `World` 布局（尺寸哨兵未变）、不动存档编码、不动任何
 /// 既有 syscall 的语义（`enemy_hp` 的降级口径一字未改，旧探针照旧能用）。
-pub const ENGINE_VER: u32 = 8;
+///
+/// **8 → 9**（敌句柄打包刀，2026-07-31）：**号表一个没长**，但六条既有 syscall 的
+/// **取值编码变了**——`spawn_enemy`(22)/`nearest_enemy`(79) 押的从裸池 index 变成
+/// `((gen & 0x7FFF) << 16) | index`，`enemy_hp`(12)/`enemy_x`(80)/`enemy_y`(81)/
+/// `enemy_alive`(82) 的判据随之多一条 generation 比对。
+///
+/// **这比"号表新增"是更硬的兼容破坏**：加号只是让旧引擎跑不了新脚本，改取值语义会让
+/// 旧回放/存档在新引擎上**静默走出另一条世界线**（同一个整数在两版里指的不是同一只敌）。
+/// 故必须 bump，旧档拒载。`World` 布局与存档编码本身未动（generation 本来就在池里，
+/// 尺寸哨兵未变）。
+pub const ENGINE_VER: u32 = 9;
 
 pub use stg_derive::define_pool;
 

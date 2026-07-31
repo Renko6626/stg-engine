@@ -142,7 +142,7 @@ const BUILTINS: &[Builtin] = &[
             Sub,
         ],
         ret: Some(Int),
-        doc: "造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌;敌死任务亡,任务跑完敌也亡——静默退场,不掉道具不发死亡事件);返敌句柄,失败 -1",
+        doc: "造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌;敌死任务亡,任务跑完敌也亡——静默退场,不掉道具不发死亡事件);返敌号(不透明值,别猜数值/别做算术;两个敌号相等 ⇒ 同一只敌),失败 -1",
         param_names: &["x", "y", "hp", "drop_table", "score", "sprite", "task"],
     },
     Builtin {
@@ -151,7 +151,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: Some(Int),
-        doc: "查敌当前 hp;死/悬垂/越界句柄返 -1(P4-b;句柄是池 index,槽复用不可辨)——stage 编排等 boss 死用",
+        doc: "查敌当前 hp;死/悬垂/越界句柄返 -1(P4-b;敌号带 generation,槽被另一只敌复用后旧号照样返 -1)——stage 编排等 boss 死用",
         param_names: &["handle"],
     },
     Builtin {
@@ -281,7 +281,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Fx), Val(Fx)],
         ret: Some(Int),
-        doc: "离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的是池 index,可直接喂 enemy_alive/enemy_hp/enemy_x/enemy_y(悬垂/复用不可辨,同 enemy_hp);它已排除 dying,故拿到的号过几帧可能已变 dying——该重查而不是继续用",
+        doc: "离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的敌号与 spawn_enemy 同编码,可直接喂 enemy_alive/enemy_hp/enemy_x/enemy_y(带 generation,槽复用后旧号可辨);它已排除 dying,故拿到的号过几帧可能已变 dying——该重查而不是继续用",
         param_names: &["x", "y"],
     },
     // 敌坐标读口刀（2026-07-31）：上一刀通电 `nearest_enemy` 后暴露的断头路——拿得到敌号
@@ -292,7 +292,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: Some(Fx),
-        doc: "按敌号读 x;死/悬垂/越界句柄返 0(**不是哨兵**——0 是合法坐标,先用 enemy_alive(e) == 1 探活再读)",
+        doc: "按敌号读 x;死/悬垂/越界/槽已被别的敌复用 → 返 0(**不是哨兵**——0 是合法坐标,先用 enemy_alive(e) == 1 探活再读)",
         param_names: &["handle"],
     },
     Builtin {
@@ -301,7 +301,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: Some(Fx),
-        doc: "按敌号读 y;死/悬垂/越界句柄返 0(同 enemy_x,先探活再读);配 enemy_x + atan2 即可朝任意敌开火",
+        doc: "按敌号读 y;死/悬垂/越界/槽已被别的敌复用 → 返 0(同 enemy_x,先探活再读);配 enemy_x + atan2 即可朝任意敌开火",
         param_names: &["handle"],
     },
     // 探活读口刀（2026-07-31）：专用探活口，堵 `enemy_hp(e) != -1` 那条残余缝
@@ -312,7 +312,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: Some(Int),
-        doc: "敌号是否指向一个有效敌槽,返 1/0(探活首选,比 enemy_hp(e) != -1 稳——血量恰为 -1 的活敌不会被误判);**含正在死的敌**(判的是槽有效不是还能打)",
+        doc: "敌号是否仍指向**它当初那只敌**,返 1/0(探活首选,比 enemy_hp(e) != -1 稳——血量恰为 -1 的活敌不会被误判;敌号带 generation,槽被另一只敌复用后旧号返 0);**含正在死的敌**(判的是槽有效不是还能打)",
         param_names: &["handle"],
     },
     Builtin {

@@ -1887,4 +1887,62 @@ mod tests {
         assert_eq!(p.angle()[i], expect, "弹真的朝那只敌打（链路整条接通）");
         assert_eq!(view.diag().task_faults, 0);
     }
+
+    /// 敌句柄打包刀（2026-07-31）：`godot/ecl/demo/boss_windchime.ecl` 的**等 boss 死**
+    /// 轮询（`while ... { if enemy_hp(boss) < 0 { ... } }`）在打包后仍正确 —— 而且
+    /// **打包实际上修好了这里一个潜在 bug**：boss 死、槽被回收之后若有杂兵落进那个槽，
+    /// 打包前 `enemy_hp(boss)` 会读到**杂兵的血**（比如 40），`< 0` 永远不成立，轮询
+    /// 就卡住不退（demo 靠"boss 段后不再造敌"这条口头惯例绕开，没有任何东西押着它）。
+    ///
+    /// 本条走真编译 + 真 VM 复刻那个形状：boss 主任务跑完即自燃（D9）→ 相位 9 回收槽
+    /// → 轮询退出 → 造一只杂兵**占进同一个槽** → 断言旧 boss 号仍返 `-1`（关键那格，
+    /// 打包前是杂兵的 `40`），同时新杂兵号一切正常。
+    #[test]
+    fn boss_death_poll_survives_a_zako_taking_the_boss_slot() {
+        // `boss_main` 只 wait 就返回 ⇒ D9「主协程返回即自燃」把 boss 标 dying，相位 9 回收。
+        let src = "async sub boss_main() {\n\
+                     wait(20);\n\
+                   }\n\
+                   sub main() {\n\
+                     var boss: int = spawn_enemy(0.0fx, 96.0fx, 900, 0, 5000, 1, boss_main);\n\
+                     set_global(20, boss);\n\
+                     var waiting: int = 1;\n\
+                     var guard: int = 0;\n\
+                     while waiting == 1 {\n\
+                       if enemy_hp(boss) < 0 { waiting = 0; }\n\
+                       guard = guard + 1;\n\
+                       if guard > 100 { waiting = 0; }\n\
+                       wait(1);\n\
+                     }\n\
+                     set_global(21, guard);\n\
+                     var zako: int = spawn_enemy(0.0fx, 0.0fx, 40, 0, 0, 0, none);\n\
+                     set_global(22, zako);\n\
+                     set_global(23, enemy_hp(boss));\n\
+                     set_global(24, enemy_hp(zako));\n\
+                     loop { wait(1); }\n\
+                   }";
+        let w = run(src, 60);
+        let g = w.body.view().globals();
+
+        assert!(g[20] >= 0, "boss 应建成（否则后面几条全退化成假绿）");
+        assert!(
+            g[21] < 100,
+            "轮询应当**自己**退出，而不是撞上 guard 兜底（got {})",
+            g[21]
+        );
+        // 前提：杂兵必须落进 boss 的旧槽，否则本测试什么也没证明。
+        assert_eq!(
+            g[22] & 0xFFFF,
+            g[20] & 0xFFFF,
+            "前提：杂兵应落进 boss 的旧槽（分配器取最低空位）"
+        );
+        assert_ne!(g[22], g[20], "同槽不同敌 ⇒ 两个敌号必须可辨");
+
+        assert_eq!(
+            g[23], -1,
+            "**关键格**：旧 boss 号仍返 -1；打包前这里会读到杂兵的血 40，轮询卡住不退"
+        );
+        assert_eq!(g[24], 40, "杂兵的新号一切正常（防「全都读不到」的假绿）");
+        assert_eq!(w.body.view().diag().task_faults, 0);
+    }
 }
