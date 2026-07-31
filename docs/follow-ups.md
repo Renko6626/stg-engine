@@ -888,3 +888,18 @@ v1 只跑彩虹风铃卡固定场景。两个自然延伸，各随触发点：`-
 `multimesh_set_buffer` 上传的仍是**整个 `cap` 长度**的 `Vec`（含 `n` 之后全是零/陈旧的
 尾部），带宽账按 `cap` 算而非按 `n` 算。真到了要优化的时候，方向是按 `n*FLOATS_PER_INSTANCE`
 切片上传（只送前缀）或脏检测（层内容与上一帧逐位相同则跳过 `set_buffer`）。
+
+### F5. `bench` 的场景**全部**传 `EclImage::empty()`——量不了任何 VM/syscall 改动（syscall 号表重排刀 T2 撞见，2026-07-31）
+
+`bench_ladder`/`bench_mix` 四类场景（哑弹 ×4 / xform ×3 / 全混合）都显式传
+`EclImage::empty()`（源码里还带着"本刀无脚本场景：显式传空镜像（零任务零成本）"的注释），
+所以 **`bench` 一条 `OP_SYS` 都不执行、一个 ECL 任务都不跑**。当初这是对的（M0 期没有 VM），
+现在它变成了一个**沉默的覆盖缺口**：任何动 `ecl::vm`/`ecl::syscall`/协程调度的刀，跑
+`bench` 前后对比都只会得到热漂移噪声，而那个"无差异"看起来像是结论。
+
+号表百分区重排刀（2026-07-31）就撞在这上面——spec §5 点名要求用 `bench` 量派发代价，实际
+只能另外外挂一个临时 crate 才量得出来（做法与数据见 `docs/bench-baseline.md` 末节）。
+
+**触发点 = 下一次真要量 VM 性能时**（不是现在，本刀已用外挂负载给出结论）。方向：给 `bench`
+补一档 `ecl-*` 场景——最省事的是复用 `compile_rainbow_image()`（`stg-harness` 里现成的风铃卡）
+再叠一档纯 syscall 压力脚本，两档都进 `bench` 的表。改动范围只在 `stg-harness`，不动核。

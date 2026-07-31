@@ -45,7 +45,9 @@ use crate::xform::XformSlot;
 // 6xx = et* 弹管理器），方便对着 Priw8 的指令表读。
 // 改号 = 冻结面变更 = 过评审 + bump ENGINE_VER（见 spec 2026-07-31）。
 //
-// **号域上限不受编码宽度约束**：`OP_SYS` 的操作数是 `vm.rs::sys()` 的 `emit(no as u32)`
+// **号域上限不受编码宽度约束**：`OP_SYS` 的操作数由发码侧 `SubBuilder::sys()` 写成
+// `emit(no as u32)`（住**另一个 crate**：`stg-ecl-compiler/src/lib.rs`，不是本 crate 的
+// `vm.rs`——`vm.rs` 只**读**这个操作数字）
 // ——一个完整的 `u32` 字（`ecl::ops::ARITY[OP_SYS] == 1`，单位是"字"不是"字节"），不是
 // 塞进 opcode 那个 `u8`。故 `u16` 全域（0..=65535）都可安全落进这个操作数，百分区制
 // 一路扩到 `8xx`/`9xx` 甚至更高都不会撞编码位宽的墙——`3xx`–`7xx` 这些 ≥256 的号已经

@@ -240,9 +240,19 @@ mod tests {
     /// 按 `ecl::ops::ARITY` 逐指令走一遍字节流，返回**出现过的 opcode 序列**。
     ///
     /// 不能用 `code().contains(&(OP_X as u32))` 裸扫字——操作数与 opcode 同住一个 `u32`
-    /// 流，`SYS_CREATE_BULLET == 20 == OP_ADD` 就是现成的假阳性（`OP_SYS 20` 的操作数字
-    /// 会被误当成一条 `OP_ADD`）。只对**单 sub** 源码可靠（多 sub 时字节流仍是线性拼接，
-    /// 但本文件用到它的测试都只有一个 `main`）。
+    /// 流，`SYS_SELF_X == 20 == OP_ADD` 就是现成的假阳性（`OP_SYS 20` 的操作数字会被误
+    /// 当成一条 `OP_ADD`）。只对**单 sub** 源码可靠（多 sub 时字节流仍是线性拼接，但本
+    /// 文件用到它的测试都只有一个 `main`）。
+    ///
+    /// > **百分区重排（2026-07-31）没有消掉这个坑**，只换了例子：旧例子是
+    /// > `SYS_CREATE_BULLET == 20`，重排后 `create_bullet` 是 200 号、确实与 op 空间
+    /// > 错开了，但 **`0xx` 族（`$` 引擎变量，000–032）整族仍落在 op 号域内**
+    /// > （op 是 `u8`、现最大 60 = `OP_SYS`）——12 条里每一条都撞着一个 op
+    /// > （`self_x`=20=`OP_ADD`、`player_x`=10=`OP_PUSHI`、`frame`=0=`OP_END` …）。
+    /// > spec `2026-07-31-syscall-renumber-design.md` §3 那句"syscall 全部推到 100 以上
+    /// > 后两个号空间永久错开"对 `0xx` 族**不成立**。
+    /// > 何况本坑本来就不只是 syscall 的事：`PUSHI 20`/`POPL 20`/`JMP 20` 的操作数字
+    /// > 同样长得像 `OP_ADD`，裸扫字**结构上**就不可靠——这个助手不会因为号表怎么排而退休。
     fn opcodes_of(code: &[u32]) -> Vec<u8> {
         use stg_core::ecl::ops::ARITY;
         let mut out = Vec::new();
