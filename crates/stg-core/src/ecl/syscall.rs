@@ -183,6 +183,46 @@ pub const SYS_SH_REQ: u16 = 75;
 /// - 直角偏移与极坐标偏移**相加**（ZUN 626 明写 stacks），不是覆盖。
 pub const SYS_SH_FIRE: u16 = 76;
 
+// ── 数学/查询面（77-79；小清洗刀 2026-07-31）────────────────────────────────
+/// 反正切（77）：2 参 `y, x`（**都是 `Fx` raw**），押 BAM 角。核里的
+/// [`crate::math::cordic::atan2`]（整数 CORDIC，钉死 16 轮）此前脚本够不着——`aim_player`
+/// 只能瞄自机，这条能瞄任意点/任意敌。
+///
+/// **无 P4 分支**：CORDIC 对任意 `(y, x)` 都有定义，含 `(0, 0)`（返 `Angle::ZERO`）——
+/// 没有"坏参数"这个概念，故不计 `contract_viol`、不 Fault。
+pub const SYS_ATAN2: u16 = 77;
+/// 向量模（78）：2 参 `dx, dy`（`Fx` raw），押 `Fx` raw。**不是两点距离**——两点距离由
+/// 脚本自己减（`dist(bx - ax, by - ay)`）。
+///
+/// 实现 = `isqrt(len_sq(dx, dy))`：[`crate::math::geom::len_sq`] 返的是 **Q32.32**
+/// （`raw²`，不归一化，见 CLAUDE.md"定点乘法规范"），而 [`crate::math::isqrt::isqrt`]
+/// 开根**正好把 Q32.32 变回 Q16.16** —— 两个原语都在核里，此前脚本一个都够不着。
+///
+/// **为什么不单独暴露 `len_sq`/`isqrt`**（人类裁定）：`len_sq` 返 i64 而脚本值域是 i32，
+/// 装不下；单独的 `isqrt` 对脚本没有直接用处。`dist` 才是那个有用的组合。
+///
+/// 值域：`len_sq` 恒 ≥ 0 故 `as u64` 安全。收窄回 i32 分两个域看——
+/// - **世界坐标差**（现实用法）：满屏最大约 1.7e15 → `isqrt` ≈ 4.1e7，远在 i32 上限
+///   （2.1e9）之内，余量两个数量级；
+/// - **任意 `fx` 输入**（本条是通用两参 syscall，脚本能直接喂极端值）：`dx = dy = i32::MAX`
+///   时 `len_sq` ≈ 9.22e18（贴着 i64 上限但不溢出），`isqrt` = 3037000498 > `i32::MAX`
+///   ⇒ 裸 `as i32` 会**静默回绕成负数**（-1257966798）。故收窄处**饱和**
+///   （`.min(i32::MAX as u32)`）：把"负距离"这个会往下游传播的无意义值换成"确定性降级到
+///   最大可表示距离"，与 P4 一贯取向同侧。钉在 `dist_saturates_instead_of_wrapping_negative`。
+///
+/// 无 P4 计数分支：饱和是正常语义（同 `add_score`/`add_lives` 族的钳位口径），
+/// 不计 `contract_viol`、不 Fault。
+pub const SYS_DIST: u16 = 78;
+/// 最近敌查询（79）：2 参 `x, y`（`Fx` raw），押**池 index**；场上无敌（或全 dying）→ **-1**。
+///
+/// [`crate::world::WorldBody::nearest_enemy`] 自 M0-13 建完就是死代码（有实现、有测试、
+/// 从没有 syscall 暴露过），本条只是给它通电，世界侧一行未改。
+///
+/// P4-b：押的是**池 index**（generation 被丢弃），故句柄悬垂/槽复用不可辨——与
+/// [`SYS_ENEMY_HP`]（12）的口径完全一致，两者本就是配对使用的
+/// （`nearest_enemy` 拿号 → `enemy_hp` 轮询）。owner 类别无限制（关卡任务也该能查）。
+pub const SYS_NEAREST_ENEMY: u16 = 79;
+
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
 fn pop(task: &mut Task) -> Result<i32, u8> {
@@ -647,6 +687,33 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             Ok(())
         }
         SYS_SH_FIRE => sys_sh_fire(task, ctx),
+        // ── 数学/查询面 77-79（参数**逆序弹出**，照 `sys_move_enemy_to`）────────────
+        SYS_ATAN2 => {
+            let x = pop(task)?;
+            let y = pop(task)?;
+            let a = crate::math::cordic::atan2(Fx::from_raw(y), Fx::from_raw(x));
+            push(task, a.raw() as i32)
+        }
+        SYS_DIST => {
+            let dy = pop(task)?;
+            let dx = pop(task)?;
+            // Q32.32 → 开根 → Q16.16（见 SYS_DIST 号表注释的值域论证）。`.min()` 不是
+            // 冗余：极端字面量（`dx = dy = i32::MAX`）能让开根结果超 i32 上限，裸 `as i32`
+            // 会回绕成负距离——饱和降级换掉那个静默错值。
+            let d2 = crate::math::geom::len_sq(Fx::from_raw(dx), Fx::from_raw(dy));
+            let root = crate::math::isqrt::isqrt(d2 as u64).min(i32::MAX as u32);
+            let d = Fx::from_raw(root as i32);
+            push(task, d.raw())
+        }
+        SYS_NEAREST_ENEMY => {
+            let y = pop(task)?;
+            let x = pop(task)?;
+            let idx = match ctx.body.nearest_enemy(Fx::from_raw(x), Fx::from_raw(y)) {
+                Some(h) => h.index as i32,
+                None => -1,
+            };
+            push(task, idx)
+        }
         _ => Err(FAULT_BAD_OP),
     }
 }
@@ -4735,5 +4802,151 @@ mod tests {
             (Fx::from_int(100).raw() + dx, Fx::from_int(-60).raw() + dy),
             "相对偏移：原点 = owner 位置 + 偏移量"
         );
+    }
+
+    // ── 数学/查询面（77-79；小清洗刀 2026-07-31）────────────────────────────────
+
+    /// **参数序判别腿**：`atan2(y, x)` 两位同为 `Fx`，对调不会有任何判型报错，只会静默
+    /// 把角度镜像到另一条对角线上。故必须**两个取值**一起断言——只测 `atan2(1,0)==16384`
+    /// 是抓不到"实现写成 `atan2(x, y)`"的（`atan2(0,1)` 那腿才把它钉死）。
+    #[test]
+    fn atan2_argument_order_is_y_then_x() {
+        let (mut w, ecl) = fresh();
+        let mut t = Task::default();
+        let one = Fx::from_int(1).raw();
+        assert!(call(&mut w, &ecl, &mut t, SYS_ATAN2, &[one, 0]).is_ok());
+        assert_eq!(t.sp, 1, "atan2 押一个返回值");
+        assert_eq!(t.stack[0], 16384, "atan2(y=1, x=0) = +90° = BAM 16384");
+        t.sp = 0;
+        assert!(call(&mut w, &ecl, &mut t, SYS_ATAN2, &[0, one]).is_ok());
+        assert_eq!(t.stack[0], 0, "atan2(y=0, x=1) = 0° = BAM 0");
+    }
+
+    /// `(0,0)` 无 P4 分支——CORDIC 对原点有定义（0），不 Fault、不计违约。
+    #[test]
+    fn atan2_at_origin_is_zero_without_fault() {
+        let (mut w, ecl) = fresh();
+        let mut t = Task::default();
+        let viol = w.body.diag.contract_viol;
+        assert!(call(&mut w, &ecl, &mut t, SYS_ATAN2, &[0, 0]).is_ok());
+        assert_eq!(t.stack[0], 0);
+        assert_eq!(w.body.diag.contract_viol, viol, "原点不是违约");
+    }
+
+    /// **开根判别腿**：3-4-5 直角三角形。若实现漏了 `isqrt`（直接押 `len_sq`）或把
+    /// Q32.32 当 Q16.16 塞回去，这条立刻红——只断言"结果 > 0"是抓不到的
+    /// （`len_sq(3,4)` 也 > 0）。
+    #[test]
+    fn dist_is_the_square_root_of_the_squared_length() {
+        let (mut w, ecl) = fresh();
+        let mut t = Task::default();
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut t,
+                SYS_DIST,
+                &[Fx::from_int(3).raw(), Fx::from_int(4).raw()]
+            )
+            .is_ok()
+        );
+        assert_eq!(t.sp, 1, "dist 押一个返回值");
+        assert_eq!(
+            t.stack[0],
+            Fx::from_int(5).raw(),
+            "dist(3.0fx, 4.0fx) 必须正好是 5.0fx"
+        );
+    }
+
+    /// `dist` 是**向量模**（对称、恒非负）——负分量与正分量同结果。
+    #[test]
+    fn dist_of_negative_components_is_the_same_magnitude() {
+        let (mut w, ecl) = fresh();
+        let mut t = Task::default();
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut t,
+                SYS_DIST,
+                &[Fx::from_int(-3).raw(), Fx::from_int(-4).raw()]
+            )
+            .is_ok()
+        );
+        assert_eq!(t.stack[0], Fx::from_int(5).raw());
+    }
+
+    /// 极端输入的收窄腿（复审 Minor）：`dist` 是**通用两参 syscall**，脚本能直接喂任意
+    /// `fx`——安全论证里那句"满屏最大 1.7e15"只覆盖世界坐标差这个域，覆盖不到字面量。
+    ///
+    /// `dx = dy = i32::MAX`：`len_sq` = 2×(2147483647²) = 9223372028264841218
+    /// （**贴着 i64 上限 9223372036854775807 但不溢出**，故 debug 下 `len_sq` 自身不 panic），
+    /// `isqrt` = **3037000498** > `i32::MAX`(2147483647) ⇒ 裸 `as i32` 回绕成
+    /// **-1257966798**。断言必须钉"等于 `i32::MAX`"而**不是**"结果 ≥ 0"——后者对
+    /// "回绕后恰好落在正半区"的输入是瞎的。
+    #[test]
+    fn dist_saturates_instead_of_wrapping_negative() {
+        let (mut w, ecl) = fresh();
+        let mut t = Task::default();
+        assert!(call(&mut w, &ecl, &mut t, SYS_DIST, &[i32::MAX, i32::MAX]).is_ok());
+        assert_eq!(
+            t.stack[0],
+            i32::MAX,
+            "开根超 i32 上限时饱和到最大可表示距离，不得回绕成负数"
+        );
+    }
+
+    /// **"取最近"判别腿**：场上放**两只**不同距离的敌——只放一只的话，"取最近"与
+    /// "取第一个活着的"无法区分（同本仓「圆心重合式测试对半径映射是瞎的」那条推论）。
+    /// 更进一步：近的那只**池索引更大**，故"返回最低存活索引"这个变异也被钉死。
+    #[test]
+    fn nearest_enemy_returns_the_nearer_of_two_enemies() {
+        let (mut w, ecl) = fresh();
+        let far = crate::world::test_support::spawn_enemy(&mut w, 10, 0, 5);
+        let near = crate::world::test_support::spawn_enemy(&mut w, 3, 0, 5);
+        assert!(
+            near.index > far.index,
+            "近敌须是后建的（索引更大）才有判别力"
+        );
+        let mut t = Task::default();
+        assert!(call(&mut w, &ecl, &mut t, SYS_NEAREST_ENEMY, &[0, 0]).is_ok());
+        assert_eq!(t.sp, 1, "nearest_enemy 押一个返回值");
+        assert_eq!(t.stack[0], near.index as i32, "查询点 (0,0) 附近的是近敌");
+
+        // 反过来查：从远敌那侧看，最近的换成远敌——防"恒返回某个固定槽"。
+        t.sp = 0;
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut t,
+                SYS_NEAREST_ENEMY,
+                &[Fx::from_int(20).raw(), 0]
+            )
+            .is_ok()
+        );
+        assert_eq!(t.stack[0], far.index as i32);
+    }
+
+    /// 空场 → -1（同 `enemy_hp` 的"查不到押 -1"口径，不 Fault）。
+    #[test]
+    fn nearest_enemy_on_empty_field_is_minus_one() {
+        let (mut w, ecl) = fresh();
+        let mut t = Task::default();
+        assert!(call(&mut w, &ecl, &mut t, SYS_NEAREST_ENEMY, &[0, 0]).is_ok());
+        assert_eq!(t.stack[0], -1);
+    }
+
+    /// owner 类别无限制：STAGE 任务（关卡编排）照样能查。
+    #[test]
+    fn nearest_enemy_is_callable_from_a_stage_task() {
+        let (mut w, ecl) = fresh();
+        let h = crate::world::test_support::spawn_enemy(&mut w, 5, 5, 3);
+        let mut t = Task {
+            owner_kind: OWNER_STAGE,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut t, SYS_NEAREST_ENEMY, &[0, 0]).is_ok());
+        assert_eq!(t.stack[0], h.index as i32);
     }
 }

@@ -439,8 +439,13 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
    ——终审 Minor，病态脚本群最坏 ~16.8M 探测/帧，纯性能项）；④ 敌 appearance 表
    （`spawn_enemy` syscall 现走直参，弹的 appearance 表已建——对称化留内容需要时）；
 ⑤ spec syscall 清单三项**有意未入号表 v1**（终审 Minor 补记）：
-   `last_status`/`nearest_enemy`/`attract_all_items`（号表 v2 候补），`SPAWN` 的
+   `last_status`/~~`nearest_enemy`~~/`attract_all_items`（号表 v2 候补），`SPAWN` 的
    "owner 来源枚举操作数"简化为恒继承——现实现更简且够用，记录在案防"悄悄丢"。
+   **`nearest_enemy` 已还**（小清洗刀，2026-07-31）：`SYS_NEAREST_ENEMY`(79) + 同名表层
+   内建，世界侧 `world::nearest_enemy`（M0-13 起的死代码）一行未改，只是通了电。**剩两项
+   仍是候补**。追一条新的小缺口：脚本拿到敌号后**只能喂 `enemy_hp`**——按号读敌坐标的读口
+   （`enemy_x`/`enemy_y`）没有暴露，所以"查最近的敌 → 朝它开火"这条链路还接不通；要它得
+   再开两个读族号（本刀有意不顺手加，加号得过号表纪律）。
 
 ### C13. ECL 表层语言（M1.9 已落地）——销账与遗留
 

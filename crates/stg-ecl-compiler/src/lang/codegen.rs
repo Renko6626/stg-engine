@@ -1766,4 +1766,32 @@ mod tests {
             "die() 本身必须生效（D9 自燃是静默退场、不发 REQ_ENEMY_DEATH）"
         );
     }
+
+    /// 小清洗刀（77-79）：三条新内建从 `.ecl` 源码一路走到真 VM——本测试证的是**通电**
+    /// （typeck 认这三个名字 + codegen 发得出 `OP_SYS 77/78/79` + 派发臂接得住），
+    /// 数值判别力由 `syscall.rs` 侧那三条判别腿承担（参数序 / 真开根 / 真取最近）。
+    ///
+    /// `nearest_enemy` 这条尤其要走真链路：它的世界实现自 M0-13 起就有、也一直有测试绿着，
+    /// **绿的一直是死代码**——只有"脚本能调到"才是本刀新增的东西。
+    #[test]
+    fn atan2_dist_and_nearest_enemy_are_reachable_from_ecl_source() {
+        let src = "sub main() {\n\
+                     var e: int = spawn_enemy(30.0fx, 40.0fx, 100, 0, 0, 3, none);\n\
+                     set_global(20, atan2(1.0fx, 0.0fx) as int);\n\
+                     set_global(21, dist(3.0fx, 4.0fx) as int);\n\
+                     set_global(22, nearest_enemy(31.0fx, 41.0fx));\n\
+                     set_global(23, e);\n\
+                     loop { wait(1); }\n\
+                   }";
+        let w = run(src, 2);
+        let g = w.body.view().globals();
+        assert_eq!(g[20], 16384, "atan2(y=1, x=0) = +90° = BAM 16384");
+        assert_eq!(
+            g[21], 5,
+            "dist(3,4) = 5.0fx，`as int` 截断后仍是 5（不是 25）"
+        );
+        assert!(g[23] >= 0, "敌应建成（否则下一条断言退化成 -1 == -1 假绿）");
+        assert_eq!(g[22], g[23], "查询点就在那只敌旁边，返的就是它的池 index");
+        assert_eq!(w.body.view().diag().task_faults, 0);
+    }
 }
