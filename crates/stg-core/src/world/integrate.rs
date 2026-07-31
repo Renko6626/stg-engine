@@ -986,6 +986,31 @@ mod tests {
         assert_eq!(w.body.enemies.vel_active[i], 0, "到期即解除武装");
     }
 
+    /// 上一条的**笛卡尔孪生**：终帧写精确终值 + 解除武装，在笛卡尔路径上同样成立。
+    ///
+    /// 单独一条而不是把招牌判别式跑完——招牌判别式只要中点（`dur=4` 只走 2 帧），
+    /// 复审实测：对调笛卡尔 `done` 分支的 `t0`/`t1`（vx 写成 vy 的终值）全仓 570 条**全绿**，
+    /// spec §6.2 的「终帧写精确终值」在笛卡尔腿上是无守卫的存活变异。
+    ///
+    /// **两个分量必须取不相等的值**（2.0 / 6.0）：取相等值的话 `t0`/`t1` 对调仍不可辨，
+    /// 等于补了个假守卫。
+    #[test]
+    fn cartesian_velocity_interpolation_lands_on_exact_target_and_disarms() {
+        let mut w = crate::step::World::new(1);
+        let h = spawn_enemy(&mut w, 0, 0, 5);
+        w.body
+            .set_enemy_vel_cart(h, Fx::from_int(-4), Fx::from_int(1), 0, 0);
+        w.body
+            .set_enemy_vel_cart(h, Fx::from_int(2), Fx::from_int(6), 3, 4); // CubicIn
+        for k in 0..3 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(k));
+        }
+        let i = w.body.enemies.get(h).unwrap();
+        assert_eq!(w.body.enemies.vx[i], Fx::from_int(2), "终帧精确终值 vx");
+        assert_eq!(w.body.enemies.vy[i], Fx::from_int(6), "终帧精确终值 vy");
+        assert_eq!(w.body.enemies.vel_active[i], 0, "到期即解除武装");
+    }
+
     /// P4：悬垂句柄计数；easing≥8 拒绝 no-op。
     #[test]
     fn move_to_bad_args_contract() {
