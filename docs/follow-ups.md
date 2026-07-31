@@ -903,3 +903,39 @@ v1 只跑彩虹风铃卡固定场景。两个自然延伸，各随触发点：`-
 **触发点 = 下一次真要量 VM 性能时**（不是现在，本刀已用外挂负载给出结论）。方向：给 `bench`
 补一档 `ecl-*` 场景——最省事的是复用 `compile_rainbow_image()`（`stg-harness` 里现成的风铃卡）
 再叠一档纯 syscall 压力脚本，两档都进 `bench` 的表。改动范围只在 `stg-harness`，不动核。
+
+### F6. `0xx` 族与 op 号域**重叠**的后果清单——已知两处，撞到第三处再考虑挪族（syscall 号表重排刀 T2 记档，2026-07-31）
+
+百分区重排把 `1xx`–`7xx` 全推到 100 以上、与 op 号空间（`u8`，现最大 60 = `OP_SYS`）永久错开，
+**但 `0xx` 族（`$` 引擎变量）取值 000–032，整族 12 条仍落在 op 号域内**，逐条撞号：
+
+```
+frame=0=OP_END      player_x=10=OP_PUSHI   player_y=11=OP_PUSHL   self_x=20=OP_ADD
+self_y=21=OP_SUB    self_vx=22=OP_MUL      self_vy=23=OP_DIV      self_speed=24=OP_MOD
+self_angle=25=OP_NEG  self_hp=30=OP_MULF   self_hp_max=31=OP_DIVF  self_age=32=OP_SINB
+```
+
+> spec `2026-07-31-syscall-renumber-design.md` §3 那句"syscall 全部推到 100 以上后两个号空间
+> 永久错开"**对 `0xx` 族不成立**，已在该 spec §9 修订记录二留痕。
+
+**已知后果两处**（都不是运行期缺陷——字节流里 opcode 与操作数是**位置区分**的，`ARITY` 驱动
+PC 推进，操作数永远不会被当成 opcode 解码，**运行期不存在歧义**）：
+
+1. **`lang/mod.rs::opcodes_of` 的扫描假阳性**：`code().contains(&(OP_X as u32))` 裸扫字会把
+   `OP_SYS 20` 的操作数字误当成一条 `OP_ADD`。**注意这条与 `0xx` 无关也成立**——`PUSHI 20` /
+   `POPL 20` / `JMP 20` 的操作数同样长得像 op，裸扫字**结构上**就不可靠。挪族消不掉它。
+2. **`builtins.rs` 的 `is_op` 标错不再响亮失败**：重排前 `sin`/`cos` 漏标 `is_op` 会发出
+   `OP_SYS 32`，而 32 当时不是任何 syscall ⇒ 运行期 `FAULT_BAD_OP`；重排后 32 是
+   `SYS_SELF_AGE`，同一失误变成**静默押一个任务龄**——比原来更坏。
+   **已用真判据补上**：`builtin_dispatch_kind_matches_what_the_field_holds`（按表查
+   `ops::op_implemented` / `syscall::syscall_implemented`，与编号怎么排无关）。
+
+**现在不挪 `0xx` 到 `8xx`**，理由两条：
+
+- 那个"响亮失败"**从来不是设计出来的不变量**，只是稀疏编号的**巧合**。为保住一个巧合去改一张
+  刚冻结、刚 bump 过 `ENGINE_VER` 的表，本末倒置。
+- `0xx` 与 `resolve_engine_var` 白名单一一对应，是全表最自解释的一格；挪到 `8xx` 会让"`$` 变量
+  住 0 号段"这个直觉丢掉，而换来的只是消掉上面第 2 条（第 1 条根本消不掉）。
+
+**触发点**：若将来撞到**第三处**由这个重叠引发的真实麻烦，再把 `0xx` 整族挪到 `8xx`（届时
+又是一次冻结面变更 + `ENGINE_VER` bump，且两条守卫测试仍然有效、与号无关）。撞到了往这条底下追加。

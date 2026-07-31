@@ -10,10 +10,18 @@
 //! （xformdef/sub 名字，编译期解析，不是求值表达式），逼 `params` 的元素类型从纯 `Ty` 扩成
 //! [`ParamKind`]。顺带处理另一处出入：`sin`/`cos` 底层不是 syscall 派发（`OP_SYS <no>`），
 //! 而是直接对应一条 VM op（`OP_SINB`/`OP_COSB`，见 `ecl::ops.rs`，30 值域族，非 60 值域族的
-//! `OP_SYS`）——若硬塞进同一个 `syscall: u16` 字段会让 T3 误当成 syscall 号发 `OP_SYS 32`
-//! （根本不存在的 syscall，运行期会 Fault）。加一个 `is_op: bool` 旗标消歧：`true` 时
-//! `syscall` 字段其实装的是 VM op 码本身，T3 需要直接发那条 op（不套 `OP_SYS` 壳）；v1 只有
-//! `sin`/`cos` 走这条支路，其余全部 `is_op=false` 正常 syscall 派发。
+//! `OP_SYS`）——若硬塞进同一个 `syscall: u16` 字段会让 T3 误当成 syscall 号发
+//! `OP_SYS <op 码>`。加一个 `is_op: bool` 旗标消歧：`true` 时 `syscall` 字段其实装的是
+//! VM op 码本身，T3 需要直接发那条 op（不套 `OP_SYS` 壳）；v1 只有 `sin`/`cos` 走这条支路，
+//! 其余全部 `is_op=false` 正常 syscall 派发。
+//!
+//! ⚠️ **这类失误不再必然响亮失败**（syscall 号表百分区重排，2026-07-31）：`0xx` 族
+//! （`$` 引擎变量，000–032）与 op 号域重叠，`OP_SYS 32` 现在会**静默押 `SYS_SELF_AGE`**
+//! （任务龄），而不是像重排前那样撞上一个不存在的号 `FAULT_BAD_OP`。那次"响亮"是稀疏
+//! 编号的**巧合**，不是设计出来的不变量。守卫改由
+//! [`tests::builtin_dispatch_kind_matches_what_the_field_holds`] 承担——它按表查
+//! （`ops::op_implemented` / `syscall::syscall_implemented`）押运"旗标与它指向的东西
+//! 一致"，与号表怎么排无关。
 //!
 //! ## `global(n)` 为何在本表（C16 复审修复，曾经不在）
 //!
@@ -837,6 +845,60 @@ pub fn engine_var_info(ev: EngVar) -> EngVarInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`is_op` 旗标必须与它指向的东西一致**——`is_op=true` 的 `syscall` 字段装的是 VM
+    /// op 码、`is_op=false` 装的是 syscall 号，两个号空间**互不相干**，标错就发错指令。
+    ///
+    /// **这条守卫是号表百分区重排刀（2026-07-31）补的，替掉一个已经失效的巧合**：重排前
+    /// syscall 号稠密占 0–90、op 码占 0–60，`sin`/`cos` 若漏标 `is_op` 会发出 `OP_SYS 32`，
+    /// 而 32 当时**不是**任何 syscall ⇒ 运行期 `FAULT_BAD_OP`，**响亮失败**。重排后
+    /// `SYS_SELF_AGE = 032`，同一个失误变成**静默押一个任务龄**——比原来更坏。那个"响亮"
+    /// 从来不是设计出来的不变量，只是稀疏编号的巧合；巧合没了，就用真判据补上。
+    ///
+    /// 两半都用**按表查**的判据，与编号怎么排完全无关：
+    /// - `is_op=true` → [`stg_core::ecl::ops::op_implemented`]（且必须装得进 `u8`）；
+    /// - `is_op=false` → [`stg_core::ecl::syscall::syscall_implemented`]（号表白名单，由
+    ///   core 侧 `syscall_whitelist_matches_the_frozen_table` 钉在冻结的 74 条上）。
+    ///
+    /// ⚠️ **第三格不能省**：只有前两条断言时，"把 `sin` 误标成 `is_op=false`" **抓不到**
+    /// ——`OP_SINB` 是 32，而 32 恰好就是 `SYS_SELF_AGE`，白名单查询照样通过。所以还要断言
+    /// **走 op 支路的全集恰好是 `sin`/`cos`**，把这一格堵死。
+    #[test]
+    fn builtin_dispatch_kind_matches_what_the_field_holds() {
+        use stg_core::ecl::{ops::op_implemented, syscall::syscall_implemented};
+
+        let mut op_backed = Vec::new();
+        for b in BUILTINS {
+            if b.is_op {
+                let op = u8::try_from(b.syscall).unwrap_or_else(|_| {
+                    panic!(
+                        "{}: is_op=true 但 {} 装不进 u8（op 码是 u8）",
+                        b.name, b.syscall
+                    )
+                });
+                assert!(
+                    op_implemented(op),
+                    "{}: is_op=true 但 {op} 不是已实现的 VM op（ops::op_implemented 按表查）",
+                    b.name
+                );
+                op_backed.push(b.name);
+            } else {
+                assert!(
+                    syscall_implemented(b.syscall),
+                    "{}: is_op=false 但 {} 不是 dispatch 会派发的 syscall 号\
+                     （syscall::syscall_implemented 按表查）——发出去会 FAULT_BAD_OP",
+                    b.name,
+                    b.syscall
+                );
+            }
+        }
+
+        assert_eq!(
+            op_backed,
+            vec!["sin", "cos"],
+            "走 op 支路的内建只应有 sin/cos；多/少一条都说明 is_op 标错了"
+        );
+    }
 
     /// 编辑体验刀:元数据完备——每条 builtin 有非空 doc,param_names 与 params 等长。
     #[test]

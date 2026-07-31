@@ -332,6 +332,105 @@ pub const SYS_SELF_SPEED: u16 = 24;
 /// 读到的是**最后一次有效朝向**而非垃圾角。
 pub const SYS_SELF_ANGLE: u16 = 25;
 
+/// 号表白名单：`no` 是不是一条 [`dispatch`] 真的会派发的 syscall——**按表查而非比大小**
+/// （百分区制下号非连续，同 [`crate::ecl::ops::op_implemented`] 的纪律）。不在表内的号
+/// 由 `dispatch` 的兜底臂返 `FAULT_BAD_OP`。
+///
+/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、74 条结构测试的表是 `cfg(test)`，
+/// 编译器 crate 两个都够不着）：`stg-ecl-compiler` 的 `builtins::BUILTINS` 要能断言
+/// "`is_op == false` 的条目，其 `syscall` 字段装的确实是个会被派发的号"。见
+/// `builtins.rs::builtin_dispatch_kind_matches_what_the_field_holds`。
+///
+/// **与 `dispatch` 的同步靠测试押运，不靠自律**：`syscall_whitelist_matches_the_frozen_table`
+/// 断言"全 `u16` 域里为真的号恰好是那 74 条"，漏一条/多一条即红。
+pub const fn syscall_implemented(no: u16) -> bool {
+    matches!(
+        no,
+        // 0xx `$` 引擎变量
+        SYS_FRAME
+            | SYS_PLAYER_X
+            | SYS_PLAYER_Y
+            | SYS_SELF_X
+            | SYS_SELF_Y
+            | SYS_SELF_VX
+            | SYS_SELF_VY
+            | SYS_SELF_SPEED
+            | SYS_SELF_ANGLE
+            | SYS_SELF_HP
+            | SYS_SELF_HP_MAX
+            | SYS_SELF_AGE
+            // 1xx 查询
+            | SYS_ENEMY_HP
+            | SYS_ENEMY_X
+            | SYS_ENEMY_Y
+            | SYS_ENEMY_ALIVE
+            | SYS_NEAREST_ENEMY
+            | SYS_AIM_PLAYER_ANGLE
+            | SYS_SPELL_TIMER
+            | SYS_ATAN2
+            | SYS_DIST
+            | SYS_RAND_RANGE
+            // 2xx 造物
+            | SYS_CREATE_BULLET
+            | SYS_CREATE_BULLETS_BATCH
+            | SYS_SPAWN_ENEMY
+            | SYS_DROP_ITEM
+            // 3xx 弹操作
+            | SYS_SET_BULLET_SPEED
+            | SYS_SET_BULLET_ANGLE
+            | SYS_TURN_BULLET
+            | SYS_SET_BULLET_VEL
+            | SYS_SET_BULLET_ANG_VEL
+            | SYS_SET_BULLET_ACCEL
+            | SYS_SET_BULLET_GRAVITY
+            | SYS_STOP_BULLET_FX
+            | SYS_AIM_BULLET_AT_PLAYER
+            // 4xx 敌运动
+            | SYS_MOVE_ENEMY_TO
+            | SYS_MOVE_VEL
+            | SYS_MOVE_VEL_XY
+            | SYS_MOVE_ANGLE
+            | SYS_MOVE_SPEED
+            // 5xx 局面·记账·道具
+            | SYS_ADD_SCORE
+            | SYS_ADD_LIVES
+            | SYS_ADD_BOMBS
+            | SYS_ADD_POWER
+            | SYS_DROP_CLEAR
+            | SYS_DROP_ADD
+            | SYS_DROP_ITEMS
+            | SYS_DIE
+            | SYS_CLEAR_BULLETS
+            | SYS_BGM
+            | SYS_BG
+            | SYS_BG_PHASE
+            // 6xx shooter
+            | SYS_SH_RESET
+            | SYS_SH_SPRITE
+            | SYS_SH_OFFSET
+            | SYS_SH_OFFSET_ABS
+            | SYS_SH_OFFSET_RAD
+            | SYS_SH_DIST
+            | SYS_SH_ANGLE
+            | SYS_SH_SPEED
+            | SYS_SH_COUNT
+            | SYS_SH_AIM
+            | SYS_SH_RING
+            | SYS_SH_XFORM
+            | SYS_SH_TASK
+            | SYS_SH_REQ
+            | SYS_SH_FIRE
+            // 7xx 控制·事件·符卡·globals
+            | SYS_GET_VAR
+            | SYS_SET_VAR
+            | SYS_PULSE_SIGNAL
+            | SYS_EMIT_REQ
+            | SYS_BOSS_SET
+            | SYS_SPELL_BEGIN
+            | SYS_SPELL_END
+    )
+}
+
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
 fn pop(task: &mut Task) -> Result<i32, u8> {
@@ -1847,14 +1946,11 @@ mod tests {
     const ROW_B: i32 = 1;
     const ROW_C: i32 = 2;
 
-    /// 【本刀的主判据】号表族结构：74 条、无重号、每条落在其声明族的百位区间内。
-    ///
-    /// 这一刀是大规模机械重排，判别力要求与常规刀不同——不是"新行为对不对"，而是
-    /// "**有没有搬错、搬漏、搬重**"。故判据是号表自身的结构性质，不是某条 syscall 的行为。
-    #[test]
-    fn syscall_table_is_hundred_partitioned_and_unique() {
-        // (号, 名, 期望族号)——逐条照 spec §4 的表；改动本表 = 改冻结面 = 过评审。
-        let table: &[(u16, &str, u16)] = &[
+    /// 冻结号表（号, 名, 期望族号）——逐条照 spec §4 的表；改动本表 = 改冻结面 = 过评审。
+    /// 提成助手供两条测试共用：结构判据（本表自身的性质）与白名单判据
+    /// （[`syscall_implemented`] 必须与本表**逐条等同**）。
+    fn frozen_table() -> &'static [(u16, &'static str, u16)] {
+        &[
             (SYS_FRAME, "frame", 0),
             (SYS_PLAYER_X, "player_x", 0),
             (SYS_PLAYER_Y, "player_y", 0),
@@ -1929,7 +2025,16 @@ mod tests {
             (SYS_BOSS_SET, "boss_set", 7),
             (SYS_SPELL_BEGIN, "spell_begin", 7),
             (SYS_SPELL_END, "spell_end", 7),
-        ];
+        ]
+    }
+
+    /// 【本刀的主判据】号表族结构：74 条、无重号、每条落在其声明族的百位区间内。
+    ///
+    /// 这一刀是大规模机械重排，判别力要求与常规刀不同——不是"新行为对不对"，而是
+    /// "**有没有搬错、搬漏、搬重**"。故判据是号表自身的结构性质，不是某条 syscall 的行为。
+    #[test]
+    fn syscall_table_is_hundred_partitioned_and_unique() {
+        let table = frozen_table();
 
         assert_eq!(table.len(), 74, "74 进 74 出：本刀不增不减一条");
 
@@ -3451,6 +3556,56 @@ mod tests {
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
         assert_eq!(call(&mut w, &ecl, &mut task, 9999, &[]), Err(FAULT_BAD_OP));
+    }
+
+    /// [`syscall_implemented`] 的白名单必须与冻结号表**逐条等同**——它是跨 crate 的唯一
+    /// 出口（`dispatch` 是 `pub(crate)`、[`frozen_table`] 是 `cfg(test)`，编译器 crate
+    /// 两个都够不着），一旦与真实派发面漂移，`stg-ecl-compiler` 那条 `is_op` 一致性测试
+    /// 就会拿错判据、变成假绿。
+    ///
+    /// 判据是**全 `u16` 域扫一遍**（65536 次 `matches!`，测试里无所谓），不是"照表逐条问
+    /// 一遍"——后者只能抓"漏了一条"，抓不到"多写了一条表里没有的号"。两个方向都要：
+    /// 加 syscall 忘了加进白名单 → 数量对不上；白名单里留了一条已删的号 → 同样红。
+    #[test]
+    fn syscall_whitelist_matches_the_frozen_table() {
+        let table = frozen_table();
+
+        // 方向一：表里每条都必须在白名单内。
+        for &(num, name, _) in table {
+            assert!(
+                syscall_implemented(num),
+                "{name}(={num}) 在冻结号表里却不在 syscall_implemented 白名单内"
+            );
+        }
+
+        // 方向二：全域里为真的号，恰好只有表里那些（抓"多写了一条"）。
+        let live: Vec<u16> = (0..=u16::MAX).filter(|&n| syscall_implemented(n)).collect();
+        assert_eq!(
+            live.len(),
+            table.len(),
+            "白名单为真的号有 {} 个，冻结号表却是 {} 条",
+            live.len(),
+            table.len()
+        );
+        for n in &live {
+            assert!(
+                table.iter().any(|&(num, _, _)| num == *n),
+                "白名单里的 {n} 不在冻结号表内（多写/该删未删）"
+            );
+        }
+
+        // 方向三：把白名单钉到 `dispatch` 的兜底臂上——白名单说没有的号，`dispatch`
+        // 必须以 `FAULT_BAD_OP` 拒绝（抽查，不做全域派发：派发有副作用）。
+        let (mut w, ecl) = fresh();
+        for probe in [9999u16, 33, 99, 104, 199, 800, u16::MAX] {
+            assert!(!syscall_implemented(probe), "{probe} 不该在白名单里");
+            let mut task = Task::default();
+            assert_eq!(
+                call(&mut w, &ecl, &mut task, probe, &[]),
+                Err(FAULT_BAD_OP),
+                "白名单外的 {probe} 应被 dispatch 兜底臂拒绝"
+            );
+        }
     }
 
     /// 栈下溢（参数不足）→ `Fault(FAULT_STACK)`：`SET_VAR` 需 2 参，空栈直接派发。
