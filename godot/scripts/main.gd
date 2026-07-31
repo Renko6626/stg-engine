@@ -3,18 +3,14 @@ extends Node
 
 enum S { PLAYING, PAUSED, STAGE_CLEAR }
 
-## 难度档(stg-core `consts.rs` 的 RANK_*,值域 0..=4 冻结;越界 new_game_at 返 Err → false)。
-## Extra(4) 是预留位不是第五档:Extra 关在现代作品里走自己的脚本,通常不靠 rank 分支。
-const RANK_EASY := 0
-const RANK_NORMAL := 1
-const RANK_HARD := 2
-const RANK_LUNATIC := 3
-const RANK_EXTRA := 4
-
 ## 开局参数(此前是 `new_game_at(names, sources, 1, 2, start, 0, 0, 3, 3)` 里一串位置魔数——
 ## demo 一直在跑 Hard 而调用点看不出来)。本刀只让它们可见可改,取值一律维持原样。
+##
+## 难度档取 `WorldBridge.RANK_*`(转自 stg-core `consts.rs` ①段,值域 `0..=4` 冻结;越界
+## `new_game_at` 返 Err → false)。**不在本文件手抄一份**:抄来的镜像与 core 无编译期押运。
+## Extra(4) 是预留位不是第五档——Extra 关在现代作品里走自己的脚本,通常不靠 rank 分支。
 const BOOT_SEED := 1
-const BOOT_RANK := RANK_HARD
+const BOOT_RANK := WorldBridge.RANK_HARD
 const BOOT_CHARACTER := 0
 const BOOT_POWER := 0
 const BOOT_LIVES := 3

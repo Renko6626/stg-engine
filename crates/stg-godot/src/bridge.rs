@@ -71,10 +71,26 @@ impl WorldBridge {
     const LAYER_ENEMIES: i64 = frame::LAYER_ENEMIES as i64;
     #[constant]
     const LAYER_ITEMS: i64 = frame::LAYER_ITEMS as i64;
+    // 难度档(`consts.rs` ①段冻结编号,值域 `0..=4`)。**转出来而非让 GDScript 手抄**:
+    // 同 BTN_*/LAYER_* 的既有先例——手抄的镜像与 core 之间没有编译期押运,改了一边
+    // 另一边照跑,而 `new_game_at` 的值域校验只认真实数字,抄错了它拦不住(抄成 5 才拦)。
+    #[constant]
+    const RANK_EASY: i64 = stg_core::consts::RANK_EASY as i64;
+    #[constant]
+    const RANK_NORMAL: i64 = stg_core::consts::RANK_NORMAL as i64;
+    #[constant]
+    const RANK_HARD: i64 = stg_core::consts::RANK_HARD as i64;
+    #[constant]
+    const RANK_LUNATIC: i64 = stg_core::consts::RANK_LUNATIC as i64;
+    #[constant]
+    const RANK_EXTRA: i64 = stg_core::consts::RANK_EXTRA as i64;
 
+    /// 单单元开机。`rank` 同 `new_game_at`:核内有值域校验,故壳层**饱和**不截断
+    /// (`as i32` 是模 2³² 回绕,会把越界值静默折回合法档)。
     #[func]
     fn new_game(&mut self, ecl_source: GString, seed: i64, rank: i64) -> bool {
-        match boot::boot(&ecl_source.to_string(), seed as u64, rank as i32) {
+        let rank = rank.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        match boot::boot(&ecl_source.to_string(), seed as u64, rank) {
             Ok(g) => {
                 self.game = Some(g);
                 self.warned = 0;
@@ -91,6 +107,13 @@ impl WorldBridge {
     /// 桥面落地,冻结面 13→15)。`names`/`sources` 是两条平行数组(GDScript 侧无原生元组
     /// 容器,壳层惯例);长度不等视为调用方违约(P4-b,no-op+false)。装备四标量壳层先
     /// `clamp` 到各自域再收窄——`power` 核内 `new_game_at` 还会钳 `POWER_MAX`,双保险。
+    ///
+    /// `rank`/`start` 反过来:核内对二者有**值域校验**(`rank` 越 `0..=4` 返
+    /// `RankOutOfRange`,`start` 认不出的 mark 返 `UnknownEntry`),所以壳层这里必须
+    /// **饱和**而非 `as i32` 截断——`as` 是模 2³² 回绕,GDScript 传 `4294967296` 会截成
+    /// `0` 静默以 Easy / 关首开局,把核内那道校验整个绕过去。饱和则把越界值钉在
+    /// `i32::MIN/MAX`,仍然越界,核内照样响亮失败。(装备四标量无此问题:它们本就是
+    /// "钳到域内"语义,没有可绕过的校验。)
     #[func]
     #[allow(clippy::too_many_arguments)] // gdext #[func] 天然参数面(GString/Rid 类比先例)；GDScript 侧无原生元组/结构体传入，装备四标量+多单元两数组只能平铺
     fn new_game_at(
@@ -125,7 +148,9 @@ impl WorldBridge {
             lives: lives.clamp(0, u8::MAX as i64) as u8,
             bombs: bombs.clamp(0, u8::MAX as i64) as u8,
         };
-        match boot::boot_at(&units, seed as u64, rank as i32, start as i32, loadout) {
+        let rank = rank.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        let start = start.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        match boot::boot_at(&units, seed as u64, rank, start, loadout) {
             Ok(g) => {
                 self.game = Some(g);
                 self.warned = 0;

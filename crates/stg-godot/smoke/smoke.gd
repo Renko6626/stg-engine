@@ -179,6 +179,20 @@ func _init():
 	if a["bg_phase"] != 1: fail("anchors bg_phase 应为 mark(9) 垫片补偿值 1(同上连锁)"); return
 	if a["bg_phase_frame"] != 1: fail("anchors bg_phase_frame 应为 1(推导见上,mid-start 与正常路径同值)"); return
 	if b.hud_player().get("power", -1) != 400: fail("new_game_at loadout power 未生效"); return
+
+	# ── rank 值域:核内校验 + 壳层饱和(难度档具名化刀) ──────────────────────
+	# 两条负例都断言"返 false 且世界没被动"(P4-b:违约 = no-op)。第二条是判别式的关键:
+	# 4294967296 = 2³²,`as i32` 截断后恰好是 **0 = RANK_EASY** 这个合法档——壳层若不饱和
+	# 就会静默以 Easy 开局并返 true,核内那道 `RankOutOfRange` 根本轮不到执行。
+	for bad_rank in [5, 4294967296, -4294967297]:
+		if b.new_game_at(names, srcs, 7, bad_rank, 9, 0, 400, 3, 3):
+			fail("越界 rank %d 应被拒(壳层饱和 + 核内校验)" % bad_rank); return
+		if b.frame() != 2: fail("rank 被拒时世界不应被动(frame 变了)"); return
+	if b.hud_player().get("power", -1) != 400: fail("rank 被拒时世界不应被动(power 变了)"); return
+	# 上沿正例:4 = RANK_EXTRA 是合法档(只测越界会让判据写成 `0..=3` 也照过)。
+	if not b.new_game_at(names, srcs, 7, WorldBridge.RANK_EXTRA, 9, 0, 400, 3, 3):
+		fail("RANK_EXTRA(4) 是合法档,不该被拒"); return
+
 	RenderingServer.free_rid(mm)
 	b.free()
 	print("SMOKE OK")
