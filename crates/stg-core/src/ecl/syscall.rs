@@ -201,8 +201,17 @@ pub const SYS_ATAN2: u16 = 77;
 /// **为什么不单独暴露 `len_sq`/`isqrt`**（人类裁定）：`len_sq` 返 i64 而脚本值域是 i32，
 /// 装不下；单独的 `isqrt` 对脚本没有直接用处。`dist` 才是那个有用的组合。
 ///
-/// 值域安全：`len_sq` 恒 ≥ 0 故 `as u64` 安全；满屏最大约 1.7e15 → `isqrt` ≈ 4.1e7，
-/// 远在 i32 上限（2.1e9）之内。无 P4 分支。
+/// 值域：`len_sq` 恒 ≥ 0 故 `as u64` 安全。收窄回 i32 分两个域看——
+/// - **世界坐标差**（现实用法）：满屏最大约 1.7e15 → `isqrt` ≈ 4.1e7，远在 i32 上限
+///   （2.1e9）之内，余量两个数量级；
+/// - **任意 `fx` 输入**（本条是通用两参 syscall，脚本能直接喂极端值）：`dx = dy = i32::MAX`
+///   时 `len_sq` ≈ 9.22e18（贴着 i64 上限但不溢出），`isqrt` = 3037000498 > `i32::MAX`
+///   ⇒ 裸 `as i32` 会**静默回绕成负数**（-1257966798）。故收窄处**饱和**
+///   （`.min(i32::MAX as u32)`）：把"负距离"这个会往下游传播的无意义值换成"确定性降级到
+///   最大可表示距离"，与 P4 一贯取向同侧。钉在 `dist_saturates_instead_of_wrapping_negative`。
+///
+/// 无 P4 计数分支：饱和是正常语义（同 `add_score`/`add_lives` 族的钳位口径），
+/// 不计 `contract_viol`、不 Fault。
 pub const SYS_DIST: u16 = 78;
 /// 最近敌查询（79）：2 参 `x, y`（`Fx` raw），押**池 index**；场上无敌（或全 dying）→ **-1**。
 ///
@@ -688,9 +697,12 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_DIST => {
             let dy = pop(task)?;
             let dx = pop(task)?;
-            // Q32.32 → 开根 → Q16.16（见 SYS_DIST 号表注释的值域论证）。
+            // Q32.32 → 开根 → Q16.16（见 SYS_DIST 号表注释的值域论证）。`.min()` 不是
+            // 冗余：极端字面量（`dx = dy = i32::MAX`）能让开根结果超 i32 上限，裸 `as i32`
+            // 会回绕成负距离——饱和降级换掉那个静默错值。
             let d2 = crate::math::geom::len_sq(Fx::from_raw(dx), Fx::from_raw(dy));
-            let d = Fx::from_raw(crate::math::isqrt::isqrt(d2 as u64) as i32);
+            let root = crate::math::isqrt::isqrt(d2 as u64).min(i32::MAX as u32);
+            let d = Fx::from_raw(root as i32);
             push(task, d.raw())
         }
         SYS_NEAREST_ENEMY => {
@@ -4862,6 +4874,26 @@ mod tests {
             .is_ok()
         );
         assert_eq!(t.stack[0], Fx::from_int(5).raw());
+    }
+
+    /// 极端输入的收窄腿（复审 Minor）：`dist` 是**通用两参 syscall**，脚本能直接喂任意
+    /// `fx`——安全论证里那句"满屏最大 1.7e15"只覆盖世界坐标差这个域，覆盖不到字面量。
+    ///
+    /// `dx = dy = i32::MAX`：`len_sq` = 2×(2147483647²) = 9223372028264841218
+    /// （**贴着 i64 上限 9223372036854775807 但不溢出**，故 debug 下 `len_sq` 自身不 panic），
+    /// `isqrt` = **3037000498** > `i32::MAX`(2147483647) ⇒ 裸 `as i32` 回绕成
+    /// **-1257966798**。断言必须钉"等于 `i32::MAX`"而**不是**"结果 ≥ 0"——后者对
+    /// "回绕后恰好落在正半区"的输入是瞎的。
+    #[test]
+    fn dist_saturates_instead_of_wrapping_negative() {
+        let (mut w, ecl) = fresh();
+        let mut t = Task::default();
+        assert!(call(&mut w, &ecl, &mut t, SYS_DIST, &[i32::MAX, i32::MAX]).is_ok());
+        assert_eq!(
+            t.stack[0],
+            i32::MAX,
+            "开根超 i32 上限时饱和到最大可表示距离，不得回绕成负数"
+        );
     }
 
     /// **"取最近"判别腿**：场上放**两只**不同距离的敌——只放一只的话，"取最近"与
