@@ -201,7 +201,12 @@
   `stg-harness` 建场时 `world.body.set_var(GVAR_RANK, ..)`）；**脚本经 `SYS 8 set_var` 写这段
   一律 no-op**——真槽值不变 + `diag.contract_viol` +1 + `last_status=BAD_ARGS`，**不 Fault**
   （P4-b 脚本作者违约的确定性安全结果，调度层不杀任务，脚本继续往下执行）。已命名槽：
-  `GVAR_RANK=0`（难度，见下方"作者须知"）。
+  `GVAR_RANK=0`（难度，见下方"作者须知"）——**取值域 `0..=4`**
+  （`RANK_EASY`/`RANK_NORMAL`/`RANK_HARD`/`RANK_LUNATIC` + 预留的 `RANK_EXTRA`，五个具名
+  常量注入脚本，见 `consts.rs`）。`World::new_game_at` 对越界 `rank` 返
+  `TaskStartError::RankOutOfRange`（**拒绝而非钳位**——`rank` 是回放/握手身份
+  `(seed, rank, start, loadout, image)` 的一员，钳过的值会让重放契约变得可疑），写槽发生在
+  校验之后，故槽里的值恒在域内。
 - **自由段** `[16, 1024)`：脚本读写皆无限制。
 - `SYS 7 get_var`（脚本读）**两段皆不受限**——只有脚本**写**系统段被挡，读不受影响。
 
@@ -233,7 +238,8 @@
   的孤儿（本池无逐槽 generation，这是"父死立即断亲"代替代际戳的等价修法）。
 - 难度（rank）= `globals` 约定槽（场景开局 `set_var` 写入），脚本 `get_var` 后自决——该槽
   （`GVAR_RANK=0`）落在**系统段**，脚本自己 `set_var(0, ..)` 会被 no-op 挡下（见"globals 段
-  纪律"），想改 rank 得靠 game 层世界 API，不是脚本自己改自己的难度。
+  纪律"），想改 rank 得靠 game 层世界 API，不是脚本自己改自己的难度。值域 `0..=4`，判难度
+  用注入的 `RANK_*` 常量（`>= RANK_HARD` 式比较），别写魔数。
 - **`self_age` 是任务龄不是敌龄**：`SYS 9`（M1.5）量 `frame - task.born_frame`，次帧首跑时
   已经是 `1`（不是 `0`，出生当帧被 born_frame 门禁跳过、根本不执行）；对 `SPAWN` 出的子任务
   同理——子任务自己的 `born_frame` 是它的出生帧，不是父任务或 owner 实体的出生帧。

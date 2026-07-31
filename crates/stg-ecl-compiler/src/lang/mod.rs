@@ -303,6 +303,42 @@ mod tests {
         );
     }
 
+    /// 难度档具名化刀：脚本用 `RANK_HARD` 写难度分支应编译通过，且常量折叠成**正确取值**
+    /// （`PUSHI 2`，= `stg_core::consts::RANK_HARD`）。判别力靠"取值"而非"能编译"——把
+    /// 五个常量写成任意值都能编译过，只有比对折叠字面量才抓得住值错。
+    #[test]
+    fn rank_named_consts_compile_and_fold_to_correct_values() {
+        let src = "sub main() { if global(GVAR_RANK) >= RANK_HARD { set_global(20, 1); } \
+                   loop { wait(1); } }";
+        let image = compile(src, "rank.ecl").expect("RANK_HARD 应是注入的引擎常量");
+        let hard = stg_core::consts::RANK_HARD as u32;
+        assert!(
+            image
+                .code()
+                .windows(2)
+                .any(|pair| pair == [OP_PUSHI as u32, hard]),
+            "RANK_HARD(={hard}) 应折叠为 PUSHI 字面量，code={:?}",
+            image.code()
+        );
+        // 五个档位名全部可用，且取值互异并等于引擎侧
+        for (name, want) in [
+            ("RANK_EASY", stg_core::consts::RANK_EASY),
+            ("RANK_NORMAL", stg_core::consts::RANK_NORMAL),
+            ("RANK_HARD", stg_core::consts::RANK_HARD),
+            ("RANK_LUNATIC", stg_core::consts::RANK_LUNATIC),
+            ("RANK_EXTRA", stg_core::consts::RANK_EXTRA),
+        ] {
+            let s = format!("sub main() {{ set_global(20, {name}); loop {{ wait(1); }} }}");
+            let img = compile(&s, "rank.ecl").unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert!(
+                img.code()
+                    .windows(2)
+                    .any(|p| p == [OP_PUSHI as u32, want as u32]),
+                "{name} 应折叠为 PUSHI {want}"
+            );
+        }
+    }
+
     /// 编译器确定性（全管线级别，plan 明文钉死）：同源码两次 `compile` 必须产出逐字节相同
     /// 的镜像（`EclImage` derive 了 `PartialEq`，整体比较即可）。
     #[test]

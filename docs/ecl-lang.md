@@ -296,14 +296,33 @@ cargo run -p stg-harness -- check stage/
 
 | 通道 | 范围 | 脚本读 | 脚本写 | 内容 / 语义 |
 |---|---|:---:|:---:|---|
-| `globals` 系统段 | `[0, 16)` | ✓ | ✗（no-op + `contract_viol` 计数，不 Fault） | **目前仅槽 0 有意义**：`GVAR_RANK`（难度值，game 层建场代码经世界 API 写入，脚本只读后自决）；槽 1-15 保留未用 |
+| `globals` 系统段 | `[0, 16)` | ✓ | ✗（no-op + `contract_viol` 计数，不 Fault） | **目前仅槽 0 有意义**：`GVAR_RANK`（难度档，**值域 `0..=4`**，game 层开机时经世界 API 写入，脚本只读后自决）；槽 1-15 保留未用 |
 | `globals` 自由段 | `[16, 1024)` | ✓ | ✓ | 脚本自定义草稿区，语义靠作者自己约定；`n` 是任意运行期表达式（不限编译期常量，可以是循环变量） |
 | `boss_ui[]` | 每 boss 一份 | ✗（无读 syscall） | ✓（`boss_set`） | 血条/spell/计时状态，写给表现层 UI 消费，脚本读不回自己刚写的值；**符卡 active 期间** `enemy`/`spell_id`/`timer_frames`/`active`/`hp_ratio` 由符卡机构逐帧自动覆写（见下"符卡"节），脚本的 `boss_set` 此时只对 `phase_left`（阶段号）全权——非符卡段（卡与卡之间）`boss_set` 照旧全权写全部字段 |
 | `signals[8]` | 8 通道 | — | — | 不是存值用的：`pulse_signal(ch)` 发边沿脉冲，`wait_signal` xform op 在变换序列里等；只唤醒当帧已在等待的弹，不锁存 |
 
 `globals`/`set_global` 读写走 `global(n)`/`set_global(n,v)`。**系统段**槽位已有引擎注入的具名
 常量可直接用——如 RANK 槽写 `global(GVAR_RANK)`，见下节"引擎常量"，不需要也不应该自己再起
-名字镜像槽号。**自由段**（`[16, 1024)`，即 `[GLOBALS_SYS_SEGMENT, GLOBALS_CAP)`）没有引擎预置
+名字镜像槽号。
+
+**难度档（`GVAR_RANK`）的值域是 `0..=4`**，五个档位各有注入的具名常量，数值顺序即难度序，
+所以 `>=` 比较是正规写法：
+
+```ecl
+sub main() {
+    // RANK_EASY(0) / RANK_NORMAL(1) / RANK_HARD(2) / RANK_LUNATIC(3) / RANK_EXTRA(4)
+    var ways: int = 8;
+    if global(GVAR_RANK) >= RANK_HARD { ways = 16; }
+    set_global(20, ways);
+    loop { wait(1); }
+}
+```
+
+档位是**四档**（Easy/Normal/Hard/Lunatic）——本引擎不做 ZUN 那套"连续 rank + 档位并存"的
+双轨，`GVAR_RANK` 里就只会是这几个整数。`RANK_EXTRA`(4) 是**预留位、不是第五档难度**：
+Extra 关在现代作品里是独立关卡走自己的脚本，通常不靠 rank 分支；留这个号是以防将来有
+共享 sub 需要判它。开机时 `rank` 越 `0..=4` 一律**被拒**（宿主 `new_game_at` 返
+`RankOutOfRange`，不钳位不开局），所以脚本可以放心假定读到的值落在域内。**自由段**（`[16, 1024)`，即 `[GLOBALS_SYS_SEGMENT, GLOBALS_CAP)`）没有引擎预置
 名字，同一 `.ecl` 文件内建议配 `const` 给自己用到的自由段槽号起名（如 `const MY_SLOT: int = 16;`）
 避免魔数；**跨 `.ecl` 文件没有共享机制**（见"已知限制"）——多个脚本文件各自手选槽号，选中
 同一个存不同东西不会有任何编译或运行期报错，纯靠作者自律对齐。
@@ -319,7 +338,9 @@ xformdef 槽参数（编译期常量位置）处都能直接引用，不用再�
 
 | 名字 | 值 | 含义 |
 |---|---:|---|
-| `GVAR_RANK` | `0` | `globals` 系统段内 RANK（难度）槽号，见上节 |
+| `GVAR_RANK` | `0` | `globals` 系统段内 RANK（难度）槽**号**，见上节 |
+| `RANK_EASY` / `RANK_NORMAL` / `RANK_HARD` / `RANK_LUNATIC` | `0`/`1`/`2`/`3` | `global(GVAR_RANK)` 的四个合法**取值**（编号冻结，顺序即难度序，可 `>=` 比较）|
+| `RANK_EXTRA` | `4` | 预留档位号（Extra 关通常走自己的脚本、不靠 rank 分支），见上节 |
 | `GLOBALS_SYS_SEGMENT` | `16` | `globals` 系统段/自由段分界槽号，见上节 |
 | `REQ_*` | 见 `consts.rs` | 通道 B 引擎保留请求 id（`REQ_STAGE_CLEAR`/`REQ_BGM`/…） |
 | `ITEM_POWER` / `ITEM_POINT` / `ITEM_LIFE_PIECE` / `ITEM_BOMB_PIECE` / `ITEM_STAR` | `0`/`1`/`2`/`3`/`4` | 道具类型号（编号**冻结**，非表驱动）。`drop_add(type, n)` 的第一参，见"敌人的三条死亡路径与掉落控制" |

@@ -73,6 +73,21 @@ engine_consts! {
         ITEM_LIFE_PIECE:     u8 as int = crate::items::ITEM_LIFE_PIECE;
         ITEM_BOMB_PIECE:     u8 as int = crate::items::ITEM_BOMB_PIECE;
         ITEM_STAR:           u8 as int = crate::items::ITEM_STAR;
+        //  难度档编号（难度档具名化刀，2026-07-31）：`GVAR_RANK` 槽的合法**取值**域 = `0..=4`
+        //  （`GVAR_RANK` 自己是槽**号**，别混）。`new_game_at` 越界返
+        //  `TaskStartError::RankOutOfRange`（拒绝而非钳位——rank 是回放/握手身份的一部分）。
+        //  **放①不放②**：同道具类型号，这是**冻结的引擎编号**、不随可加载表漂移，②段的
+        //  join 校验没有可抓的漂移。数值顺序即难度序，脚本可写
+        //  `if global(GVAR_RANK) >= RANK_HARD { .. }`。
+        //
+        //  现代作品已基本弃用连续 rank（ZUN 那套「连续 rank + 档位」双轨不做）——就是四档
+        //  确定性弹幕。**`RANK_EXTRA`(4) 是预留位、不是"第五档难度"**：Extra 在现代作品里是
+        //  独立关卡走自己的脚本，通常不靠 rank 分支；留 4 号是以防将来有共享 sub 需要判它。
+        RANK_EASY:           i32 as int = 0;
+        RANK_NORMAL:         i32 as int = 1;
+        RANK_HARD:           i32 as int = 2;
+        RANK_LUNATIC:        i32 as int = 3;
+        RANK_EXTRA:          i32 as int = 4;
     }
     //  ② 段目前**空**（颜色轴刀 2026-07-26）：弹型名/色名归**内容包**——由各内容包
     //  自己的 `.ecl` 用 `const` 声明（内建 demo 的一份见 `godot/ecl/demo/bullets.ecl`），
@@ -108,6 +123,39 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), n, "引擎常量名必须唯一");
+    }
+
+    /// 难度档具名常量（难度档具名化刀）：值域 `0..=4` 逐个钉死 + 注入面按 ① 结构常量登记
+    /// （**冻结的引擎编号**，不随可加载表漂移，故与道具类型号同段）。
+    #[test]
+    fn rank_consts_are_frozen_engine_ids_in_structural_segment() {
+        // Rust 侧值逐档钉死（顺序即难度序，`>=` 比较是脚本的正规用法）
+        assert_eq!(
+            (RANK_EASY, RANK_NORMAL, RANK_HARD, RANK_LUNATIC),
+            (0, 1, 2, 3)
+        );
+        assert_eq!(RANK_EXTRA, 4, "4 号是 Extra 预留位，不是第五档难度");
+        // 五个名字全部经 ① 段注入，类型 Int，值与 Rust 侧一致
+        for (name, want) in [
+            ("RANK_EASY", 0),
+            ("RANK_NORMAL", 1),
+            ("RANK_HARD", 2),
+            ("RANK_LUNATIC", 3),
+            ("RANK_EXTRA", 4),
+        ] {
+            let c = ENGINE_STRUCTURAL
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("{name} 应在 ① 结构常量段"));
+            assert_eq!(c.ty, EclValueType::Int, "{name} 是 int");
+            assert_eq!(c.value, want, "{name} 值");
+            assert!(
+                ENGINE_CONSTS
+                    .iter()
+                    .any(|e| e.name == name && e.value == want),
+                "{name} 应出现在注入表"
+            );
+        }
     }
 
     #[test]

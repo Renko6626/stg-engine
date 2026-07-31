@@ -80,11 +80,17 @@ impl World {
     /// 编译器保证合法指令边界)。中段启动是"规范态"开局(符卡练习语义):被跳过流程的世界
     /// 效果由脚本 mark 块+自动补偿承担(见 stg-ecl-compiler codegen `scan_mark_compensation`)。
     ///
-    /// 两条宿主期响亮错(P4-a)钉在 `World::new` 分配**之前**完成,而非事后回滚:
-    /// `loadout.character` 越 `tables.characters.len()` → `InvalidCharacter`;`start != 0`
-    /// 且标记表查无该 id(含负值——标记表 id 恒正,天然不命中)→ `UnknownMark`。两项校验
-    /// 全通过才分配 `World`,失败路径下从未存在过半初始化的 `Box<World>`——`Err` 分支
-    /// 不持有、也无需丢弃任何世界实例。
+    /// 三条宿主期响亮错(P4-a)钉在 `World::new` 分配**之前**完成,而非事后回滚:
+    /// `rank` 越 `RANK_EASY..=RANK_EXTRA`(`0..=4`)→ `RankOutOfRange`;`loadout.character`
+    /// 越 `tables.characters.len()` → `InvalidCharacter`;`start != 0` 且标记表查无该 id
+    /// (含负值——标记表 id 恒正,天然不命中)→ `UnknownMark`。三项校验全通过才分配 `World`,
+    /// 失败路径下从未存在过半初始化的 `Box<World>`——`Err` 分支不持有、也无需丢弃任何
+    /// 世界实例。
+    ///
+    /// **rank 取拒绝而非钳位**(难度档具名化刀,2026-07-31):它是上面那条身份元组的一员,
+    /// 一个悄悄被钳过的值会让"同 seed 同 rank 重放"变得可疑;开机是宿主的一次性调用,
+    /// 当场 `Err` 好过事后翻 `diag`。校验位于写 `GVAR_RANK` 之前(判别测试
+    /// `new_game_at_rank_check_precedes_any_world_write` 押运这个顺序)。
     pub fn new_game_at(
         seed: u64,
         rank: i32,
@@ -93,6 +99,9 @@ impl World {
         image: &crate::ecl::image::EclImage,
     ) -> Result<Box<World>, crate::ecl::binding::TaskStartError> {
         use crate::ecl::binding::TaskStartError;
+        if !(crate::consts::RANK_EASY..=crate::consts::RANK_EXTRA).contains(&rank) {
+            return Err(TaskStartError::RankOutOfRange { rank });
+        }
         let tables = &crate::tables::TABLES_V0;
         if loadout.character as usize >= tables.characters.len() {
             return Err(TaskStartError::InvalidCharacter(loadout.character));
@@ -2471,6 +2480,72 @@ mod tests {
         let err = World::new_game_at(7, 2, 0, bad_character, &image)
             .expect_err("character=9 越 TABLES_V0.characters.len()==1");
         assert_eq!(err, TaskStartError::InvalidCharacter(9));
+    }
+
+    /// 第三条宿主期响亮错(P4-a,难度档具名化刀):`rank` 越 `0..=4` → `RankOutOfRange`。
+    /// **取拒绝而非钳位**——`rank` 是回放/握手身份的一部分(seed, rank, start, loadout,
+    /// image),悄悄钳过的值会让"同 seed 同 rank 重放"这个契约变得可疑。
+    ///
+    /// **边界两端都断言**(本仓吃过阈值下沿的亏):只测 `-1`/`5` 的话把判据误写成 `1..=3`
+    /// 也能过,故 `0`(EASY)与 `4`(EXTRA)必须各自 `Ok` 且 `GVAR_RANK` 读回原值。
+    #[test]
+    fn new_game_at_rejects_out_of_range_rank_at_both_ends() {
+        use crate::ecl::binding::TaskStartError;
+        let image = root_image(vec![OP_END as u32]);
+
+        for bad in [-1i32, 5] {
+            let err = World::new_game_at(7, bad, 0, crate::player::Loadout::default(), &image)
+                .expect_err("越界 rank 必须响亮失败");
+            assert_eq!(err, TaskStartError::RankOutOfRange { rank: bad });
+        }
+        // 负向大值/正向大值也拒(同一判据的两侧远端,防"只挡相邻越界")
+        assert_eq!(
+            World::new_game_at(7, -999, 0, crate::player::Loadout::default(), &image)
+                .expect_err("rank=-999"),
+            TaskStartError::RankOutOfRange { rank: -999 }
+        );
+        assert_eq!(
+            World::new_game_at(7, 12345, 0, crate::player::Loadout::default(), &image)
+                .expect_err("rank=12345"),
+            TaskStartError::RankOutOfRange { rank: 12345 }
+        );
+
+        for good in [
+            crate::consts::RANK_EASY,
+            crate::consts::RANK_NORMAL,
+            crate::consts::RANK_HARD,
+            crate::consts::RANK_LUNATIC,
+            crate::consts::RANK_EXTRA,
+        ] {
+            let mut w = World::new_game_at(7, good, 0, crate::player::Loadout::default(), &image)
+                .unwrap_or_else(|e| panic!("rank={good} 合法却失败:{e:?}"));
+            assert_eq!(
+                w.body.get_var(crate::consts::GVAR_RANK),
+                good,
+                "合法 rank 原样落 GVAR_RANK(不钳不改)"
+            );
+        }
+    }
+
+    /// 零副作用(判别式):越界 rank 必须在**任何世界写之前**返回——用一枚 `NoRoot` 镜像
+    /// 造"两个错并存"的局面,若校验被摆到 `set_var(GVAR_RANK)`/`start_main` 之后,拿到的
+    /// 会是 `NoRoot`(世界已被写过 GVAR_RANK 才发现越界)。断言 `RankOutOfRange` 胜出 =
+    /// 校验位于 `World::new` 分配之前,同 `InvalidCharacter`/`UnknownMark` 的先验后建口径。
+    #[test]
+    fn new_game_at_rank_check_precedes_any_world_write() {
+        use crate::ecl::binding::TaskStartError;
+        assert_eq!(
+            World::new_game_at(
+                7,
+                5,
+                0,
+                crate::player::Loadout::default(),
+                &crate::ecl::image::EclImage::empty()
+            )
+            .expect_err("rank 越界 + 无 root"),
+            TaskStartError::RankOutOfRange { rank: 5 },
+            "rank 校验须先于 start_main(否则世界已被写)"
+        );
     }
 
     /// 中段启动:根任务(tasks 池 0 号,首次分配必落最低空位——I4)pc 直接搁到标记

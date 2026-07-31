@@ -3,6 +3,23 @@ extends Node
 
 enum S { PLAYING, PAUSED, STAGE_CLEAR }
 
+## 难度档(stg-core `consts.rs` 的 RANK_*,值域 0..=4 冻结;越界 new_game_at 返 Err → false)。
+## Extra(4) 是预留位不是第五档:Extra 关在现代作品里走自己的脚本,通常不靠 rank 分支。
+const RANK_EASY := 0
+const RANK_NORMAL := 1
+const RANK_HARD := 2
+const RANK_LUNATIC := 3
+const RANK_EXTRA := 4
+
+## 开局参数(此前是 `new_game_at(names, sources, 1, 2, start, 0, 0, 3, 3)` 里一串位置魔数——
+## demo 一直在跑 Hard 而调用点看不出来)。本刀只让它们可见可改,取值一律维持原样。
+const BOOT_SEED := 1
+const BOOT_RANK := RANK_HARD
+const BOOT_CHARACTER := 0
+const BOOT_POWER := 0
+const BOOT_LIVES := 3
+const BOOT_BOMBS := 3
+
 var state: int = S.PLAYING
 var bridge: WorldBridge
 var stg_input: StgInput
@@ -64,7 +81,9 @@ func _boot(start: int) -> bool:
 	for f in files:
 		names.append(f)
 		sources.append(FileAccess.get_file_as_string("res://ecl/demo/" + f))
-	var ok := bridge.new_game_at(names, sources, 1, 2, start, 0, 0, 3, 3)
+	# 参数序:names, sources, seed, rank, start, character, power, lives, bombs
+	var ok := bridge.new_game_at(names, sources, BOOT_SEED, BOOT_RANK, start,
+		BOOT_CHARACTER, BOOT_POWER, BOOT_LIVES, BOOT_BOMBS)
 	if ok:
 		_sync_anchors() # 双表示规矩:开机后一次性对电平(T5 实装演出)
 		if not playfield.setup(bridge):

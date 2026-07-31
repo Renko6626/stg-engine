@@ -98,6 +98,11 @@ pub enum TaskStartError {
     /// `new_game_at`'s `Loadout.character` is out of range for `WorldTables::characters`
     /// (宿主期响亮错，见上).
     InvalidCharacter(u8),
+    /// `new_game_at`'s `rank` is outside `RANK_EASY..=RANK_EXTRA`（`0..=4`，难度档具名化刀）
+    /// ——**拒绝而非钳位**：`rank` 是回放/握手身份 `(seed, rank, start, loadout, image)` 的
+    /// 一部分，悄悄钳过的值会让"同 seed 同 rank 重放"这个契约变得可疑；开机是宿主一次性
+    /// 调用，返 `Err` 让它当场发现，好过事后翻 `diag`。宿主期响亮错，不半初始化世界.
+    RankOutOfRange { rank: i32 },
 }
 
 // ── World extension methods ────────────────────────────────────────────────
