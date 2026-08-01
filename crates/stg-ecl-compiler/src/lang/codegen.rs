@@ -1069,6 +1069,32 @@ mod tests {
         w
     }
 
+    // ── wait 周期语义 ───────────────────────────────────────────────────
+
+    /// `wait(n)` 的语义是**等 n 帧**：`loop { …; wait(1); }` 应当**每帧**跑一次。
+    ///
+    /// 判别力：本测试同时钉死"周期 == n"与"周期 != n+1"。旧实现是
+    /// `task.wait = n` + 调度门禁 `wait > 0 → 递减并跳过`，于是 `wait(n)` 在第 F 帧
+    /// 执行后要被跳过 F+1..F+n 共 n 帧、第 **F+n+1** 帧才跑 ⇒ 周期是 n+1，
+    /// `wait(1)` 变成"隔一帧"。取两个 n（1 和 2）是必须的：只测 n=1 的话，
+    /// "周期恒为 1"这种实现也能过。
+    #[test]
+    fn wait_period_equals_its_argument() {
+        // main 在第 0 帧派生、**出生当帧不跑**（次帧首跑门禁），故 F 帧里能跑的是 1..F-1。
+        let mk = |w: u32| {
+            format!(
+                "sub main() {{\n\
+                   var n: int = 0;\n\
+                   loop {{ n = n + 1; set_global(20, n); wait({w}); }}\n\
+                 }}"
+            )
+        };
+        let mut w1 = run(&mk(1), 21);
+        assert_eq!(w1.body.get_var(20), 20, "wait(1) 应每帧跑一次(第 1..20 帧)");
+        let mut w2 = run(&mk(2), 21);
+        assert_eq!(w2.body.get_var(20), 10, "wait(2) 应隔一帧跑一次");
+    }
+
     // ── if 双分支 ───────────────────────────────────────────────────────
 
     #[test]
@@ -1963,8 +1989,9 @@ mod tests {
         assert_eq!(w.body.view().globals()[20], 3, "$self_vy 读到 3.0fx");
         assert_eq!(
             w.body.view().globals()[21],
-            186,
-            "$self_y：wait(5) 醒来那帧（相位 2）位置是 180 + 2×3"
+            183,
+            "$self_y：wait(5) 醒来那帧位置是 180 + 1×3（2026-08-01 语义修正前是 186 = 180+2×3——\
+             旧 wait(5) 实际等 6 帧，读点晚一帧。世界侧时间线没变：上面 e.y() 仍是 189）"
         );
         assert_eq!(w.body.view().globals()[22], 80, "$self_x 停在终点 x");
         assert_eq!(w.body.view().diag().task_faults, 0);

@@ -5511,8 +5511,11 @@ mod tests {
             1,                                // 24
             crate::ecl::ops::OP_SYS as u32,   // 25
             SYS_SH_XFORM as u32,              // 26
-            crate::ecl::ops::OP_PUSHI as u32, // 27  wait(1) ← **跨帧**
-            1,                                // 28
+            crate::ecl::ops::OP_PUSHI as u32, // 27  wait(2) ← **跨帧**
+            2,                                // 28  （2026-08-01 语义修正：旧 `wait(1)` 就是
+            //                                        "隔一帧跑"，新语义下等价写法是 wait(2)。
+            //                                        这里要的是"设 xform 与开火之间夹一个
+            //                                        任务不执行的空转帧"，故跟着改数不改结构。）
             crate::ecl::ops::OP_WAIT as u32,  // 29
             crate::ecl::ops::OP_PUSHI as u32, // 30  sh_fire(0)
             0,                                // 31
@@ -5537,7 +5540,7 @@ mod tests {
             .spawn_sub_internal(&ecl, ecl.sub_id(1).unwrap(), &[], (OWNER_STAGE, 0, 0))
             .expect("应能派一个任务");
 
-        // 帧 1：跑到 wait(1) 让出（此时 sh_xform 已设、还没开火）。
+        // 帧 1：跑到 wait(2) 让出（此时 sh_xform 已设、还没开火）。
         w.body.frame = 1;
         crate::ecl::vm::run_tasks(&mut w.tasks, &mut w.body, &ecl, &TABLES_V0);
         assert_eq!(w.body.bullets.iter_alive().count(), 0, "跨帧前还没开火");
