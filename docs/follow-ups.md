@@ -605,7 +605,8 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 ### D15. 脚本敌号只带 generation 的**低 15 位** —— ABA 检测周期 32768（敌句柄打包刀，2026-07-31）
 
 `syscall.rs::pack_enemy_handle` 把敌号编成 `((gen & 0x7FFF) << 16) | index`，**只押 15 位**。
-理由是打包值必须恒**非负**：`-1` 是四个读口（12/79/80/81/82 那族）唯一的"无效/没有"哨兵，
+理由是打包值必须恒**非负**：`-1` 是四个读口（100/110/101/102/103 那族，即
+`enemy_hp`/`nearest_enemy`/`enemy_x`/`enemy_y`/`enemy_alive`）唯一的"无效/没有"哨兵，
 押满 16 位会让 `gen >= 0x8000` 的敌号变成负数、与哨兵撞车。
 
 **代价**：同一个池槽复用 **32768** 次之后，`generation & 0x7FFF` 回绕，旧敌号会重新"认领"
@@ -643,7 +644,7 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
    `$self_x` 与 `enemy_x(e)` 两套都有，速度这边先只做 `$self_*`——读别人的**位置**有明确
    用途（瞄准/聚集/跟随），读别人的**速度**暂时想不出非它不可的场景，而 `nearest_enemy`
    返的敌大多是拿来打的不是拿来跟的。真需要时补两个 syscall 号即可，**不影响本刀任何设计**
-   （敌池里 `speed`/`angle` 本来就逐敌存着，缺的只是读口，同 80/81 号当初的形状）。
+   （敌池里 `speed`/`angle` 本来就逐敌存着，缺的只是读口，同 `enemy_x`/`enemy_y` 当初的形状）。
 
 另有一条已裁定不做且**不留触发点**：笛卡尔单轴动词 `move_vx`/`move_vy`——
 `move_vel_xy(30, $self_vx, 4.0fx, 2)` composed 已等价且更通用。

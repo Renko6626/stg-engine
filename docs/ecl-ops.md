@@ -192,7 +192,7 @@ owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P
 
 | 号 | 名 | 参数（压栈序） | 返回 |
 |---|---|---|---|
-| 500 | `add_score`（整局流程刀，见 consts.rs 5x 族） | delta | —（自机 0 记分；`delta` 允许负值扣分，结果**饱和钳** `[0, u64::MAX]`——扣穿停在 0、加满停在上限，不回绕；不做参数收窄，不 Fault，owner 类别无限制） |
+| 500 | `add_score`（整局流程刀，见 consts.rs 5xx 族） | delta | —（自机 0 记分；`delta` 允许负值扣分，结果**饱和钳** `[0, u64::MAX]`——扣穿停在 0、加满停在上限，不回绕；不做参数收窄，不 Fault，owner 类别无限制） |
 | 510 | `add_lives`（B20） | delta | —（自机 0；`delta` 允许负，`saturating_add` 后**双边钳** `[0, u8::MAX]`——扣穿停 0、加满停 255，不回绕不 panic；**钳位是正常语义**，不计 `contract_viol`、不 Fault（同 `add_score` 口径）；不做参数收窄，owner 类别无限制） |
 | 511 | `add_bombs`（B20） | delta | —（同 510，写 `bombs`，钳 `[0, u8::MAX]`） |
 | 512 | `add_power`（B20） | delta | —（同 510，写 `power`，但上钳是 `items::POWER_MAX`=**400**（显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 档位索引 OOB） |

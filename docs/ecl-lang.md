@@ -1000,7 +1000,7 @@ id 命名空间：`0` 保留无效 · `1..=63` 引擎保留（如 `REQ_ENEMY_DEA
 | `REQ_BG`（6） | `id`（int，同写入的 `bg_id`） | 0 |
 | `REQ_BG_PHASE`（7） | `phase`（int，同写入的 `bg_phase`） | 0 |
 
-`REQ_BGM`/`REQ_BG`/`REQ_BG_PHASE` 由 `bgm`/`bg`/`bg_phase` 三个 builtin 内部经对应的 5x
+`REQ_BGM`/`REQ_BG`/`REQ_BG_PHASE` 由 `bgm`/`bg`/`bg_phase` 三个 builtin 内部经对应的 5xx
 syscall 自动发出——脚本不需要、也不应该自己再手写一次 `emit_req` 发这三个 id。
 `REQ_STAGE_CLEAR` 没有专属 syscall/builtin，是纯粹的挂牌协议常量：脚本用通用的
 `emit_req(REQ_STAGE_CLEAR, ...)` 自己发。
@@ -1275,7 +1275,7 @@ sub main() {
 
 ### 什么会 Fault、什么只是静默降级
 
-写 `.ecl` 时值得记住的分界（完整口径见 [`ecl-ops.md`](ecl-ops.md) 62-76 号表）：
+写 `.ecl` 时值得记住的分界（完整口径见 [`ecl-ops.md`](ecl-ops.md) 600-660 号表）：
 
 - **静默降级（no-op + 违约计数，任务继续跑）**：槽号 `id` 越界；`n_angle` 或 `n_speed` 为
   0，或两者之积超过弹池容量（整条 `sh_fire` 一颗不发）。**这几种最难查**——脚本照跑、
