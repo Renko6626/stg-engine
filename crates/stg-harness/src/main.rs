@@ -7,6 +7,8 @@
 //!   serve [--port 8611] [--seed 1]  起 WebSocket 查看器
 //!   check <file.ecl|目录>  只编译不跑，渲染诊断（人/agent/CI 共用的最短反馈环；目录 =
 //!                         多文件编译单元，走 compile_units）
+//!   run <file.ecl|目录>   跑任意 .ecl 并输出可断言的事实（计数/峰值/末帧 + --at 单帧弹表）；
+//!                         **有 task fault 即退非零码**（写完 .ecl 之后的观测出口）
 //!   gen-ecl-meta          生成 editors/vscode/stg-ecl/ecl-meta.json + 刷新 docs/ecl-lang/7-reference.md
 //!                       生成段（单一真相源=builtins::all()，两个 sink 同一次生成）
 //!
@@ -15,6 +17,7 @@
 use std::process::ExitCode;
 
 mod eclmeta;
+mod run;
 mod storm;
 mod tables;
 mod viewer;
@@ -30,10 +33,11 @@ fn main() -> ExitCode {
         Some("dump") => viewer::cmd_dump(&args[2..]),
         Some("storm") => storm::cmd_storm(&args[2..]),
         Some("check") => cmd_check(&args[2..]),
+        Some("run") => run::cmd_run(&args[2..]),
         Some("gen-ecl-meta") => eclmeta::cmd_gen(),
         _ => {
             eprintln!(
-                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl> | gen-ecl-meta>"
+                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] [--ecl PATH] | dump --out FILE [--frames N] [--seed S] [--ecl PATH] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl|目录> | run <file.ecl|目录> [--frames N] [--seed S] [--rank R] [--at F] | gen-ecl-meta>"
             );
             ExitCode::FAILURE
         }
@@ -1260,7 +1264,8 @@ fn cmd_verify_tables() -> ExitCode {
 }
 
 /// 目录 → 全部 *.ecl 按文件名字节序;单文件 → 单元素。整局流程刀 spec §1 收集约定。
-fn collect_units(path: &str) -> std::io::Result<Vec<(String, String)>> {
+/// `check` 与 `run`/`serve --ecl`/`dump --ecl` 共用同一条路径处理（run 刀 2026-08-01）。
+pub(crate) fn collect_units(path: &str) -> std::io::Result<Vec<(String, String)>> {
     let meta = std::fs::metadata(path)?;
     if meta.is_dir() {
         let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(path)?

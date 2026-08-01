@@ -13,8 +13,28 @@ cargo run -p stg-harness -- check my.ecl
 ```
 
 通过打印 `OK`、退出码 0；不通过逐条打 `文件:行:列: 说明` + 源行 + `^` 定位。
-想真看到画面，就去替换 `godot/ecl/demo/` 里的关卡脚本（那个目录**整取**、按文件名排序编译成
-一个编译单元，所以不是往里加文件——里面已经有一个 `sub main()` 了，加第四个文件会撞名），
+
+编过了不等于跑对了。**真跑一遍**看它到底干了什么：
+
+```
+cargo run -p stg-harness -- run my.ecl --frames 600
+```
+
+打的是逐段采样的**弹数/敌数/活任务数**、全程峰值、末帧，外加诊断计数。⚠️ 脚本被引擎杀掉
+（死循环烧穿指令预算、坏参数）时 `run` 会**打出 fault 并退非零码**——这是唯一能看见它的地方，
+别的路径一律静默。要验一圈弹到底均没均分，加 `--at F` 打第 F 帧每颗弹的角度（BAM 原值 + 度数）
+与速度：
+
+```
+cargo run -p stg-harness -- run my.ecl --frames 300 --at 60
+```
+
+还有 `--seed S`（换随机种子）、`--rank R`（难度 `0..=4`，默认 2）。想边玩边看就
+`cargo run -p stg-harness -- serve --ecl my.ecl`，浏览器开 <http://localhost:8611>，
+改完脚本刷新页面即重载。
+
+想在真 Godot 里看，就去替换 `godot/ecl/demo/` 里的关卡脚本（那个目录**整取**、按文件名排序
+编译成一个编译单元，所以不是往里加文件——里面已经有一个 `sub main()` 了，加第四个文件会撞名），
 再 `cargo build -p stg-godot && godot --path godot`。详见
 [`godot/README.md`](../../godot/README.md)。
 

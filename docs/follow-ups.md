@@ -998,3 +998,37 @@ CI 的 clippy 步跑的是 **debug**（`cargo clippy --workspace --all-targets -
 
 **触发点 = 谁要让 `cargo clippy --release -- -D warnings` 进 CI**（或谁被这条 warning 挡住），
 届时连同 ①②③ 一并裁。在那之前它只是噪声一行。
+
+### F8. 引擎里有**两套不一致的瞄准政策**——自机 game over 之后两条路各走各的（run 刀记档，2026-08-01）
+
+同一句"瞄自机"在引擎里有两份实现，对**自机不在场**的处置正好相反：
+
+| 路径 | 实现 | 自机 `LIFE_ABSENT`/`LIFE_GAMEOVER` 时 |
+|---|---|---|
+| `aim_player()`（syscall 120） | 无条件对 `players[0]` 求 `atan2` | 照常返回一个角度——**瞄那个已不存在的自机的槽位坐标** |
+| `sh_aim` + `sh_fire`（6xx 发射器） | 同上，无条件对 `players[0]` | 同上 |
+| xformdef 的 `aim_player` op | `world/motion.rs:179` 的 `nearest_aimable_player` | 跳过不可瞄的自机；**一个都没有 → 整条 no-op** |
+| 弹 setter `aim_at_player`（330） | 同上 | 同上：弹保持原角度，**不报错、不计数** |
+
+后果：自机 game over 之后，发射器仍朝那个槽位坐标喷，而弹身上的 xform 会**安静地不动**——
+同一段弹幕的两半按两套规矩走。单人局里只有 game over 之后才看得见，所以一直没人撞上。
+
+**触发点**：谁要统一这两套政策。⚠️ **这是行为变更，而且是内容口径问题、不是实现细节**——
+改哪一边都要先回答「**自机死了之后弹幕该继续瞄哪**」（继续瞄尸体坐标？冻住角度？瞄场地中轴？
+ZUN 各作口径也不一致）。答案定下来之前不要"顺手对齐"，那会悄悄改掉弹幕形状。
+
+已在 [`docs/ecl-lang/4-bullets.md`](ecl-lang/4-bullets.md) 的「四条瞄准路径的解析时机与基点」
+表里如实写明现状——**文档不欠账，欠的是引擎的一致性**。
+
+### F9. fault 码名字表在 harness 抄了第二份（`run` 刀 2026-08-01 记档）
+
+`stg_core::ecl::vm` 的 fault 码常量是 `pub(crate)`，而 `harness run` 要把 `code 3` 渲染成
+`BUDGET 指令预算耗尽` 这样的人话，只能在 harness 侧**抄一份码→名字表**。这是第二真相源，
+core 那边加了新 fault 码而这边没跟，会**静默漂**。
+
+**后果有限**：跟漏只会打成 `code N 未知 fault 码`，**不会错报**成别的码，退出码逻辑也不依赖
+这张表（它只看 `diag.task_faults` 与 `EVT_TASK_FAULT` 事件）。所以不急。
+
+**正解**：把 core 里那几个 fault 码常量的可见性改成 `pub`（纯可见性变更、零行为变更、
+不动 `ENGINE_VER`），harness 直接引用。**触发点** = 下次有理由动 `stg-core` 时顺手做；
+本刀因任务书钉死"core 一行不改"而没做。
