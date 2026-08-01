@@ -39,7 +39,7 @@ impl<'w> WorldView<'w> {
     pub fn spells(self) -> &'w [crate::spell::SpellSlot] {
         &self.body.spells
     }
-    /// 表现锚点四读口（整局流程刀 spec §4；仅 5x 族 syscall 写，见 `WorldBody` 字段文档）。
+    /// 表现锚点四读口（整局流程刀 spec §4；仅 5xx 族 syscall 写，见 `WorldBody` 字段文档）。
     pub fn bgm_id(self) -> u16 {
         self.body.bgm_id
     }

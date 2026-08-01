@@ -32,30 +32,56 @@ use crate::math::geom::polar_to_vec;
 use crate::math::{Angle, Fx};
 use crate::xform::XformSlot;
 
-// ── syscall 号表 v1（编号即契约；冻结纪律同 op 表——族内留空隙，新增落族内）───────
+// ── syscall 号表（冻结；百分区制，2026-07-31 重排拍板）─────────────────────────
+// 百位 = 族号：0xx `$` 引擎变量 / 1xx 查询 / 2xx 造物 / 3xx 弹操作 / 4xx 敌运动 /
+// 5xx 局面·记账·道具 / 6xx shooter / 7xx 控制·事件·符卡 / 8xx+ 预留。
+//
+// **族内留空隙：新号落族内、永不乱序追加。** 族满了走评审开新族，不许溢出到隔壁——
+// 上一版是十位族号制，`0x` 读族（容量 10）实占 13、`6x` shooter（容量 10）实占 15，
+// 两次静默溢出之后 77 号起就没族可落了，最近四刀只好纯自增，读族因此裂成三段。
+// 那次的教训不是"纪律松"，是**族容量对一张还在长的表本来就不够**。
+//
+// 4xx/5xx/6xx 与 ZUN ECL 的同号段**有意对齐**（他的 4xx = move、5xx = drops、
+// 6xx = et* 弹管理器），方便对着 Priw8 的指令表读。
+// 改号 = 冻结面变更 = 过评审 + bump ENGINE_VER（见 spec 2026-07-31）。
+//
+// **号域上限不受编码宽度约束**：`OP_SYS` 的操作数由发码侧 `SubBuilder::sys()` 写成
+// `emit(no as u32)`（住**另一个 crate**：`stg-ecl-compiler/src/lib.rs`，不是本 crate 的
+// `vm.rs`——`vm.rs` 只**读**这个操作数字）
+// ——一个完整的 `u32` 字（`ecl::ops::ARITY[OP_SYS] == 1`，单位是"字"不是"字节"），不是
+// 塞进 opcode 那个 `u8`。故 `u16` 全域（0..=65535）都可安全落进这个操作数，百分区制
+// 一路扩到 `8xx`/`9xx` 甚至更高都不会撞编码位宽的墙——`3xx`–`7xx` 这些 ≥256 的号已经
+// 是现成的证据。
 
-// 0x：读——世界/自机/随机/变量
+// 0xx `$` 引擎变量（12；与 parse.rs::resolve_engine_var 白名单一一对应）／1xx 查询（10；
+// 函数形态读口 + 纯数学）／2xx 造物（4）／3xx 弹操作（9；self owner 必须是 BULLET；按
+// motion.rs 九连顺序编号）／4xx 敌运动（5；对齐 ZUN 4xx）／5xx 局面·记账·道具（12；
+// 对齐 ZUN 5xx 的 drops；owner 类别无限制，STAGE 任务常发）／6xx shooter（15；对齐 ZUN
+// 6xx 的 et*）／7xx 控制·事件·符卡·globals（7）。
+//
+// 下方 74 个常量的**物理顺序沿用历史累加顺序（append-order）**，不随本刀按族重排位置——
+// 每个常量的族由其**取值的百位**决定，不由物理位置决定；见文件头总纲。
 pub const SYS_FRAME: u16 = 0;
-pub const SYS_PLAYER_X: u16 = 1;
-pub const SYS_PLAYER_Y: u16 = 2;
-pub const SYS_SELF_X: u16 = 3;
-pub const SYS_SELF_Y: u16 = 4;
-pub const SYS_SELF_HP: u16 = 5;
-pub const SYS_RAND_RANGE: u16 = 6;
-pub const SYS_GET_VAR: u16 = 7;
-pub const SYS_SET_VAR: u16 = 8;
+pub const SYS_PLAYER_X: u16 = 10;
+pub const SYS_PLAYER_Y: u16 = 11;
+pub const SYS_SELF_X: u16 = 20;
+pub const SYS_SELF_Y: u16 = 21;
+pub const SYS_SELF_HP: u16 = 30;
+pub const SYS_RAND_RANGE: u16 = 150;
+pub const SYS_GET_VAR: u16 = 700;
+pub const SYS_SET_VAR: u16 = 701;
 /// 任务龄（帧数，**M1.5 新增**）：`ctx.frame - task.born_frame`（wrapping）。**语义故意偏离
 /// ZUN**（ZUN `-9988` 是"敌出生以来帧数"，只对敌有意义）——我们量的是**任务**的龄，不是
 /// owner 实体的龄：零新状态（复用既有 `Task.born_frame`/`ctx.frame`），对全部 owner 种类
 /// （含 STAGE）均有意义。见 `docs/ecl-ops.md`/`docs/zun-ecl-v2-reference.md` 的偏离记档。
-pub const SYS_SELF_AGE: u16 = 9;
+pub const SYS_SELF_AGE: u16 = 32;
 /// owner 上限血量（M1.5 新增）：owner=ENEMY → `enemies.hp_max[idx]`；非敌 → 押 0
 /// （同 `SYS_SELF_HP` 误用策略：静默降级，不 Fault）。
-pub const SYS_SELF_HP_MAX: u16 = 10;
+pub const SYS_SELF_HP_MAX: u16 = 31;
 /// 符卡计时读族（符卡机构 spec 2026-07-24 §5）：owner 绑定的 active 槽 → `frames_left`；
 /// 无绑定 → `-1`（`wait_spell()` 语法糖的判据，同 `SYS_SELF_HP` 误用降级口径：owner
 /// 非 ENEMY 直接押 -1，不 Fault）。
-pub const SYS_SPELL_TIMER: u16 = 11;
+pub const SYS_SPELL_TIMER: u16 = 130;
 /// 查敌读口(A5 补遗):活敌返 hp,其余 -1。1 参 `handle` = **打包敌号**(含 generation,
 /// 见 [`pack_enemy_handle`])。P4-b:越界/死槽/**gen 不符**/负值一律 -1,不 Fault
 /// ——stage 编排等 boss 死的轮询原语。
@@ -63,61 +89,62 @@ pub const SYS_SPELL_TIMER: u16 = 11;
 /// **槽复用可辨(敌句柄打包刀 2026-07-31)**:敌死、槽被回收、另一只敌落进同一个槽之后,
 /// 旧句柄读到的是 -1 而**不是**新那只敌的血。打包前这里是条真 bug——boss 死后若有杂兵
 /// 占了它的槽,`enemy_hp(boss)` 会读到杂兵的血,"等 boss 死"的轮询就卡住不退。
-pub const SYS_ENEMY_HP: u16 = 12;
+pub const SYS_ENEMY_HP: u16 = 100;
 
-// 2x：写——创建/世界变更
+// （原 "2x：写——创建/世界变更" 族——见文件头总纲：本区混有 2xx 造物 / 4xx 敌运动 /
+// 7xx 控制·符卡三族，物理顺序沿用历史累加顺序，不代表族边界）
 /// 丙方案 8 参（正序压栈）：`appearance, x, y, speed, angle, xform_off, xform_cnt, task_script`。
-pub const SYS_CREATE_BULLET: u16 = 20;
+pub const SYS_CREATE_BULLET: u16 = 200;
 /// 9 参：`appearance, x, y, n_angle, angle0, angle_step, n_speed, speed0, speed_step`（无 xform）。
-pub const SYS_CREATE_BULLETS_BATCH: u16 = 21;
+pub const SYS_CREATE_BULLETS_BATCH: u16 = 201;
 /// v1 直参 5 个：`x, y, hp, drop_table, score`（appearance 敌表后补，见 follow-ups）；
 /// A5 乙案尾追 `sprite, task_script`。押**打包敌号**（[`pack_enemy_handle`]：含
 /// generation，恒非负）；池满 → **-1**。
-pub const SYS_SPAWN_ENEMY: u16 = 22;
+pub const SYS_SPAWN_ENEMY: u16 = 210;
 /// 3 参：`x, y, item_type`。
-pub const SYS_DROP_ITEM: u16 = 23;
+pub const SYS_DROP_ITEM: u16 = 220;
 /// self owner 敌；4 参：`dur, x, y, easing`。
-pub const SYS_MOVE_ENEMY_TO: u16 = 24;
+pub const SYS_MOVE_ENEMY_TO: u16 = 400;
 /// slot + 5 字段（`enemy` 取自 self owner，非显式参）：
 /// `slot, hp_ratio, spell_id, timer_frames, phase_left, active`。
-pub const SYS_BOSS_SET: u16 = 25;
+pub const SYS_BOSS_SET: u16 = 730;
 /// 1 参：`ch`。
-pub const SYS_PULSE_SIGNAL: u16 = 26;
+pub const SYS_PULSE_SIGNAL: u16 = 710;
 /// 通道 B 渲染请求推送（M2 前置刀；D12/spec §2.5）。无 owner 类别限制——宣言/音效/震屏
 /// 常由 STAGE 任务发。
-pub const SYS_EMIT_REQ: u16 = 27;
+pub const SYS_EMIT_REQ: u16 = 720;
 /// 符卡宣言（符卡机构 spec 2026-07-24 §5）：owner 必须 ENEMY（misuse → Fault）；7 参
 /// 正序压栈 `slot, spell_id, pattern:SubRef, time_limit, bonus0, flags, hp_threshold`
 /// （`pattern` 同 `fire` task 参同款 `SubRef`，负值=none）。
-pub const SYS_SPELL_BEGIN: u16 = 28;
+pub const SYS_SPELL_BEGIN: u16 = 740;
 /// 符卡逃生舱口（符卡机构 spec 2026-07-24 §5）：无参；owner 绑定槽走 HP 路径结算，
 /// 无绑定 → no-op（重复调用安全）。
-pub const SYS_SPELL_END: u16 = 29;
+pub const SYS_SPELL_END: u16 = 741;
 
-// 3x：写——弹 setter 族（self owner 必须是 BULLET；按 motion.rs 九连顺序编号）
-pub const SYS_SET_BULLET_SPEED: u16 = 30;
-pub const SYS_SET_BULLET_ANGLE: u16 = 31;
-pub const SYS_TURN_BULLET: u16 = 32;
-pub const SYS_SET_BULLET_VEL: u16 = 33;
-pub const SYS_SET_BULLET_ANG_VEL: u16 = 34;
-pub const SYS_SET_BULLET_ACCEL: u16 = 35;
-pub const SYS_SET_BULLET_GRAVITY: u16 = 36;
-pub const SYS_STOP_BULLET_FX: u16 = 37;
-pub const SYS_AIM_BULLET_AT_PLAYER: u16 = 38;
+// 3xx：弹操作族（self owner 必须是 BULLET；按 motion.rs 九连顺序编号）
+pub const SYS_SET_BULLET_SPEED: u16 = 300;
+pub const SYS_SET_BULLET_ANGLE: u16 = 301;
+pub const SYS_TURN_BULLET: u16 = 302;
+pub const SYS_SET_BULLET_VEL: u16 = 310;
+pub const SYS_SET_BULLET_ANG_VEL: u16 = 311;
+pub const SYS_SET_BULLET_ACCEL: u16 = 312;
+pub const SYS_SET_BULLET_GRAVITY: u16 = 313;
+pub const SYS_STOP_BULLET_FX: u16 = 320;
+pub const SYS_AIM_BULLET_AT_PLAYER: u16 = 330;
 
-// 4x：读——瞄准
+// （原 "4x：读——瞄准" 族——本条单独在新表里落 1xx 查询族，见文件头总纲）
 /// 0 参：读 self 位置 → 朝向 P0 的角度（BAM，供脚本自算瞄准环）。
-pub const SYS_AIM_PLAYER_ANGLE: u16 = 40;
+pub const SYS_AIM_PLAYER_ANGLE: u16 = 120;
 
-// 5x：写——账面/表现声明族（整局流程刀 spec §4；owner 类别无限制，STAGE 任务常发）。
+// 5xx：局面·记账·道具族（整局流程刀 spec §4；owner 类别无限制，STAGE 任务常发）。
 /// 1 参：`delta`（允许负，饱和钳 `[0, u64::MAX]`，P4-b）。
-pub const SYS_ADD_SCORE: u16 = 50;
+pub const SYS_ADD_SCORE: u16 = 500;
 /// 1 参：`id`（`0..=65535` 收窄，越界 no-op+viol）。写 `bgm_id` + 发 `REQ_BGM`。
-pub const SYS_BGM: u16 = 51;
+pub const SYS_BGM: u16 = 550;
 /// 同上，写 `bg_id` + `REQ_BG`。
-pub const SYS_BG: u16 = 52;
+pub const SYS_BG: u16 = 551;
 /// 1 参：`n`。写 `bg_phase` + 自动盖 `bg_phase_frame` = 当前帧 + 发 `REQ_BG_PHASE`。
-pub const SYS_BG_PHASE: u16 = 53;
+pub const SYS_BG_PHASE: u16 = 552;
 /// 全场清弹（B19；0 参、无返回）。铺一个覆盖全场、`life=1` 的 `FIELD_CLEAR_BULLETS`
 /// 作用区——**复用现成的消弹区机制**，故"每颗被消的弹原位转一颗星星"（M0-15）与
 /// `EVT_FIELD_CLEARED` 都是白送的，引擎侧零新机制（同 `settle_one_spell` 的全屏清弹样板）。
@@ -125,7 +152,7 @@ pub const SYS_BG_PHASE: u16 = 53;
 /// 关底转场（`REQ_STAGE_CLEAR` 挂牌前）是首个真实消费者。**不给护盾帧**——那是 bomb
 /// 那刀的职责（bomb = `FIELD_CLEAR_BULLETS | FIELD_DAMAGE` + 自机无敌）。
 /// P4-a：field 池满 → `create_field` 自身的降级（NULL + 计数），本 syscall 不 Fault。
-pub const SYS_CLEAR_BULLETS: u16 = 54;
+pub const SYS_CLEAR_BULLETS: u16 = 540;
 /// 残机增量（B20；1 参 `delta`、无返回）。双边钳 `[0, u8::MAX]`（P4-b：`delta` 是脚本给的
 /// 任意 `i32`，先 `saturating_add` 再 `clamp`，不回绕不 panic）。
 ///
@@ -134,31 +161,31 @@ pub const SYS_CLEAR_BULLETS: u16 = 54;
 /// 都是"奖命 +1 / 中弹 −1"这类记账。
 /// 别把这族"补全"成 `set_lives`/`set_bombs`/`set_power` 四件套——多一条写路径就多一处
 /// 与 `Loadout` 抢开局初值的歧义。
-pub const SYS_ADD_LIVES: u16 = 55;
+pub const SYS_ADD_LIVES: u16 = 510;
 /// bomb 增量（B20）。语义同 [`SYS_ADD_LIVES`]，钳 `[0, u8::MAX]`；增量形态同为人类裁定。
-pub const SYS_ADD_BOMBS: u16 = 56;
+pub const SYS_ADD_BOMBS: u16 = 511;
 /// 火力增量（B20）。语义同 [`SYS_ADD_LIVES`]，但上钳是 [`crate::items::POWER_MAX`]（400，
 /// = 显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 索引就 OOB（见
 /// `world::WorldBody::set_player_power` 文档）。增量形态同为人类裁定。
-pub const SYS_ADD_POWER: u16 = 57;
-/// 清空自身待掉落计数（58；0 参、无返回。敌人死亡效果刀，参照 ZUN ECL 的 `dropClear` 506）。
+pub const SYS_ADD_POWER: u16 = 512;
+/// 清空自身待掉落计数（520；0 参、无返回。敌人死亡效果刀，参照 ZUN ECL 的 `dropClear` 506）。
 /// self owner 必须是 ENEMY，否则 Fault（misuse 策略，同 `move_enemy_to`）。
-pub const SYS_DROP_CLEAR: u16 = 58;
-/// 给自身待掉落计数增量加 `n` 颗 `type`（59；2 参、无返回。参照 ZUN `dropExtra` 507）。
+pub const SYS_DROP_CLEAR: u16 = 520;
+/// 给自身待掉落计数增量加 `n` 颗 `type`（521；2 参、无返回。参照 ZUN `dropExtra` 507）。
 /// **只增不减**是人类裁定——要清空用 `drop_clear()`。坏类型/负 n 的处置见
 /// [`crate::world::WorldBody::add_enemy_drop`]。
-pub const SYS_DROP_ADD: u16 = 59;
-/// 立刻把自身待掉落计数撒出去（60；0 参、无返回。参照 ZUN `dropItems` 509）。
+pub const SYS_DROP_ADD: u16 = 521;
+/// 立刻把自身待掉落计数撒出去（522；0 参、无返回。参照 ZUN `dropItems` 509）。
 /// **吐完不清空**（人类裁定 D-3，照 ZUN 字面）——故 `drop_items(); die();` 掉**双份**，
 /// 作者自负。这条语义有测试钉死（`drop_items_does_not_clear_counts_...`），别"顺手修好"。
-pub const SYS_DROP_ITEMS: u16 = 60;
-/// 就地阵亡：跑完整死亡效果（61；0 参、无返回。参照 ZUN `die` 561）。
+pub const SYS_DROP_ITEMS: u16 = 522;
+/// 就地阵亡：跑完整死亡效果（530；0 参、无返回。参照 ZUN `die` 561）。
 /// **表层 `die()` 降低成本 syscall + `OP_KILL_SELF` 两条指令**（见 codegen），故调用它的
 /// 任务立即终止（人类裁定 D-4）。ZUN 的 561 还经 `setDeath`(556) 间接一层——那半留给
 /// `death_script` 通电那一刀，届时与 ZUN 完全同构。
-pub const SYS_DIE: u16 = 61;
+pub const SYS_DIE: u16 = 530;
 
-// ── Shooter：预存发射参数集（62-76；shooter 刀 2026-07-31，参照 ZUN et* 族 600-641）──
+// ── Shooter：预存发射参数集（600-660；shooter 刀 2026-07-31，参照 ZUN et* 族 600-641）──
 //
 // 每任务 4 个编号槽（[`crate::ecl::shooter::SHOOTERS_PER_TASK`]）。`id ≥ SHOOTERS_PER_TASK`
 // 一律 no-op + `contract_viol`（P4-b）——不 Fault，因为"槽号写错"是常见笔误而非结构性违约，
@@ -166,39 +193,39 @@ pub const SYS_DIE: u16 = 61;
 //
 // 下面**前 14 条**都只是写字段、无副作用：不查 appearance 是否在册、不查 xform 区间、不查
 // sub 号在册——那些校验统一在**开火那一刻**做（同 `fire` 的"先验后建"口径：设参数时弹还
-// 不存在，没有可拒绝的对象）。`sh_fire`(76) 的语义见其自身文档。
-pub const SYS_SH_RESET: u16 = 62;
-pub const SYS_SH_SPRITE: u16 = 63;
-pub const SYS_SH_OFFSET: u16 = 64;
-pub const SYS_SH_OFFSET_ABS: u16 = 65;
-pub const SYS_SH_OFFSET_RAD: u16 = 66;
-pub const SYS_SH_DIST: u16 = 67;
-pub const SYS_SH_ANGLE: u16 = 68;
-pub const SYS_SH_SPEED: u16 = 69;
-pub const SYS_SH_COUNT: u16 = 70;
-pub const SYS_SH_AIM: u16 = 71;
-pub const SYS_SH_RING: u16 = 72;
-pub const SYS_SH_XFORM: u16 = 73;
-pub const SYS_SH_TASK: u16 = 74;
-pub const SYS_SH_REQ: u16 = 75;
-/// 开火（76）：用发射器槽 `id` 的参数造弹。**无返回值**（人类裁定 D-8——本语言要求值必须
+// 不存在，没有可拒绝的对象）。`sh_fire`(660) 的语义见其自身文档。
+pub const SYS_SH_RESET: u16 = 600;
+pub const SYS_SH_SPRITE: u16 = 610;
+pub const SYS_SH_OFFSET: u16 = 620;
+pub const SYS_SH_OFFSET_ABS: u16 = 621;
+pub const SYS_SH_OFFSET_RAD: u16 = 622;
+pub const SYS_SH_DIST: u16 = 623;
+pub const SYS_SH_ANGLE: u16 = 630;
+pub const SYS_SH_SPEED: u16 = 631;
+pub const SYS_SH_COUNT: u16 = 632;
+pub const SYS_SH_AIM: u16 = 640;
+pub const SYS_SH_RING: u16 = 641;
+pub const SYS_SH_XFORM: u16 = 650;
+pub const SYS_SH_TASK: u16 = 651;
+pub const SYS_SH_REQ: u16 = 652;
+/// 开火（660）：用发射器槽 `id` 的参数造弹。**无返回值**（人类裁定 D-8——本语言要求值必须
 /// 消费，有返回值就得写 `_ = sh_fire(0);`，而开火是循环里最高频的语句）。
 ///
 /// 七步见 spec §10。要点三条，都有判别式测试钉着，**别"顺手改好"**：
 /// - **fan 以基准方向为中心对称展开**（D-7）；ring 不居中。
 /// - `dist` 逐颗沿**各自**角度位移，不是整环平移。
 /// - 直角偏移与极坐标偏移**相加**（ZUN 626 明写 stacks），不是覆盖。
-pub const SYS_SH_FIRE: u16 = 76;
+pub const SYS_SH_FIRE: u16 = 660;
 
-// ── 数学/查询面（77-79；小清洗刀 2026-07-31）────────────────────────────────
-/// 反正切（77）：2 参 `y, x`（**都是 `Fx` raw**），押 BAM 角。核里的
+// ── 数学/查询面（110/140/141；小清洗刀 2026-07-31）────────────────────────────────
+/// 反正切（140）：2 参 `y, x`（**都是 `Fx` raw**），押 BAM 角。核里的
 /// [`crate::math::cordic::atan2`]（整数 CORDIC，钉死 16 轮）此前脚本够不着——`aim_player`
 /// 只能瞄自机，这条能瞄任意点/任意敌。
 ///
 /// **无 P4 分支**：CORDIC 对任意 `(y, x)` 都有定义，含 `(0, 0)`（返 `Angle::ZERO`）——
 /// 没有"坏参数"这个概念，故不计 `contract_viol`、不 Fault。
-pub const SYS_ATAN2: u16 = 77;
-/// 向量模（78）：2 参 `dx, dy`（`Fx` raw），押 `Fx` raw。**不是两点距离**——两点距离由
+pub const SYS_ATAN2: u16 = 140;
+/// 向量模（141）：2 参 `dx, dy`（`Fx` raw），押 `Fx` raw。**不是两点距离**——两点距离由
 /// 脚本自己减（`dist(bx - ax, by - ay)`）。
 ///
 /// 实现 = `isqrt(len_sq(dx, dy))`：[`crate::math::geom::len_sq`] 返的是 **Q32.32**
@@ -219,23 +246,23 @@ pub const SYS_ATAN2: u16 = 77;
 ///
 /// 无 P4 计数分支：饱和是正常语义（同 `add_score`/`add_lives` 族的钳位口径），
 /// 不计 `contract_viol`、不 Fault。
-pub const SYS_DIST: u16 = 78;
-/// 最近敌查询（79）：2 参 `x, y`（`Fx` raw），押**打包敌号**；场上无敌（或全 dying）→ **-1**。
+pub const SYS_DIST: u16 = 141;
+/// 最近敌查询（110）：2 参 `x, y`（`Fx` raw），押**打包敌号**；场上无敌（或全 dying）→ **-1**。
 ///
 /// [`crate::world::WorldBody::nearest_enemy`] 自 M0-13 建完就是死代码（有实现、有测试、
 /// 从没有 syscall 暴露过），本条只是给它通电，世界侧一行未改。
 ///
-/// 编码同 [`SYS_ENEMY_HP`]（12）/[`SYS_SPAWN_ENEMY`]（22）——三条本就是配对使用的
+/// 编码同 [`SYS_ENEMY_HP`]（100）/[`SYS_SPAWN_ENEMY`]（210）——三条本就是配对使用的
 /// （拿号 → 轮询）。世界侧返的一直是**完整句柄**，敌句柄打包刀（2026-07-31）之前
 /// 这里只押 `index`、把 generation 丢了；接上之后槽复用可辨。
 /// owner 类别无限制（关卡任务也该能查）。
-pub const SYS_NEAREST_ENEMY: u16 = 79;
+pub const SYS_NEAREST_ENEMY: u16 = 110;
 
-// ── 敌坐标读口（80-81；敌坐标读口刀 2026-07-31）──────────────────────────────
-/// 按敌号读 **x**（80）：1 参 `handle`（**打包敌号**，与 [`SYS_ENEMY_HP`]/
+// ── 敌坐标读口（101-102；敌坐标读口刀 2026-07-31）──────────────────────────────
+/// 按敌号读 **x**（101）：1 参 `handle`（**打包敌号**，与 [`SYS_ENEMY_HP`]/
 /// [`SYS_NEAREST_ENEMY`] 同口径——含 generation，槽复用可辨），押 `Fx` raw。
 ///
-/// 补的是上一刀（77-79 通电）暴露的断头路：脚本拿得到敌号却读不到坐标，
+/// 补的是上一刀（110/140/141 通电）暴露的断头路：脚本拿得到敌号却读不到坐标，
 /// "查最近的敌 → 朝它开火"算不出角度。数据本就在敌池里躺着，缺的只是读口。
 ///
 /// P4-b 降级（照 `sys_enemy_hp`）：**负句柄 / 越界 / 死槽 / gen 不符 → 返 `0`**，不 Fault、
@@ -248,12 +275,12 @@ pub const SYS_NEAREST_ENEMY: u16 = 79;
 /// 故探活归脚本：先 `enemy_hp(e) != -1` 再读坐标（手册 `docs/ecl-lang.md` 写死了这条惯例）。
 /// ⚠️ 探活判据**不是** `enemy_hp(e) >= 0`——overkill 的敌 hp 是真实负值
 /// （`settle::kill_enemy` 只 `min(0)`，不抹平负血），`>= 0` 会把"刚被打穿、槽还在"的敌误判成无效。
-pub const SYS_ENEMY_X: u16 = 80;
-/// 按敌号读 **y**（81）——镜像 [`SYS_ENEMY_X`]，语义/降级/owner 口径逐条相同。
-pub const SYS_ENEMY_Y: u16 = 81;
+pub const SYS_ENEMY_X: u16 = 101;
+/// 按敌号读 **y**（102）——镜像 [`SYS_ENEMY_X`]，语义/降级/owner 口径逐条相同。
+pub const SYS_ENEMY_Y: u16 = 102;
 
-// ── 探活读口（82；探活读口刀 2026-07-31）────────────────────────────────────
-/// 敌**探活**（82，ZUN `555 enmAlive`）：1 参 `handle`（**打包敌号**，同读族口径），
+// ── 探活读口（103；探活读口刀 2026-07-31）────────────────────────────────────
+/// 敌**探活**（103，ZUN `555 enmAlive`）：1 参 `handle`（**打包敌号**，同读族口径），
 /// 押 **1 或 0**。
 ///
 /// 补的是上一刀留下的残余缝：探活此前只能拿 `enemy_hp(e) != -1` 当探针，而 `-1`
@@ -270,39 +297,139 @@ pub const SYS_ENEMY_Y: u16 = 81;
 /// ——dying 的槽要活到相位 9（坐标仍读得到），四条里单独给一条换判据会让这组口径散掉。
 /// 配套建议写在手册：[`crate::world::WorldBody::nearest_enemy`] **本身已排除 dying**
 /// （候选 = 存活且非 dying），所以"从它拿到的号后来变 dying"应当**重查**而不是继续用。
-pub const SYS_ENEMY_ALIVE: u16 = 82;
+pub const SYS_ENEMY_ALIVE: u16 = 103;
 
-// ── 敌人运动动词族（83-86；T4，对标 ZUN ECL `move` 400-447 族）────────────────
+// ── 敌人运动动词族（410-421；T4，对标 ZUN ECL `move` 400-447 族）────────────────
 // 四条 syscall 都是 `world/motion.rs` 四个 `set_enemy_*` 写 API 的薄封装：owner 违约
 // （非 ENEMY）→ Fault，悬垂句柄/`easing>=8` 的 P4-b 校验全在世界层做过，本层不重复计数。
 
-/// 极坐标速度（83；ZUN `404 moveVel` / `405 moveVelTime`）：4 参正序
+/// 极坐标速度（410；ZUN `404 moveVel` / `405 moveVelTime`）：4 参正序
 /// `dur, angle, speed, easing`。self owner 非 ENEMY → Fault（同 [`SYS_MOVE_ENEMY_TO`]）。
 /// `dur == 0` 是合法退化 = 立即设。
-pub const SYS_MOVE_VEL: u16 = 83;
-/// 笛卡尔速度（84）：4 参正序 `dur, vx, vy, easing`。**`dur > 0` 时在笛卡尔空间插值**
+pub const SYS_MOVE_VEL: u16 = 410;
+/// 笛卡尔速度（411）：4 参正序 `dur, vx, vy, easing`。**`dur > 0` 时在笛卡尔空间插值**
 /// ——不转极坐标，否则它就退化成 [`SYS_MOVE_VEL`] 的语法糖（spec §3.3）。
-pub const SYS_MOVE_VEL_XY: u16 = 84;
-/// 只转向、保持速率（85；ZUN `440 moveAngle`）：3 参正序 `dur, angle, easing`。
-pub const SYS_MOVE_ANGLE: u16 = 85;
-/// 只调速、保持方向（86；ZUN `444 moveSpeed`）：3 参正序 `dur, speed, easing`。
-pub const SYS_MOVE_SPEED: u16 = 86;
+pub const SYS_MOVE_VEL_XY: u16 = 411;
+/// 只转向、保持速率（420；ZUN `440 moveAngle`）：3 参正序 `dur, angle, easing`。
+pub const SYS_MOVE_ANGLE: u16 = 420;
+/// 只调速、保持方向（421；ZUN `444 moveSpeed`）：3 参正序 `dur, speed, easing`。
+pub const SYS_MOVE_SPEED: u16 = 421;
 
-// ── $self_* 速度引擎变量（87-90；T5；白名单 8→12）───────────────────────────
+// （原 "── $self_* 速度引擎变量（87-90）──" 族——本四条新表里落 0xx `$` 引擎变量族，
+// 见文件头总纲；T5；白名单 8→12）
 // 与 `$self_x`/`$self_y` 同族同形状：不收参数，owner 从 task 取，派发规则逐条同
 // `self_pos`（ENEMY→敌池/BULLET→弹池/其余→0）。存在的理由：笛卡尔没有单轴动词
 // （`move_vel_xy` 两轴齐写），"只插 vy、保住 vx"唯一的写法就是把当前 vx 读出来填回去。
 
-/// owner 的笛卡尔速度 x（87）：ENEMY → 敌池、BULLET → 弹池、其余 → 0（同 [`SYS_SELF_X`]）。
+/// owner 的笛卡尔速度 x（022）：ENEMY → 敌池、BULLET → 弹池、其余 → 0（同 [`SYS_SELF_X`]）。
 /// 存在的理由：笛卡尔没有单轴动词，"只插 vy 保住 vx"唯一的写法是把当前 vx 读出来填回去。
-pub const SYS_SELF_VX: u16 = 87;
-/// owner 的笛卡尔速度 y（88）——镜像 [`SYS_SELF_VX`]。
-pub const SYS_SELF_VY: u16 = 88;
-/// owner 的速率（89，作者视图）：与 [`SYS_SELF_VX`]/[`SYS_SELF_VY`] 恒同步（双表示）。
-pub const SYS_SELF_SPEED: u16 = 89;
-/// owner 的朝向（90，作者视图，BAM）。近停时冻结（`BACKFILL_MIN_SPEED`），故零速下
+pub const SYS_SELF_VX: u16 = 22;
+/// owner 的笛卡尔速度 y（023）——镜像 [`SYS_SELF_VX`]。
+pub const SYS_SELF_VY: u16 = 23;
+/// owner 的速率（024，作者视图）：与 [`SYS_SELF_VX`]/[`SYS_SELF_VY`] 恒同步（双表示）。
+pub const SYS_SELF_SPEED: u16 = 24;
+/// owner 的朝向（025，作者视图，BAM）。近停时冻结（`BACKFILL_MIN_SPEED`），故零速下
 /// 读到的是**最后一次有效朝向**而非垃圾角。
-pub const SYS_SELF_ANGLE: u16 = 90;
+pub const SYS_SELF_ANGLE: u16 = 25;
+
+/// 号表白名单：`no` 是不是一条 [`dispatch`] 真的会派发的 syscall——**按表查而非比大小**
+/// （百分区制下号非连续，同 [`crate::ecl::ops::op_implemented`] 的纪律）。不在表内的号
+/// 由 `dispatch` 的兜底臂返 `FAULT_BAD_OP`。
+///
+/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、74 条结构测试的表是 `cfg(test)`，
+/// 编译器 crate 两个都够不着）：`stg-ecl-compiler` 的 `builtins::BUILTINS` 要能断言
+/// "`is_op == false` 的条目，其 `syscall` 字段装的确实是个会被派发的号"。见
+/// `builtins.rs::builtin_dispatch_kind_matches_what_the_field_holds`。
+///
+/// **与 `dispatch` 的同步靠测试押运，不靠自律**：`syscall_whitelist_matches_the_frozen_table`
+/// 断言"全 `u16` 域里为真的号恰好是那 74 条"，漏一条/多一条即红。
+pub const fn syscall_implemented(no: u16) -> bool {
+    matches!(
+        no,
+        // 0xx `$` 引擎变量
+        SYS_FRAME
+            | SYS_PLAYER_X
+            | SYS_PLAYER_Y
+            | SYS_SELF_X
+            | SYS_SELF_Y
+            | SYS_SELF_VX
+            | SYS_SELF_VY
+            | SYS_SELF_SPEED
+            | SYS_SELF_ANGLE
+            | SYS_SELF_HP
+            | SYS_SELF_HP_MAX
+            | SYS_SELF_AGE
+            // 1xx 查询
+            | SYS_ENEMY_HP
+            | SYS_ENEMY_X
+            | SYS_ENEMY_Y
+            | SYS_ENEMY_ALIVE
+            | SYS_NEAREST_ENEMY
+            | SYS_AIM_PLAYER_ANGLE
+            | SYS_SPELL_TIMER
+            | SYS_ATAN2
+            | SYS_DIST
+            | SYS_RAND_RANGE
+            // 2xx 造物
+            | SYS_CREATE_BULLET
+            | SYS_CREATE_BULLETS_BATCH
+            | SYS_SPAWN_ENEMY
+            | SYS_DROP_ITEM
+            // 3xx 弹操作
+            | SYS_SET_BULLET_SPEED
+            | SYS_SET_BULLET_ANGLE
+            | SYS_TURN_BULLET
+            | SYS_SET_BULLET_VEL
+            | SYS_SET_BULLET_ANG_VEL
+            | SYS_SET_BULLET_ACCEL
+            | SYS_SET_BULLET_GRAVITY
+            | SYS_STOP_BULLET_FX
+            | SYS_AIM_BULLET_AT_PLAYER
+            // 4xx 敌运动
+            | SYS_MOVE_ENEMY_TO
+            | SYS_MOVE_VEL
+            | SYS_MOVE_VEL_XY
+            | SYS_MOVE_ANGLE
+            | SYS_MOVE_SPEED
+            // 5xx 局面·记账·道具
+            | SYS_ADD_SCORE
+            | SYS_ADD_LIVES
+            | SYS_ADD_BOMBS
+            | SYS_ADD_POWER
+            | SYS_DROP_CLEAR
+            | SYS_DROP_ADD
+            | SYS_DROP_ITEMS
+            | SYS_DIE
+            | SYS_CLEAR_BULLETS
+            | SYS_BGM
+            | SYS_BG
+            | SYS_BG_PHASE
+            // 6xx shooter
+            | SYS_SH_RESET
+            | SYS_SH_SPRITE
+            | SYS_SH_OFFSET
+            | SYS_SH_OFFSET_ABS
+            | SYS_SH_OFFSET_RAD
+            | SYS_SH_DIST
+            | SYS_SH_ANGLE
+            | SYS_SH_SPEED
+            | SYS_SH_COUNT
+            | SYS_SH_AIM
+            | SYS_SH_RING
+            | SYS_SH_XFORM
+            | SYS_SH_TASK
+            | SYS_SH_REQ
+            | SYS_SH_FIRE
+            // 7xx 控制·事件·符卡·globals
+            | SYS_GET_VAR
+            | SYS_SET_VAR
+            | SYS_PULSE_SIGNAL
+            | SYS_EMIT_REQ
+            | SYS_BOSS_SET
+            | SYS_SPELL_BEGIN
+            | SYS_SPELL_END
+    )
+}
 
 // ── 求值栈存取（供各 syscall 实现复用；语义同 vm::exec 内的 pop!/push! 宏）───────
 
@@ -381,7 +508,7 @@ fn self_hp_max(task: &Task, ctx: &VmCtx) -> i32 {
     }
 }
 
-/// `SYS_SPELL_TIMER`（11）：owner 非 ENEMY → 直接押 -1（同 `SYS_SELF_HP` 误用降级口径，
+/// `SYS_SPELL_TIMER`（130）：owner 非 ENEMY → 直接押 -1（同 `SYS_SELF_HP` 误用降级口径，
 /// 不 Fault——读族误用是"确定性安全结果"而非脚本作者违约）；敌 → 押
 /// `spell_frames_left_of`（世界侧核已处理"无绑定 → -1"）。
 fn sys_spell_timer(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -441,7 +568,7 @@ fn resolve_enemy_handle(packed: i32, ctx: &VmCtx) -> Option<usize> {
     }
 }
 
-/// `SYS_ENEMY_HP`（12；A5 补遗）：1 参 `handle`（**打包敌号**，含 generation——槽复用后
+/// `SYS_ENEMY_HP`（100；A5 补遗）：1 参 `handle`（**打包敌号**，含 generation——槽复用后
 /// 旧句柄可辨，见 [`resolve_enemy_handle`]；无效句柄仍是读族误用降级口径，不 Fault）。
 /// 活敌返当前 hp；越界/死槽/gen 不符/负值一律 -1——stage 编排"等 boss 死"的轮询原语。
 fn sys_enemy_hp(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -453,7 +580,7 @@ fn sys_enemy_hp(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     push(task, hp)
 }
 
-/// `SYS_ENEMY_X`(80)/`SYS_ENEMY_Y`(81) 共享的读法——存活判据逐字同 `sys_enemy_hp`
+/// `SYS_ENEMY_X`(101)/`SYS_ENEMY_Y`(102) 共享的读法——存活判据逐字同 `sys_enemy_hp`
 /// （同一个 [`resolve_enemy_handle`]；dying 仍算活），只有降级值不同（坐标无哨兵位可用
 /// → `Fx::ZERO`，理由见 [`SYS_ENEMY_X`] 号表注释）。`want_y` 选轴：`false`=x，`true`=y。
 fn sys_enemy_pos(task: &mut Task, ctx: &mut VmCtx, want_y: bool) -> Result<(), u8> {
@@ -471,7 +598,7 @@ fn sys_enemy_pos(task: &mut Task, ctx: &mut VmCtx, want_y: bool) -> Result<(), u
     push(task, v.raw())
 }
 
-/// `SYS_ENEMY_ALIVE`(82)：存活判据**逐字同** `sys_enemy_hp`/`sys_enemy_pos`（同一个
+/// `SYS_ENEMY_ALIVE`(103)：存活判据**逐字同** `sys_enemy_hp`/`sys_enemy_pos`（同一个
 /// [`resolve_enemy_handle`]：负句柄/越界/死槽/gen 不符 → 0；`ENEMY_DYING` 仍算活——
 /// `is_alive` 是存活位，dying 只是 flag，槽活到相位 9 才回收），只是把那个判据**本身**
 /// 押出去而不是拿它选一个值。
@@ -507,7 +634,7 @@ fn self_enemy_handle(task: &Task) -> Result<EnemyHandle, u8> {
 }
 
 /// 取本任务的第 `id` 个 shooter（可变）。`id` 越界 → `None` + `contract_viol` + `BAD_ARGS`
-/// （P4-b：no-op，不 Fault——见 62-76 号表注释）。`id` 是脚本给的任意 `i32`，负数与超界同处置。
+/// （P4-b：no-op，不 Fault——见 600-660 号表注释）。`id` 是脚本给的任意 `i32`，负数与超界同处置。
 ///
 /// **必须在参数全部 `pop` 完之后再调**：栈效应与成功路径一致（同 `sys_emit_req` 的"先弹后验"
 /// 口径），否则越界腿会给下一条指令留下垃圾栈。
@@ -527,6 +654,7 @@ fn shooter_mut<'a>(
 /// 号表派发。坏号/参数不足 → `Err(fault_code)`（由 `vm::exec` 转 `Exec::Fault`）。
 pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     match no {
+        // ── 0xx `$` 引擎变量 ──────────────────────────────────────────────────
         SYS_FRAME => push(task, ctx.frame as i32),
         SYS_PLAYER_X => push(task, ctx.body.players[0].x.raw()),
         SYS_PLAYER_Y => push(task, ctx.body.players[0].y.raw()),
@@ -538,54 +666,82 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             let (_, y) = self_pos(task, ctx);
             push(task, y.raw())
         }
+        // ── $self_* 速度引擎变量 022-025（T5）──────────────────────────────────
+        SYS_SELF_VX => {
+            let (vx, _, _, _) = self_vel(task, ctx);
+            push(task, vx)
+        }
+        SYS_SELF_VY => {
+            let (_, vy, _, _) = self_vel(task, ctx);
+            push(task, vy)
+        }
+        SYS_SELF_SPEED => {
+            let (_, _, sp, _) = self_vel(task, ctx);
+            push(task, sp)
+        }
+        SYS_SELF_ANGLE => {
+            let (_, _, _, a) = self_vel(task, ctx);
+            push(task, a)
+        }
         SYS_SELF_HP => {
             let hp = self_hp(task, ctx);
             push(task, hp)
-        }
-        SYS_RAND_RANGE => sys_rand_range(task, ctx),
-        SYS_GET_VAR => {
-            let slot = pop(task)? as u16;
-            let v = ctx.body.get_var(slot);
-            push(task, v)
-        }
-        SYS_SET_VAR => {
-            let val = pop(task)?;
-            let slot = pop(task)? as u16;
-            // globals 段纪律（甲案，M1.5）：脚本写系统段（slot < GLOBALS_SYS_SEGMENT）→
-            // no-op + contract_viol 计数（P4-b 确定性安全结果，不 Fault——见
-            // `world::GLOBALS_SYS_SEGMENT` 文档）。世界 API `set_var` 不经此门，见调用方。
-            if slot < crate::world::GLOBALS_SYS_SEGMENT {
-                ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
-                ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
-            } else {
-                ctx.body.set_var(slot, val);
-            }
-            Ok(())
-        }
-        SYS_SELF_AGE => {
-            let age = ctx.frame.wrapping_sub(task.born_frame) as i32;
-            push(task, age)
         }
         SYS_SELF_HP_MAX => {
             let hp_max = self_hp_max(task, ctx);
             push(task, hp_max)
         }
-        SYS_SPELL_TIMER => sys_spell_timer(task, ctx),
+        SYS_SELF_AGE => {
+            let age = ctx.frame.wrapping_sub(task.born_frame) as i32;
+            push(task, age)
+        }
+
+        // ── 1xx 查询 ─────────────────────────────────────────────────────────
         SYS_ENEMY_HP => sys_enemy_hp(task, ctx),
+        // ── 敌坐标读口 101/102（敌坐标读口刀）──────────────────────────────────
+        SYS_ENEMY_X => sys_enemy_pos(task, ctx, false),
+        SYS_ENEMY_Y => sys_enemy_pos(task, ctx, true),
+        // ── 探活读口 103（探活读口刀）────────────────────────────────────────
+        SYS_ENEMY_ALIVE => sys_enemy_alive(task, ctx),
+        SYS_NEAREST_ENEMY => {
+            let y = pop(task)?;
+            let x = pop(task)?;
+            // 世界侧返的本来就是**完整句柄**——打包刀之前这里只押 `h.index`、把 gen 丢了。
+            let handle = match ctx.body.nearest_enemy(Fx::from_raw(x), Fx::from_raw(y)) {
+                Some(h) => pack_enemy_handle(h),
+                None => -1,
+            };
+            push(task, handle)
+        }
+        SYS_AIM_PLAYER_ANGLE => sys_aim_player_angle(task, ctx),
+        SYS_SPELL_TIMER => sys_spell_timer(task, ctx),
+        // ── 数学/查询面 110/140/141（参数**逆序弹出**，照 `sys_move_enemy_to`）────────────
+        SYS_ATAN2 => {
+            let x = pop(task)?;
+            let y = pop(task)?;
+            let a = crate::math::cordic::atan2(Fx::from_raw(y), Fx::from_raw(x));
+            push(task, a.raw() as i32)
+        }
+        SYS_DIST => {
+            let dy = pop(task)?;
+            let dx = pop(task)?;
+            // Q32.32 → 开根 → Q16.16（见 SYS_DIST 号表注释的值域论证）。`.min()` 不是
+            // 冗余：极端字面量（`dx = dy = i32::MAX`）能让开根结果超 i32 上限，裸 `as i32`
+            // 会回绕成负距离——饱和降级换掉那个静默错值。
+            let d2 = crate::math::geom::len_sq(Fx::from_raw(dx), Fx::from_raw(dy));
+            let root = crate::math::isqrt::isqrt(d2 as u64).min(i32::MAX as u32);
+            let d = Fx::from_raw(root as i32);
+            push(task, d.raw())
+        }
+        SYS_RAND_RANGE => sys_rand_range(task, ctx),
+
+        // ── 2xx 造物 ─────────────────────────────────────────────────────────
         SYS_CREATE_BULLET => sys_create_bullet(task, ctx),
         SYS_CREATE_BULLETS_BATCH => sys_create_bullets_batch(task, ctx),
         SYS_SPAWN_ENEMY => sys_spawn_enemy(task, ctx),
         SYS_DROP_ITEM => sys_drop_item(task, ctx),
-        SYS_MOVE_ENEMY_TO => sys_move_enemy_to(task, ctx),
-        SYS_BOSS_SET => sys_boss_set(task, ctx),
-        SYS_PULSE_SIGNAL => {
-            let ch = pop(task)?;
-            ctx.body.pulse_signal(ch as usize);
-            Ok(())
-        }
-        SYS_EMIT_REQ => sys_emit_req(task, ctx),
-        SYS_SPELL_BEGIN => sys_spell_begin(task, ctx),
-        SYS_SPELL_END => sys_spell_end(task, ctx),
+
+        // ── 3xx 弹操作 ───────────────────────────────────────────────────────
         SYS_SET_BULLET_SPEED => {
             let h = self_bullet_handle(task)?;
             let speed = pop(task)?;
@@ -643,7 +799,16 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             ctx.body.aim_bullet_at_player(h, bam(d));
             Ok(())
         }
-        SYS_AIM_PLAYER_ANGLE => sys_aim_player_angle(task, ctx),
+
+        // ── 4xx 敌运动 ───────────────────────────────────────────────────────
+        SYS_MOVE_ENEMY_TO => sys_move_enemy_to(task, ctx),
+        // ── 敌人运动动词族 410-421（T4）────────────────────────────────────────
+        SYS_MOVE_VEL => sys_move_vel(task, ctx),
+        SYS_MOVE_VEL_XY => sys_move_vel_xy(task, ctx),
+        SYS_MOVE_ANGLE => sys_move_angle(task, ctx),
+        SYS_MOVE_SPEED => sys_move_speed(task, ctx),
+
+        // ── 5xx 局面·记账·道具 ──────────────────────────────────────────────
         SYS_ADD_SCORE => {
             let d = pop(task)?;
             let s = &mut ctx.body.players[0].score;
@@ -652,14 +817,6 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             } else {
                 s.saturating_sub(d.unsigned_abs() as u64)
             };
-            Ok(())
-        }
-        SYS_BGM => sys_anchor_u16(task, ctx, AnchorKind::Bgm),
-        SYS_BG => sys_anchor_u16(task, ctx, AnchorKind::Bg),
-        SYS_BG_PHASE => sys_anchor_u16(task, ctx, AnchorKind::BgPhase),
-        SYS_CLEAR_BULLETS => {
-            ctx.body
-                .create_field(crate::field::fullscreen_clear_field());
             Ok(())
         }
         // B20 三件套：`d` 是脚本 push 上来的**任意 i32**，故一律先 `saturating_add`
@@ -686,7 +843,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
                 .clamp(0, crate::items::POWER_MAX as i32) as u16;
             Ok(())
         }
-        // 敌人死亡效果四件（58-61）：一律经 `WorldBody` 的 handle 写 API（P1：调用方
+        // 敌人死亡效果四件（520-530）：一律经 `WorldBody` 的 handle 写 API（P1：调用方
         // 永不直接摸池内存），self owner 必须是敌（misuse → Fault，同 `move_enemy_to`）。
         SYS_DROP_CLEAR => {
             let h = self_enemy_handle(task)?;
@@ -711,8 +868,18 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             ctx.body.kill_enemy_by_handle(h, ctx.tables);
             Ok(())
         }
-        // ── Shooter 配置面 62-75（参数**逆序弹出**，照 `sys_move_enemy_to`；`id` 是首参、
-        //    故最后弹）。每条都是"弹完全部参数 → 取槽（越界即 no-op）→ 写字段"三段式。
+        SYS_CLEAR_BULLETS => {
+            ctx.body
+                .create_field(crate::field::fullscreen_clear_field());
+            Ok(())
+        }
+        SYS_BGM => sys_anchor_u16(task, ctx, AnchorKind::Bgm),
+        SYS_BG => sys_anchor_u16(task, ctx, AnchorKind::Bg),
+        SYS_BG_PHASE => sys_anchor_u16(task, ctx, AnchorKind::BgPhase),
+
+        // ── 6xx shooter ──────────────────────────────────────────────────────
+        // Shooter 配置面 600-652（参数**逆序弹出**，照 `sys_move_enemy_to`；`id` 是首参、
+        // 故最后弹）。每条都是"弹完全部参数 → 取槽（越界即 no-op）→ 写字段"三段式。
         SYS_SH_RESET => {
             let id = pop(task)?;
             if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
@@ -873,66 +1040,42 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             Ok(())
         }
         SYS_SH_FIRE => sys_sh_fire(task, ctx),
-        // ── 数学/查询面 77-79（参数**逆序弹出**，照 `sys_move_enemy_to`）────────────
-        SYS_ATAN2 => {
-            let x = pop(task)?;
-            let y = pop(task)?;
-            let a = crate::math::cordic::atan2(Fx::from_raw(y), Fx::from_raw(x));
-            push(task, a.raw() as i32)
+
+        // ── 7xx 控制·事件·符卡 ─────────────────────────────────────────────
+        SYS_GET_VAR => {
+            let slot = pop(task)? as u16;
+            let v = ctx.body.get_var(slot);
+            push(task, v)
         }
-        SYS_DIST => {
-            let dy = pop(task)?;
-            let dx = pop(task)?;
-            // Q32.32 → 开根 → Q16.16（见 SYS_DIST 号表注释的值域论证）。`.min()` 不是
-            // 冗余：极端字面量（`dx = dy = i32::MAX`）能让开根结果超 i32 上限，裸 `as i32`
-            // 会回绕成负距离——饱和降级换掉那个静默错值。
-            let d2 = crate::math::geom::len_sq(Fx::from_raw(dx), Fx::from_raw(dy));
-            let root = crate::math::isqrt::isqrt(d2 as u64).min(i32::MAX as u32);
-            let d = Fx::from_raw(root as i32);
-            push(task, d.raw())
+        SYS_SET_VAR => {
+            let val = pop(task)?;
+            let slot = pop(task)? as u16;
+            // globals 段纪律（甲案，M1.5）：脚本写系统段（slot < GLOBALS_SYS_SEGMENT）→
+            // no-op + contract_viol 计数（P4-b 确定性安全结果，不 Fault——见
+            // `world::GLOBALS_SYS_SEGMENT` 文档）。世界 API `set_var` 不经此门，见调用方。
+            if slot < crate::world::GLOBALS_SYS_SEGMENT {
+                ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+                ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+            } else {
+                ctx.body.set_var(slot, val);
+            }
+            Ok(())
         }
-        SYS_NEAREST_ENEMY => {
-            let y = pop(task)?;
-            let x = pop(task)?;
-            // 世界侧返的本来就是**完整句柄**——打包刀之前这里只押 `h.index`、把 gen 丢了。
-            let handle = match ctx.body.nearest_enemy(Fx::from_raw(x), Fx::from_raw(y)) {
-                Some(h) => pack_enemy_handle(h),
-                None => -1,
-            };
-            push(task, handle)
+        SYS_PULSE_SIGNAL => {
+            let ch = pop(task)?;
+            ctx.body.pulse_signal(ch as usize);
+            Ok(())
         }
-        // ── 敌坐标读口 80/81（敌坐标读口刀）──────────────────────────────────
-        SYS_ENEMY_X => sys_enemy_pos(task, ctx, false),
-        SYS_ENEMY_Y => sys_enemy_pos(task, ctx, true),
-        // ── 探活读口 82（探活读口刀）────────────────────────────────────────
-        SYS_ENEMY_ALIVE => sys_enemy_alive(task, ctx),
-        // ── 敌人运动动词族 83-86（T4）────────────────────────────────────────
-        SYS_MOVE_VEL => sys_move_vel(task, ctx),
-        SYS_MOVE_VEL_XY => sys_move_vel_xy(task, ctx),
-        SYS_MOVE_ANGLE => sys_move_angle(task, ctx),
-        SYS_MOVE_SPEED => sys_move_speed(task, ctx),
-        // ── $self_* 速度引擎变量 87-90（T5）──────────────────────────────────
-        SYS_SELF_VX => {
-            let (vx, _, _, _) = self_vel(task, ctx);
-            push(task, vx)
-        }
-        SYS_SELF_VY => {
-            let (_, vy, _, _) = self_vel(task, ctx);
-            push(task, vy)
-        }
-        SYS_SELF_SPEED => {
-            let (_, _, sp, _) = self_vel(task, ctx);
-            push(task, sp)
-        }
-        SYS_SELF_ANGLE => {
-            let (_, _, _, a) = self_vel(task, ctx);
-            push(task, a)
-        }
+        SYS_EMIT_REQ => sys_emit_req(task, ctx),
+        SYS_BOSS_SET => sys_boss_set(task, ctx),
+        SYS_SPELL_BEGIN => sys_spell_begin(task, ctx),
+        SYS_SPELL_END => sys_spell_end(task, ctx),
+
         _ => Err(FAULT_BAD_OP),
     }
 }
 
-/// 开火（SYS 76）：按 spec §10 的七步用发射器槽 `id` 的参数造弹。1 参、**无返回值**。
+/// 开火（SYS 660）：按 spec §10 的七步用发射器槽 `id` 的参数造弹。1 参、**无返回值**。
 ///
 /// **为什么开火循环住这儿而不是扩 `create_bullets_batch`**：P1——world 不知道"任务"存在，
 /// 没法逐颗挂 `task_script`（`fire` 的挂任务也因此发生在 ECL 层）。代价是网格循环有了
@@ -1163,7 +1306,7 @@ fn sys_sh_fire(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 5x 族锚点写口的三种目标字段（`sys_anchor_u16` 判据）。
+/// 5xx 族锚点写口的三种目标字段（`sys_anchor_u16` 判据）。
 enum AnchorKind {
     Bgm,
     Bg,
@@ -1204,7 +1347,7 @@ fn sys_rand_range(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     push(task, v)
 }
 
-/// 丙方案 create_bullet（SYS 20）：8 参逆序弹出；appearance 越界/xform 区间越界 → Fault；
+/// 丙方案 create_bullet（SYS 200）：8 参逆序弹出；appearance 越界/xform 区间越界 → Fault；
 /// task_script ≥0 时脚本号必须在册（否则 Fault，同 `OP_SPAWN` 口径）——**先查后建**：
 /// 一切校验在任何世界写之前完成，避免"弹已建、任务绑定失败"的半成品状态。
 /// 创建失败（appearance/xform 校验过关后，池满或 xform 内容仍被 `create_bullet_with_xform`
@@ -1334,7 +1477,7 @@ fn sys_create_bullet(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 批量环（SYS 21）：9 参逆序弹出，无 xform（性能语义原语，dumb 弹批量铺环）。
+/// 批量环（SYS 201）：9 参逆序弹出，无 xform（性能语义原语，dumb 弹批量铺环）。
 /// appearance 越界 → Fault；池满/坏轴由 `create_bullets_batch` 自身 P4 处置（压实发数，
 /// 可能为 0——not 视为 Fault，与单发 create_bullet 的"NULL→-1"口径不同因为返回语义本就是数量）。
 fn sys_create_bullets_batch(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -1392,7 +1535,7 @@ fn sys_create_bullets_batch(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> 
     push(task, n as i32)
 }
 
-/// 敌人创建（SYS 22；A5 乙案，append-only：旧 5 参前缀不动，尾追 sprite/task）：
+/// 敌人创建（SYS 210；A5 乙案，append-only：旧 5 参前缀不动，尾追 sprite/task）：
 /// 7 参逆序弹出。半径/受击盒用固定默认值（同 `world::test_support::spawn_enemy` 惯例）；
 /// `task` 号先验后建（镜像 `sys_create_bullet` 的 task 路径：坏号/非 0 参 Async → Fault，
 /// 零副作用，敌未建）；`main_task` 在敌句柄产出**之后**回填（任务的 owner 三元组需要敌
@@ -1494,7 +1637,7 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 道具掉落（SYS 23）：3 参逆序弹出。坏类型 → `drop_item` 自身 P4-b 处置（NULL + BAD_ARGS
+/// 道具掉落（SYS 220）：3 参逆序弹出。坏类型 → `drop_item` 自身 P4-b 处置（NULL + BAD_ARGS
 /// 计数，不 Fault——世界既有 write API 契约，syscall 层不重复判定）。
 fn sys_drop_item(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let item_type = pop(task)?;
@@ -1512,7 +1655,7 @@ fn sys_drop_item(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     push(task, handle.index as i32)
 }
 
-/// 敌人限时缓动位移（SYS 24）：self owner 必须是 ENEMY（否则 Fault，misuse 策略）；
+/// 敌人限时缓动位移（SYS 400）：self owner 必须是 ENEMY（否则 Fault，misuse 策略）；
 /// 4 参逆序弹出：`easing, y, x, dur`。无返回值。
 fn sys_move_enemy_to(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
@@ -1530,7 +1673,7 @@ fn sys_move_enemy_to(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `SYS_MOVE_VEL`（83）：逆序弹出 `easing, speed, angle, dur`。
+/// `SYS_MOVE_VEL`（410）：逆序弹出 `easing, speed, angle, dur`。
 fn sys_move_vel(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
     let easing = pop(task)?;
@@ -1547,7 +1690,7 @@ fn sys_move_vel(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `SYS_MOVE_VEL_XY`（84）：逆序弹出 `easing, vy, vx, dur`。
+/// `SYS_MOVE_VEL_XY`（411）：逆序弹出 `easing, vy, vx, dur`。
 fn sys_move_vel_xy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
     let easing = pop(task)?;
@@ -1564,7 +1707,7 @@ fn sys_move_vel_xy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `SYS_MOVE_ANGLE`（85）：逆序弹出 `easing, angle, dur`。
+/// `SYS_MOVE_ANGLE`（420）：逆序弹出 `easing, angle, dur`。
 fn sys_move_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
     let easing = pop(task)?;
@@ -1579,7 +1722,7 @@ fn sys_move_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `SYS_MOVE_SPEED`（86）：逆序弹出 `easing, speed, dur`。
+/// `SYS_MOVE_SPEED`（421）：逆序弹出 `easing, speed, dur`。
 fn sys_move_speed(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
     let easing = pop(task)?;
@@ -1590,7 +1733,7 @@ fn sys_move_speed(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// boss 公告板整槽写（SYS 25）：`enemy` 字段取自 self owner（非 ENEMY → `EnemyHandle::NULL`，
+/// boss 公告板整槽写（SYS 730）：`enemy` 字段取自 self owner（非 ENEMY → `EnemyHandle::NULL`，
 /// 不 Fault——见模块文档"误用策略"boss_set 例外）；6 参逆序弹出：
 /// `active, phase_left, timer_frames, spell_id, hp_ratio, slot`。无返回值。
 fn sys_boss_set(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -1624,7 +1767,7 @@ fn sys_boss_set(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `SYS_EMIT_REQ`（27）：通道 B 推送。id 收窄 P4-b——栈值超出 `0..=65535` →
+/// `SYS_EMIT_REQ`（720）：通道 B 推送。id 收窄 P4-b——栈值超出 `0..=65535` →
 /// no-op + `contract_viol` + `BAD_ARGS`，**不 Fault**（作者违约 → 确定性安全结果）；
 /// 值域内转交 `WorldBody::emit_req`（满缓冲处置 TRUNCATED + 计数在那边）。
 fn sys_emit_req(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -1644,7 +1787,7 @@ fn sys_emit_req(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 符卡宣言（`SYS_SPELL_BEGIN`=28；符卡机构 spec 2026-07-24 §5）：7 参逆序弹出；
+/// 符卡宣言（`SYS_SPELL_BEGIN`=740；符卡机构 spec 2026-07-24 §5）：7 参逆序弹出；
 /// `self_enemy_handle`（非敌 misuse → Fault，同 `move_enemy_to` 误用策略）。
 ///
 /// **四条控制器补充决策**（复审 T1-m3/T1-m1/Task2 复审落地，spec 未写全，本刀新增，
@@ -1767,7 +1910,7 @@ fn sys_spell_begin(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 符卡逃生舱口（`SYS_SPELL_END`=29；符卡机构 spec 2026-07-24 §5）：无参；
+/// 符卡逃生舱口（`SYS_SPELL_END`=741；符卡机构 spec 2026-07-24 §5）：无参；
 /// `self_enemy_handle`（非敌 misuse → Fault）；转交 `spell_end_by_owner`（无绑定 →
 /// no-op，重复调用安全，见该 API 文档）。
 fn sys_spell_end(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
@@ -1776,7 +1919,7 @@ fn sys_spell_end(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 瞄准角查询（SYS 40）：0 参；self 位置（owner 未知/STAGE→原点）朝向 P0 的 `atan2`，
+/// 瞄准角查询（SYS 120）：0 参；self 位置（owner 未知/STAGE→原点）朝向 P0 的 `atan2`，
 /// 押回 BAM raw（不消 RNG、不改世界，纯读）。
 fn sys_aim_player_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let (sx, sy) = self_pos(task, ctx);
@@ -1802,6 +1945,328 @@ mod tests {
     const ROW_A: i32 = 0;
     const ROW_B: i32 = 1;
     const ROW_C: i32 = 2;
+
+    /// 冻结号表（号, 名, 期望族号）——逐条照 spec §4 的表；改动本表 = 改冻结面 = 过评审。
+    /// 提成助手供两条测试共用：结构判据（本表自身的性质）与白名单判据
+    /// （[`syscall_implemented`] 必须与本表**逐条等同**）。
+    fn frozen_table() -> &'static [(u16, &'static str, u16)] {
+        &[
+            (SYS_FRAME, "frame", 0),
+            (SYS_PLAYER_X, "player_x", 0),
+            (SYS_PLAYER_Y, "player_y", 0),
+            (SYS_SELF_X, "self_x", 0),
+            (SYS_SELF_Y, "self_y", 0),
+            (SYS_SELF_VX, "self_vx", 0),
+            (SYS_SELF_VY, "self_vy", 0),
+            (SYS_SELF_SPEED, "self_speed", 0),
+            (SYS_SELF_ANGLE, "self_angle", 0),
+            (SYS_SELF_HP, "self_hp", 0),
+            (SYS_SELF_HP_MAX, "self_hp_max", 0),
+            (SYS_SELF_AGE, "self_age", 0),
+            (SYS_ENEMY_HP, "enemy_hp", 1),
+            (SYS_ENEMY_X, "enemy_x", 1),
+            (SYS_ENEMY_Y, "enemy_y", 1),
+            (SYS_ENEMY_ALIVE, "enemy_alive", 1),
+            (SYS_NEAREST_ENEMY, "nearest_enemy", 1),
+            (SYS_AIM_PLAYER_ANGLE, "aim_player_angle", 1),
+            (SYS_SPELL_TIMER, "spell_timer", 1),
+            (SYS_ATAN2, "atan2", 1),
+            (SYS_DIST, "dist", 1),
+            (SYS_RAND_RANGE, "rand_range", 1),
+            (SYS_CREATE_BULLET, "create_bullet", 2),
+            (SYS_CREATE_BULLETS_BATCH, "create_bullets_batch", 2),
+            (SYS_SPAWN_ENEMY, "spawn_enemy", 2),
+            (SYS_DROP_ITEM, "drop_item", 2),
+            (SYS_SET_BULLET_SPEED, "set_bullet_speed", 3),
+            (SYS_SET_BULLET_ANGLE, "set_bullet_angle", 3),
+            (SYS_TURN_BULLET, "turn_bullet", 3),
+            (SYS_SET_BULLET_VEL, "set_bullet_vel", 3),
+            (SYS_SET_BULLET_ANG_VEL, "set_bullet_ang_vel", 3),
+            (SYS_SET_BULLET_ACCEL, "set_bullet_accel", 3),
+            (SYS_SET_BULLET_GRAVITY, "set_bullet_gravity", 3),
+            (SYS_STOP_BULLET_FX, "stop_bullet_fx", 3),
+            (SYS_AIM_BULLET_AT_PLAYER, "aim_bullet_at_player", 3),
+            (SYS_MOVE_ENEMY_TO, "move_enemy_to", 4),
+            (SYS_MOVE_VEL, "move_vel", 4),
+            (SYS_MOVE_VEL_XY, "move_vel_xy", 4),
+            (SYS_MOVE_ANGLE, "move_angle", 4),
+            (SYS_MOVE_SPEED, "move_speed", 4),
+            (SYS_ADD_SCORE, "add_score", 5),
+            (SYS_ADD_LIVES, "add_lives", 5),
+            (SYS_ADD_BOMBS, "add_bombs", 5),
+            (SYS_ADD_POWER, "add_power", 5),
+            (SYS_DROP_CLEAR, "drop_clear", 5),
+            (SYS_DROP_ADD, "drop_add", 5),
+            (SYS_DROP_ITEMS, "drop_items", 5),
+            (SYS_DIE, "die", 5),
+            (SYS_CLEAR_BULLETS, "clear_bullets", 5),
+            (SYS_BGM, "bgm", 5),
+            (SYS_BG, "bg", 5),
+            (SYS_BG_PHASE, "bg_phase", 5),
+            (SYS_SH_RESET, "sh_reset", 6),
+            (SYS_SH_SPRITE, "sh_sprite", 6),
+            (SYS_SH_OFFSET, "sh_offset", 6),
+            (SYS_SH_OFFSET_ABS, "sh_offset_abs", 6),
+            (SYS_SH_OFFSET_RAD, "sh_offset_rad", 6),
+            (SYS_SH_DIST, "sh_dist", 6),
+            (SYS_SH_ANGLE, "sh_angle", 6),
+            (SYS_SH_SPEED, "sh_speed", 6),
+            (SYS_SH_COUNT, "sh_count", 6),
+            (SYS_SH_AIM, "sh_aim", 6),
+            (SYS_SH_RING, "sh_ring", 6),
+            (SYS_SH_XFORM, "sh_xform", 6),
+            (SYS_SH_TASK, "sh_task", 6),
+            (SYS_SH_REQ, "sh_req", 6),
+            (SYS_SH_FIRE, "sh_fire", 6),
+            (SYS_GET_VAR, "get_var", 7),
+            (SYS_SET_VAR, "set_var", 7),
+            (SYS_PULSE_SIGNAL, "pulse_signal", 7),
+            (SYS_EMIT_REQ, "emit_req", 7),
+            (SYS_BOSS_SET, "boss_set", 7),
+            (SYS_SPELL_BEGIN, "spell_begin", 7),
+            (SYS_SPELL_END, "spell_end", 7),
+        ]
+    }
+
+    /// 【本刀的主判据】号表族结构：74 条、无重号、每条落在其声明族的百位区间内。
+    ///
+    /// 这一刀是大规模机械重排，判别力要求与常规刀不同——不是"新行为对不对"，而是
+    /// "**有没有搬错、搬漏、搬重**"。故判据是号表自身的结构性质，不是某条 syscall 的行为。
+    ///
+    /// # 判别力边界（终审实测，2026-07-31——别高估这条测试）
+    ///
+    /// **抓不到「族内互换」。** [`frozen_table`] 是**符号引用**常量的（`(SYS_ATAN2, "atan2",
+    /// 1)`），所以把 `SYS_ATAN2` 与 `SYS_DIST` 的值对调（140 ↔ 141）之后，本测试的三条
+    /// 断言**全部照过**：仍是 74 条、仍两两不等、仍都落在 `1xx`。实测把这对值对调后
+    /// **全仓 947 条测试无一转红**——这不是覆盖漏洞，因为号本身是任意的，族内换值在行为上
+    /// 确实是 no-op（调用方一律符号引用，`ecl-meta.json` 也不含号）。但上面那句"有没有
+    /// 搬错"要按字面读会读出过强的承诺：**「值错、族对」这一格本测试是瞎的**。
+    /// 那一格**全仓唯一**的网是 [`ecl_ops_doc_syscall_numbers_match_the_constants`]——
+    /// 它拿 `docs/ecl-ops.md`（号表的权威呈现面）里的**字面数字**双向对常量，
+    /// 别把它当成只防文档漂移的东西而删掉。
+    ///
+    /// **「搬重」比本测试更早被抓住——是编译期错误。** 把 `SYS_DIST` 改成与 `SYS_ATAN2`
+    /// 同值，rustc 在**两处**报 `unreachable pattern`：[`syscall_implemented`] 的白名单
+    /// `matches!` 与 [`dispatch`] 的 `match`（两处都是 `const` 模式匹配）。CI 的
+    /// `-D warnings` 下这是硬失败，压根编译不过来跑测试。故 (b) 那条唯一性断言实际是
+    /// **第二道网**，价值在于把这条性质写成可读的意图，而不是它先发现问题。
+    #[test]
+    fn syscall_table_is_hundred_partitioned_and_unique() {
+        let table = frozen_table();
+
+        assert_eq!(table.len(), 74, "74 进 74 出：本刀不增不减一条");
+
+        // (a) 族归属：搬错族立刻红
+        for &(num, name, fam) in table {
+            assert_eq!(
+                num / 100,
+                fam,
+                "{name}(={num}) 应落在 {fam}xx 族，实得 {}xx",
+                num / 100
+            );
+        }
+
+        // (b) 两两不等：搬重立刻红（O(n²) 但 n=74，测试里无所谓）
+        for (i, &(a, na, _)) in table.iter().enumerate() {
+            for &(b, nb, _) in &table[i + 1..] {
+                assert_ne!(a, b, "{na} 与 {nb} 撞号（都是 {a}）");
+            }
+        }
+
+        // (c) 与 op 号空间错开：op 是 u8、现最大 60（OP_SPAWN_PATTERN）。这条只对**非
+        //     0xx 族**成立——1xx..7xx 全部 >= 100，与 op 号空间永久不相交；0xx 族的号
+        //     本来就 < 100（000-032），与 op 号空间的重叠是既有状态，本刀不承诺解决
+        //     （spec §3 "syscall 全部推到 100 以上就与 op 号错开"这句对 0xx 族不成立，
+        //     已在设计评审收窄，见 task-1-report.md）。
+        for &(num, name, fam) in table {
+            if fam != 0 {
+                assert!(
+                    num >= 100,
+                    "{name}(={num}) 应与 op 号空间(u8,最大 60)错开，但仍 <100",
+                );
+            }
+        }
+    }
+
+    // ── `docs/ecl-ops.md` 号表 ↔ 常量的双向钉死（终审补，2026-07-31）────────────────
+
+    /// `"000"` / `"140"` → `Some(0)` / `Some(140)`；其余（`---`、`300-330`、正文词）→ `None`。
+    /// **只认三位补零形式**，这是号表列的排版约定（见 `ecl-ops.md` 0xx 族那条排版说明）。
+    fn doc_num(tok: &str) -> Option<u16> {
+        let t = tok.trim();
+        (t.len() == 3 && t.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| t.parse().ok())
+            .flatten()
+    }
+
+    /// 依次取出 cell 里所有反引号包起来的**原样** token（不判字符集，`$` 前缀剥掉）。
+    fn backticked(cell: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let mut rest = cell;
+        while let Some(i) = rest.find('`') {
+            let after = &rest[i + 1..];
+            let Some(j) = after.find('`') else { break };
+            out.push(after[..j].trim_start_matches('$'));
+            rest = &after[j + 1..];
+        }
+        out
+    }
+
+    fn is_ident(s: &str) -> bool {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    }
+
+    /// 从 `docs/ecl-ops.md` 的 `## syscall 号表` 一节抽出全部 `(号, 名)` 对。
+    ///
+    /// 两个来源，都是文档**自己既有的**排版，不是为测试新加的标记：
+    /// - **表行** `| 号 | 名 | 参数 | 返回 |`：首格是号（`NNN` 或 `NNN/NNN`），
+    ///   次格开头是反引号名。`| 010/011 | `player_x/y` |` 这种合并写法按 `_` 词干展开。
+    /// - **围栏块**里相邻的 `NNN name`（3xx 弹 setter 九连只在围栏里逐条列名，
+    ///   表行是聚合的 `| 300-330 | 弹 setter 族 |`）。
+    ///
+    /// 第二个返回值 = 那些**没能配上名**的格子里的三位数（如 `300-330` 的两个端点），
+    /// 只做"必须是真号"的弱检查。
+    fn parse_doc_number_table() -> (Vec<(u16, String)>, Vec<u16>) {
+        const DOC: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/ecl-ops.md"
+        ));
+
+        let start = DOC
+            .find("\n## syscall 号表")
+            .expect("ecl-ops.md 缺 `## syscall 号表` 节标题——文档结构变了，本测试要跟着改");
+        let sec = &DOC[start + 1..];
+        let end = sec[3..].find("\n## ").map_or(sec.len(), |i| i + 4);
+        let sec = &sec[..end];
+
+        let mut pairs: Vec<(u16, String)> = Vec::new();
+        let mut loose: Vec<u16> = Vec::new();
+        let mut in_fence = false;
+
+        for line in sec.lines() {
+            if line.trim_start().starts_with("```") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if in_fence {
+                // 围栏：相邻两 token 形如 `NNN name`
+                let toks: Vec<&str> = line.split_whitespace().collect();
+                for w in toks.windows(2) {
+                    if let (Some(n), true) = (doc_num(w[0]), is_ident(w[1])) {
+                        pairs.push((n, w[1].to_string()));
+                    }
+                }
+                continue;
+            }
+            let Some(body) = line.strip_prefix('|') else {
+                continue;
+            };
+            let mut cells = body.split('|');
+            let (Some(num_cell), Some(name_cell)) = (cells.next(), cells.next()) else {
+                continue;
+            };
+            let nums: Vec<Option<u16>> = num_cell.trim().split('/').map(doc_num).collect();
+            if nums.iter().any(Option::is_none) {
+                // 聚合格（`300-330`）或表头分隔行（`---`）：只捞里面的三位数弱检查
+                let bytes = num_cell.as_bytes();
+                for i in 0..bytes.len() {
+                    if bytes[i].is_ascii_digit()
+                        && (i == 0 || !bytes[i - 1].is_ascii_digit())
+                        && let Some(n) = doc_num(&num_cell[i..(i + 3).min(num_cell.len())])
+                    {
+                        loose.push(n);
+                    }
+                }
+                continue;
+            }
+            let nums: Vec<u16> = nums.into_iter().flatten().collect();
+            let ticked = backticked(name_cell);
+            let mut names: Vec<String> = ticked
+                .iter()
+                .filter(|s| is_ident(s))
+                .map(|s| s.to_string())
+                .collect();
+            // 合并写法 `player_x/y` → player_x / player_y
+            if names.len() < nums.len()
+                && let Some((a, b)) = ticked.first().and_then(|t| t.split_once('/'))
+                && let Some((stem, _)) = a.rsplit_once('_')
+            {
+                names = vec![a.to_string(), format!("{stem}_{b}")];
+            }
+            assert!(
+                names.len() >= nums.len(),
+                "ecl-ops.md 号表行 `{}` 的号有 {} 个、认得出的反引号名只有 {} 个——\
+                 排版变了就得改 `parse_doc_number_table`（别把这条测试关掉）",
+                line.chars().take(60).collect::<String>(),
+                nums.len(),
+                names.len(),
+            );
+            for (n, name) in nums.into_iter().zip(names) {
+                pairs.push((n, name));
+            }
+        }
+        (pairs, loose)
+    }
+
+    /// **`docs/ecl-ops.md` 的号表必须与 `SYS_*` 常量两向一致**（终审补，2026-07-31）。
+    ///
+    /// 补的是一个**沉默漂移面**：`ecl-ops.md` 是号表层的权威呈现面（M4 对端与回放头要认的
+    /// 冻结契约），而在此之前**仓内没有任何东西把它和常量绑住**——一次手滑编辑就能让文档
+    /// 与代码分家，且不会有任何测试转红。号表重排那一刀是靠**手工写脚本**比对才确认干净的，
+    /// 那种一次性验证保不住下一次。
+    ///
+    /// 两个方向都断言（缺一个就只是半张网）：
+    /// - **文档 → 常量**：文档里出现的每个 `(号, 名)` 对都得在 [`frozen_table`] 里；
+    /// - **常量 → 文档**：74 条常量每条都得在文档里出现，**漏记一条即红**。
+    ///
+    /// **它还有第二重职责，别只当它是"防文档漂移"**：本条是**全仓唯一**能抓到
+    /// **族内互换**（号换了、族没换，如 `SYS_ATAN2` ↔ `SYS_DIST`）的测试。
+    /// [`syscall_table_is_hundred_partitioned_and_unique`] 那张表**符号引用**常量，对具体
+    /// 取值免疫；实测把这一对的值对调后，**全仓 947 条测试无一转红**（终审复跑，2026-07-31）。
+    /// 本条按**字面数字**比对，是那一格唯一的网——变异实证见下（对调文档号列即红，
+    /// 而结构测试照绿）。删本条 = 把那一格重新变瞎。
+    ///
+    /// 解析靠的是文档自己既有的排版（号列 + 反引号名），没有新加机器可读标记。排版真变了
+    /// 本测试会**带着行内容响亮失败**并要求同步改解析器——号表是冻结面，这个代价是对的。
+    #[test]
+    fn ecl_ops_doc_syscall_numbers_match_the_constants() {
+        let table = frozen_table();
+        let (doc_pairs, loose) = parse_doc_number_table();
+
+        assert!(
+            doc_pairs.len() >= 74,
+            "只从 ecl-ops.md 解析出 {} 个 (号,名) 对，远少于 74——解析器多半没跟上排版变更",
+            doc_pairs.len()
+        );
+
+        // 方向一：文档有而常量无（含"号对名错"与"名对号错"）
+        for (num, name) in &doc_pairs {
+            assert!(
+                table.iter().any(|&(n, nm, _)| n == *num && nm == name),
+                "ecl-ops.md 记着 `{num} = {name}`，但 `SYS_*` 常量里没有这一对；\
+                 号表以 `ecl::syscall` 的常量为唯一权威，改文档别改代码"
+            );
+        }
+
+        // 方向二：常量有而文档无（漏记一条）
+        for &(num, name, _) in table {
+            assert!(
+                doc_pairs.iter().any(|(n, nm)| *n == num && nm == name),
+                "`SYS_{}` = {num} 在 `docs/ecl-ops.md` 的号表里查无此条——新增/改号必须同步文档",
+                name.to_uppercase()
+            );
+        }
+
+        // 聚合格（如 `| 300-330 | 弹 setter 族 |`）的端点也得是真号
+        for n in loose {
+            assert!(
+                syscall_implemented(n),
+                "ecl-ops.md 号表的聚合格里出现了 {n}，但它不是任何 syscall 的号"
+            );
+        }
+    }
 
     /// 派发测试助手：把 `args`（脚本**声明顺序**，正序）压栈，直连 `dispatch`（不经
     /// `OP_SYS`/`exec`——聚焦 syscall 语义本身，`OP_SYS` 派发链路已由 `vm.rs` 测试覆盖）。
@@ -2918,7 +3383,7 @@ mod tests {
         assert_eq!(w.body.diag.task_faults, 0, "owner 死不是 Fault");
     }
 
-    /// `enemy_hp`（SYS 12）：活敌返当前 hp（判别值 77，非默认）；死敌/越界句柄均返 -1
+    /// `enemy_hp`（SYS 100）：活敌返当前 hp（判别值 77，非默认）；死敌/越界句柄均返 -1
     /// （P4-b，不 Fault）。
     #[test]
     fn enemy_hp_reads_alive_and_rejects_dead() {
@@ -3009,7 +3474,7 @@ mod tests {
         assert_eq!(r, Err(FAULT_BAD_OP));
     }
 
-    /// move_vel（83）：4 参正序 dur,angle,speed,easing；owner 取自 self。
+    /// move_vel（410）：4 参正序 dur,angle,speed,easing；owner 取自 self。
     #[test]
     fn sys_move_vel_arms_polar_interpolator() {
         let (mut w, ecl) = fresh();
@@ -3039,7 +3504,7 @@ mod tests {
         assert_eq!(w.body.enemies.vel_easing[i], 3);
     }
 
-    /// move_vel_xy（84）：落 CART 空间——**参数序 dur,vx,vy,easing**（vx 在前）。
+    /// move_vel_xy（411）：落 CART 空间——**参数序 dur,vx,vy,easing**（vx 在前）。
     #[test]
     fn sys_move_vel_xy_arms_cartesian_interpolator() {
         let (mut w, ecl) = fresh();
@@ -3067,7 +3532,7 @@ mod tests {
         );
     }
 
-    /// move_angle（85）/ move_speed（86）：3 参，各自保持另一分量。
+    /// move_angle（420）/ move_speed（421）：3 参，各自保持另一分量。
     #[test]
     fn sys_move_angle_and_speed_are_single_axis() {
         let (mut w, ecl) = fresh();
@@ -3289,6 +3754,56 @@ mod tests {
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
         assert_eq!(call(&mut w, &ecl, &mut task, 9999, &[]), Err(FAULT_BAD_OP));
+    }
+
+    /// [`syscall_implemented`] 的白名单必须与冻结号表**逐条等同**——它是跨 crate 的唯一
+    /// 出口（`dispatch` 是 `pub(crate)`、[`frozen_table`] 是 `cfg(test)`，编译器 crate
+    /// 两个都够不着），一旦与真实派发面漂移，`stg-ecl-compiler` 那条 `is_op` 一致性测试
+    /// 就会拿错判据、变成假绿。
+    ///
+    /// 判据是**全 `u16` 域扫一遍**（65536 次 `matches!`，测试里无所谓），不是"照表逐条问
+    /// 一遍"——后者只能抓"漏了一条"，抓不到"多写了一条表里没有的号"。两个方向都要：
+    /// 加 syscall 忘了加进白名单 → 数量对不上；白名单里留了一条已删的号 → 同样红。
+    #[test]
+    fn syscall_whitelist_matches_the_frozen_table() {
+        let table = frozen_table();
+
+        // 方向一：表里每条都必须在白名单内。
+        for &(num, name, _) in table {
+            assert!(
+                syscall_implemented(num),
+                "{name}(={num}) 在冻结号表里却不在 syscall_implemented 白名单内"
+            );
+        }
+
+        // 方向二：全域里为真的号，恰好只有表里那些（抓"多写了一条"）。
+        let live: Vec<u16> = (0..=u16::MAX).filter(|&n| syscall_implemented(n)).collect();
+        assert_eq!(
+            live.len(),
+            table.len(),
+            "白名单为真的号有 {} 个，冻结号表却是 {} 条",
+            live.len(),
+            table.len()
+        );
+        for n in &live {
+            assert!(
+                table.iter().any(|&(num, _, _)| num == *n),
+                "白名单里的 {n} 不在冻结号表内（多写/该删未删）"
+            );
+        }
+
+        // 方向三：把白名单钉到 `dispatch` 的兜底臂上——白名单说没有的号，`dispatch`
+        // 必须以 `FAULT_BAD_OP` 拒绝（抽查，不做全域派发：派发有副作用）。
+        let (mut w, ecl) = fresh();
+        for probe in [9999u16, 33, 99, 104, 199, 800, u16::MAX] {
+            assert!(!syscall_implemented(probe), "{probe} 不该在白名单里");
+            let mut task = Task::default();
+            assert_eq!(
+                call(&mut w, &ecl, &mut task, probe, &[]),
+                Err(FAULT_BAD_OP),
+                "白名单外的 {probe} 应被 dispatch 兜底臂拒绝"
+            );
+        }
     }
 
     /// 栈下溢（参数不足）→ `Fault(FAULT_STACK)`：`SET_VAR` 需 2 参，空栈直接派发。
@@ -3633,7 +4148,7 @@ mod tests {
         assert_eq!(task.stack[0], -1);
     }
 
-    // ── SYS_ADD_SCORE/SYS_BGM/SYS_BG/SYS_BG_PHASE（整局流程刀 Task 2；5x 族）────────
+    // ── SYS_ADD_SCORE/SYS_BGM/SYS_BG/SYS_BG_PHASE（整局流程刀 Task 2；5xx 族）────────
 
     #[test]
     fn sys_bgm_writes_field_and_emits_req() {
@@ -3892,7 +4407,7 @@ mod tests {
         assert_eq!(w.body.players[0].power, 0, "i32::MIN 应钳到 0");
     }
 
-    // ── 敌人死亡效果四 syscall（58-61；敌人死亡效果刀 T3）────────────────────
+    // ── 敌人死亡效果四 syscall（520-530；敌人死亡效果刀 T3）────────────────────
 
     /// 造一只 owner 敌 + 指向它的任务（掉落计数**空**——要灌表 1 用 `load_drop_table_1`）。
     fn enemy_owner_task(w: &mut World, hp: i32, score: u16) -> (EnemyHandle, Task) {
@@ -4145,7 +4660,7 @@ mod tests {
         }
     }
 
-    // ── Shooter 配置面（syscall 62-75；shooter 刀 T2 2026-07-31）──────────────
+    // ── Shooter 配置面（syscall 600-652；shooter 刀 T2 2026-07-31）──────────────
     //
     // 四条测试全是**表驱动**的：14 个 setter 各写一段复制粘贴既臃肿、又保证将来加第 15 个
     // 时漏掉——而漏掉的那个恰恰是最可能忘写边界检查/写串字段的那个。表在一处，加一行即入网。
@@ -4527,7 +5042,7 @@ mod tests {
         assert_eq!(s.n_speed, 0, "-256 下钳到 0");
     }
 
-    // ── Shooter 开火面（syscall 76；shooter 刀 T3 2026-07-31）────────────────────
+    // ── Shooter 开火面（syscall 660；shooter 刀 T3 2026-07-31）────────────────────
     //
     // 开火循环住 **ECL 层**（spec §10 末：P1 使然——world 不知道任务存在、没法逐颗挂
     // `task_script`），于是网格逻辑有了**第二份实现**。故下面第一条等价测试是**必需**
@@ -5298,7 +5813,7 @@ mod tests {
         );
     }
 
-    // ── 数学/查询面（77-79；小清洗刀 2026-07-31）────────────────────────────────
+    // ── 数学/查询面（110/140/141；小清洗刀 2026-07-31）────────────────────────────────
 
     /// **参数序判别腿**：`atan2(y, x)` 两位同为 `Fx`，对调不会有任何判型报错，只会静默
     /// 把角度镜像到另一条对角线上。故必须**两个取值**一起断言——只测 `atan2(1,0)==16384`
@@ -5520,7 +6035,7 @@ mod tests {
         assert_eq!(t.stack[0], Fx::from_int(30).raw());
     }
 
-    // ── 探活读口 82（enemy_alive；探活读口刀 2026-07-31）──────────────────────
+    // ── 探活读口 103（enemy_alive；探活读口刀 2026-07-31）──────────────────────
 
     /// 活敌返 **1**、三种无效句柄（负 / 越界 / 死槽）各返 **0**，且**不计 `contract_viol`**
     /// （纯读族口径，同 `enemy_hp`/`sys_enemy_pos`）。
@@ -5696,7 +6211,7 @@ mod tests {
 
     // ── 敌句柄打包 generation（敌句柄打包刀 2026-07-31）─────────────────────────
 
-    /// 用 `spawn_enemy`(22) 造敌并取**脚本视角**的敌号——即 syscall 真正押出去的那个值。
+    /// 用 `spawn_enemy`(210) 造敌并取**脚本视角**的敌号——即 syscall 真正押出去的那个值。
     /// 本族测试必须走 syscall 边界：被测的就是那个边界上的编码，绕过它（直接拿
     /// `test_support::spawn_enemy` 的 `EnemyHandle`）就把要证的东西假设掉了。
     fn spawn_enemy_via_syscall(w: &mut World, ecl: &EclImage, x: i32, y: i32, hp: i32) -> i32 {

@@ -58,7 +58,7 @@ engine_consts! {
         REQ_ENEMY_DEATH:     u16 as int = 1;
         REQ_SPELL_DECLARE:   u16 as int = 2;
         REQ_SPELL_RESULT:    u16 as int = 3;
-        //  整局流程刀（spec §4）：关卡结算边沿 + 表现锚点三族（5x syscall 写口专用）
+        //  整局流程刀（spec §4）：关卡结算边沿 + 表现锚点三族（5xx syscall 写口专用）
         REQ_STAGE_CLEAR:     u16 as int = 4;
         REQ_BGM:             u16 as int = 5;
         REQ_BG:              u16 as int = 6;

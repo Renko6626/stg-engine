@@ -662,9 +662,9 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | （内部）hits 满 | — | 丢弃（不 panic，同 P4-a） | — | `diag.hits_overflow` |
 | （内部）frame_events 满 | — | 丢弃 | — | `diag.events_overflow` |
 
-注：ECL syscall 层已落地（M1）：号表 v1 见 `crates/stg-core/src/ecl/syscall.rs` 与
+注：ECL syscall 层已落地（M1）：号表见 `crates/stg-core/src/ecl/syscall.rs` 与
 [`docs/ecl-ops.md`](docs/ecl-ops.md)（编号即契约）；本表成员中 `emit_req` 已落地
-（`SYS_EMIT_REQ = 27`，通道 B 刀 2026-07-23），`create_player_shot` 不入 syscall
+（`SYS_EMIT_REQ = 720`，通道 B 刀 2026-07-23），`create_player_shot` 不入 syscall
 （自机弹归世界相位 3）。`&EclImage` 与 `&WorldTables`
 同款参数穿线。
 

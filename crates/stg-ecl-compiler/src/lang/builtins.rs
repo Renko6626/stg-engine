@@ -10,10 +10,18 @@
 //! （xformdef/sub 名字，编译期解析，不是求值表达式），逼 `params` 的元素类型从纯 `Ty` 扩成
 //! [`ParamKind`]。顺带处理另一处出入：`sin`/`cos` 底层不是 syscall 派发（`OP_SYS <no>`），
 //! 而是直接对应一条 VM op（`OP_SINB`/`OP_COSB`，见 `ecl::ops.rs`，30 值域族，非 60 值域族的
-//! `OP_SYS`）——若硬塞进同一个 `syscall: u16` 字段会让 T3 误当成 syscall 号发 `OP_SYS 32`
-//! （根本不存在的 syscall，运行期会 Fault）。加一个 `is_op: bool` 旗标消歧：`true` 时
-//! `syscall` 字段其实装的是 VM op 码本身，T3 需要直接发那条 op（不套 `OP_SYS` 壳）；v1 只有
-//! `sin`/`cos` 走这条支路，其余全部 `is_op=false` 正常 syscall 派发。
+//! `OP_SYS`）——若硬塞进同一个 `syscall: u16` 字段会让 T3 误当成 syscall 号发
+//! `OP_SYS <op 码>`。加一个 `is_op: bool` 旗标消歧：`true` 时 `syscall` 字段其实装的是
+//! VM op 码本身，T3 需要直接发那条 op（不套 `OP_SYS` 壳）；v1 只有 `sin`/`cos` 走这条支路，
+//! 其余全部 `is_op=false` 正常 syscall 派发。
+//!
+//! ⚠️ **这类失误不再必然响亮失败**（syscall 号表百分区重排，2026-07-31）：`0xx` 族
+//! （`$` 引擎变量，000–032）与 op 号域重叠，`OP_SYS 32` 现在会**静默押 `SYS_SELF_AGE`**
+//! （任务龄），而不是像重排前那样撞上一个不存在的号 `FAULT_BAD_OP`。那次"响亮"是稀疏
+//! 编号的**巧合**，不是设计出来的不变量。守卫改由
+//! [`tests::builtin_dispatch_kind_matches_what_the_field_holds`] 承担——它按表查
+//! （`ops::op_implemented` / `syscall::syscall_implemented`）押运"旗标与它指向的东西
+//! 一致"，与号表怎么排无关。
 //!
 //! ## `global(n)` 为何在本表（C16 复审修复，曾经不在）
 //!
@@ -73,7 +81,7 @@ use Ty::{Angle, Fx, Int};
 
 /// v1.1 内建函数全集（源码序即本表序——`lookup` 线性扫描，条目 <30、无序容器无必要）。
 const BUILTINS: &[Builtin] = &[
-    // ── 创建/世界变更（syscall 2x）───────────────────────────────────────
+    // ── 创建/世界变更（syscall 2xx/4xx/7xx）───────────────────────────────────────
     Builtin {
         name: "fire",
         syscall: syscall::SYS_CREATE_BULLET,
@@ -372,7 +380,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "查表三角,返 fx(VM op 直发,非 syscall)",
         param_names: &["angle"],
     },
-    // ── 弹 setter 族九连（syscall 3x；按 syscall.rs/motion.rs 顺序编号；handle:int 首参，
+    // ── 弹 setter 族九连（syscall 3xx；按 syscall.rs/motion.rs 顺序编号；handle:int 首参，
     // 见 plan 核心接口块——VM 侧 setter 语义实取 self owner，handle 参数的落地方式留 T3
     // 定，T2 只钉表层签名，见本刀报告"contract notes for T3"）───────────────────────
     //
@@ -465,7 +473,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "弹 setter:指向自机方向再加 offset 偏移角;作用于自身(self owner 非 BULLET → Fault);首参 handle 为占位求值后丢弃,不参与判定",
         param_names: &["handle", "offset"],
     },
-    // ── 符卡计器（syscall 28/29/11；符卡机构 spec 2026-07-24 §5）─────────────
+    // ── 符卡计器（syscall 740/741/130；符卡机构 spec 2026-07-24 §5）─────────────
     Builtin {
         name: "spell_begin",
         syscall: syscall::SYS_SPELL_BEGIN,
@@ -511,7 +519,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "当前卡剩余帧数",
         param_names: &[],
     },
-    // ── 表现锚点四字段（syscall 5x；整局流程刀 Task 2/3）─────────────────────
+    // ── 表现锚点四字段（syscall 5xx；整局流程刀 Task 2/3）─────────────────────
     Builtin {
         name: "add_score",
         syscall: syscall::SYS_ADD_SCORE,
@@ -558,7 +566,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧",
         param_names: &[],
     },
-    // ── B20：账面增量三件套（syscall 55/56/57）。只有 add_*、没有 set_*——绝对赋值场景
+    // ── B20：账面增量三件套（syscall 510/511/512）。只有 add_*、没有 set_*——绝对赋值场景
     //    已被 Loadout（开局装备）收编，是人类裁定，别"补全"（裁定详见 syscall.rs 号表注释）。
     Builtin {
         name: "add_lives",
@@ -587,7 +595,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout",
         param_names: &["delta"],
     },
-    // ── 敌人死亡效果（syscall 58-61；参照 ZUN ECL 506/507/509/561）───────────
+    // ── 敌人死亡效果（syscall 520-530；参照 ZUN ECL 506/507/509/561）───────────
     Builtin {
         name: "drop_clear",
         syscall: syscall::SYS_DROP_CLEAR,
@@ -624,7 +632,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)",
         param_names: &[],
     },
-    // ── Shooter：预存发射参数集（syscall 62-76；参照 ZUN et* 族 600-641）───────
+    // ── Shooter：预存发射参数集（syscall 600-660；参照 ZUN et* 族 600-641）───────
     //    `sh_reset` 重置编号槽 → 一堆以 `id` 打头的 setter 逐项配 → `sh_fire(id)` 开火。
     //    改一个字段再开一次火就是下一波。每任务 4 个槽（id ∈ 0..4），槽号越界一律 no-op+计数。
     //    **前 14 条只写字段、无副作用**：appearance 在册/xform 区间/sub 号在册的校验
@@ -837,6 +845,66 @@ pub fn engine_var_info(ev: EngVar) -> EngVarInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`is_op` 旗标必须与它指向的东西一致**——`is_op=true` 的 `syscall` 字段装的是 VM
+    /// op 码、`is_op=false` 装的是 syscall 号，两个号空间**互不相干**，标错就发错指令。
+    ///
+    /// **这条守卫是号表百分区重排刀（2026-07-31）补的，替掉一个已经失效的巧合**：重排前
+    /// syscall 号稠密占 0–90、op 码占 0–60，`sin`/`cos` 若漏标 `is_op` 会发出 `OP_SYS 32`，
+    /// 而 32 当时**不是**任何 syscall ⇒ 运行期 `FAULT_BAD_OP`，**响亮失败**。重排后
+    /// `SYS_SELF_AGE = 032`，同一个失误变成**静默押一个任务龄**——比原来更坏。那个"响亮"
+    /// 从来不是设计出来的不变量，只是稀疏编号的巧合；巧合没了，就用真判据补上。
+    ///
+    /// 两半都用**按表查**的判据，与编号怎么排完全无关：
+    /// - `is_op=true` → [`stg_core::ecl::ops::op_implemented`]（且必须装得进 `u8`）；
+    /// - `is_op=false` → [`stg_core::ecl::syscall::syscall_implemented`]（号表白名单，由
+    ///   core 侧 `syscall_whitelist_matches_the_frozen_table` 钉在冻结的 74 条上）。
+    ///
+    /// ⚠️ **第三格（`op_backed == ["sin","cos"]`）守的是闭世界性质，不是 `sin`/`cos` 本身。**
+    /// 前两条断言确实抓不到"把 `sin` 误标成 `is_op=false`"（`OP_SINB` 是 32，而 32 恰好就是
+    /// `SYS_SELF_AGE`，白名单查询照样通过）——但那个具体错法在全量跑里还有
+    /// [`sin_cos_dispatch_via_raw_vm_op_not_syscall`] 按名兜着（它直接断言 `sin.is_op`），
+    /// 所以"只有第三格红"只在**单跑本测试**时成立，别把它当成这一格的存在理由。
+    ///
+    /// 第三格真正新增的是**闭世界**：将来**新加**一个 builtin 并误标成 `is_op=true`，
+    /// 没有任何按名写的测试会管它（按名的测试只覆盖它点名的那几个），而第三格会立刻红。
+    /// 反向同理——把某个 syscall 内建误标成 `is_op=true` 也逃不掉。
+    #[test]
+    fn builtin_dispatch_kind_matches_what_the_field_holds() {
+        use stg_core::ecl::{ops::op_implemented, syscall::syscall_implemented};
+
+        let mut op_backed = Vec::new();
+        for b in BUILTINS {
+            if b.is_op {
+                let op = u8::try_from(b.syscall).unwrap_or_else(|_| {
+                    panic!(
+                        "{}: is_op=true 但 {} 装不进 u8（op 码是 u8）",
+                        b.name, b.syscall
+                    )
+                });
+                assert!(
+                    op_implemented(op),
+                    "{}: is_op=true 但 {op} 不是已实现的 VM op（ops::op_implemented 按表查）",
+                    b.name
+                );
+                op_backed.push(b.name);
+            } else {
+                assert!(
+                    syscall_implemented(b.syscall),
+                    "{}: is_op=false 但 {} 不是 dispatch 会派发的 syscall 号\
+                     （syscall::syscall_implemented 按表查）——发出去会 FAULT_BAD_OP",
+                    b.name,
+                    b.syscall
+                );
+            }
+        }
+
+        assert_eq!(
+            op_backed,
+            vec!["sin", "cos"],
+            "走 op 支路的内建只应有 sin/cos；多/少一条都说明 is_op 标错了"
+        );
+    }
 
     /// 编辑体验刀:元数据完备——每条 builtin 有非空 doc,param_names 与 params 等长。
     #[test]
@@ -1178,7 +1246,7 @@ mod tests {
         }
     }
 
-    /// 小清洗刀（77-79）：三条新内建的**返回型**与 syscall 号。返回型是契约——
+    /// 小清洗刀（110/140/141）：三条新内建的**返回型**与 syscall 号。返回型是契约——
     /// `atan2` 返 `angle`（拿去喂 `fire` 的角度位不用 cast）、`dist` 返 `fx`、
     /// `nearest_enemy` 返 `int`（池 index）；写错任何一个都会让作者被迫加位穿透 cast。
     #[test]
@@ -1203,9 +1271,9 @@ mod tests {
         assert!(!n.is_op);
     }
 
-    /// 敌坐标读口刀（80/81）：**返回型必须是 `fx`**——它们存在的全部理由就是拿去减、
+    /// 敌坐标读口刀（101/102）：**返回型必须是 `fx`**——它们存在的全部理由就是拿去减、
     /// 喂 `atan2`/`dist`，返 `int` 会让作者每处都补一记穿透 cast。号也逐条钉死，防
-    /// 80/81 两条派发臂在表里写反（两条内建同签名，写反了 typeck 一声不吭）。
+    /// 101/102 两条派发臂在表里写反（两条内建同签名，写反了 typeck 一声不吭）。
     #[test]
     fn enemy_pos_builtins_return_fx_and_carry_their_own_syscall_numbers() {
         let x = lookup("enemy_x").expect("enemy_x 应在表中");
@@ -1223,7 +1291,7 @@ mod tests {
         assert_ne!(x.syscall, y.syscall, "两条不能共用一个号");
     }
 
-    /// 探活读口刀（82）：`enemy_alive` 返 **`int`**（1/0 的布尔面孔，直接进 `if` 条件），
+    /// 探活读口刀（103）：`enemy_alive` 返 **`int`**（1/0 的布尔面孔，直接进 `if` 条件），
     /// **不是** `fx`——返 `fx` 会让 `enemy_alive(e) == 1` 这个招牌写法判型失败。
     #[test]
     fn enemy_alive_builtin_returns_int_and_carries_its_own_syscall_number() {

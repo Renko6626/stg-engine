@@ -549,7 +549,7 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 
 ### C23. `SHOOTERS_PER_TASK` 没作为 C14 引擎常量注入，脚本只能硬编码 `0..=3`（shooter 刀终审记档，2026-07-31）
 
-`crate::ecl::shooter::SHOOTERS_PER_TASK = 4` 是 `sh_*` 族（syscall 62-76）**槽号 `id` 的
+`crate::ecl::shooter::SHOOTERS_PER_TASK = 4` 是 `sh_*` 族（syscall 600-660）**槽号 `id` 的
 合法上界**，越界走 P4-b（no-op + `contract_viol`，不 Fault）。但它**没有进 `consts.rs` 的
 ① 结构常量段**，而它的每一个同类兄弟都进了：`GLOBALS_SYS_SEGMENT`（同样是"脚本必须知道的
 边界值"）、`REQ_SCRIPT_BASE`、`ITEM_*` 五个；连表派生的 `BULLET_COLOR_STRIDE` 都由
@@ -605,7 +605,8 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 ### D15. 脚本敌号只带 generation 的**低 15 位** —— ABA 检测周期 32768（敌句柄打包刀，2026-07-31）
 
 `syscall.rs::pack_enemy_handle` 把敌号编成 `((gen & 0x7FFF) << 16) | index`，**只押 15 位**。
-理由是打包值必须恒**非负**：`-1` 是四个读口（12/79/80/81/82 那族）唯一的"无效/没有"哨兵，
+理由是打包值必须恒**非负**：`-1` 是四个读口（100/110/101/102/103 那族，即
+`enemy_hp`/`nearest_enemy`/`enemy_x`/`enemy_y`/`enemy_alive`）唯一的"无效/没有"哨兵，
 押满 16 位会让 `gen >= 0x8000` 的敌号变成负数、与哨兵撞车。
 
 **代价**：同一个池槽复用 **32768** 次之后，`generation & 0x7FFF` 回绕，旧敌号会重新"认领"
@@ -618,7 +619,7 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 与 D7 一并重估。届时的修法：要么把 index 收窄到 8 位（敌池 cap 256，只需 8 位）给 gen 腾出
 23 位，要么改用两个 `i32`（脚本侧要配对存，很难看）。
 
-**弹 / 道具句柄仍是裸 index**（`create_bullet`(20) 押 `BulletHandle.index`、`drop_item`(23) 押
+**弹 / 道具句柄仍是裸 index**（`create_bullet`(200) 押 `BulletHandle.index`、`drop_item`(220) 押
 `ItemHandle.index`）。今天**物理上够不着**这个 ABA 面，不是"危害小"——引擎侧根本没有解析口：
 弹的九个 setter 全走 `self_bullet_handle(task)` 从 owner 三元组取句柄，脚本传的首参 pop 完
 就丢；道具句柄没有任何内建吃它。**触发点 = 谁要给它们加读口**（`bullet_x`/`item_type` 之类）：
@@ -643,7 +644,7 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
    `$self_x` 与 `enemy_x(e)` 两套都有，速度这边先只做 `$self_*`——读别人的**位置**有明确
    用途（瞄准/聚集/跟随），读别人的**速度**暂时想不出非它不可的场景，而 `nearest_enemy`
    返的敌大多是拿来打的不是拿来跟的。真需要时补两个 syscall 号即可，**不影响本刀任何设计**
-   （敌池里 `speed`/`angle` 本来就逐敌存着，缺的只是读口，同 80/81 号当初的形状）。
+   （敌池里 `speed`/`angle` 本来就逐敌存着，缺的只是读口，同 `enemy_x`/`enemy_y` 当初的形状）。
 
 另有一条已裁定不做且**不留触发点**：笛卡尔单轴动词 `move_vx`/`move_vy`——
 `move_vel_xy(30, $self_vx, 4.0fx, 2)` composed 已等价且更通用。
@@ -761,7 +762,7 @@ mod 提供的二进制 xform 段格式、M4 rollback 对端镜像重放）——
 ### D13. 随机 aimmode（ZUN 的 `6`/`7`/`8`）不做——它们消耗世界 RNG，消耗序直接进校验和（shooter 刀 T4 记档，2026-07-31）
 
 ZUN 的 `607 etAim` 是个九值枚举，本刀（D-6）把它塌成 `aimed`/`ring` 两个正交布尔
-（`sh_aim`/`sh_ring`，syscall 71/72），**塌得下的只有 `0-5` 那六个**。剩下三个是另一类东西：
+（`sh_aim`/`sh_ring`，syscall 640/641），**塌得下的只有 `0-5` 那六个**。剩下三个是另一类东西：
 
 | ZUN mode | 语义 | 参数转义 |
 |---|---|---|
@@ -888,3 +889,80 @@ v1 只跑彩虹风铃卡固定场景。两个自然延伸，各随触发点：`-
 `multimesh_set_buffer` 上传的仍是**整个 `cap` 长度**的 `Vec`（含 `n` 之后全是零/陈旧的
 尾部），带宽账按 `cap` 算而非按 `n` 算。真到了要优化的时候，方向是按 `n*FLOATS_PER_INSTANCE`
 切片上传（只送前缀）或脏检测（层内容与上一帧逐位相同则跳过 `set_buffer`）。
+
+### F5. `bench` 的场景**全部**传 `EclImage::empty()`——量不了任何 VM/syscall 改动（syscall 号表重排刀 T2 撞见，2026-07-31）
+
+`bench_ladder`/`bench_mix` 四类场景（哑弹 ×4 / xform ×3 / 全混合）都显式传
+`EclImage::empty()`（源码里还带着"本刀无脚本场景：显式传空镜像（零任务零成本）"的注释），
+所以 **`bench` 一条 `OP_SYS` 都不执行、一个 ECL 任务都不跑**。当初这是对的（M0 期没有 VM），
+现在它变成了一个**沉默的覆盖缺口**：任何动 `ecl::vm`/`ecl::syscall`/协程调度的刀，跑
+`bench` 前后对比都只会得到热漂移噪声，而那个"无差异"看起来像是结论。
+
+号表百分区重排刀（2026-07-31）就撞在这上面——spec §5 点名要求用 `bench` 量派发代价，实际
+只能另外外挂一个临时 crate 才量得出来（做法与数据见 `docs/bench-baseline.md` 末节）。
+
+**触发点 = 下一次真要量 VM 性能时**（不是现在，本刀已用外挂负载给出结论）。方向：给 `bench`
+补一档 `ecl-*` 场景——最省事的是复用 `compile_rainbow_image()`（`stg-harness` 里现成的风铃卡）
+再叠一档纯 syscall 压力脚本，两档都进 `bench` 的表。改动范围只在 `stg-harness`，不动核。
+
+### F6. `0xx` 族与 op 号域**重叠**的后果清单——已知两处，撞到第三处再考虑挪族（syscall 号表重排刀 T2 记档，2026-07-31）
+
+百分区重排把 `1xx`–`7xx` 全推到 100 以上、与 op 号空间（`u8`，现最大 60 = `OP_SYS`）永久错开，
+**但 `0xx` 族（`$` 引擎变量）取值 000–032，整族 12 条仍落在 op 号域内**，逐条撞号：
+
+```
+frame=0=OP_END      player_x=10=OP_PUSHI   player_y=11=OP_PUSHL   self_x=20=OP_ADD
+self_y=21=OP_SUB    self_vx=22=OP_MUL      self_vy=23=OP_DIV      self_speed=24=OP_MOD
+self_angle=25=OP_NEG  self_hp=30=OP_MULF   self_hp_max=31=OP_DIVF  self_age=32=OP_SINB
+```
+
+> spec `2026-07-31-syscall-renumber-design.md` §3 那句"syscall 全部推到 100 以上后两个号空间
+> 永久错开"**对 `0xx` 族不成立**，已在该 spec §9 修订记录二留痕。
+
+**已知后果两处**（都不是运行期缺陷——字节流里 opcode 与操作数是**位置区分**的，`ARITY` 驱动
+PC 推进，操作数永远不会被当成 opcode 解码，**运行期不存在歧义**）：
+
+1. **`lang/mod.rs::opcodes_of` 的扫描假阳性**：`code().contains(&(OP_X as u32))` 裸扫字会把
+   `OP_SYS 20` 的操作数字误当成一条 `OP_ADD`。**注意这条与 `0xx` 无关也成立**——`PUSHI 20` /
+   `POPL 20` / `JMP 20` 的操作数同样长得像 op，裸扫字**结构上**就不可靠。挪族消不掉它。
+2. **`builtins.rs` 的 `is_op` 标错不再响亮失败**：重排前 `sin`/`cos` 漏标 `is_op` 会发出
+   `OP_SYS 32`，而 32 当时不是任何 syscall ⇒ 运行期 `FAULT_BAD_OP`；重排后 32 是
+   `SYS_SELF_AGE`，同一失误变成**静默押一个任务龄**——比原来更坏。
+   **已用真判据补上**：`builtin_dispatch_kind_matches_what_the_field_holds`（按表查
+   `ops::op_implemented` / `syscall::syscall_implemented`，与编号怎么排无关）。
+
+**现在不挪 `0xx` 到 `8xx`**，理由两条：
+
+- 那个"响亮失败"**从来不是设计出来的不变量**，只是稀疏编号的**巧合**。为保住一个巧合去改一张
+  刚冻结、刚 bump 过 `ENGINE_VER` 的表，本末倒置。
+- `0xx` 与 `resolve_engine_var` 白名单一一对应，是全表最自解释的一格；挪到 `8xx` 会让"`$` 变量
+  住 0 号段"这个直觉丢掉，而换来的只是消掉上面第 2 条（第 1 条根本消不掉）。
+
+**触发点**：若将来撞到**第三处**由这个重叠引发的真实麻烦，再把 `0xx` 整族挪到 `8xx`（届时
+又是一次冻结面变更 + `ENGINE_VER` bump，且两条守卫测试仍然有效、与号无关）。撞到了往这条底下追加。
+
+### F7. release 下 `NUM_PHASES` 报 `dead_code`——`cargo clippy --release` 现在跑不绿（syscall 号表重排刀终审修复波撞见，2026-07-31）
+
+```
+warning: constant `NUM_PHASES` is never used
+   --> crates/stg-core/src/world.rs:113:18
+```
+
+`pub(crate) const NUM_PHASES: u8 = 11;` 只被 **`PhaseGuard`** 用，而 `PhaseGuard` 整个住在
+`#[cfg(debug_assertions)]` 里（P2：debug 押运 §3.5 相位时序，release 不检查）。于是
+**release 编译时它真的没有任何使用者**。
+
+**先于本波存在，与本波无关**（本波只改了 `world.rs` 的两行注释）。之所以一直没人撞见：
+CI 的 clippy 步跑的是 **debug**（`cargo clippy --workspace --all-targets -- -D warnings`），
+`debug_assertions` 成立 ⇒ 有使用者 ⇒ 不报。`cargo build --release` 只是 warning 不是 error，
+所以 `storm`/`bench` 那几条 release 命令照跑不误。
+
+**没有顺手修**：三条修法各有取舍，都是行为面选择，不该混进一把纯注释刀——
+
+1. `#[cfg(debug_assertions)]` 挂在常量上 —— 最诚实（它本来就是 debug 专用），但要确认没有
+   将来的 release 使用者；
+2. `#[allow(dead_code)]` —— 一行了事，代价是把"它在 release 里没人用"这个事实盖住；
+3. 让它在 release 也有用（例如相位数进某个诊断/校验面）—— 那是**加东西**，得单独立项。
+
+**触发点 = 谁要让 `cargo clippy --release -- -D warnings` 进 CI**（或谁被这条 warning 挡住），
+届时连同 ①②③ 一并裁。在那之前它只是噪声一行。

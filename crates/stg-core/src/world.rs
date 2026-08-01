@@ -185,7 +185,7 @@ pub struct WorldBody {
     /// 世代"，这里是"这个槽历史上一共发过多少代"。全零初始化合法（首次 begin 即从 1 起算）。
     pub(crate) spell_seq: [u16; crate::boss::MAX_BOSSES],
     /// 表现锚点（整局流程刀 spec §4）：存读档/回滚/中段启动后表现层重同步的世界侧真相。
-    /// 仅 5x 族 syscall 写、任何相位不读（判别式测试押运）；P6 全量入校验和，facing 先例。
+    /// 仅 5xx 族 syscall 写、任何相位不读（判别式测试押运）；P6 全量入校验和，facing 先例。
     pub(crate) bgm_id: u16,
     pub(crate) bg_id: u16,
     pub(crate) bg_phase: u16,
@@ -1025,7 +1025,7 @@ impl WorldBody {
         &self.reqs[..self.reqs_len as usize]
     }
 
-    /// 5x 族锚点写口（syscall 专用；写字段+发 req 一体，保证"字段可 seek、req 可边沿"双通道）。
+    /// 5xx 族锚点写口（syscall 专用；写字段+发 req 一体，保证"字段可 seek、req 可边沿"双通道）。
     pub(crate) fn set_bgm(&mut self, id: u16) {
         self.bgm_id = id;
         self.emit_req(crate::consts::REQ_BGM, [id as i32, 0, 0, 0, 0, 0]);
