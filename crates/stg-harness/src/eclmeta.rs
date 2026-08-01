@@ -105,11 +105,36 @@ pub fn render_doc_segment() -> String {
 const DOC_BEGIN: &str = "<!-- gen:builtins:begin -->";
 const DOC_END: &str = "<!-- gen:builtins:end -->";
 
-pub fn doc_path() -> std::path::PathBuf {
+/// 手册正文目录（`docs/ecl-lang/`，按教学顺序编号的 8 篇）。
+pub fn doc_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/ecl-lang")
+}
+
+/// 手册薄索引（`docs/ecl-lang.md`）——全仓十余处活文档链接指着它，故保留。
+#[cfg(test)]
+fn doc_index_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/ecl-lang.md")
 }
 
-/// 幂等替换 ecl-lang.md 生成段;找不到标记 = 错。
+/// 生成段所在的那一篇（速查页）。`splice_doc` 写这里，防漂移测试也只读这里。
+pub fn doc_path() -> std::path::PathBuf {
+    doc_dir().join("7-reference.md")
+}
+
+/// 索引 + 正文全部 `.md`——`ecl` 围栏真编译测试的扫描面。文件名排序保证顺序确定。
+#[cfg(test)]
+fn all_doc_files() -> Vec<std::path::PathBuf> {
+    let mut v: Vec<std::path::PathBuf> = std::fs::read_dir(doc_dir())
+        .expect("docs/ecl-lang/ 应存在")
+        .map(|e| e.expect("读目录项").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .collect();
+    v.sort();
+    v.insert(0, doc_index_path());
+    v
+}
+
+/// 幂等替换 `docs/ecl-lang/7-reference.md` 生成段;找不到标记 = 错。
 ///
 /// 注(本刀实测修正)：简报给的原始 `format!("{}{}\n{}{}", prefix, "\n", body, suffix)`
 /// 在 `"\n"` 实参之外，模板字面量里又硬编码了一个 `\n`——两个换行叠加，产出
@@ -121,7 +146,7 @@ pub fn splice_doc() -> Result<(), String> {
     let p = doc_path();
     let s = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
     let (Some(b), Some(e)) = (s.find(DOC_BEGIN), s.find(DOC_END)) else {
-        return Err("ecl-lang.md 缺生成段标记".into());
+        return Err("docs/ecl-lang/7-reference.md 缺生成段标记".into());
     };
     let new = format!(
         "{}\n{}{}",
@@ -187,27 +212,40 @@ mod tests {
         assert_eq!(
             s[b..e].trim_end(),
             format!("\n{}", render_doc_segment()).trim_end(),
-            "跑 `cargo run -p stg-harness -- gen-ecl-meta` 再 commit(会同步刷新 ecl-lang.md 生成段)"
+            "跑 `cargo run -p stg-harness -- gen-ecl-meta` 再 commit(会同步刷新 7-reference.md 生成段)"
         );
     }
 
-    /// ecl-lang.md 的每个 ```ecl 围栏例子必须能编译(文档即规格,例子腐烂即红)。
+    /// 手册**每一篇**的每个 ```ecl 围栏例子必须能编译(文档即规格,例子腐烂即红)。
+    ///
+    /// 扫描面 = 索引 `docs/ecl-lang.md` + `docs/ecl-lang/` 下全部 `.md`（含折叠块里的围栏）。
+    /// 下限断言钉在 15：拆分刀之前单文件就有 15 个围栏，只多不少——**这条下限防的是"漏配
+    /// 路径导致一个围栏都没扫到、测试空跑全绿"**，那是最坏的假绿。
     #[test]
     fn every_ecl_fenced_example_in_doc_compiles() {
-        let s = std::fs::read_to_string(doc_path()).unwrap();
         let mut n = 0;
-        let mut rest = s.as_str();
-        while let Some(start) = rest.find("```ecl\n") {
-            let body = &rest[start + 7..];
-            let end = body.find("```").expect("未闭合的 ecl 围栏");
-            let src = &body[..end];
-            if let Err(errors) = stg_ecl_compiler::lang::compile(src, "doc.ecl") {
-                let msg: Vec<String> = errors.iter().map(|e| e.render("doc.ecl")).collect();
-                panic!("文档例 #{n} 编译失败:\n{src}\n---\n{}", msg.join("\n"));
+        for f in all_doc_files() {
+            let s = std::fs::read_to_string(&f).unwrap();
+            let mut rest = s.as_str();
+            while let Some(start) = rest.find("```ecl\n") {
+                let body = &rest[start + 7..];
+                let end = body.find("```").expect("未闭合的 ecl 围栏");
+                let src = &body[..end];
+                if let Err(errors) = stg_ecl_compiler::lang::compile(src, "doc.ecl") {
+                    let msg: Vec<String> = errors.iter().map(|e| e.render("doc.ecl")).collect();
+                    panic!(
+                        "文档例 #{n}({}) 编译失败:\n{src}\n---\n{}",
+                        f.display(),
+                        msg.join("\n")
+                    );
+                }
+                n += 1;
+                rest = &body[end + 3..];
             }
-            n += 1;
-            rest = &body[end + 3..];
         }
-        assert!(n >= 3, "文档至少应有 3 个可编译示例,实得 {n}");
+        assert!(
+            n >= 15,
+            "手册至少应有 15 个可编译示例,实得 {n}——是不是漏配了扫描路径?"
+        );
     }
 }
