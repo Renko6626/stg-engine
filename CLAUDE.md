@@ -111,8 +111,12 @@ docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
 docs/checksum-mechanism.md       校验和机制 + "新字段默认入校验" 保证
 docs/pool-memory-layout.md       池 SoA 布局与缓存精算（热路径驻 L2）
 docs/xform-ops.md                弹变换 op 速查表（编号即契约；作者视角参考）
-docs/ecl-lang.md                 【ECL 脚本作者第一入口 / agent 必读】.ecl 表层语言手册（M1.9；
-                     内建函数节由 gen-ecl-meta 生成，改 builtins.rs 后重跑同步，编辑体验刀）
+docs/ecl-lang.md                 【ECL 脚本作者第一入口 / agent 必读】.ecl 表层语言手册的**薄索引**
+                     （全景 + 五条静默坑 + 该读哪一篇；全仓十余处链接指着它，勿改名）
+docs/ecl-lang/                   手册正文，按教学顺序 8 篇：1 hello-danmaku / 2 tasks / 3 enemy
+                     / 4 bullets / 5 types / 6 spell-and-stage / 7 reference / 8 errors。
+                     内建函数生成段住 7-reference.md（gen-ecl-meta 写入，改 builtins.rs 后重跑
+                     同步）；每篇的 ```ecl 围栏都被 cargo test -p stg-harness 真编译
 docs/ecl-ops.md                  ECL 字节码层速查（op/syscall/fault 码；VM/编译器开发用）
 docs/zun-ecl-v2-reference.md     ZUN ECL V2 指令/变量表本地副本 + 逐条对照（源 Priw8）
 docs/bench-baseline.md           性能基线（step 曲线/快照/校验和账；大改后重跑续表）
