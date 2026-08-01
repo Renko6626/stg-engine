@@ -172,8 +172,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p stg-harness -- golden --out c.txt   # 跑金向量输出逐帧校验和
 cargo run -p stg-harness -- verify-tables        # 断言烘焙表字节 == commit
 cargo run -p stg-harness -- check <f.ecl|目录>   # .ecl 只编译不跑,行列报错(目录=多文件整局)
+cargo run -p stg-harness -- run <f.ecl|目录>     # 跑起来看结果:计数/峰值/末帧+--at F 单帧弹表
+                                             # ⚠ task fault 会打出来并退非零码(别处一律静默)
 cargo run -p stg-harness -- gen-ecl-meta         # 改 builtins.rs 后同步元数据/文档两生成 sink
-cargo run -p stg-harness -- serve            # WebSocket 查看器(浏览器玩风铃卡,ssh -L 转发)
+cargo run -p stg-harness -- serve [--ecl f]  # WebSocket 查看器(默认风铃卡;--ecl 跑自己的脚本,
+                                             # 每次连接重编 ⇒ 刷新浏览器即热重载。ssh -L 转发)
 cargo run --release -p stg-harness -- storm      # 恢复重演风暴闸(存档正确性)
 bash crates/stg-godot/smoke/run-smoke.sh     # 桥级冒烟(桥面回归)
 bash godot/smoke/run-smoke.sh                # 真工程冒烟(demo 局两次开机:正常/中段)

@@ -998,3 +998,24 @@ CI 的 clippy 步跑的是 **debug**（`cargo clippy --workspace --all-targets -
 
 **触发点 = 谁要让 `cargo clippy --release -- -D warnings` 进 CI**（或谁被这条 warning 挡住），
 届时连同 ①②③ 一并裁。在那之前它只是噪声一行。
+
+### F8. 引擎里有**两套不一致的瞄准政策**——自机 game over 之后两条路各走各的（run 刀记档，2026-08-01）
+
+同一句"瞄自机"在引擎里有两份实现，对**自机不在场**的处置正好相反：
+
+| 路径 | 实现 | 自机 `LIFE_ABSENT`/`LIFE_GAMEOVER` 时 |
+|---|---|---|
+| `aim_player()`（syscall 120） | 无条件对 `players[0]` 求 `atan2` | 照常返回一个角度——**瞄那个已不存在的自机的槽位坐标** |
+| `sh_aim` + `sh_fire`（6xx 发射器） | 同上，无条件对 `players[0]` | 同上 |
+| xformdef 的 `aim_player` op | `world/motion.rs:179` 的 `nearest_aimable_player` | 跳过不可瞄的自机；**一个都没有 → 整条 no-op** |
+| 弹 setter `aim_at_player`（330） | 同上 | 同上：弹保持原角度，**不报错、不计数** |
+
+后果：自机 game over 之后，发射器仍朝那个槽位坐标喷，而弹身上的 xform 会**安静地不动**——
+同一段弹幕的两半按两套规矩走。单人局里只有 game over 之后才看得见，所以一直没人撞上。
+
+**触发点**：谁要统一这两套政策。⚠️ **这是行为变更，而且是内容口径问题、不是实现细节**——
+改哪一边都要先回答「**自机死了之后弹幕该继续瞄哪**」（继续瞄尸体坐标？冻住角度？瞄场地中轴？
+ZUN 各作口径也不一致）。答案定下来之前不要"顺手对齐"，那会悄悄改掉弹幕形状。
+
+已在 [`docs/ecl-lang/4-bullets.md`](ecl-lang/4-bullets.md) 的「四条瞄准路径的解析时机与基点」
+表里如实写明现状——**文档不欠账，欠的是引擎的一致性**。

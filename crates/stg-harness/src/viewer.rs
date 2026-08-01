@@ -116,14 +116,36 @@ pub(crate) fn mask_to_input(frame: u32, mask: u32) -> InputFrame {
 
 const INDEX_HTML: &str = include_str!("../viewer/index.html");
 
-/// `dump --out FILE [--frames 900] [--seed 1]`——离线录一局(脚本自动打:射击 + 每秒左右
-/// 横移,golden 场景 2 同款),每帧写 `u32 len(LE) + 线格式 v1 帧`。回放页/调试工具消费
-/// (follow-ups F3 预告的 dump 形态)。
+/// serve/dump 的建场旁路（run 刀 2026-08-01）：给了 `--ecl` 就走 `run` 那条路
+/// （`collect_units` + `compile_units` + `World::new_game`，空场、脚本自己 `spawn_enemy`），
+/// 不给就维持现状跑 `rainbow.ecl`。
+///
+/// **加旁路、不改主路**：`build_rainbow_world` 一个字不动——golden 场景 2 依赖它，
+/// 改它就是改金向量。rank 固定 2（`RANK_HARD`，同 rainbow 建场），viewer 不开难度旋钮。
+const VIEWER_RANK: i32 = 2;
+
+fn build_viewer_world(
+    ecl: Option<&str>,
+    seed: u64,
+) -> Result<(Box<World>, stg_core::ecl::image::EclImage), String> {
+    match ecl {
+        Some(p) => crate::run::build_ecl_world(p, seed, VIEWER_RANK).map(|(w, i, _n)| (w, i)),
+        None => {
+            let (w, i, _boss) = crate::build_rainbow_world(seed);
+            Ok((w, i))
+        }
+    }
+}
+
+/// `dump --out FILE [--frames 900] [--seed 1] [--ecl PATH]`——离线录一局(脚本自动打:
+/// 射击 + 每秒左右横移,golden 场景 2 同款),每帧写 `u32 len(LE) + 线格式 v1 帧`。回放页/
+/// 调试工具消费(follow-ups F3 预告的 dump 形态)。`--ecl` 见 `build_viewer_world`。
 pub(crate) fn cmd_dump(rest: &[String]) -> ExitCode {
     use stg_core::input::{BTN_LEFT, BTN_RIGHT, BTN_SHOT};
     let mut out_path: Option<String> = None;
     let mut frames: u32 = 900;
     let mut seed: u64 = 1;
+    let mut ecl: Option<String> = None;
     let mut i = 0;
     while i < rest.len() {
         match (rest[i].as_str(), rest.get(i + 1)) {
@@ -139,8 +161,12 @@ pub(crate) fn cmd_dump(rest: &[String]) -> ExitCode {
                 seed = v.parse().expect("--seed 要 u64");
                 i += 2;
             }
+            ("--ecl", Some(v)) => {
+                ecl = Some(v.clone());
+                i += 2;
+            }
             (a, _) => {
-                eprintln!("dump: 未知参数 {a}（支持 --out/--frames/--seed）");
+                eprintln!("dump: 未知参数 {a}（支持 --out/--frames/--seed/--ecl）");
                 return ExitCode::from(2);
             }
         }
@@ -149,7 +175,13 @@ pub(crate) fn cmd_dump(rest: &[String]) -> ExitCode {
         eprintln!("dump: 缺 --out FILE");
         return ExitCode::from(2);
     };
-    let (mut w, image, _boss) = crate::build_rainbow_world(seed);
+    let (mut w, image) = match build_viewer_world(ecl.as_deref(), seed) {
+        Ok(t) => t,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return ExitCode::from(2);
+        }
+    };
     let mut buf = Vec::new();
     for f in 0..frames {
         let mask = BTN_SHOT
@@ -176,11 +208,16 @@ pub(crate) fn cmd_dump(rest: &[String]) -> ExitCode {
     }
 }
 
-/// `serve [--port 8611] [--seed 1]`——单端口：HTTP GET 回内嵌页，WS 升级进 60Hz 游戏循环。
-/// 单客户端串行伺候；断开/刷新 = 下一局新 World（天然 restart）。
+/// `serve [--port 8611] [--seed 1] [--ecl PATH]`——单端口：HTTP GET 回内嵌页，WS 升级进
+/// 60Hz 游戏循环。单客户端串行伺候；断开/刷新 = 下一局新 World（天然 restart）。
+///
+/// `--ecl` 跑自己的脚本（不给则维持现状跑 `rainbow.ecl`）。**每次连接都重新编译**——
+/// 于是"改 .ecl → 刷新浏览器"就是一次热重载；编译坏了打渲染诊断、关掉这条连接，服务不倒。
+/// 起服前先编一次做 fail-fast，免得对着一个永远连不上的端口猜。
 pub(crate) fn cmd_serve(rest: &[String]) -> ExitCode {
     let mut port: u16 = 8611;
     let mut seed: u64 = 1;
+    let mut ecl: Option<String> = None;
     let mut i = 0;
     while i < rest.len() {
         match (rest[i].as_str(), rest.get(i + 1)) {
@@ -192,11 +229,21 @@ pub(crate) fn cmd_serve(rest: &[String]) -> ExitCode {
                 seed = v.parse().expect("--seed 要 u64");
                 i += 2;
             }
+            ("--ecl", Some(v)) => {
+                ecl = Some(v.clone());
+                i += 2;
+            }
             (a, _) => {
-                eprintln!("serve: 未知参数 {a}（支持 --port/--seed）");
+                eprintln!("serve: 未知参数 {a}（支持 --port/--seed/--ecl）");
                 return ExitCode::from(2);
             }
         }
+    }
+    if let Some(p) = ecl.as_deref()
+        && let Err(msg) = build_viewer_world(Some(p), seed)
+    {
+        eprintln!("{msg}");
+        return ExitCode::from(2);
     }
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
@@ -208,10 +255,14 @@ pub(crate) fn cmd_serve(rest: &[String]) -> ExitCode {
     eprintln!(
         "viewer 就绪：http://localhost:{port}   （远程盒子上用 `ssh -L {port}:localhost:{port} <box>` 转发）"
     );
+    match ecl.as_deref() {
+        Some(p) => eprintln!("场景：{p}（每次连接重编，刷新浏览器即热重载）"),
+        None => eprintln!("场景：内建 rainbow.ecl（`--ecl <file|目录>` 跑自己的脚本）"),
+    }
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
-                if let Err(e) = handle_conn(s, seed) {
+                if let Err(e) = handle_conn(s, seed, ecl.as_deref()) {
                     eprintln!("serve: 连接结束（{e}），等待下一个……");
                 }
             }
@@ -248,7 +299,11 @@ fn is_ws_upgrade(stream: &TcpStream) -> bool {
         .contains("upgrade: websocket")
 }
 
-fn handle_conn(mut stream: TcpStream, seed: u64) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_conn(
+    mut stream: TcpStream,
+    seed: u64,
+    ecl: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if !is_ws_upgrade(&stream) {
         // 读走请求（尽力而为）再回页，部分浏览器不读完请求就写会 RST
         let mut sink = [0u8; 2048];
@@ -266,7 +321,14 @@ fn handle_conn(mut stream: TcpStream, seed: u64) -> Result<(), Box<dyn std::erro
     ws.get_ref()
         .set_read_timeout(Some(Duration::from_millis(1)))?;
 
-    let (mut w, image, _boss) = crate::build_rainbow_world(seed);
+    let (mut w, image) = match build_viewer_world(ecl, seed) {
+        Ok(t) => t,
+        // 编译坏了不该拖垮服务：打诊断、关这条连接，改好脚本再刷新即可。
+        Err(msg) => {
+            eprintln!("{msg}");
+            return Ok(());
+        }
+    };
     let mut mask = 0u32;
     let tick = Duration::from_nanos(16_666_667); // 60 Hz（I6 固定步；节拍器住表现侧）
     let mut next = Instant::now(); // 首步即刻，此后每步 += tick（起步无双拍空隙）
@@ -471,6 +533,33 @@ mod tests {
         assert!(r3, "分包到达的 Upgrade 头仍应判 WS（不误判成 HTTP）");
     }
 
+    /// `--ecl` 旁路判别式（run 刀）：给了脚本就走脚本，不给就还是 rainbow——两条路
+    /// 必须造出**不同**的世界。判别点选"开局敌数"：rainbow 在 Rust 侧手摆了一只 boss，
+    /// 空场脚本一只都没有。若旁路接错（两边都回 rainbow），本测试即红。
+    #[test]
+    fn ecl_bypass_builds_a_different_world_than_rainbow() {
+        let dir = std::env::temp_dir().join(format!("stg-viewer-ecl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("empty.ecl");
+        std::fs::write(&p, "sub main() { loop { wait(1); } }").unwrap();
+
+        let (w_ecl, _i) = super::build_viewer_world(Some(p.to_str().unwrap()), 1).unwrap();
+        assert_eq!(
+            w_ecl.view().enemies().iter_alive().count(),
+            0,
+            "空场脚本开局零敌"
+        );
+        let (w_rb, _i) = super::build_viewer_world(None, 1).unwrap();
+        assert_eq!(
+            w_rb.view().enemies().iter_alive().count(),
+            1,
+            "不给 --ecl 仍是 rainbow（Rust 侧手摆的 boss 还在）"
+        );
+        // 编译错误不 panic，成"已渲染诊断"回给调用方
+        std::fs::write(&p, "sub main() { int x = 5; }").unwrap();
+        assert!(super::build_viewer_world(Some(p.to_str().unwrap()), 1).is_err());
+    }
+
     #[test]
     fn http_path_serves_embedded_page() {
         use std::io::{Read, Write};
@@ -479,7 +568,7 @@ mod tests {
         let addr = l.local_addr().unwrap();
         let t = std::thread::spawn(move || {
             let (s, _) = l.accept().unwrap();
-            super::handle_conn(s, 1).unwrap();
+            super::handle_conn(s, 1, None).unwrap();
         });
         let mut c = TcpStream::connect(addr).unwrap();
         c.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
