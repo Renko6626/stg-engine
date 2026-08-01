@@ -663,6 +663,28 @@ mod tests {
     ///   杀掉的死循环——这是 `wait(0)` 做成 no-op 所付的代价，作者契约见 `docs/ecl-lang.md`。
     ///
     /// 此测试防"改成饱和/报错"，也防"把 n==0 悄悄改回等 1 帧"。
+    /// `wait(0)` 是**真 no-op**：不 yield、同帧接着跑。
+    ///
+    /// 判别力：正面陈述"同帧继续"。此前它只被 `wait_truncates_to_low_16_bits` **侧面**
+    /// 押着（经由 65536 截断成 0 那个边界）——把 `n == 0` 改成"饱和成等 1 帧"时两条会
+    /// 一起红，但只有本条说得出坏在哪。`locals[0]` 那格证明 WAIT 之后的指令**本帧**执行了。
+    #[test]
+    fn wait_zero_is_a_true_noop_and_continues_in_the_same_frame() {
+        let (r, t) = run(&[
+            OP_PUSHI as u32,
+            0,
+            OP_WAIT as u32,
+            OP_PUSHI as u32,
+            42,
+            OP_POPL as u32,
+            0,
+            OP_END as u32,
+        ]);
+        assert_eq!(r, Exec::End, "wait(0) 不该 yield —— 同帧应一路跑到 END");
+        assert_eq!(t.locals[0], 42, "WAIT 之后的指令本帧就该执行");
+        assert_eq!(t.wait, 0, "no-op 路径不得留下等待计数");
+    }
+
     #[test]
     fn wait_truncates_to_low_16_bits() {
         let (r, t) = run(&[OP_PUSHI as u32, -1i32 as u32, OP_WAIT as u32, OP_END as u32]);

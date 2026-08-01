@@ -310,7 +310,7 @@ struct Task {
     alive: u8,
     script: u16,              // static_ecl 中的入口索引
     pc: u32,
-    wait: u16,                // 剩余等待帧
+    wait: u16,                // **还要跳过的帧数** = wait(n) 的 n−1（见下方勘误）
     born_frame: u32,          // 派生帧戳；== 当前帧则本帧跳过（次帧首跑，§4.3）
     owner: Handle,            // 关卡 / 敌人 / 子弹；失效则任务自动死亡
     parent: Handle,           // 派生树标签，仅供显式 kill_children 遍历（默认不级联）
@@ -333,6 +333,15 @@ struct Task {
 
 - **栈机**：push / pop / dup；算术区分整数与 Q16.16 语义（`addi/addf` 风格），乘除走 i64 中间量；比较 + `jz/jnz/jmp`；`call/ret`（sub 调用）。
 - **`wait n`**：写 `wait` 计时并让出；帧首 `wait > 0` 则减一并跳过本帧执行。这就是协程的全部魔法——没有任何隐藏栈。
+
+> **勘误（2026-08-01，`wait` 语义修正刀）**：上面这句描述的是**计数器机制**，不是**作者语义**。
+> 二者差一帧，而实现照着前者写了一年：`OP_WAIT` 原本存 `task.wait = n`，于是 `wait(n)` 在第 F 帧
+> 执行后被跳过 F+1..F+n 共 n 帧、第 **F+n+1** 帧才跑 ⇒ `loop { …; wait(n); }` 的周期是 **n+1**。
+> 正确的作者语义是 **`wait(n)` = 等 n 帧**（同 ZUN 的"停 %1 帧"，也同本仓 xform 段 `wait` 的既有
+> 勘误 [`stg-world-design.md` D4 那条]——**那条早就修对了，唯独 ECL 任务这条路径漏了**）。
+> 现行实现：`OP_WAIT` 存 **`n − 1`**（yield 本身已吃掉当前帧的剩余，那一帧不该再由计数器买单），
+> 且 **`n == 0` 不 yield、同帧继续**（"等同于没写这句"）。代价：`loop { wait(0); }` 与因低 16 位
+> 截断成 0 的 `wait(65536)` 都是真死循环，会被 `FAULT_BUDGET` 响亮杀掉。`ENGINE_VER` 11→12。
 - **`spawn_task(script, owner)`**：派生子任务（ZUN ECL 的 async 语义），返回任务句柄。**默认次帧首跑**：子任务盖 `born_frame` 戳，step 3 遍历本帧跳过它——使"当帧跑不跑"与 free-list 槽索引**解耦**、时序可预测（派生链通常很短，一帧延迟微乎其微）。此选择与"每任务独立扁平栈"契合：step 3 恒为一层扁平迭代、任何帧边界可直接 memcpy 快照，`spawn_task` 退化为"占槽 + 盖戳 + 返句柄"零递归。配套 `kill_task(recursive=false 默认) / kill_children`（§4.2）。
   - *后期可选* `spawn_task_now`（当帧内联跑子任务到首个 wait）：真实用例窄（"N 个子任务且首 tick 必须本帧"；同帧一环弹用父任务里 `for { create_bullet }` 即可，无需子任务）。若做，**用 step 3 内 worklist 迭代 drain 而非宿主递归**（避免无界爆栈），深度由池容量封顶。phase 1 不实现。
 - **syscall**：一切副作用的唯一通道（§4.4）。

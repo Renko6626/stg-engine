@@ -25,7 +25,7 @@ time/rank_mask/param_mask 字段（时间轴混编 + 难度过滤 + 栈引用替
 | 17 | killAsync | S | 按 id 杀最近 async sub | 句柄 + kill（绑定层） |
 | 18-20 | （异步管理，未考据明） | | | — |
 | 21 | killAllAsync | — | 杀本敌全部 async sub | `KILL_CHILDREN 52`（差异：ZUN 按敌归属，我们按 parent 直系） |
-| 23 | wait | S | 停 %1 帧 | `WAIT 1`（取栈顶低 16 位） |
+| 23 | wait | S | 停 %1 帧 | `WAIT 1`（取栈顶低 16 位）—— **2026-08-01 起才真的相等**：此前我方 `wait(n)` 的周期是 n+1，这一行宣称的等价是无声失真的（见 `design_doc.md` 的 `wait n` 勘误）。这份逐条对照当时的沉默同意，正是那个差一活了一年的一环 |
 | 24 | waitf | f | 浮点亚帧等待 | **永不进**（I6 整数帧） |
 | 30 | printf | … | 调试打印 | —（诊断走事件/校验和） |
 | 40 | stackAlloc | S | 栈指针抬 %1 字节（帧局部变量区） | 无——locals 定长 64 共享（拍板 3/4） |
