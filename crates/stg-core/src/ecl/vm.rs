@@ -135,8 +135,25 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
             ops::OP_END => return Exec::End,
             ops::OP_WAIT => {
                 let frames = pop!();
-                task.wait = frames as u16;
+                // `wait(n)` 的语义是**等 n 帧**：第 F 帧执行 ⇒ 第 F+n 帧接着跑，
+                // 故 `loop { …; wait(n); }` 的周期恰是 **n**（不是 n+1）。
+                //
+                // 计数器要存 `n − 1`：调度门禁是"`wait > 0` ⇒ 递减并跳过"，即计数器的值
+                // 是**要跳过的帧数**，而 yield 本身已经吃掉了当前帧的剩余部分——那一帧
+                // 不需要再由计数器来买。存 `n` 会多跳一帧（2026-08-01 前的旧行为：
+                // `wait(1)` 变成"隔一帧跑"，凡是自己记帧数的脚本一律偏 1/n）。
+                //
+                // `n == 0` **等同于没写这句**：不 yield、同帧继续。这样 `wait(delay)` 在
+                // `delay` 算出 0 时行为自然（"不延迟"），不必调用方特判。
+                // ⚠️ 代价：`loop { wait(0); }` 是货真价实的死循环，会烧穿单任务指令预算
+                // 被 `FAULT_BUDGET` 杀掉——**确定性的响亮失败**，同 `loop {}` 一个下场。
+                // 又因 `n` 取低 16 位，`wait(65536)` 截断成 0 ⇒ 同样是死循环而非"等 0 帧"。
+                let n = frames as u16;
                 task.pc = next_pc;
+                if n == 0 {
+                    continue;
+                }
+                task.wait = n - 1;
                 return Exec::Yield;
             }
             ops::OP_JMP => {
@@ -637,16 +654,50 @@ mod tests {
         assert_eq!(t.stack[0], 42);
     }
 
-    /// WAIT 截断语义钉死（M1 终审 Minor）：取栈顶低 16 位——wait(-1)=65535 帧、
-    /// wait(65536)=0 帧。作者契约入 ecl-ops.md，此测试防"改成饱和/报错"的无声语义变化。
+    /// WAIT 截断语义钉死（M1 终审 Minor；语义修正后重钉，2026-08-01）：取栈顶低 16 位。
+    ///
+    /// 两个边界在**新语义**下不再同族，这正是本测试要押的东西：
+    /// - `wait(-1)` → 低 16 位 = 65535 ⇒ 等 65535 帧，仍是 yield（计数器存 65535 − 1）。
+    /// - `wait(65536)` → 低 16 位 = **0** ⇒ 不再是"等 0 帧、次帧继续"，而是 **真 no-op：
+    ///   不 yield、同帧往下跑**。搁在 `loop` 里就是烧穿单任务指令预算被 `FAULT_BUDGET`
+    ///   杀掉的死循环——这是 `wait(0)` 做成 no-op 所付的代价，作者契约见 `docs/ecl-lang.md`。
+    ///
+    /// 此测试防"改成饱和/报错"，也防"把 n==0 悄悄改回等 1 帧"。
+    /// `wait(0)` 是**真 no-op**：不 yield、同帧接着跑。
+    ///
+    /// 判别力：正面陈述"同帧继续"。此前它只被 `wait_truncates_to_low_16_bits` **侧面**
+    /// 押着（经由 65536 截断成 0 那个边界）——把 `n == 0` 改成"饱和成等 1 帧"时两条会
+    /// 一起红，但只有本条说得出坏在哪。`locals[0]` 那格证明 WAIT 之后的指令**本帧**执行了。
+    #[test]
+    fn wait_zero_is_a_true_noop_and_continues_in_the_same_frame() {
+        let (r, t) = run(&[
+            OP_PUSHI as u32,
+            0,
+            OP_WAIT as u32,
+            OP_PUSHI as u32,
+            42,
+            OP_POPL as u32,
+            0,
+            OP_END as u32,
+        ]);
+        assert_eq!(r, Exec::End, "wait(0) 不该 yield —— 同帧应一路跑到 END");
+        assert_eq!(t.locals[0], 42, "WAIT 之后的指令本帧就该执行");
+        assert_eq!(t.wait, 0, "no-op 路径不得留下等待计数");
+    }
+
     #[test]
     fn wait_truncates_to_low_16_bits() {
         let (r, t) = run(&[OP_PUSHI as u32, -1i32 as u32, OP_WAIT as u32, OP_END as u32]);
-        assert_eq!(r, Exec::Yield);
-        assert_eq!(t.wait, 65535, "wait(-1) 截断为 65535");
+        assert_eq!(r, Exec::Yield, "wait(-1) 仍让出");
+        assert_eq!(t.wait, 65534, "wait(-1) = 等 65535 帧 ⇒ 计数器 = 65535 − 1");
+        // 判别力：若 WAIT 对 n==0 仍 yield，这里会停在 Yield 而到不了 END。
         let (r, t) = run(&[OP_PUSHI as u32, 65536u32, OP_WAIT as u32, OP_END as u32]);
-        assert_eq!(r, Exec::Yield);
-        assert_eq!(t.wait, 0, "wait(65536) 截断为 0");
+        assert_eq!(
+            r,
+            Exec::End,
+            "wait(65536) 截断为 0 ⇒ 同帧继续，一路跑到 END"
+        );
+        assert_eq!(t.wait, 0, "no-op 不得写计数器");
     }
 
     /// wrapping 语义钉死（T1 复审 Important）：`i32::MIN / -1`（Rust 裸 `/` 在 release
@@ -847,7 +898,9 @@ mod tests {
         };
         let r = exec(&mut task, &mut ctx);
         assert_eq!(r, Exec::Yield);
-        assert_eq!(task.wait, 30);
+        // 计数器存的是**还要被调度门禁跳过的帧数** = n − 1：yield 本身已经吃掉了当前帧
+        // 的剩余部分，那一帧不需要再由计数器来买 ⇒ `wait(30)` 恰好等 30 帧。
+        assert_eq!(task.wait, 29);
         assert_eq!(task.pc, 3, "pc 落在 WAIT 之后的下一条指令");
         assert_eq!(task.sp, 0, "WAIT 消费了栈顶帧数");
         // 续跑：resume 后应从 pc=3 继续执行完剩余指令

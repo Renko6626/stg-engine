@@ -440,6 +440,7 @@ fn bench_enemy_interp(name: &str, space: VelSpace, frames: u32) {
 
 /// 插值段长（帧）。重新武装周期同此值。
 const BENCH_VEL_DUR: u16 = 30;
+
 /// 摆幅速度（px/帧）。1.0 × 30 帧 ⇒ 摆幅十几 px，离任何边界都远。
 const BENCH_VEL_V: stg_core::math::Fx = stg_core::math::Fx::from_raw(65536);
 
@@ -502,8 +503,17 @@ fn bench_fill_enemy_grid(w: &mut stg_core::step::World) -> Vec<stg_core::enemy::
 }
 
 /// 每 `BENCH_VEL_DUR` 帧无条件重新武装全部 256 只敌的速度插值（逐段取反，见
-/// [`bench_enemy_interp`] 的稳态说明）。导演位（相位 3）恒早于插值 tick（相位 5），
-/// 故 `vel_t` 永远追不上 `vel_dur`，`vel_active` 全程为 1。
+/// [`bench_enemy_interp`] 的稳态说明）。
+///
+/// ⚠️ **重新武装周期恰等于 `BENCH_VEL_DUR`，所以每段的最后一帧插值是"刚到期"而非"在飞"**
+/// （复审实测：f = 29/59/89… 上 256 只敌全部 `vel_active == 0`、`vel_t == 30`）。导演位
+/// （相位 3）恒早于插值 tick（相位 5）只保证"同帧先武装后 tick"，不保证"永不完成"。
+/// 对读数的影响可忽略——`integrate` 的 `done` 路径**照样调 `backfill_enemy_polar`**、只是
+/// 跳过一次 `ease()`，30 帧里 1 帧。
+///
+/// **别试图靠缩短周期来"永不完成"**：往返两段必须等长才净位移为零，周期是摆幅的分母，
+/// 取 `dur − 1` 会让 256 只敌慢慢漂出界（实测末帧只剩 16 只）。真要永不完成得加长 `dur`
+/// 且同步重算摆幅，收益（30 帧里省 1 次 `ease`）不值这个风险。
 fn bench_rearm_enemy_vel(
     b: &mut stg_core::world::WorldBody,
     handles: &[stg_core::enemy::EnemyHandle],
@@ -1871,7 +1881,9 @@ sub main() {
             let handles = super::bench_fill_enemy_grid(&mut w);
             assert_eq!(handles.len(), 256, "敌池应恰好被填满");
             let ecl = stg_core::ecl::image::EclImage::empty();
-            for f in 0..720u32 {
+            // 跑到 720（`BENCH_VEL_DUR` 的整数倍 ⇒ 末帧正好重新武装过），避开
+            // 每段最后一帧那个"刚到期"的相位，好让下面的 `vel_active` 断言问的是稳态。
+            for f in 0..=720u32 {
                 step_with_director(
                     &mut w,
                     &stg_core::tables::TABLES_V0,
@@ -1883,7 +1895,22 @@ sub main() {
             assert_eq!(
                 w.body.view().enemies().iter_alive().count(),
                 256,
-                "全程 720 帧后 256 只敌应一只不少（不漂出边界）"
+                "全程 721 帧后 256 只敌应一只不少（不漂出边界）"
+            );
+            // ⚠️ 上面那条**不押这一档的那根轴**（复审逮到）：把武装用的 easing 写成越界值，
+            // `enemy_vel_precheck` 会按 P4-b 拒收 ⇒ 每次重新武装都是空操作、256 只敌全程
+            // 静止零插值，而"没漂出边界"照样成立、测试照绿。真正塌掉的是这一档的头条结论
+            // （笛/极两行之差 = `backfill_enemy_polar` 的价钱），它会静默变成 ~0。
+            // 故必须直接押"插值器确实在飞"。
+            let pool = w.body.view().enemies();
+            let armed = pool
+                .iter_alive()
+                .filter(|&i| pool.vel_active()[i] == 1)
+                .count();
+            assert!(
+                armed >= 250,
+                "末帧应有几乎全部敌人带着在飞的速度插值器，实得 {armed}/256\
+                 （若为 0，多半是武装参数被 P4-b 拒收 ⇒ 这一档测的是 256 只静止敌）"
             );
         }
     }

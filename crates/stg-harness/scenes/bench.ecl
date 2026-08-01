@@ -13,12 +13,14 @@
 // `sub main()` 是**必须存在但不启动**的占位（表层语言要求每个编译单元恰有一个零参
 // `main`）。harness 从不 `start_main` 它，故它一条指令都不会执行。
 //
-// ── ⚠️ 满负载要写 `wait(0)` 不是 `wait(1)`（写这份文件时踩的第一个坑）────────────
-// 调度器的 wait 门禁是「`wait > 0` → 递减 1、跳过本帧」（`ecl::vm::run_tasks`），所以
-// **`wait(1)` = 每隔一帧才跑一次**，`wait(0)` 才是"下一帧接着跑"。第一版三档全写的
-// `wait(1)`，结果 `syscall 密` 那行出现了 mean(1023) < p50(2007) 的双峰——一半帧满载、
-// 一半帧白送，而不是"每帧满载"。把这条写在这里，因为它在 ecl-lang.md 的 `wait` 节里
-// 不显眼（那节讲的是 u16 截断），而它足以让一整档 bench 只测到一半负载。
+// ── 满负载 = `wait(1)`（这份文件写成时踩过的坑，现已随内核修复消失）──────────
+// `wait(n)` 的语义是**等 n 帧**，故 `loop { …; wait(1); }` **每帧**跑一次 —— 这三档要的
+// 就是它。写这份文件时内核还差一帧（`wait(n)` 周期实为 n+1），当时得写 `wait(0)` 才满载，
+// `syscall 密` 那行因此出现过 mean(1023) < p50(2007) 的双峰（一半帧满载、一半帧白送，
+// 只测到一半负载）。**那个 bug 正是被这份 bench 逼出来的**，已在 `wait` 语义修正刀里改掉
+// （`ENGINE_VER` 11→12）。
+// ⚠️ 现在**不要**写 `wait(0)`：它是"当这句不存在"的真 no-op，`loop { wait(0); }` 会烧穿
+// 单任务指令预算被 `FAULT_BUDGET` 杀掉 —— 而 bench 自己只印时间、不报错。
 //
 // ── 预算红线（写这份文件时唯一真正的约束）────────────────────────────────────
 // VM 有双层指令预算（`ecl::vm`）：**单任务 1024 条/帧** + **全局 65536 条/帧**，超限
@@ -49,7 +51,7 @@ const BENCH_SINK_F: int = 17;
 // 预热 120 帧远长于这 5 帧，测量窗口里池早就是满的。
 async sub bench_drone() {
     loop {
-        wait(0);
+        wait(1);
     }
 }
 
@@ -58,10 +60,10 @@ async sub bench_tasks() {
         for i in 0..51 {
             spawn bench_drone();
         }
-        wait(0);
+        wait(1);
     }
     loop {
-        wait(0);
+        wait(1);
     }
 }
 
@@ -105,7 +107,7 @@ async sub bench_sys_burn() {
         }
         set_global(BENCH_SINK_I, ia);
         set_global(BENCH_SINK_F, fa as int);
-        wait(0);
+        wait(1);
     }
 }
 
@@ -114,7 +116,7 @@ async sub bench_syscalls() {
         spawn bench_sys_burn();
     }
     loop {
-        wait(0);
+        wait(1);
     }
 }
 
@@ -167,7 +169,7 @@ async sub bench_shooter() {
         spawn bench_ring((i * 48 - 168) as fx, 160.0fx, i);
     }
     loop {
-        wait(0);
+        wait(1);
     }
 }
 
@@ -176,6 +178,6 @@ async sub bench_shooter() {
 // ═══════════════════════════════════════════════════════════════════════════
 sub main() {
     loop {
-        wait(0);
+        wait(1);
     }
 }

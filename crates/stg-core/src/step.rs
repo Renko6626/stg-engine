@@ -1196,7 +1196,8 @@ mod tests {
             w.tasks.slots[idx as usize].locals[0], 1,
             "次帧首跑：locals 写入生效"
         );
-        assert_eq!(w.tasks.slots[idx as usize].wait, 5);
+        // `wait(5)` = 等 5 帧 ⇒ 计数器存"还要跳过的帧数" = 4（yield 本身吃掉了当前帧）。
+        assert_eq!(w.tasks.slots[idx as usize].wait, 4);
     }
 
     /// M1.9 T3 Commit A：`OP_SPAWN` 带参端到端——**次帧首跑语义不受带参扩展影响**（子任务
@@ -1287,7 +1288,11 @@ mod tests {
 
     /// M1.5：`SYS_SELF_AGE` 端到端 off-by 语义——任务出生帧 F（`spawn_task` 时 `body.frame`），
     /// 出生当帧不跑（born_frame 门禁），**次帧首跑** `ctx.frame=F+1`，此时 `self_age = 1`（不是
-    /// 0）。脚本每帧把 `self_age` 写回一个自由段全局槽（`WAIT(0)+JMP` 回环，每帧恰写一次）——
+    /// 0）。脚本每帧把 `self_age` 写回一个自由段全局槽（`WAIT(1)+JMP` 回环，每帧恰写一次）——
+    /// ⚠️ 2026-08-01 语义修正前这里写的是 `WAIT(0)`：旧语义下"存 n、门禁 `wait>0` 才跳"使得
+    /// `wait(0)` 恰好是"每帧跑一次"。新语义下 `wait(0)` 是**同帧继续的真 no-op**，`wait(0)+JMP`
+    /// 会变成烧穿指令预算的死循环（`FAULT_BUDGET`），"每帧跑一次"的正确写法是 `wait(1)`。
+    /// 断言值 `N-1` 不变——这正说明改的是写法不是被观测的语义。
     /// 跑 N 次 `step` 后，槽值应精确等于 `N-1`（第 0 次 step 撞 born 门禁不写，随后 N-1 次各写
     /// 一次，各次覆盖，终值 = 最后一次的 age = N-1）。此 off-by 是本刀刻意钉死的契约。
     #[test]
@@ -1303,7 +1308,7 @@ mod tests {
             OP_SYS as u32,
             SYS_SET_VAR as u32, // 4,5
             OP_PUSHI as u32,
-            0,              // 6,7：wait(0) 帧数
+            1,              // 6,7：wait(1) 帧数 = 每帧跑一次
             OP_WAIT as u32, // 8
             OP_JMP as u32,
             0, // 9,10：回环顶部
@@ -1504,68 +1509,78 @@ mod tests {
         assert_eq!(w.body.events_len, 0);
     }
 
-    /// M1 T2：`wait n` 恰 n 帧后恢复——`WAIT` 执行帧不计入空转，随后 n 帧调度层只递减
-    /// 不执行，第 n+1 帧起恢复。
+    /// M1 T2（2026-08-01 `wait` 语义修正后**重写并改名**）：`wait(n)` 的**周期恰是 n**——
+    /// 第 F 帧执行 `wait(n)` ⇒ 第 **F+n** 帧接着跑，中间恰 n−1 个空转帧。
+    ///
+    /// ⚠️ 这条测试的旧名是 `wait_n_idles_exactly_n_frames_then_resumes`，钉的是**引擎内部
+    /// 的**心智模型："`WAIT` 执行帧不计入空转，随后 n 帧调度层只递减不执行，第 n+1 帧起
+    /// 恢复。"那套说法自洽且与当时的实现逐字吻合——但它数的是**空转帧**，而写脚本的人数的
+    /// 是**周期**。执行帧 + n 个空转帧 = 每 **n+1** 帧一轮，两种心智模型差的就是这一帧，
+    /// 这正是本次 off-by-one 的根：`boss_windchime.ecl` 里
+    /// `while t < 600 { …; wait(20); t = t + 20; }` 按周期记账自以为走 600 帧，
+    /// 按空转实现实际走 30×21 = 630 帧，偏 5%。凡是自己记帧数的脚本一律偏 1/n。
+    ///
+    /// 人类裁定："`wait(n)` 就该是等 n 帧"——即以**作者的**心智模型为准。故本测试改为直接
+    /// 陈述周期，不再陈述"空转了几帧"这个实现侧的量。
+    ///
+    /// 判别力：n 取 1 与 3 两点。只测 n=1 的话，"周期恒为 1"（即 `wait` 被实现成完全不等）
+    /// 也能过；只测某个大 n 的话，差一帧的旧实现在 n=1 处最刺眼的退化（"隔一帧跑"）测不到。
     #[test]
-    fn wait_n_idles_exactly_n_frames_then_resumes() {
-        const N: u16 = 3;
-        let ecl = root_image(vec![
-            OP_PUSHI as u32,
-            N as u32,
-            OP_WAIT as u32,
-            OP_PUSHI as u32,
-            7,
-            OP_POPL as u32,
-            0,
-            OP_END as u32,
-        ]);
-        let mut w = World::new(1);
-        let idx = spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
+    fn wait_n_makes_the_resume_delay_exactly_n() {
+        /// 返回"执行 `wait(n)` 的那帧"到"`wait` 之后的语句真正执行的那帧"之间的帧数。
+        fn resume_delay(n: u16) -> u32 {
+            // script：WAIT(n) → locals[0] = 7 → END
+            let ecl = root_image(vec![
+                OP_PUSHI as u32,
+                n as u32,
+                OP_WAIT as u32,
+                OP_PUSHI as u32,
+                7,
+                OP_POPL as u32,
+                0,
+                OP_END as u32,
+            ]);
+            let mut w = World::new(1);
+            let idx = spawn_test(&mut w, &ecl, 0, (OWNER_STAGE, 0, 0)).unwrap();
 
-        step(
-            &mut w,
-            &crate::tables::TABLES_V0,
-            &ecl,
-            &InputFrame::empty(0),
-        ); // 出生帧：跳过
-        step(
-            &mut w,
-            &crate::tables::TABLES_V0,
-            &ecl,
-            &InputFrame::empty(1),
-        ); // 首跑：执行到 WAIT(N)
-        assert_eq!(
-            w.tasks.slots[idx as usize].wait, N,
-            "WAIT 执行帧本身即置 wait=N"
-        );
-        assert!(w.tasks.is_alive(idx as usize));
-
-        for k in 0..N {
+            // 帧 0：出生帧门禁，不跑。帧 1：首跑，执行到 WAIT(n) 让出。
             step(
                 &mut w,
                 &crate::tables::TABLES_V0,
                 &ecl,
-                &InputFrame::empty(2 + k as u32),
+                &InputFrame::empty(0),
             );
-            assert!(
-                w.tasks.is_alive(idx as usize),
-                "空转第 {k} 帧仍不该恢复执行/死亡"
+            step(
+                &mut w,
+                &crate::tables::TABLES_V0,
+                &ecl,
+                &InputFrame::empty(1),
             );
-            assert_eq!(w.tasks.slots[idx as usize].locals[0], 0, "空转帧不得执行");
+            assert_eq!(
+                w.tasks.slots[idx as usize].locals[0], 0,
+                "wait(n) 之后的语句不得在执行 WAIT 的同一帧里跑"
+            );
+
+            // 帧 2 起逐帧推进，找 `wait` 之后的语句头一次执行是哪帧。
+            for f in 2..2 + 600u32 {
+                step(
+                    &mut w,
+                    &crate::tables::TABLES_V0,
+                    &ecl,
+                    &InputFrame::empty(f),
+                );
+                if w.tasks.slots[idx as usize].locals[0] == 7 {
+                    assert!(!w.tasks.is_alive(idx as usize), "恢复后跑到 END 被回收");
+                    assert_eq!(w.body.diag.task_faults, 0);
+                    return f - 1; // WAIT 执行于帧 1
+                }
+                assert!(w.tasks.is_alive(idx as usize), "空转帧不该死亡");
+            }
+            panic!("wait({n}) 在 600 帧内没恢复");
         }
 
-        // 第 N+2 帧（出生后第 N+1 个 step 调用）：wait 已递减到 0，恢复执行至 END。
-        step(
-            &mut w,
-            &crate::tables::TABLES_V0,
-            &ecl,
-            &InputFrame::empty(2 + N as u32),
-        );
-        assert_eq!(
-            w.tasks.slots[idx as usize].locals[0], 7,
-            "恰 N 帧后恢复执行"
-        );
-        assert!(!w.tasks.is_alive(idx as usize), "恢复后跑到 END 被回收");
+        assert_eq!(resume_delay(1), 1, "wait(1) = 等 1 帧 ⇒ 每帧跑一次");
+        assert_eq!(resume_delay(3), 3, "wait(3) = 等 3 帧 ⇒ 中间恰 2 个空转帧");
     }
 
     /// M1 T2：调度升序（I4）——两个 STAGE 任务各自 `SPAWN` 一个子任务；池分配走最低空位，
@@ -2227,15 +2242,16 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            11,
-            "bump 必须是有意识决定(评审 + 改本测试)——10→11：syscall 号表百分区重排,\
-             **号表取值语义全变**——同一个号在新旧两版指向不同的 syscall(例如 20 旧表是\
-             create_bullet、新表是 self_x),旧镜像/旧回放按新表解读会静默走出另一条世界线,\
-             必须拒载。**理由不是条数变**:本刀 74 进 74 出,一条没增没减、任何 syscall 的\
-             语义/参数序/降级口径一字未改。硬度与 8→9(取值编码变了)同侧,比 2→3、7→8 那种\
-             纯号表新增(只让旧引擎跑不了新脚本)高一档。World 布局/SaveBytes 编码/op 表/\
-             相位序全未动(尺寸哨兵未变,金向量校验和流逐字节不变)。\
-             前一次 9→10 是敌人运动动词族刀(敌池 SoA 布局变更,理由是布局不是号表)"
+            12,
+            "bump 必须是有意识决定(评审 + 改本测试)——11→12：`wait` 语义修正,\
+             **任务调度语义变更**——`OP_WAIT` 从存 n 改成存 n−1 且 n==0 不 yield,\
+             `wait(n)` 的周期从 n+1 变成 n。同一份镜像在新旧两版**产出不同的世界演化**\
+             (每个 wait 差一帧),凡自己记帧数的脚本原先一律偏 1/n;旧回放逐帧校验和从第一个\
+             wait 生效那帧起全线错开、旧存档重演接不上,必须拒载。**理由是调度语义,不是编码**:\
+             World 布局/SaveBytes 编码/op 表条目/syscall 号表/相位序全未动(尺寸哨兵未变,\
+             OP_WAIT 的号与元数也没动)。硬度与 10→11 同侧——变的是同一个字节序列的含义,\
+             旧产物在新引擎上不报错、只是悄悄走出另一条世界线。\
+             前一次 10→11 是 syscall 号表百分区重排(号表取值语义全变,74 进 74 出)"
         );
     }
 
