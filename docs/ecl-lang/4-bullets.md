@@ -1,8 +1,42 @@
 # 4 · 弹
 
-> 这一篇讲弹怎么出来、出来之后怎么自己变化：`fire`/`batch` 两条直发口、弹自己的 setter
-> 族、`xformdef` 变换序列、以及"配一遍开多次火"的发射器族。读之前先读
+> 这一篇讲弹怎么出来、出来之后怎么自己变化：三条发弹口（发射器 / `fire` / `batch`）的取舍、
+> 弹自己的 setter 族、`xformdef` 变换序列。读之前先读
 > [3 · 敌人](3-enemy.md)——发弹的通常是敌，出弹点和瞄准都建立在敌的位置上。
+
+## 先决定用哪条路
+
+引擎有三条发弹口。**默认选发射器**（`sh_*` 族）——第 1 篇发那个环用的就是它：
+
+| 场合 | 用什么 | 为什么 |
+|---|---|---|
+| 反复开火、同一套参数（boss 非符连发 30 次） | **发射器** | 配一遍，此后每波一句 `sh_fire` |
+| 整周环（任何路数） | **发射器**（`sh_ring`） | 引擎替你均分，不掉余数（见下一小节） |
+| 真·一次性单发一颗 | `fire` | 发射器在这里是净亏：几句配置换一句调用 |
+| 一次性的角度 × 速度网格 | `batch` 更短 | **但角度算术归你** |
+
+诚实的账：拿发射器重写过整个 demo 局，**代码反而变长了**（+11 / +4 非注释行）。配一个发射器
+要五六句，这本钱得靠"配一遍、开很多次"赚回来——非符段一次配置开火 30 次赚了，风铃卡每环都要
+改弹型和速度没赚到，杂兵的 1×1 单发是净亏。所以正确的说法不是"`batch` 不好"，是：
+**默认发射器；`fire` 留给一次性单发；`batch` 能用，但角度你自己负责。**
+
+### 手算整周环会掉余数——一个真发生过的例子
+
+`godot/ecl/demo/boss_windchime.ecl` 的风铃卡原本手算 `astep = 65536 / ways`，而路数随难度走：
+`ways = 28 + global(GVAR_RANK) * 2`。整数除法一取整，`ways` 颗弹就铺不满一整圈：
+
+| 难度 | `ways` | `65536 / ways` | `ways × step` | 缺口 |
+|---|---:|---:|---:|---:|
+| Easy | 28 | 2340 | 65520 | **16 BAM** |
+| Normal | 30 | 2184 | 65520 | **16 BAM** |
+| Hard | 32 | 2048 | 65536 | 0（恰好整除）|
+| Lunatic | 34 | 1927 | 65518 | **18 BAM** |
+
+**四档里三档的环合不拢**，只有 Hard 躲过。缺口 16~18 BAM ≈ 0.1°，肉眼几乎看不出来，于是这个
+bug 进了已发布内容，一直活到有人拿发射器重写它才被发现。`sh_ring` 不是这么算的：它逐颗算
+`(i × 65536)/n`、把余数均摊掉，首尾精确闭合，相邻两颗的间隔极差 ≤1 BAM。
+
+一句话：**手写 `batch` 发环，就是在手算一个会掉余数的步长。**
 
 ## `fire` 与 `batch`——两条直发口
 
@@ -21,7 +55,8 @@
 ⚠️ **`batch` 的 `angle_step` 是逐弹增量，不会替你均分整周。** 第 i 颗的角度是
 `angle0 + i × angle_step`，写 `0deg` 就是 n 颗叠在同一个方向上。要整周均分自己算
 `65536 / n`（BAM 一圈 65536）再 `as angle` 位穿透过去，同 `crates/stg-harness/scenes/rainbow.ecl`
-的写法。会自动均分的是发射器的 `sh_ring`（见下方「发射器」节），两者别记混。
+的写法——**掉不掉余数你自己盯**（上一节那张表）。会自动均分的是发射器的 `sh_ring`
+（见下方「发射器」节），两者别记混。
 
 ```ecl
 const RICE: int = 64;      // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
@@ -29,7 +64,7 @@ const COLOR_RED: int = 0;
 
 async sub two_ways() {
     loop {
-        // 一颗：朝自机
+        // 一颗：朝自机。一次性单发，用 fire 最短
         _ = fire(RICE, COLOR_RED, $self_x, $self_y, 2.0fx, aim_player(), none, none);
         wait(30);
         // 一圈：12 颗均分整周 × 2 层速度。均分要自己算步长（见上面那条警告）
@@ -46,92 +81,8 @@ sub main() {
 }
 ```
 
-## 弹 setter 族——弹在自己的任务里改自己
-
-这九个内建给**挂在弹上的任务**用（`fire` 的 `task` 参或 `sh_task` 派出来的那种）：在弹自己的
-任务里改这颗弹的速度、方向、加速度。同名的动作也能写进下面的 `xformdef`，那条路不吃任务槽。
-
-⚠️ **弹 setter 族的 handle 参数是陷阱位。** 九个 setter（`set_speed`/`set_angle`/`turn`/
-`set_vel`/`set_ang_vel`/`set_accel`/`set_gravity`/`stop_fx`/`aim_at_player`）的首参
-`handle: int` 求值后即丢弃，setter 恒作用于当前任务的 owner 弹，是 `self` 语义。不能借句柄
-定向操纵别的弹；owner 不是弹的任务调它 → 任务 Fault。想操纵 `fire(...)` 出来的那颗弹，用
-xformdef 或 `fire` 的 `task` 参数挂子任务。
-
-## xformdef（弹变换序列声明）
-
-```ecl
-xformdef ARC_SHOT {
-    set_speed(1.5fx);
-    @20 turn(45deg);
-    @20 turn(-45deg);
-    set_life(180);
-}
-
-const BALL: int = 48; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
-const COLOR_CYAN: int = 7;
-
-sub main() {
-    _ = fire(BALL, COLOR_CYAN, 0fx, 0fx, 1.0fx, 0deg, ARC_SHOT, none);
-}
-```
-
-- op 名 = [`xform-ops.md`](../xform-ops.md) 小写助记（`turn`/`set_speed`/`set_ang_vel`/
-  `step_speed`…）；`@N` 前缀 = 该槽 wait N 帧；参数必须是编译期常量（字面量/const/一元负号）。
-- **STEP 族（`step_speed`/`step_angle`）物理占 2 槽。** scratch 由编译器自动补，作者按 1 条
-  写；物理槽总数 ≤16。`loop`/`end` 不开放（复杂控制流写任务弹；尾部零填充天然 END）。
-- 被 `fire(..., NAME, ...)` 引用才占 locals 空间（3 字/物理槽，算进引用它的 sub 的容量账）。
-
-### 部分设三兄弟：`set_sprite` / `set_shape` / `set_color`
-
-外观值 = `形 × color_stride + 色`（identity：表索引 ≡ 图集格号 ≡ 池 `sprite` 值，见
-[`render-contract.md`](../render-contract.md) §3）。三个 xform op 都改弹当前的外观值，区别
-在改哪一维：`set_sprite(形, 色)` 是全设，两维一起换（`fire`/`batch` 内部折叠出的 op 就是
-它）；`set_shape(形)` 只换形状，保住当前色位；`set_color(色)` 只换颜色，保住当前形位。
-
-```ecl
-xformdef SWAP_LOOK {
-    set_color(COLOR_BLUE);        // 保形：不管当前是什么形，只把颜色换成蓝
-    @10 set_shape(BALL); // 保色：不管当前是什么色，只把形状换成大玉
-}
-
-const OUTLINE: int = 32; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
-const BALL: int = 48;
-const COLOR_BLUE: int = 8;
-
-sub main() {
-    _ = fire(OUTLINE, COLOR_BLUE, 0fx, 0fx, 1.0fx, 0deg, SWAP_LOOK, none);
-    wait(60);
-}
-```
-
-⚠️ **部分设不查空格。** `set_shape`/`set_color` 编译期只查值本身合不合法：色号落在
-`[0, BULLET_COLOR_STRIDE)`、形状基址是 stride 的整倍数且落在表范围内。它不查"这个形+色组合
-在图集里是不是空格"，运行期也不替你兜底——两个解释臂只护 stride 合法性（防除零/溢出），不查
-`valid`，撞空格既不报错也不 Fault，弹会悄悄变透明地继续飞。
-
-落到空格 = 该弹变透明，这是设计允许的降级路径，由作者自己负责别把部分设用在会撞空的组合上。
-想要"越界就出错"的效果，只有 `fire`/`batch`/`set_sprite` 的两参全设才有这道闸（`set_sprite`
-编译期走同一份 `check_shape_color`，含 `valid` 检查，见
-`set_sprite_blank_atlas_cell_is_compile_error` 单测）。
-
-⚠️ **稀疏弹型不能盲目轮转全色。** 只做了部分色的弹型（如心弹/蝶弹），
-`for i in 0..BULLET_COLOR_STRIDE { ... }` 这类轮转写法在色号跑到空格区间时，`fire`/`batch`
-会在编译期或运行期被拒收（两参全设查 `valid`）；换成部分设则不会报错，只会让弹在那几帧变
-透明。两种后果都不是作者通常想要的。轮转全色只对满色弹型安全，稀疏弹型要么显式列出可用色，
-要么整体避开轮转写法。
-
-<details><summary>为什么部分设不做跨维校验（复审别把它当 bug 修回去）</summary>
-
-这是设计允许的行为，不是漏洞。部分设只改一维，落点还取决于弹当时的另一维——那是运行期状态
-（可能来自 `fire` 给的初始外观，也可能来自之前执行过的另一次部分设），编译期看不到那个值，
-做不了跨维校验。
-
-曾提议一条"跨形状安全"判据（`set_color(c)` 要求 `c` 在图集里所有弹型上都有图）被人类裁定
-否决：图集里只要存在一两个稀疏弹型（某行缺几个色），这条判据就会把那几号色在所有弹型上一起
-禁掉，代价远大于收益。（当前内建图集 12 行全满 16 色、没有空格，但这条裁定是针对机制的，
-不随某一版美术变化。）
-
-</details>
+（顺手验一下上一节那笔账：12 并不整除 65536，`step = 5461`，`12 × 5461 = 65532`，这个"12 颗
+均分整周"其实差着 4 BAM。真要严丝合缝的整周，走 `sh_ring`。）
 
 ## 发射器（`sh_*` 族）——配一遍，开多次火
 
@@ -152,7 +103,7 @@ sub main() {
 const RICE: int = 64;      // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
 const COLOR_RED: int = 0;
 
-xformdef SLOW_DOWN { @30 set_speed(0.6fx); }
+xformdef SLOW_DOWN { @30 set_speed(0.6fx); }   // 变换序列，见下面「xformdef」节
 
 async sub windchime() {
     var base: angle = 0deg;
@@ -177,9 +128,16 @@ sub main() {
 }
 ```
 
+七句配置全在 `loop` **外面**，循环体里只剩"改一句 + 开火"——这才是发射器赚钱的地方。那个
+28 路的环用 `batch` 写还得自己算 `65536 / 28`，掉 16 BAM（上面那张表的 Easy 那一行）。
+
 发出来的是一张 `n_angle` × `n_speed` 的网格（`sh_count` 的两个数）：角度方向 `n_angle` 颗、
 速度方向 `n_speed` 层，逐层速度 `speed0 + j × speed_step`（`sh_speed`）。发弹顺序是角度外层、
 速度内层，与 `batch` 同序。
+
+⚠️ **颜色是发射器级的，不逐层。** `sh_sprite` 一次设整个槽的弹型与色号，`n_speed` 那一维只
+分速度、不分色。所以"五环逐环换色"塌不成一次 `sh_count(0, n, 5)` + `sh_speed`，只能保留外层
+循环、每轮改 `sh_sprite` 再 `sh_fire`（`boss_windchime.ecl` 里就是这么写的，注释也钉在那）。
 
 ### fan 与 ring 是两种排布，`angle_step` 的含义跟着变
 
@@ -238,7 +196,7 @@ sub main() {
 
 均分是逐颗算 `(i × 65536)/n`，不是"预乘一个整数步长"，余数被均摊掉，所以环精确闭合：最后
 一颗与第一颗的间隔和别处一样（差 ≤1 BAM 单位）。`n` 不整除 65536 时也不会攒出一条肉眼可见
-的缝。
+的缝。**这正是上面那张 rank 表里手算版做不到的事。**
 
 惯用法是两层错开半个间隔——ring 下 `angle_step` 就是干这个的，写 `32768 / n`
 （半个间隔 = 半个 `65536/n`）：
@@ -268,7 +226,8 @@ sub main() {
 ```
 
 （`(32768 / n) as angle` 里的 `as angle` 是位穿透 cast，不是"转成度"，见 [5 · 三型、字面量与语句](5-types.md)。这里要
-的正是位穿透：`32768/n` 算出来的就是 BAM 原值。）
+的正是位穿透：`32768/n` 算出来的就是 BAM 原值。逐层偏移这一位没有"引擎替你均分"的待遇，
+它本来就是你想错开多少就错开多少。）
 
 ### `sh_aim` 下 `angle0` 是偏移而不是方向
 
@@ -280,6 +239,9 @@ sub main() {
 自机方向是**开火那一刻**才解析的，不是设 `sh_angle` 那一刻。所以"配一遍、循环里反复
 `sh_fire`"每一发都跟着自机走，不会锁死在配置时的角度上。基点是出弹点（含各种偏移之后的那个
 点），不是 owner 的位置：`sh_offset_abs` 把出弹点挪到别处时，瞄的是从那个点看自机的方向。
+
+（对照：拿 `fire` 写一个三叉自机狙要写三行 `aim_player() ± 12deg`，改成五叉就得重算中心角；
+fan + `sh_aim` 的 `sh_count(0, 3, 1)` 改成 `5` 就完事，两者逐位等价。）
 
 ### 四条坑
 
@@ -335,6 +297,96 @@ debug，因为画面上弹都在。给多颗弹挂任务前先算一下 `n_angle
 - **xform 段池满**（只在配了 `sh_xform` 时可能）：和弹池满同样短路，已发的留着，不 Fault。
   这是另一个池、另一个计数器（`pool_full[XFORM]`），别和弹池满混作一谈：段池只有 2048 个，
   而配了 `sh_xform` 的一句 `sh_fire` 一次就吃掉 `n_angle × n_speed` 个（账见坑④）。
+
+## 弹 setter 族——弹在自己的任务里改自己
+
+这九个内建给**挂在弹上的任务**用（`fire` 的 `task` 参或 `sh_task` 派出来的那种）：在弹自己的
+任务里改这颗弹的速度、方向、加速度。同名的动作也能写进下面的 `xformdef`，那条路不吃任务槽。
+
+⚠️ **弹 setter 族的 handle 参数是陷阱位。** 九个 setter（`set_speed`/`set_angle`/`turn`/
+`set_vel`/`set_ang_vel`/`set_accel`/`set_gravity`/`stop_fx`/`aim_at_player`）的首参
+`handle: int` 求值后即丢弃，setter 恒作用于当前任务的 owner 弹，是 `self` 语义。不能借句柄
+定向操纵别的弹；owner 不是弹的任务调它 → 任务 Fault。想操纵 `fire(...)` 出来的那颗弹，用
+xformdef 或 `fire` 的 `task` 参数挂子任务。
+
+## xformdef（弹变换序列声明）
+
+```ecl
+xformdef ARC_SHOT {
+    set_speed(1.5fx);
+    @20 turn(45deg);
+    @20 turn(-45deg);
+    set_life(180);
+}
+
+const BALL: int = 48; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const COLOR_CYAN: int = 7;
+
+sub main() {
+    _ = fire(BALL, COLOR_CYAN, 0fx, 0fx, 1.0fx, 0deg, ARC_SHOT, none);
+}
+```
+
+- op 名 = [`xform-ops.md`](../xform-ops.md) 小写助记（`turn`/`set_speed`/`set_ang_vel`/
+  `step_speed`…）；`@N` 前缀 = 该槽 wait N 帧；参数必须是编译期常量（字面量/const/一元负号）。
+- **STEP 族（`step_speed`/`step_angle`）物理占 2 槽。** scratch 由编译器自动补，作者按 1 条
+  写；物理槽总数 ≤16。`loop`/`end` 不开放（复杂控制流写任务弹；尾部零填充天然 END）。
+- 被 `fire(..., NAME, ...)` 引用才占 locals 空间（3 字/物理槽，算进引用它的 sub 的容量账）。
+
+发射器的 `sh_xform(id, NAME)` 收的就是这里声明的名字，效果一样，只是"配一遍、每颗弹都带上"
+（段消耗账见上面坑④）。
+
+### 部分设三兄弟：`set_sprite` / `set_shape` / `set_color`
+
+外观值 = `形 × color_stride + 色`（identity：表索引 ≡ 图集格号 ≡ 池 `sprite` 值，见
+[`render-contract.md`](../render-contract.md) §3）。三个 xform op 都改弹当前的外观值，区别
+在改哪一维：`set_sprite(形, 色)` 是全设，两维一起换（`fire`/`batch` 内部折叠出的 op 就是
+它）；`set_shape(形)` 只换形状，保住当前色位；`set_color(色)` 只换颜色，保住当前形位。
+
+```ecl
+xformdef SWAP_LOOK {
+    set_color(COLOR_BLUE);        // 保形：不管当前是什么形，只把颜色换成蓝
+    @10 set_shape(BALL); // 保色：不管当前是什么色，只把形状换成大玉
+}
+
+const OUTLINE: int = 32; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const BALL: int = 48;
+const COLOR_BLUE: int = 8;
+
+sub main() {
+    _ = fire(OUTLINE, COLOR_BLUE, 0fx, 0fx, 1.0fx, 0deg, SWAP_LOOK, none);
+    wait(60);
+}
+```
+
+⚠️ **部分设不查空格。** `set_shape`/`set_color` 编译期只查值本身合不合法：色号落在
+`[0, BULLET_COLOR_STRIDE)`、形状基址是 stride 的整倍数且落在表范围内。它不查"这个形+色组合
+在图集里是不是空格"，运行期也不替你兜底——两个解释臂只护 stride 合法性（防除零/溢出），不查
+`valid`，撞空格既不报错也不 Fault，弹会悄悄变透明地继续飞。
+
+落到空格 = 该弹变透明，这是设计允许的降级路径，由作者自己负责别把部分设用在会撞空的组合上。
+想要"越界就出错"的效果，只有 `fire`/`batch`/`set_sprite` 的两参全设才有这道闸（`set_sprite`
+编译期走同一份 `check_shape_color`，含 `valid` 检查，见
+`set_sprite_blank_atlas_cell_is_compile_error` 单测）。
+
+⚠️ **稀疏弹型不能盲目轮转全色。** 只做了部分色的弹型（如心弹/蝶弹），
+`for i in 0..BULLET_COLOR_STRIDE { ... }` 这类轮转写法在色号跑到空格区间时，`fire`/`batch`
+会在编译期或运行期被拒收（两参全设查 `valid`）；换成部分设则不会报错，只会让弹在那几帧变
+透明。两种后果都不是作者通常想要的。轮转全色只对满色弹型安全，稀疏弹型要么显式列出可用色，
+要么整体避开轮转写法。
+
+<details><summary>为什么部分设不做跨维校验（复审别把它当 bug 修回去）</summary>
+
+这是设计允许的行为，不是漏洞。部分设只改一维，落点还取决于弹当时的另一维——那是运行期状态
+（可能来自 `fire` 给的初始外观，也可能来自之前执行过的另一次部分设），编译期看不到那个值，
+做不了跨维校验。
+
+曾提议一条"跨形状安全"判据（`set_color(c)` 要求 `c` 在图集里所有弹型上都有图）被人类裁定
+否决：图集里只要存在一两个稀疏弹型（某行缺几个色），这条判据就会把那几号色在所有弹型上一起
+禁掉，代价远大于收益。（当前内建图集 12 行全满 16 色、没有空格，但这条裁定是针对机制的，
+不随某一版美术变化。）
+
+</details>
 
 ---
 

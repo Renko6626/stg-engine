@@ -112,7 +112,7 @@ sub main() {
 boss_main() { }`——那样敌会在你还没看见它的时候就没了。
 
 反过来说，敌想退场也不用飞到界外，让主任务自然结束就行。完整规则（退场是静默的：不掉道具、
-不加分、不发死亡事件）见 [2 · 任务与时间](2-tasks.md)。
+不加分、不发死亡事件）见 [3 · 敌人](3-enemy.md)。
 
 **你会看到什么**：敌停在原地不走了，一直在。
 
@@ -185,18 +185,21 @@ sub main() {
 
 ## 第 6 步：发一圈
 
-一句 `batch` 发一整张"角度 × 速度"的网格：
+发环用**发射器**（`sh_*` 族）：先把一组发射参数写进槽里，之后每开一波火只要一句 `sh_fire`。
+关键是配置写在 `loop` **外面**——付一次，循环里每波只有一句 `sh_fire`：
 
 ```ecl
 const BALL: int = 48;
 const COLOR_RED: int = 2;
 
 async sub shoot() {
+    sh_reset(0);                     // 0 号槽抹回默认，不继承别处的残留
+    sh_sprite(0, BALL, COLOR_RED);   // 弹型 + 色号
+    sh_ring(0, 1);                   // 整周环：n 颗由引擎均分 360°
+    sh_count(0, 16, 2);              // 16 颗 × 2 层速度
+    sh_speed(0, 1.2fx, 0.5fx);       // 层速 1.20 / 1.70
     loop {
-        var step: int = 65536 / 16;                     // BAM 一圈 65536，16 等分
-        _ = batch(BALL, COLOR_RED, $self_x, $self_y,
-                  16, 0deg, step as angle,              // 16 个角度，逐弹 +step
-                  2, 1.2fx, 0.5fx);                     // 2 层速度：1.2 / 1.7
+        sh_fire(0);                  // ← 每一波就这一句
         wait(60);
     }
 }
@@ -217,12 +220,49 @@ sub main() {
 }
 ```
 
-`angle_step` 是**逐弹增量**，不会替你均分整周，所以要自己算 `65536 / n`（角度是 BAM，
-一圈 65536，`as angle` 是位穿透 cast 不是"转成度"）。想让引擎替你均分，用发射器族的
-`sh_ring`，见 [4 · 弹](4-bullets.md)。
+那五句 `sh_*` 是**一次性成本**：槽里的参数跨帧留着，所以循环里只剩 `sh_fire(0)`。要下一波不同
+就临开火前改一句——`sh_count(0, 24, 2);` 就是 24 路，`sh_speed(0, 2.0fx, 0fx);` 就是提速，其余
+五句一个字不用动。boss 一段弹幕开几十次火，这笔账很快就赚回来了。
+
+`sh_ring(0, 1)` 是"整周均分"开关：引擎逐颗算 `(i × 65536)/n`、余数均摊，首尾精确闭合，`n`
+不整除 65536 也不会攒出一条缝。**自己拿 `65536 / n` 算步长会掉余数**——真实符卡因此翻过车，
+数字见 [4 · 弹](4-bullets.md) 开头那张表。
+
+一次性的角度 × 速度网格也可以用 `batch` 一句发完，代价是角度算术归你：它的 `angle_step` 是
+**逐弹增量**，不替你均分整周，整周得自己算 `65536 / n`（角度是 BAM，一圈 65536，`as angle`
+是位穿透 cast 不是"转成度"）。三条路什么时候用哪条，见 [4 · 弹](4-bullets.md) 开头的表。
+
+<details><summary>同一个环用 `batch` 写：更短，但那圈是你自己分的</summary>
+
+```ecl
+const BALL: int = 48;
+const COLOR_RED: int = 2;
+
+async sub shoot() {
+    loop {
+        var step: int = 65536 / 16;                     // BAM 一圈 65536，16 等分
+        _ = batch(BALL, COLOR_RED, $self_x, $self_y,
+                  16, 0deg, step as angle,              // 16 个角度，逐弹 +step
+                  2, 1.2fx, 0.5fx);                     // 2 层速度：1.2 / 1.7
+        wait(60);
+    }
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 96.0fx, 500, 1, 1000, 1, shoot);
+    loop { wait(1); }
+}
+```
+
+发出来的和上面那版是同一张网格——因为 16 恰好整除 65536（`step` 正好 4096），一颗余数都没掉。
+换成 28 路就不是了。差别也不在长度（就这一波而言 `batch` 还更短），在于**每次改颗数你都得
+重算一遍 `step`，而且没人会提醒你算错了**；而这一版每波都要把十个参数重念一遍，改成"下一波
+换个速度"就得再抄一行。
+
+</details>
 
 **你会看到什么**：每秒一发的双层 16 方环，一边踱步一边扩散。到这里你已经能改出自己的弹幕了
-——改 `16`、改 `step`、改速度层数，或者把 `wait(60)` 调小。
+——改 `sh_count` 的颗数与层数、改 `sh_speed`，或者把 `wait(60)` 调小。
 
 ## 第 7 步：放进关卡
 
@@ -246,10 +286,13 @@ async sub zako() {
 }
 
 async sub shoot() {
+    sh_reset(0);
+    sh_sprite(0, BALL, COLOR_RED);
+    sh_ring(0, 1);
+    sh_count(0, 16, 2);
+    sh_speed(0, 1.2fx, 0.5fx);
     loop {
-        var step: int = 65536 / 16;
-        _ = batch(BALL, COLOR_RED, $self_x, $self_y,
-                  16, 0deg, step as angle, 2, 1.2fx, 0.5fx);
+        sh_fire(0);
         wait(60);
     }
 }
@@ -306,14 +349,14 @@ sub main() {
 
 ## 你现在会的和还不会的
 
-会了：`main` 根入口、`spawn_enemy` + 主任务、`move_to`、`fire`/`batch`、`spawn` 并行任务、
-`wait` 的让出语义、`mark` 落点。
+会了：`main` 根入口、`spawn_enemy` + 主任务、`move_to`、`fire` 单发、发射器发环、`spawn`
+并行任务、`wait` 的让出语义、`mark` 落点。
 
-还不会（按建议顺序）：`wait` 的精确周期和几条静默截断（[2](2-tasks.md)）、敌的死亡与掉落
-（[3](3-enemy.md)）、弹自己变速转向的 `xformdef` 与发射器族（[4](4-bullets.md)）、
-三型的完整规矩（[5](5-types.md)）、符卡与整局编排（[6](6-spell-and-stage.md)）。
+还不会（按建议顺序）：`wait` 的精确周期和几条静默截断（[2](2-tasks.md)）、敌的退场/死亡与掉落
+（[3](3-enemy.md)）、发射器的 fan/ring/自机狙与池账、弹自己变速转向的 `xformdef`
+（[4](4-bullets.md)）、三型的完整规矩（[5](5-types.md)）、符卡与整局编排（[6](6-spell-and-stage.md)）。
 
 ---
 
 **下一篇** → [2 · 任务与时间](2-tasks.md)：`sub` 与 `async sub` 的确切分工、`wait(n)` 到底
-等几帧、以及主任务退场规则的完整版。
+等几帧、新协程什么时候开始跑。

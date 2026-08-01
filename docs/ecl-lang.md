@@ -9,9 +9,9 @@
 | 篇 | 讲什么 |
 |---|---|
 | [1 · 从零到一个弹幕](ecl-lang/1-hello-danmaku.md) | 一步一步长出一段能玩的弹幕：敌 → 动 → 一颗弹 → 一圈 → 关卡。**新手从这里开始** |
-| [2 · 任务与时间](ecl-lang/2-tasks.md) | `sub` vs `async sub`、`spawn`、`wait(n)` 的准确周期、主任务返回 = 敌退场 |
-| [3 · 敌人](ecl-lang/3-enemy.md) | 生成与轮询、五条运动动词、三条死亡路径与掉落、敌号与读口 |
-| [4 · 弹](ecl-lang/4-bullets.md) | `fire` / `batch`、弹 setter 族、`xformdef` 变换序列、发射器 `sh_*` 族 |
+| [2 · 任务与时间](ecl-lang/2-tasks.md) | `sub` vs `async sub`、`spawn`、`wait(n)` 的准确周期、新协程什么时候开始跑 |
+| [3 · 敌人](ecl-lang/3-enemy.md) | 主任务返回 = 敌退场、生成与轮询、五条运动动词、三条死亡路径与掉落、敌号与读口 |
+| [4 · 弹](ecl-lang/4-bullets.md) | 三条发弹口怎么选、发射器 `sh_*` 族、`fire` / `batch`、弹 setter 族、`xformdef` 变换序列 |
 | [5 · 三型、字面量与语句](ecl-lang/5-types.md) | `int`/`fx`/`angle` 三型、后缀、运算矩阵、cast 白名单、语句表 |
 | [6 · 符卡与整局编排](ecl-lang/6-spell-and-stage.md) | 符卡机构、`mark` 中段启动、多文件、全局状态、账面、渲染请求 |
 | [7 · 速查](ecl-lang/7-reference.md) | 内建函数**生成段** + `$` 引擎变量 + 引擎常量。查签名来这里 |
@@ -30,7 +30,7 @@
    `wait(0)`——而 `wait(0)` 是真 no-op，搁在 `loop` 里就是死循环。见
    [2 · 任务与时间](ecl-lang/2-tasks.md)。
 2. **敌的主任务一 `return`，这只敌就退场。** 不是"任务没了敌还在"。要它留着就
-   `loop { wait(1); }` 挂住。见 [2 · 任务与时间](ecl-lang/2-tasks.md)。
+   `loop { wait(1); }` 挂住。见 [3 · 敌人](ecl-lang/3-enemy.md)。
 3. **`drop_items()` 吐完不清空计数**，`drop_items(); die();` 掉两份道具。见
    [3 · 敌人](ecl-lang/3-enemy.md)。
 4. **`atan2(y, x)` 的 `y` 在前**（同 libm）。两参同为 `fx`，写反不报错，只把角度沿 45°

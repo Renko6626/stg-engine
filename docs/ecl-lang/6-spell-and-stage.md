@@ -21,14 +21,17 @@ async sub patrol() {
 }
 
 async sub windchime_pattern() {
+    sh_reset(0);
+    sh_ring(0, 1);                   // 整周环：路数交给引擎均分，不手算步长
     var base: angle = 0deg;
     loop {
-        var ways: int = 28 + global(GVAR_RANK) * 2;
-        var astep: angle = (65536 / ways) as angle;   // 均分整周要自己算
-        for i in 0..5 {
-            _ = batch(RICE, i % BULLET_COLOR_STRIDE,
-                      $self_x, $self_y, ways, base, astep, 1,
-                      1.0fx + i as fx * 0.25fx, 0fx);
+        var ways: int = 28 + global(GVAR_RANK) * 2;   // 路数随难度走
+        sh_count(0, ways, 1);
+        sh_angle(0, base, 0deg);
+        for i in 0..5 {              // 五环逐环换色换速（颜色是发射器级的，塌不进 n_speed）
+            sh_sprite(0, RICE, i % BULLET_COLOR_STRIDE);
+            sh_speed(0, 1.0fx + i as fx * 0.25fx, 0fx);
+            sh_fire(0);
         }
         base = base + 7deg;
         wait(50);
