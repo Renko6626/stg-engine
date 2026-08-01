@@ -1019,3 +1019,16 @@ ZUN 各作口径也不一致）。答案定下来之前不要"顺手对齐"，�
 
 已在 [`docs/ecl-lang/4-bullets.md`](ecl-lang/4-bullets.md) 的「四条瞄准路径的解析时机与基点」
 表里如实写明现状——**文档不欠账，欠的是引擎的一致性**。
+
+### F9. fault 码名字表在 harness 抄了第二份（`run` 刀 2026-08-01 记档）
+
+`stg_core::ecl::vm` 的 fault 码常量是 `pub(crate)`，而 `harness run` 要把 `code 3` 渲染成
+`BUDGET 指令预算耗尽` 这样的人话，只能在 harness 侧**抄一份码→名字表**。这是第二真相源，
+core 那边加了新 fault 码而这边没跟，会**静默漂**。
+
+**后果有限**：跟漏只会打成 `code N 未知 fault 码`，**不会错报**成别的码，退出码逻辑也不依赖
+这张表（它只看 `diag.task_faults` 与 `EVT_TASK_FAULT` 事件）。所以不急。
+
+**正解**：把 core 里那几个 fault 码常量的可见性改成 `pub`（纯可见性变更、零行为变更、
+不动 `ENGINE_VER`），harness 直接引用。**触发点** = 下次有理由动 `stg-core` 时顺手做；
+本刀因任务书钉死"core 一行不改"而没做。
