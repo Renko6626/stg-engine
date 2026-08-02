@@ -1032,3 +1032,70 @@ core 那边加了新 fault 码而这边没跟，会**静默漂**。
 **正解**：把 core 里那几个 fault 码常量的可见性改成 `pub`（纯可见性变更、零行为变更、
 不动 `ENGINE_VER`），harness 直接引用。**触发点** = 下次有理由动 `stg-core` 时顺手做；
 本刀因任务书钉死"core 一行不改"而没做。
+
+### F10. `sh_task` 挂弹任务想跟 xformdef 的 `set_life` 自爆对齐帧数，天生错开 1 帧——踩坑记录（母弹分裂卡内容刀，2026-08-02）
+
+写 `godot/ecl/demo/boss_mothersplit.ecl`（母弹飞一段时间自爆、原地炸开子弹）时撞见的一个
+**静默陷阱**，没有 Fault、没有 `contract_viol`、没有 `pool_full`——画面上就是"子弹一颗都不
+出现"，只有拿 `stg-harness run --at` 逐帧扫才抓得到。
+
+两条腿要在同一帧数上会合，实际起点不同：
+
+- **xformdef 从弹的创建当帧就开始跑**：`sh_xform` 挂的序列在创建帧的变换相位（phase 4）
+  就处理第一槽，`@N` 加在某槽自己头上表示"这槽发射后再等 N 帧执行下一槽"（`wait` 属于
+  **当前槽**，不是"等 N 帧再执行这槽"——单槽 `xformdef { @N set_life(1); }` 会在创建帧
+  **立即**发 `set_life`，母弹活不过一帧，是这次踩坑的第一层；正确写法是拿一个无副作用占位
+  op（如 `add_speed(0fx)`）扛住 `@N`，把真正的 `set_life` 挪到下一槽）。
+- **`sh_task` 派的任务出生当帧不跑**（docs/ecl-lang.md 五条坑之一），首条语句要到出生后
+  第 1 帧才执行——`wait(n)` 的周期语义（`crates/stg-core/src/step.rs`
+  `wait_n_makes_the_resume_delay_exactly_n` 那条测试，2026-08-01 刚拍板"以作者心智模型为准"）
+  是从**这条 wait 语句自己执行的那一帧**起算 n 帧后恢复。
+
+两条腿因此天生差 1 帧：任务侧若直接 `wait(N)`（与 xformdef 用同一个 N），会在母弹已经被
+`cleanup` 回收**之后**才追到 `sh_fire`——owner 已死，`owner_bullet_death_kills_task_silently_
+next_frame`（`crates/stg-core/src/step.rs`）钉死的那条"owner 死后任务静默回收、不 Fault、不
+计数"门禁直接拦下，子弹一颗不出，且没有任何诊断信号能看出来。
+
+**当前处置**：`boss_mothersplit.ecl` 里任务侧的 `wait` 值比 xformdef 的自爆延迟少 1
+（`MOTHER_SPLIT_TASK_WAIT = MOTHER_LIFE - 1`），已用 `stg-harness run --at` 逐帧扫过：差 1 帧
+稳定成功、不减（原值）稳定失败。这是**内容侧绕过**，不是引擎修复。
+
+**触发点**：这条"两种起跑时间基准不同"的坑值得写进 [`docs/xform-ops.md`](xform-ops.md)
+或 [`docs/ecl-lang/4-bullets.md`](ecl-lang/4-bullets.md)「四条坑」——`sh_task` + `sh_xform`
+配合做"弹活到第 N 帧、原地触发点自己动作"这个惯用法看起来会越来越常见（母弹分裂只是第一个
+撞上的内容），下一个作者大概率会重摔一次。本刀任务书是纯内容工作，没有去改文档主干，只记
+在这里；下次有人整理「弹」或「xform」那两篇时顺手把这条并进去。
+
+### F11. xformdef 的 `@N` 记号读法与语义相反——本刀已补文档，语义/记号本身要不要改留待评审（docs 刀，2026-08-02）
+
+`@N op(...)` 里的 `N` 解析进的是**这一条 slot 自己的 `wait` 字段**
+（`parse_xf_slot`，`crates/stg-ecl-compiler/src/lang/parse.rs:337`），而变换相位是**先发射
+这条 op、才把 `xform_wait` 设成它的 `wait`**（`advance_cursor`，
+`crates/stg-core/src/world/transform.rs`）。所以 `@N op()` 的真实语义是「执行 op，然后等 N
+帧再走下一条」——**后置延迟**。但记号读起来像「到第 N 帧才做这条」——一个**时间标签**，
+ZUN 原版 ECL 的 `@N` 就是那个意思。**读法与语义相反**，本仓至少已有两名作者（含一个不带任何
+提示、独立在本仓写弹幕的 agent）在这一处摔倒：
+
+1. **demo 的 `WIND_CHIME`**（`godot/ecl/demo/boss_windchime.ecl`，已修）：原写
+   `set_speed(2.0fx); @30 turn(90deg);`，两条在出生同一帧全跑完，弹一出生就转了 90° 并再也
+   不动，`@30` 什么都没延迟。
+2. 上面 F10 记的母弹分裂卡踩坑是同一处记号的另一种摔法：`xformdef { @110 set_life(1); }`
+   想让母弹活 110 帧，结果 `@110` 被解析进 `set_life` 自己的 wait、`set_life` 创建帧就立即
+   发射，母弹一帧就死。F10 已经把这次事故记进内容侧的处置；这里补的是**面向所有 xformdef
+   作者的文档**，不局限于母弹分裂卡那一处。
+
+**已做（本刀）**：[`docs/ecl-lang/4-bullets.md`](ecl-lang/4-bullets.md) 补了「`@N` 是后置延迟，
+不是时间标签」一节（含 `WIND_CHIME` 错/对写法对照、`harness run --at` 实测帧号）；
+[`docs/xform-ops.md`](xform-ops.md) 的 `wait` 一条加了指回那节的一句话。**只补文档，零风险**，
+但记号本身仍反直觉，下一个人还会栽。
+
+**候选处置（留待评审，本刀不做）**：
+
+1. **只补文档**（本刀做的）——零风险，但记号仍反直觉，下一个人还会栽。
+2. **改语义**：`@N` 变前置延迟（parser 把 `N` 挂到前一条 slot）。符合直觉，但**改变所有
+   既有 xformdef 的行为** ⇒ 金向量变、`ENGINE_VER` bump、要重审每一份内容。
+3. **换记号**：保留后置语义，把 `@N op()` 改成读起来就是后置的写法（如 `op() @N;`）。
+   破坏面是语法而非语义。
+
+**裁定**：先走 1，把 2/3 留给单独评估——这是冻结面的语义问题，不该顺手改。**触发点** = 谁要
+动 xformdef 的语法或语义。
