@@ -1,14 +1,28 @@
-// boss:非符(瞄准三叉)→ 风铃卡(rainbow.ecl 移植)。boss_main 是 enemy-owned 主任务
-// (A5 乙案:spawn_enemy 第 7 参),敌死任务亡;boss_battle(STAGE 侧)用 enemy_hp 轮询等死。
+// boss:非符(瞄准三叉)→ 风铃卡(rainbow.ecl 移植)→ 母弹分裂卡(boss_mothersplit.ecl)。
+// boss_main 是 enemy-owned 主任务(A5 乙案:spawn_enemy 第 7 参),敌死任务亡;
+// boss_battle(STAGE 侧)用 enemy_alive 轮询等死。
 //
 // 发弹一律走**发射器**(shooter,syscall 6xx 族):配一遍 → 反复 `sh_fire`。发射器槽是
 // **每任务 4 个**(`SHOOTERS_PER_TASK`),故 `boss_main` 与 `windchime_pattern` 各有自己的
 // 0..3,互不干扰。裸 `fire`/`batch` 仍在(单发一次性的场合更短),本局只在没有复用价值处用。
+//
+// **两卡序共享一池血(900)、逐卡递降血线**(docs/ecl-lang/6-spell-and-stage.md「符卡」节
+// 点名的惯用法):风铃卡 hp_threshold 抬到半血 450(不再是 0)——伤害在风铃卡期间下钳在
+// 450,打到底提前收卡,不会一套风铃卡直接送走整只 boss;母弹分裂卡(见
+// `boss_mothersplit.ecl`)接手剩下的半血,hp_threshold=0 才是真正的终卡。
 const SPELL_WINDCHIME: int = 1;
 
+// ⚠️ `@N` 是**后置延迟**（执行本条 op、然后等 N 帧再走下一条），**不是**"到第 N 帧才做这条"
+// 的时间标签——记号读起来像后者，语义是前者（`parse.rs` 把 `@N` 存进**本条** slot 的 wait，
+// 而 `transform.rs::advance_cursor` 是**先 fire 再设 wait**）。
+//
+// 所以要"设速 → 直飞 30 帧 → 转 90°"，`@30` 必须挂在 `set_speed` 上。原先写的是
+// `set_speed(2.0fx); @30 turn(90deg);` —— 那两条**在出生同一帧全跑完**（弹一出生就转了
+// 90° 并再也不动），`@30` 延迟的是 turn 之后、而后面已经没有东西了，等于什么都没延迟。
+// 实测（`harness run --at`）：旧版帧 3 就是 angle 90°；新版帧 32 仍 0°、帧 33 才转。
 xformdef WIND_CHIME {
-    set_speed(2.0fx);
-    @30 turn(90deg);
+    @30 set_speed(2.0fx);
+    turn(90deg);
 }
 
 async sub patrol() {
@@ -84,9 +98,16 @@ async sub boss_main() {
         wait(20);
         t = t + 20;
     }
-    spell_begin(0, SPELL_WINDCHIME, windchime_pattern, 3600, 100000, 0, 0);
+    // hp_threshold=450:半血破卡即收——不是 0,因为这不是终卡(见文件顶注「两卡序」)。
+    spell_begin(0, SPELL_WINDCHIME, windchime_pattern, 3600, 100000, 0, 450);
     wait_spell();
-    // 超时未破:退场(顶部飞出,OOB 回收 → boss_battle 的轮询放行;被击破则本任务已随敌亡)
+    // 跑到这里两条路都可能:限时超时(hp 仍 >450)或半血触底提前收卡——两条路都活着,
+    // 直接顺次开第二张卡(多卡序范式:两行一卡,前一张 wait_spell 返回后紧跟下一张
+    // spell_begin,不需要引擎侧任何"下一张卡"排程)。若风铃卡期间被打穿到 0(die() 那种
+    // 手滑或血线本身被绕过的极端路径),boss 已死、本任务已随敌亡,根本不会跑到这一行。
+    spell_begin(0, SPELL_MOTHERSPLIT, motherspell_pattern, 3600, 150000, 0, 0);
+    wait_spell();
+    // 终卡也超时未破:退场(顶部飞出,OOB 回收 → boss_battle 的轮询放行;被击破则本任务已随敌亡)
     move_to(120, 0fx, -600.0fx, 1);
     wait(600);
 }
@@ -95,6 +116,11 @@ sub boss_battle() {
     // hp=900(用户裁定,demo 平衡):tier0 三发/轮实测≈44dps、站桩~20s 可破卡,「取得」路径
     // 人工可达(实测值,测法=静止 boss/task none/自机站桩 SHOT,终审仓外探针实测)——原 2600
     // 在非符 10 秒(自机同期几乎不可能追上耗时)+符卡阶段几乎打不穿。
+    //
+    // 母弹分裂卡刀(2026-08-02)把这 900 血拆成两段(风铃卡 900→450、母弹分裂卡 450→0):
+    // 单卡耗时估算按同一份 ≈44dps 折半、约 10s 一卡,总耗时量级与原单卡设计接近——**这笔账
+    // 只是沿用同一 dps 数字线性折半,没有像上面那行一样重新拿探针实测过**,真实手感(尤其是
+    // 母弹分裂卡本身的走位/闪弹时间是否会拖慢有效 dps)留待真人试玩验证。
     var boss: int = spawn_enemy(0.0fx, 96.0fx, 900, 1, 5000, 1, boss_main);
     // 等 boss 死——**探活走 `enemy_alive`**(敌句柄打包刀之后敌号带 generation,槽复用可辨;
     // 探活读口刀之后 `enemy_alive` 是专用口,不再拿血量当探针——overkill 的敌 hp 是真实负值)。
