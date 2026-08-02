@@ -401,10 +401,55 @@ sub main() {
 ```
 
 - op 名 = [`xform-ops.md`](../xform-ops.md) 小写助记（`turn`/`set_speed`/`set_ang_vel`/
-  `step_speed`…）；`@N` 前缀 = 该槽 wait N 帧；参数必须是编译期常量（字面量/const/一元负号）。
+  `step_speed`…）；`@N` 前缀 = **该槽自己的 wait**，即"这条 op 先执行，再等 N 帧才轮到
+  下一条"（细节见下面「`@N` 是后置延迟」）；参数必须是编译期常量（字面量/const/一元负号）。
 - **STEP 族（`step_speed`/`step_angle`）物理占 2 槽。** scratch 由编译器自动补，作者按 1 条
   写；物理槽总数 ≤16。`loop`/`end` 不开放（复杂控制流写任务弹；尾部零填充天然 END）。
 - 被 `fire(..., NAME, ...)` 引用才占 locals 空间（3 字/物理槽，算进引用它的 sub 的容量账）。
+
+### ⚠️ `@N` 是后置延迟，不是时间标签
+
+`@N op(...)` 读起来很像"到第 N 帧才做这条"——一个**时间标签**，ZUN 原版 ECL 的 `@N` 就是这个
+意思。**stg-engine 里不是**：`@N` 解析进的是**这一条 op 自己的 `wait` 字段**
+（`parse_xf_slot`，`crates/stg-ecl-compiler/src/lang/parse.rs`），而变换相位是**先发射这条
+op、才把 `xform_wait` 设成它的 `wait`**（`advance_cursor`，
+`crates/stg-core/src/world/transform.rs`）。所以 `@N` 的真实语义是**后置延迟**：「执行这条
+op，然后等 N 帧再走下一条」。
+
+推论：**一段 xformdef 里所有 `wait=0`（不带 `@N`）的 op 会在同一帧连续跑完**，直到撞上第一个
+带 `@N` 的 op——那条也在同一帧发射，发射之后才开始停 N 帧。想表达"先做 A、等 N 帧、再做
+B"，`@N` 必须挂在 **A** 上，不是 B 上。
+
+对照——`godot/ecl/demo/boss_windchime.ecl` 的 `WIND_CHIME` 就是一次真实事故：
+
+```text
+// 错写法：@30 挂在 turn 上，读起来像"等 30 帧再转"
+xformdef WIND_CHIME_WRONG {
+    set_speed(2.0fx);
+    @30 turn(90deg);
+}
+// 实际发生：set_speed 的 wait=0 → 同帧接着发 turn；turn 发射之后才开始等 30 帧，
+// 但序列到 turn 就结束了（尾部零填充天然 END），这 30 帧谁都不等——纯粹被浪费。
+// 效果：弹一出生就转向 90°，此后再也不会动。实测（harness run --at）：帧 3 已是 angle 90°。
+```
+
+```ecl
+// 对写法：@30 挂在 set_speed 上，序列变成"设速 → 等 30 帧直飞 → 再转 90°"
+xformdef WIND_CHIME {
+    @30 set_speed(2.0fx);
+    turn(90deg);
+}
+
+const BALL: int = 48; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const COLOR_CYAN: int = 7;
+
+sub main() {
+    _ = fire(BALL, COLOR_CYAN, 0.0fx, 0.0fx, 1.0fx, 0deg, WIND_CHIME, none);
+}
+```
+
+实测：改成对写法后帧 31 仍是 angle 0、帧 32 才转向——`@30` 这才真正延迟到了东西
+（本例直接调 `fire`，比 demo 里走发射器少一帧出生延迟，帧号差 1、量级一致）。
 
 发射器的 `sh_xform(id, NAME)` 收的就是这里声明的名字，效果一样，只是"配一遍、每颗弹都带上"
 （段消耗账见上面坑④）。
