@@ -95,6 +95,9 @@ engine_consts! {
         //  都只能把 `4` / `0..=3` 写成字面量，正是 C14 那条"跨语言常量引用缺失"要消灭的形态。
         //  **放①不放②**：K 是 VM/ABI 事实（槽存储在 `TaskPool` 里，定长），与可加载表无关。
         SHOOTERS_PER_TASK:   usize as int = crate::ecl::shooter::SHOOTERS_PER_TASK;
+        //  时停固定时长（自机能力刀 spec §9.1）：脚本/手册引用此名而非硬编 180，
+        //  数值单一来源 = `crate::player::TIMESTOP_FRAMES`。
+        TIMESTOP_FRAMES:     u16 as int = crate::player::TIMESTOP_FRAMES;
     }
     //  ② 段目前**空**（颜色轴刀 2026-07-26）：弹型名/色名归**内容包**——由各内容包
     //  自己的 `.ecl` 用 `const` 声明（内建 demo 的一份见 `godot/ecl/demo/bullets.ecl`），

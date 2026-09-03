@@ -124,6 +124,7 @@ impl World {
         p.power = loadout.power.min(crate::items::POWER_MAX);
         p.lives = loadout.lives;
         p.bombs = loadout.bombs;
+        p.time_stops = loadout.time_stops;
         w.body.set_var(crate::consts::GVAR_RANK, rank);
         let root_idx = w.start_main(image)?;
         if let Some(ip) = landing {
@@ -2244,6 +2245,20 @@ mod tests {
         //    （非按 `size_of` 整块拷贝），故即便内存尺寸没变，序列化字节流仍多出这 4 B
         //    ⇒ 存档 wire format 照样变化，故 `ENGINE_VER` 14→15（见 lib.rs）——尺寸哨兵
         //    绿只说明"没漏 padding"，管不了"存档格式变没变"，两件事分开判。
+        // 2026-09-03（自机能力刀 Task 4）：`PlayerState` 在 `bombs` 后插 `time_stops: u8`
+        // （逐槽 +1 B，`[PlayerState; MAX_PLAYERS=2]` ⇒ 逻辑 +2 B）。**又一次对齐吸收**：
+        // `PlayerState` 内 `score: u64` 前本来就有尾随 padding 把 `bombs..bomb_pieces` 那串
+        // u8 垫到 8 对齐，新插的 1 B 只是把那份 padding 吃掉 1 B，`size_of::<PlayerState>()`
+        // 前后都是 64（实测，非手算）；`WorldBody`/`World` 因此两个 `size_of` **同样不动**
+        // ——不是本刀漏改，是量出来的真结果，`world_size_sentinel` 本条继续绿属预期。
+        // ① `players` 字段是 `[PlayerState; N]`（`Copy`），`copy_into` 走整块赋值
+        //    `d.players = s.players;`（step.rs 里已是这行，无需改）——不是池、不走
+        //    `define_pool!`，本就无手写清单要同步；② checksum 走 `PlayerState` 自身
+        //    `#[derive(Checksum)]` 默认全量入（未加 skip）；③ D10 容量预算不适用
+        //    （非池 cap 变更，MAX_PLAYERS 未变，只是每人宽了 1 B）；④ SaveBytes 同②走
+        //    derive 按字段序列化，存档 wire format 因此仍多出 2 B（1 B×2 名自机）——
+        //    `ENGINE_VER` 已在 Task 1 一并算进 14→15（lib.rs `engine_ver_anchored` 早已
+        //    把本刀 time_stops 计入同一次 bump，本 Task 不再二次 bump）。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
         const EXPECTED: (usize, usize) = (989152, 1148952);
@@ -2586,6 +2601,7 @@ mod tests {
             power: 9999,
             lives: 8,
             bombs: 1,
+            ..crate::player::Loadout::default()
         };
         let w = World::new_game_at(7, 2, 0, loadout, &image).expect("new_game_at");
         let p = &w.body.players[0];
@@ -2786,6 +2802,14 @@ mod tests {
         w.body.freeze_left = [10, 10];
         step_empty(&mut w);
 
+        // Task 3 复审 carryover (c)：下面那句 `bg_phase_frame = before...` 是整块豁免拷贝，
+        // 一个错的值（比如背景锚点没跟 frame 走、卡在原地）会被这句拷贝照样盖掉，
+        // 让"整块不变"通过得毫无意义。先把"它确实是 +1"这条钉死，豁免才诚实。
+        assert_eq!(
+            w.body.bg_phase_frame,
+            before.body.bg_phase_frame + 1,
+            "全场静止一帧，bg_phase_frame 仍须跟 frame 一起 +1（它是背景锚点不是独立计时器）"
+        );
         w.body.frame = before.body.frame;
         w.body.freeze_left = before.body.freeze_left;
         w.body.bg_phase_frame = before.body.bg_phase_frame;
@@ -2987,7 +3011,17 @@ mod tests {
         for _ in 0..20 {
             fire(&mut w);
         }
-        assert!(w.body.shots.iter_alive().count() > n1, "弹应持续堆积");
+        // Task 3 复审 carryover (b)：只断言"变多了"守不住这条性质——冻结世界里弹飞出场外、
+        // 相位 9 回收低位槽、同帧新弹又在同一出生坐标补位，坐标逐位不变的断言照样绿，
+        // 巧合地"看起来对了"。断数量才能把这条巧合路径掐掉：`shot_timer` 计时器持续
+        // 持住（先判后加，interval=4/delay=0，见 `char0_update_shot`），首帧 timer=0 已发
+        // 一发（n1），随后 20 帧 pre-increment 值依次为 1..=20，命中 `%4==0` 的恰好
+        // 4/8/12/16/20 共 5 次 ⇒ 应恰好新增 5 发，不多不少。
+        assert_eq!(
+            w.body.shots.iter_alive().count(),
+            n1 + 5,
+            "弹应恰好持续堆积 5 发（不是碰巧数量对得上）"
+        );
         // 头 n1 颗（低索引，I4 分配序）必须一动没动
         for (k, &(x, y)) in snapshot.iter().enumerate() {
             let i = w.body.shots.iter_alive().nth(k).unwrap();

@@ -147,6 +147,9 @@ impl WorldBridge {
             power: power.clamp(0, u16::MAX as i64) as u16,
             lives: lives.clamp(0, u8::MAX as i64) as u8,
             bombs: bombs.clamp(0, u8::MAX as i64) as u8,
+            // 时停刀（裁定 R-2）：不给桥面加 time_stops 入参——默认值 1 已够，
+            // 加参数是没人要的接口扩张。
+            ..Default::default()
         };
         let rank = rank.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let start = start.clamp(i32::MIN as i64, i32::MAX as i64) as i32;

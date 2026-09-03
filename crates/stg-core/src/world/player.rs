@@ -77,6 +77,7 @@ impl WorldBody {
             if actor {
                 continue;
             }
+            self.try_time_stop(i);
             self.move_player(i, tables);
             // 角色模块静态分发点（A8"shottype 类似物"）：现仅 character 0，将来各角色一臂。
             #[allow(clippy::single_match)]
@@ -109,6 +110,29 @@ impl WorldBody {
             self.players[i].invuln = RESPAWN_INVULN;
             self.players[i].state_timer = 0;
         }
+    }
+
+    /// 时停触发（A 组）。门禁四条：动作位沿 + 资源 > 0 + 该能力未在进行 + 自机 ALIVE。
+    ///
+    /// **`BTN_TIMESTOP` 声明是 Edge，但 `decode_input`（本文件顶部）对任何位都不做沿处理
+    /// ——`players[i].input` 就是当帧原始电平，按住则连续多帧为 1**（已读 `decode_input`
+    /// 实现确认：全词表没有 `prev_input` 字段，`EDGE_MASK` 目前无人真正消费）。故"沿"不是
+    /// 靠输入译码给的，是靠下面 `freeze_left[0] != 0` 这条门禁自己造的防抖：一旦触发，
+    /// `freeze_left[0]` 整个 `TIMESTOP_FRAMES` 窗口内非零，按住不放也只在第一帧命中一次
+    /// ——这正是 spec §9.1 钦定的门禁形态（`BTN_TIMESTOP` 沿 + `time_stops>0` +
+    /// `freeze_left[0]==0` + `LIFE_ALIVE`），不是漏做边沿检测。
+    ///
+    /// 时停期间再按 = **no-op 且不扣资源**（裁定 #6）。
+    fn try_time_stop(&mut self, i: usize) {
+        if self.players[i].input & crate::input::BTN_TIMESTOP == 0
+            || self.players[i].time_stops == 0
+            || self.freeze_left[0] != 0
+            || self.players[i].life_state != LIFE_ALIVE
+        {
+            return;
+        }
+        self.players[i].time_stops -= 1;
+        self.freeze_left[0] = crate::player::TIMESTOP_FRAMES;
     }
 
     /// 移动（东方手感：方向 + 低速 + 对角归一 + 场界钳制）。移速三值读角色配置表
@@ -462,5 +486,103 @@ mod tests {
             4,
             "钳到 tier 4：三路 + 子机照常齐射"
         );
+    }
+
+    // ── 时停自机入口（自机能力刀 Task 4）─────────────────────────────────
+
+    fn press(w: &mut crate::step::World, buttons: u32) {
+        let mut input = crate::input::InputFrame::empty(w.frame());
+        input.actions[0].buttons = buttons;
+        crate::step::step(
+            w,
+            &crate::tables::TABLES_V0,
+            &crate::ecl::image::EclImage::empty(),
+            &input,
+        );
+    }
+
+    /// 门禁四条 + 效果。判别力：逐条断言"扣了资源"与"冻了世界"两件，只断其一的话
+    /// "扣费但没生效"或"生效但没扣费"各能溜过一条。
+    #[test]
+    fn time_stop_triggers_and_charges_one_use() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].time_stops = 2;
+        press(&mut w, crate::input::BTN_TIMESTOP);
+        assert_eq!(w.body.players[0].time_stops, 1, "应扣一次资源");
+        assert_eq!(
+            w.body.freeze_left[0],
+            crate::player::TIMESTOP_FRAMES,
+            "应写玩家技能倒计时（相位 3 写、当帧相位 4 起即冻）"
+        );
+        assert_eq!(w.body.freeze_left[1], 0, "不得碰 ECL 演出那一格");
+    }
+
+    /// 时停期间再按 = no-op **且不扣资源**（裁定 #6）。
+    #[test]
+    fn time_stop_reentry_is_free_noop() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].time_stops = 2;
+        press(&mut w, crate::input::BTN_TIMESTOP);
+        let left = w.body.freeze_left[0];
+        press(&mut w, crate::input::BTN_TIMESTOP);
+        assert_eq!(w.body.players[0].time_stops, 1, "时停中再按不得扣资源");
+        assert!(
+            w.body.freeze_left[0] < left,
+            "也不得刷新倒计时（覆盖是 ECL 侧的语义）"
+        );
+    }
+
+    /// 资源为 0 时按无效。
+    #[test]
+    fn time_stop_without_charges_does_nothing() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].time_stops = 0;
+        press(&mut w, crate::input::BTN_TIMESTOP);
+        assert_eq!(w.body.freeze_left[0], 0);
+    }
+
+    /// A 组被冻（ECL 演出进行中）时不能发动时停——"你被定住了当然不能用"，
+    /// 这条不是特例，是 A 组门禁自动给的。
+    #[test]
+    fn time_stop_is_unavailable_while_the_actor_is_frozen() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].time_stops = 2;
+        w.body.freeze_left = [0, 10];
+        press(&mut w, crate::input::BTN_TIMESTOP);
+        assert_eq!(w.body.freeze_left[0], 0, "被定住期间不得发动");
+        assert_eq!(w.body.players[0].time_stops, 2, "也不得扣资源");
+    }
+
+    /// Task 3 复审 carryover (a)：Task 3 那批"恰好少走 N 帧"判别测试（`step.rs` 的
+    /// `both_freezes_always_expire_and_last_exactly_n_frames`）写的时候相位 3 触发还不
+    /// 存在，只能借 `step_with_director` 在相位 2 直接点火。现在真触发有了，改用**真实
+    /// 输入位**按一次 `BTN_TIMESTOP`，钉死同一条时序语义："相位 3 写 N ⇒ 世界恰好少走
+    /// N 帧"——用一颗有速度的敌弹（C 组）当观测面：按下当帧起飞行冻住，之后
+    /// `TIMESTOP_FRAMES − 1` 帧仍冻，第 `TIMESTOP_FRAMES` 帧解除、弹恢复飞行，一帧不多
+    /// 一帧不少（只测"变小了"或只测头一帧的话，"恒冻一帧"或"提前/推迟一帧解除"两种
+    /// 错实现都能溜过）。
+    #[test]
+    fn real_button_press_skips_exactly_timestop_frames() {
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::bullet_at(&mut w, 0, 100);
+        let bi = w.body.bullets.get(h).unwrap();
+        w.body.bullets.vy[bi] = crate::math::Fx::from_int(1);
+        let y0 = w.body.bullets.y[bi];
+
+        press(&mut w, crate::input::BTN_TIMESTOP); // 相位 2 之后即触发，本帧相位 4 起即冻
+        assert_eq!(w.body.bullets.y[bi], y0, "触发当帧起即已冻");
+
+        for k in 1..crate::player::TIMESTOP_FRAMES {
+            let f = w.frame();
+            crate::world::test_support::step_t(&mut w, &crate::input::InputFrame::empty(f));
+            assert_eq!(w.body.bullets.y[bi], y0, "第 {k} 帧仍应在冻结中");
+        }
+        let f = w.frame();
+        crate::world::test_support::step_t(&mut w, &crate::input::InputFrame::empty(f));
+        assert_ne!(
+            w.body.bullets.y[bi], y0,
+            "第 TIMESTOP_FRAMES+1 帧必须已解除"
+        );
+        assert_eq!(w.body.freeze_left[0], 0, "倒计时必须归零");
     }
 }
