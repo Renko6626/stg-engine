@@ -212,7 +212,7 @@ mod tests {
 
     /// `EDGE_MASK` = 全部沿触发位的并集；当前词表中 BOMB 与 TIMESTOP 是沿语义。
     #[test]
-    fn edge_mask_is_exactly_bomb() {
+    fn edge_mask_is_exactly_bomb_and_timestop() {
         assert_eq!(EDGE_MASK, BTN_BOMB | BTN_TIMESTOP);
     }
 

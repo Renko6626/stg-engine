@@ -2343,7 +2343,8 @@ mod tests {
             crate::ENGINE_VER,
             15,
             "bump 必须是有意识决定(评审 + 改本测试)——14→15：自机能力刀(时间停止 + bomb)。\
-             **布局 + 号表 + 输入词表三重变更**:World 变宽(freeze_left 4B + time_stops 1B×2)\
+             **布局 + 号表 + 输入词表三重变更**:World 变宽(freeze_left 4B + time_stops 1B×2 \
+             + prev_input 4B×2,后者是复审纠偏加的沿检测滚存位,见 try_time_stop 文档)\
              ⇒ 旧存档尺寸对不上、响亮失败;号表新增 513 add_time_stops / 560 \
              time_stop_player;输入词表新增 BTN_TIMESTOP=7(位=0 等价旧行为);WorldTables \
              新增 CharacterCfg.bomb ⇒ 表 content_hash 变。金向量预期改变(新字段进哈希)。\

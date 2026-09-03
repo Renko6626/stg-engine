@@ -660,4 +660,44 @@ mod tests {
         );
         assert_eq!(w.body.freeze_left[0], crate::player::TIMESTOP_FRAMES);
     }
+
+    /// 复审 round 2 Important 补漏：上面两条一条按住到窗口尽头、一条等整窗跑完再按，
+    /// 都没有覆盖"窗口**内部**松手重按"这条路径——`pressed_edge` 判定为真（是货真价实
+    /// 的新上升沿）、但 `freeze_left[0]` 仍非零（时停还没解除）。这正是
+    /// `freeze_left[0] != 0` 那条门禁唯一管的场景（裁定 #6："时停中再按 = no-op 且不扣
+    /// 资源"），删掉它整套测试此前竟然照样绿——因为前两条各自绕开了这条路径。
+    ///
+    /// 判别力：起始 2 点资源，触发后松手一帧、再跑到窗口正中（约第 90 帧），此时
+    /// `freeze_left[0]` 应仍在倒数（非零）；此刻真按一次（新的沿）必须：①不扣资源
+    /// （仍是 1）；②不刷新倒计时（继续往下数，不跳回 `TIMESTOP_FRAMES`）。
+    #[test]
+    fn genuine_press_inside_the_window_is_still_a_free_noop() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].time_stops = 2;
+        press(&mut w, crate::input::BTN_TIMESTOP); // frame 0：触发
+        assert_eq!(w.body.players[0].time_stops, 1);
+
+        // 松手一帧,再跑到窗口正中（触发后共 89 帧：freeze_left 180→91）。
+        let f = w.frame();
+        crate::world::test_support::step_t(&mut w, &crate::input::InputFrame::empty(f));
+        for _ in 0..88 {
+            let f = w.frame();
+            crate::world::test_support::step_t(&mut w, &crate::input::InputFrame::empty(f));
+        }
+        let left_before = w.body.freeze_left[0];
+        assert!(
+            left_before > 0 && left_before < crate::player::TIMESTOP_FRAMES,
+            "应仍在窗口中段倒数（约第 90 帧附近），既未解除也未被这条测试自己撞上边界"
+        );
+
+        press(&mut w, crate::input::BTN_TIMESTOP); // 窗口内的一次真沿（松手后重按）
+        assert_eq!(
+            w.body.players[0].time_stops, 1,
+            "时停中再按（即便是货真价实的新沿）也不得扣资源——裁定 #6"
+        );
+        assert!(
+            w.body.freeze_left[0] < left_before,
+            "不得刷新倒计时——应继续倒数而非跳回 TIMESTOP_FRAMES"
+        );
+    }
 }

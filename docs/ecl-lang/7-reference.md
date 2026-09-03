@@ -48,6 +48,7 @@
 | `REQ_*` | 见 `consts.rs` | 通道 B 引擎保留请求 id（`REQ_STAGE_CLEAR`/`REQ_BGM`/…） |
 | `ITEM_POWER` / `ITEM_POINT` / `ITEM_LIFE_PIECE` / `ITEM_BOMB_PIECE` / `ITEM_STAR` | `0`/`1`/`2`/`3`/`4` | 道具类型号（编号**冻结**，非表驱动），`drop_add(type, n)` 的第一参 |
 | `SHOOTERS_PER_TASK` | `4` | 每任务的发射器槽数——`sh_*` 族槽号 `id` 的**上界**（合法 `0 ..= SHOOTERS_PER_TASK - 1`）|
+| `TIMESTOP_FRAMES` | `180` | 玩家技能"时间停止"的固定时长（帧，3 秒 @60Hz）——自机能力刀 spec §9.1，数值单一来源 = `crate::player::TIMESTOP_FRAMES` |
 | `BULLET_COLOR_STRIDE` | 内建 `16` | **表派生**：当前绑定表的每种弹型色数 |
 
 脚本**不得**重新声明同名 `const`，无论写的值是否一致——会在类型检查阶段报错
