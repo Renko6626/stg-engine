@@ -299,7 +299,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[],
         ret: Some(Angle),
-        doc: "自身(敌/弹属主)指向自机的 BAM 角",
+        doc: "自身(敌/弹属主)指向**最近可瞄自机**的 BAM 角;一个可瞄的都没有则回退 1P 的最后坐标",
         param_names: &[],
     },
     // 小清洗刀（2026-07-31）：核里现成的三件东西通电——CORDIC `atan2`、`isqrt∘len_sq`、
@@ -860,14 +860,14 @@ pub const ENGINE_VARS: &[EngVarMeta] = &[
         name: "player_x",
         ty: Fx,
         syscall: syscall::SYS_PLAYER_X,
-        doc: "玩家 0 的 x 坐标",
+        doc: "1P(players[0])的 x 坐标——恒读 1P,不查存活;它是坐标读、不是瞄准原语,瞄准用 aim_player",
     },
     EngVarMeta {
         ev: EngVar::PlayerY,
         name: "player_y",
         ty: Fx,
         syscall: syscall::SYS_PLAYER_Y,
-        doc: "玩家 0 的 y 坐标",
+        doc: "1P(players[0])的 y 坐标——恒读 1P,不查存活;它是坐标读、不是瞄准原语,瞄准用 aim_player",
     },
     EngVarMeta {
         ev: EngVar::SelfX,

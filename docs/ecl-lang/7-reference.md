@@ -13,8 +13,8 @@
 | 名字 | 类型 | 含义 |
 |---|---|---|
 | `$frame` | `int` | 当前世界帧号 |
-| `$player_x` | `fx` | 玩家 0 的 x 坐标 |
-| `$player_y` | `fx` | 玩家 0 的 y 坐标 |
+| `$player_x` | `fx` | 1P(players[0])的 x 坐标——恒读 1P,不查存活;它是坐标读、不是瞄准原语,瞄准用 aim_player |
+| `$player_y` | `fx` | 1P(players[0])的 y 坐标——恒读 1P,不查存活;它是坐标读、不是瞄准原语,瞄准用 aim_player |
 | `$self_x` | `fx` | 任务 owner 的 x——敌→敌池坐标，弹→弹池坐标，关卡(STAGE)→0 |
 | `$self_y` | `fx` | 任务 owner 的 y——敌→敌池坐标，弹→弹池坐标，关卡(STAGE)→0 |
 | `$self_hp` | `int` | owner 当前血量——仅敌(ENEMY)有意义，其余 owner 种类恒 0 |
@@ -105,7 +105,7 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `rand(n: int) -> int` — 模拟 RNG 均匀 [0,n);确定性,随快照回卷
 - `global(slot: int) -> int` — 读 globals 槽(GVAR_RANK=0 为难度)
 - `set_global(slot: int, value: int)` — 写 globals 槽;系统段(slot<16)脚本写为 no-op+计数,不 Fault(GVAR_RANK=0 建议脚本只读)
-- `aim_player() -> angle` — 自身(敌/弹属主)指向自机的 BAM 角
+- `aim_player() -> angle` — 自身(敌/弹属主)指向**最近可瞄自机**的 BAM 角;一个可瞄的都没有则回退 1P 的最后坐标
 - `atan2(y: fx, x: fx) -> angle` — 任意向量的方向角(整数 CORDIC,16 轮);参数序 (y, x) 同 libm;(0,0) 返 0 不报错;比 aim_player 通用——能瞄任意点
 - `dist(dx: fx, dy: fx) -> fx` — 向量 (dx,dy) 的模长(开根,不是平方);**不是两点距离**——两点距离自己减: dist(bx-ax, by-ay)
 - `nearest_enemy(x: fx, y: fx) -> int` — 离 (x,y) 最近的活敌(非 dying;并列取低索引);无敌返 -1;返的敌号与 spawn_enemy 同编码,可直接喂 enemy_alive/enemy_hp/enemy_x/enemy_y(带 generation,槽复用后旧号可辨);它已排除 dying,故拿到的号过几帧可能已变 dying——该重查而不是继续用
