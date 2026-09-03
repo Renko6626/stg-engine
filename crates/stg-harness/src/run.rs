@@ -398,9 +398,27 @@ fn print_report(path: &str, r: &RunReport) {
         println!("  不影响退出码（P4-b 是「安全结果」不是崩），但多半是脚本 bug，值得查。");
     }
     if pool_full > 0 {
+        // **逐池列出**：只印总数的话这条警告没法追——"弹/敌/任务超预算了"三选一全靠猜，
+        // 而处置完全不同（弹池满 = 弹幕太密，任务池满 = `sh_task` 吃槽，段池满 = xform 太多）。
+        let names = [
+            (stg_core::world::POOL_BULLET, "弹"),
+            (stg_core::world::POOL_SHOT, "自机弹"),
+            (stg_core::world::POOL_ENEMY, "敌"),
+            (stg_core::world::POOL_FIELD, "作用区"),
+            (stg_core::world::POOL_XFORM, "xform 段"),
+            (stg_core::world::POOL_ITEM, "道具"),
+            (stg_core::world::POOL_TASK, "任务"),
+        ];
+        let by_pool: Vec<String> = names
+            .iter()
+            .filter(|(k, _)| d.pool_full[*k] > 0)
+            .map(|(k, n)| format!("{n} {}", d.pool_full[*k]))
+            .collect();
         println!(
-            "⚠ pool_full {pool_full} —— 有池被打满、分配被确定性降级（P4-a）。弹/敌/任务超预算了。"
+            "⚠ pool_full {pool_full} —— 有池被打满、分配被确定性降级（P4-a）：{}。",
+            by_pool.join(" · ")
         );
+        println!("  不影响退出码（P4-a 是确定性降级不是崩），但场上确实少了东西。");
     }
 
     if let Some((f, bullets, enemies)) = &r.at {
@@ -812,5 +830,37 @@ sub main() { _ = spawn_enemy(0.0fx, 96.0fx, 500, 1, 1000, 1, shoot); loop { wait
         }
         // 越界码不 panic、退化成短名占位（不是"未知 fault 码"那种会漂的措辞）
         assert_eq!(fault_name(200), "?");
+    }
+
+    /// 逐池名字表的**池号互异且落在数组内**——错位会让 `run` 把"道具池满"印成"敌池满"，
+    /// 而那两种情况的处置完全不同。
+    ///
+    /// **判别力**：断言的是每个常量各占一格、不重复；把表里任意两行的常量对调即红。
+    ///
+    /// ⚠️ **它抓不到"加了新池却忘了给名字"**——core 侧没有可枚举的池清单
+    /// （`diag.pool_full` 是定长 `[u32; 8]`，容量不等于池数），这里没有编译期抓手。
+    /// 新池的满载会从 `run` 的逐池列表里静默消失，只有总数还对得上。加池时请手动来这里加行。
+    #[test]
+    fn pool_name_table_indices_are_distinct_and_in_range() {
+        use stg_core::world::*;
+        const CAP: usize = 8; // `Diag::pool_full` 的数组长度（core 侧无具名常量可引）
+        let names = [
+            POOL_BULLET,
+            POOL_SHOT,
+            POOL_ENEMY,
+            POOL_FIELD,
+            POOL_XFORM,
+            POOL_ITEM,
+            POOL_TASK,
+        ];
+        let mut seen = [false; CAP];
+        for k in names {
+            assert!(k < CAP, "池号 {k} 越出 diag.pool_full");
+            assert!(
+                !seen[k],
+                "池号 {k} 在名字表里出现两次——两个池会共用一个名字"
+            );
+            seen[k] = true;
+        }
     }
 }
