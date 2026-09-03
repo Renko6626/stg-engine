@@ -179,7 +179,7 @@ impl World {
         // events，会重放刚回滚掉的帧里的"幽灵死亡"。显式清 len，把这条从相位顺序的巧合变成
         // 明写的契约：恢复出的 World 必须无陈旧输出。
         d.hits_len = 0;
-        d.events_len = 0;
+        d.frame_events_len = 0;
         d.reqs_len = 0;
         #[cfg(debug_assertions)]
         {
@@ -1478,7 +1478,10 @@ mod tests {
         );
         assert!(!w.tasks.is_alive(idx as usize), "owner 死后任务应被回收");
         assert_eq!(w.body.diag.task_faults, 0, "owner 死不是 Fault");
-        assert_eq!(w.body.events_len, 0, "owner 死静默——不发 EVT_TASK_FAULT");
+        assert_eq!(
+            w.body.frame_events_len, 0,
+            "owner 死静默——不发 EVT_TASK_FAULT"
+        );
     }
 
     /// M1 T2：owner=BULLET 同款门禁（与 ENEMY 分支镜像，独立判别覆盖）。
@@ -1506,7 +1509,7 @@ mod tests {
         );
         assert!(!w.tasks.is_alive(idx as usize), "owner 死后任务应被回收");
         assert_eq!(w.body.diag.task_faults, 0);
-        assert_eq!(w.body.events_len, 0);
+        assert_eq!(w.body.frame_events_len, 0);
     }
 
     /// M1 T2（2026-08-01 `wait` 语义修正后**重写并改名**）：`wait(n)` 的**周期恰是 n**——
@@ -1860,8 +1863,8 @@ mod tests {
 
         assert!(!w.tasks.is_alive(idx as usize));
         assert_eq!(w.body.diag.task_faults, 1);
-        assert_eq!(w.body.events_len, 1);
-        let ev = w.body.events[0];
+        assert_eq!(w.body.frame_events_len, 1);
+        let ev = w.body.frame_events[0];
         assert_eq!(ev.kind, crate::events::EVT_TASK_FAULT);
         assert_eq!(ev.a_index, idx);
         assert_eq!(ev.data, [4, 0], "data = [fault_code, script]");
@@ -2217,6 +2220,43 @@ mod tests {
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
+    /// **池尺寸哨兵**——`docs/pool-memory-layout.md` 那张账目表的活押运（follow-ups **C21**）。
+    ///
+    /// 上面那条 World 哨兵盯的是"字段清单变了没"，本条盯的是**文档里的数字还准不准**：
+    /// 那份文档做的是缓存精算（哪些字段集塞得进 L1D/L2），一旦池宽了而账没跟，整篇推论
+    /// 就悄悄失效——而它此前**只有人手算的估值**（弹池按"19 字段全 4B"估 625 KB，实际近半
+    /// 字段是 u8/u16、真值 433 KB，虚高 30%；敌池同样从 `~64 B/敌` 一路过期到 105）。
+    ///
+    /// 红了怎么办：**不是改数字了事**——先回文档核对第 1 节的账目表与第 2 节的缓存推论
+    /// （单字段大小变了？热集还塞得进 L2 吗？），改完文档再更新这里。
+    ///
+    /// 数字全部是本测试实测输出，非手算。每槽字节 = (总量 − gen 2B×cap − alive 8B×⌈cap/64⌉) ÷ cap。
+    #[test]
+    fn pool_size_sentinel_guards_the_layout_doc_account() {
+        use core::mem::size_of;
+        let actual = [
+            ("bullets", size_of::<crate::bullets::BulletPool>()),
+            ("enemies", size_of::<crate::enemy::EnemyPool>()),
+            ("shots", size_of::<crate::shots::ShotPool>()),
+            ("items", size_of::<crate::items::ItemPool>()),
+            ("fields", size_of::<crate::field::FieldPool>()),
+            ("xform", size_of::<crate::xform::XformSegPool>()),
+        ];
+        // cap: bullets 8192 / enemies 256 / shots 1024 / items 512 / fields 16 / xform 4096
+        let expected = [
+            ("bullets", 443_392), // 52 B/弹 ×8192 + gen 16384 + alive 1024  ≈ 433 KiB
+            ("enemies", 27_424),  // 105 B/敌 ×256 + gen 512 + alive 32      ≈ 26.8 KiB
+            ("shots", 28_800),
+            ("items", 11_328),
+            ("fields", 328),
+            ("xform", 393_472),
+        ];
+        assert_eq!(
+            actual, expected,
+            "池尺寸变了 ⇒ docs/pool-memory-layout.md 的账目表与缓存推论要一起复核，别只改数字"
+        );
+    }
+
     /// D6 封口后的三只读口(2026-07-23 审阅 §2):帧号推进可见 / events 切片界=len /
     /// tasks 只读借用。
     #[test]
@@ -2242,8 +2282,18 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            12,
-            "bump 必须是有意识决定(评审 + 改本测试)——11→12：`wait` 语义修正,\
+            13,
+            "bump 必须是有意识决定(评审 + 改本测试)——12→13：运动动词参数收窄(D19,\
+             人类裁定'收窄成拒收')。五条运动动词 syscall 的 dur/easing 从裸 as u16/as u8 \
+             收窄成 try_from,越界即 P4-b(contract_viol + BAD_ARGS + **整条 no-op**)。\
+             同一份镜像在新旧两版**产出不同的世界演化**:move_enemy_to(30,x,y,256) 旧版\
+             静默当 Linear 走完整段插值、新版整条不执行,敌人停在原地 ⇒ 旧回放从那一帧起\
+             全线错开,必须拒载。**理由是同一字节序列的含义变了**,与 11→12 同侧:World 布局/\
+             SaveBytes 编码/op 表/号表/相位序全未动(尺寸哨兵未变)。旧行为的荒谬正是 bump \
+             的理由——**能不能拒取决于越界值模 256 落在哪里**(easing=256 静默变 Linear、\
+             easing=264 却被正确拒掉),dur=-1 变成'缓动 65535 帧'。内容侧零改动,\
+             金向量实测逐字节不变(两段场景压不到这条新路径)。\
+             前一次 11→12：`wait` 语义修正,\
              **任务调度语义变更**——`OP_WAIT` 从存 n 改成存 n−1 且 n==0 不 yield,\
              `wait(n)` 的周期从 n+1 变成 n。同一份镜像在新旧两版**产出不同的世界演化**\
              (每个 wait 差一帧),凡自己记帧数的脚本原先一律偏 1/n;旧回放逐帧校验和从第一个\

@@ -46,24 +46,13 @@ fn infix_binding(kind: &TokenKind) -> Option<(u8, BinOp)> {
     }
 }
 
-/// `$` 引擎变量白名单（v1 固定 8 个；敌人运动动词族刀 2026-07-31 扩到 12 个）——
-/// 词法层只切词，这里判定是否合法。
+/// `$` 引擎变量白名单——词法层只切词，这里判定是否合法。
+///
+/// 名字表**不在这里**：唯一真相源是 `lang::builtins::ENGINE_VARS`（D18），同一张表还喂
+/// `engine_var_info` 与 `gen-ecl-meta`（编辑器补全/hover + 手册生成段）。此前名字散在本函数
+/// 的 `match` 里，导致工具链导不出引擎变量。
 fn resolve_engine_var(name: &str) -> Option<EngVar> {
-    match name {
-        "frame" => Some(EngVar::Frame),
-        "player_x" => Some(EngVar::PlayerX),
-        "player_y" => Some(EngVar::PlayerY),
-        "self_x" => Some(EngVar::SelfX),
-        "self_y" => Some(EngVar::SelfY),
-        "self_hp" => Some(EngVar::SelfHp),
-        "self_hp_max" => Some(EngVar::SelfHpMax),
-        "self_age" => Some(EngVar::SelfAge),
-        "self_vx" => Some(EngVar::SelfVx),
-        "self_vy" => Some(EngVar::SelfVy),
-        "self_speed" => Some(EngVar::SelfSpeed),
-        "self_angle" => Some(EngVar::SelfAngle),
-        _ => None,
-    }
+    crate::lang::builtins::engine_var_by_name(name).map(|m| m.ev)
 }
 
 /// 人类可读的 token 描述，供错误信息里的"实际是 ..."拼接。

@@ -28,21 +28,31 @@ const AT_DUMP_LIMIT: usize = 1024;
 /// 采样行的目标条数（外加帧 0 与末帧）。
 const SAMPLE_ROWS: u32 = 10;
 
-// ── fault 码名字表 ─────────────────────────────────────────────────────────
+// ── fault 码渲染 ───────────────────────────────────────────────────────────
 //
-// **刻意抄一份而不是引用**：`stg_core::ecl::vm` 是 `pub(crate)`，`FAULT_*` 在断层线
-// 以上够不着，而本刀的硬约束是 **stg-core 一行不改**。数值即契约（`docs/ecl-ops.md`
-// 有同一张表），加新码时这里要跟一行；跟漏了只会打成 `code N`，不会错报。
-fn fault_name(code: u8) -> &'static str {
-    match code {
-        0 => "BAD_OP 非法指令/坏 syscall 号",
-        1 => "PC_OOB pc 或跳转目标越界",
-        2 => "STACK 求值栈上溢/下溢",
-        3 => "BUDGET 指令预算耗尽（多半是没 wait 的死循环）",
-        4 => "DIV_ZERO 除零",
-        5 => "CALL_DEPTH 调用深度超限",
-        6 => "UNIMPLEMENTED 保留码（T3 起不再产出）",
-        _ => "未知 fault 码",
+// **短名来自 core，解释归这里**（F9 已还，2026-09-03）：`stg_core::ecl::FAULT_NAMES` 的
+// 下标即码号，是唯一真相源——此前 harness 抄了第二份码→名字表，core 加了新码而这边没跟
+// 就会静默漂。现在 core 加码必须在 `FAULT_NAMES` 里加一行（数组长度固定，编译期强制），
+// 而这边**跟漏的最坏结果是"打出短名、没有中文解释"**，不再是"未知 fault 码"。
+fn fault_name(code: u8) -> String {
+    let short = stg_core::ecl::FAULT_NAMES
+        .get(code as usize)
+        .copied()
+        .unwrap_or("?");
+    let hint = match code {
+        stg_core::ecl::FAULT_BAD_OP => "非法指令/坏 syscall 号",
+        stg_core::ecl::FAULT_PC_OOB => "pc 或跳转目标越界",
+        stg_core::ecl::FAULT_STACK => "求值栈上溢/下溢",
+        stg_core::ecl::FAULT_BUDGET => "指令预算耗尽（多半是没 wait 的死循环）",
+        stg_core::ecl::FAULT_DIV_ZERO => "除零",
+        stg_core::ecl::FAULT_CALL_DEPTH => "调用深度超限",
+        stg_core::ecl::FAULT_UNIMPLEMENTED => "保留码（T3 起不再产出）",
+        _ => "",
+    };
+    if hint.is_empty() {
+        short.to_string()
+    } else {
+        format!("{short} {hint}")
     }
 }
 
@@ -388,9 +398,27 @@ fn print_report(path: &str, r: &RunReport) {
         println!("  不影响退出码（P4-b 是「安全结果」不是崩），但多半是脚本 bug，值得查。");
     }
     if pool_full > 0 {
+        // **逐池列出**：只印总数的话这条警告没法追——"弹/敌/任务超预算了"三选一全靠猜，
+        // 而处置完全不同（弹池满 = 弹幕太密，任务池满 = `sh_task` 吃槽，段池满 = xform 太多）。
+        let names = [
+            (stg_core::world::POOL_BULLET, "弹"),
+            (stg_core::world::POOL_SHOT, "自机弹"),
+            (stg_core::world::POOL_ENEMY, "敌"),
+            (stg_core::world::POOL_FIELD, "作用区"),
+            (stg_core::world::POOL_XFORM, "xform 段"),
+            (stg_core::world::POOL_ITEM, "道具"),
+            (stg_core::world::POOL_TASK, "任务"),
+        ];
+        let by_pool: Vec<String> = names
+            .iter()
+            .filter(|(k, _)| d.pool_full[*k] > 0)
+            .map(|(k, n)| format!("{n} {}", d.pool_full[*k]))
+            .collect();
         println!(
-            "⚠ pool_full {pool_full} —— 有池被打满、分配被确定性降级（P4-a）。弹/敌/任务超预算了。"
+            "⚠ pool_full {pool_full} —— 有池被打满、分配被确定性降级（P4-a）：{}。",
+            by_pool.join(" · ")
         );
+        println!("  不影响退出码（P4-a 是确定性降级不是崩），但场上确实少了东西。");
     }
 
     if let Some((f, bullets, enemies)) = &r.at {
@@ -777,5 +805,62 @@ sub main() { _ = spawn_enemy(0.0fx, 96.0fx, 500, 1, 1000, 1, shoot); loop { wait
         let sample_max = r.rows.iter().map(|c| c.bullets).max().unwrap();
         assert!(r.peaks.bullets.v >= sample_max);
         assert!(r.peaks.bullets.v > 0, "总得有弹");
+    }
+
+    /// F9：core 的 `FAULT_NAMES` 是唯一真相源，本文件的中文解释必须**逐码跟满**。
+    ///
+    /// core 加了新 fault 码（`FAULT_NAMES` 长度 +1）而这边忘了加解释时转红。
+    /// **判别力**：删掉 `fault_name` 里任意一条 `hint` 分支立刻红；而"短名来自 core"
+    /// 那半边则由第二条断言押住——若有人把 `short` 改回硬编码字面量，core 侧改名后转红。
+    #[test]
+    fn every_core_fault_code_has_a_chinese_hint() {
+        for code in 0..stg_core::ecl::FAULT_NAMES.len() {
+            let rendered = fault_name(code as u8);
+            let short = stg_core::ecl::FAULT_NAMES[code];
+            assert!(
+                rendered.starts_with(short),
+                "码 {code} 的渲染 {rendered:?} 没有以 core 的短名 {short:?} 打头——\
+                 短名的真相源是 core，不该在 harness 侧另写一份"
+            );
+            assert!(
+                rendered.len() > short.len(),
+                "码 {code}（{short}）在 harness 侧没有中文解释——core 新增了 fault 码，\
+                 这边的 hint 分支要跟一行"
+            );
+        }
+        // 越界码不 panic、退化成短名占位（不是"未知 fault 码"那种会漂的措辞）
+        assert_eq!(fault_name(200), "?");
+    }
+
+    /// 逐池名字表的**池号互异且落在数组内**——错位会让 `run` 把"道具池满"印成"敌池满"，
+    /// 而那两种情况的处置完全不同。
+    ///
+    /// **判别力**：断言的是每个常量各占一格、不重复；把表里任意两行的常量对调即红。
+    ///
+    /// ⚠️ **它抓不到"加了新池却忘了给名字"**——core 侧没有可枚举的池清单
+    /// （`diag.pool_full` 是定长 `[u32; 8]`，容量不等于池数），这里没有编译期抓手。
+    /// 新池的满载会从 `run` 的逐池列表里静默消失，只有总数还对得上。加池时请手动来这里加行。
+    #[test]
+    fn pool_name_table_indices_are_distinct_and_in_range() {
+        use stg_core::world::*;
+        const CAP: usize = 8; // `Diag::pool_full` 的数组长度（core 侧无具名常量可引）
+        let names = [
+            POOL_BULLET,
+            POOL_SHOT,
+            POOL_ENEMY,
+            POOL_FIELD,
+            POOL_XFORM,
+            POOL_ITEM,
+            POOL_TASK,
+        ];
+        let mut seen = [false; CAP];
+        for k in names {
+            assert!(k < CAP, "池号 {k} 越出 diag.pool_full");
+            assert!(
+                !seen[k],
+                "池号 {k} 在名字表里出现两次——两个池会共用一个名字"
+            );
+            seen[k] = true;
+        }
     }
 }

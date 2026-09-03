@@ -121,7 +121,22 @@ extern crate self as stg_core;
 /// 最需要版本闸挡住。附带代价（作者可见，已入 `docs/ecl-lang.md`）：`wait(0)` 成为真
 /// no-op，`loop { wait(0); }` 与截断到 0 的 `wait(65536)` 都变成会被 `FAULT_BUDGET` 杀掉
 /// 的死循环——确定性的响亮失败，不是 UB。
-pub const ENGINE_VER: u32 = 12;
+///
+/// **12 → 13**（运动动词参数收窄，2026-09-03；follow-ups **D19**，人类裁定"收窄成拒收"）：
+/// 五条运动动词 syscall（`move_enemy_to` / `move_vel` / `move_vel_xy` / `move_angle` /
+/// `move_speed`）的 `dur`/`easing` 从裸 `as u16`/`as u8` 收窄成 `try_from`，越界即 P4-b
+/// （`contract_viol` + `BAD_ARGS` + **整条 no-op**）。同一份镜像在新旧两版**产出不同的世界
+/// 演化**：`move_enemy_to(30, x, y, 256)` 旧版静默当 Linear 走完整段插值、新版整条不执行，
+/// 敌人停在原地——旧回放从那一帧起全线错开，必须拒载。
+///
+/// **这是"同一个字节序列的含义变了"，与 11→12 同侧**（不是布局、不是编码：`World` 布局/
+/// `SaveBytes` 编码/op 表/号表/相位序全未动，尺寸哨兵未变）。旧行为的荒谬之处正是 bump 的
+/// 理由：**能不能拒取决于越界值模 256 落在哪里**——`easing = 256` 静默变 Linear，
+/// `easing = 264` 却被正确拒掉。`dur = -1` 同理变成"缓动 65535 帧 ≈ 18 分钟"。
+///
+/// 内容侧零改动（六份 `.ecl` 无一处传越界 `dur`/`easing`），金向量**实测逐字节不变**
+/// ——两段场景都压不到这条新路径。
+pub const ENGINE_VER: u32 = 13;
 
 pub use stg_derive::define_pool;
 

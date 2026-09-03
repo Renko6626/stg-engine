@@ -220,6 +220,7 @@ impl WorldBody {
 #[cfg(test)]
 mod tests {
     use crate::math::Fx;
+    #[cfg(debug_assertions)]
     use crate::world::PH_COLLIDE;
     use crate::world::test_support::*;
 

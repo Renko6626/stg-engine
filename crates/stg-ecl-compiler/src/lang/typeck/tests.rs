@@ -1076,3 +1076,41 @@ fn unbound_table_does_not_inject_color_stride() {
         "应报'未定义'且点名 BULLET_COLOR_STRIDE：{errs:?}"
     );
 }
+
+// ── A10：常量 `wait(n)` 的越界值编译期挡一道 ─────────────────────────────────
+
+/// 字面量与 `const` 折出的越界 `wait` 都报编译错。
+///
+/// **判别力**：三条腿分别钉住三种错法——
+/// ① `65536` 是**恰好截断成 0** 的那个值（漏挡 ⇒ `loop { wait(65536) }` 变死循环）；
+/// ② `-1` 走的是另一侧（截断成 65535，"等 18 分钟"）；
+/// ③ `const` 折叠腿证明闸挂在**常量求值之后**，不是只认字面量 token。
+/// 若把判据写成 `v > 65535`（漏掉负数侧）②转红；写成只查 `Expr::IntLit` 则③转红。
+#[test]
+fn const_wait_out_of_range_is_a_compile_error() {
+    for src in [
+        "sub main() { wait(65536); }",
+        "sub main() { wait(-1); }",
+        "const W: int = 131072;\nsub main() { wait(W); }",
+    ] {
+        let es = err(src);
+        assert!(
+            es.iter()
+                .any(|e| e.msg.contains("wait") && e.msg.contains("越界")),
+            "期望 wait 越界编译错，实得 {es:?}\n源码：\n{src}"
+        );
+    }
+}
+
+/// 边界两端合法 + **运行期表达式一律放行**（A10 明写的分工：截断语义只在编译期常量上被挡，
+/// 运行期不加检查——那会落进断层线以下）。
+///
+/// **判别力**：若把闸误做成"对所有 wait 都查"，第三条（`$self_age` 是运行期值）转红；
+/// 若把范围写成 `1..=65535`（顺手把 `wait(0)` 也禁了），第一条转红——`wait(0)` 是刻意
+/// 裁定的合法 no-op。
+#[test]
+fn wait_boundaries_are_legal_and_runtime_expressions_pass_through() {
+    ok("sub main() { wait(0); }");
+    ok("sub main() { wait(65535); }");
+    ok("async sub s() { wait($self_age); }\nsub main() { wait(1); }");
+}

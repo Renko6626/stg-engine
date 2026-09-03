@@ -209,6 +209,7 @@ mod tests {
     #[test]
     fn item_recycled_after_pick_and_when_oob() {
         use crate::items::{ITEM_POWER, MAGNET_PICKED};
+        #[cfg(debug_assertions)]
         use crate::world::PH_CLEANUP;
         let mut w = crate::step::World::new(1);
         let picked = w.body.drop_item(

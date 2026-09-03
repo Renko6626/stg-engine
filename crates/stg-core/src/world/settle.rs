@@ -310,6 +310,7 @@ impl WorldBody {
 #[cfg(test)]
 mod tests {
     use crate::math::{Angle, Fx};
+    #[cfg(debug_assertions)]
     use crate::world::PH_COLLIDE;
     use crate::world::test_support::*;
 
@@ -364,8 +365,8 @@ mod tests {
         w.body.collide(&crate::tables::TABLES_V0);
         w.body.settle(&crate::tables::TABLES_V0);
 
-        assert_eq!(w.body.events_len, 1, "只该有命中事件（敌未死）");
-        let ev = w.body.events[0];
+        assert_eq!(w.body.frame_events_len, 1, "只该有命中事件（敌未死）");
+        let ev = w.body.frame_events[0];
         assert_eq!(ev.kind, EVT_SHOT_HIT_ENEMY);
         assert_eq!((ev.x, ev.y), (sx, sy), "坐标须取自机弹位置，不是敌心");
         assert_ne!(
@@ -407,9 +408,12 @@ mod tests {
         assert!(w.body.enemies.hp[ei] <= 0);
         assert_ne!(w.body.enemies.flags[ei] & ENEMY_DYING, 0);
         // 两条事件、且**命中在死亡之前**（同一趟里先记命中事实、再结算伤害）
-        assert_eq!(w.body.events_len, 2);
-        assert_eq!(w.body.events[0].kind, crate::events::EVT_SHOT_HIT_ENEMY);
-        assert_eq!(w.body.events[1].kind, EVT_ENEMY_DIED);
+        assert_eq!(w.body.frame_events_len, 2);
+        assert_eq!(
+            w.body.frame_events[0].kind,
+            crate::events::EVT_SHOT_HIT_ENEMY
+        );
+        assert_eq!(w.body.frame_events[1].kind, EVT_ENEMY_DIED);
     }
 
     #[test]
@@ -438,7 +442,7 @@ mod tests {
         w.body.settle(&crate::tables::TABLES_V0);
         // 只死一次；而且**第二发连命中事件都不发**——它被 ENEMY_DYING 门禁在记事实之前
         // 就挡掉了（overkill 不该冒第二次火花）。比原来只数死亡事件的断言更严。
-        let kinds: Vec<u8> = w.body.events[..w.body.events_len as usize]
+        let kinds: Vec<u8> = w.body.frame_events[..w.body.frame_events_len as usize]
             .iter()
             .map(|e| e.kind)
             .collect();
@@ -527,9 +531,9 @@ mod tests {
         assert_ne!(w.body.bullets.flags[0] & BULLET_CLEARED, 0);
         assert_ne!(w.body.bullets.flags[1] & BULLET_CLEARED, 0);
         // 聚合：一条事件、count=2
-        assert_eq!(w.body.events_len, 1);
-        assert_eq!(w.body.events[0].kind, EVT_FIELD_CLEARED);
-        assert_eq!(w.body.events[0].data[0], 2);
+        assert_eq!(w.body.frame_events_len, 1);
+        assert_eq!(w.body.frame_events[0].kind, EVT_FIELD_CLEARED);
+        assert_eq!(w.body.frame_events[0].data[0], 2);
     }
 
     /// 消弹转星星（M0-15）：3 弹异位被消 → 恰 3 星、槽序=消弹序、各在原弹位、
@@ -646,8 +650,8 @@ mod tests {
         w.body.collide(&crate::tables::TABLES_V0);
         w.body.settle(&crate::tables::TABLES_V0);
         // 幂等：弹只被计一次 → 只有 field 0 计到 1，field 1 计 0（无事件）
-        let total: i32 = (0..w.body.events_len as usize)
-            .map(|k| w.body.events[k].data[0])
+        let total: i32 = (0..w.body.frame_events_len as usize)
+            .map(|k| w.body.frame_events[k].data[0])
             .sum();
         assert_eq!(total, 1);
     }
@@ -817,9 +821,9 @@ mod tests {
         }
         w.body.collide(&crate::tables::TABLES_V0);
         w.body.settle(&crate::tables::TABLES_V0);
-        assert_eq!(w.body.events_len, 1);
-        assert_eq!(w.body.events[0].kind, EVT_ITEM_PICKED);
-        assert_eq!(w.body.events[0].data[0], ITEM_POWER as i32);
+        assert_eq!(w.body.frame_events_len, 1);
+        assert_eq!(w.body.frame_events[0].kind, EVT_ITEM_PICKED);
+        assert_eq!(w.body.frame_events[0].data[0], ITEM_POWER as i32);
         assert_eq!(w.body.items.magnet_to[ni], MAGNET_PICKED, "30px 应拾中");
         assert_eq!(w.body.items.magnet_to[fi], MAGNET_NONE, "34px 应仍未锁定");
     }
@@ -922,8 +926,8 @@ mod tests {
         }
         w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.items.magnet_to[i], MAGNET_PICKED);
-        let picks = (0..w.body.events_len as usize)
-            .filter(|&k| w.body.events[k].kind == EVT_ITEM_PICKED)
+        let picks = (0..w.body.frame_events_len as usize)
+            .filter(|&k| w.body.frame_events[k].kind == EVT_ITEM_PICKED)
             .count();
         assert_eq!(picks, 1, "同帧多 hit 只入账一次");
         assert_eq!(
@@ -953,8 +957,8 @@ mod tests {
         }
         w.body.collide(&crate::tables::TABLES_V0);
         w.body.settle(&crate::tables::TABLES_V0);
-        assert_eq!(w.body.events_len, 1);
-        let ev = w.body.events[0];
+        assert_eq!(w.body.frame_events_len, 1);
+        let ev = w.body.frame_events[0];
         assert_eq!(ev.kind, EVT_ITEM_PICKED);
         assert_eq!(ev.a_index, i as u16);
         assert_eq!(ev.a_gen, item_gen);
@@ -1081,7 +1085,7 @@ mod tests {
         w.body.kill_enemy(ei, &crate::tables::TABLES_V0);
         assert_eq!(w.body.items.iter_alive().count(), 3, "掉落只撒一次");
         assert_eq!(w.body.players[0].score, before + 100, "加分只记一次");
-        assert_eq!(w.body.events_len, 1, "EVT_ENEMY_DIED 只发一次");
+        assert_eq!(w.body.frame_events_len, 1, "EVT_ENEMY_DIED 只发一次");
     }
 
     /// 全字段 EnemyInit（exhaustive）：位置固定 (0,80)、hp=1、其余惰性。

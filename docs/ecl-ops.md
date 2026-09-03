@@ -176,6 +176,14 @@ owner 类别全族无限制。
 owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P4-b 校验（悬垂句柄 →
 `STALE_HANDLE`；`easing >= 8` → `BAD_ARGS`）在世界层做过，绑定层不重复计数。
 
+⚠️ **`dur`/`easing` 的收窄在派发臂、先于世界层**（D19，`ENGINE_VER` 12→13，2026-09-03）：
+栈上是 `i32`，世界层收的是 `u16`/`u8`，这一步走 `u16::try_from` / `u8::try_from`，任一失败即
+**整条 no-op + `contract_viol` +1 + `BAD_ARGS`**（与世界层那条 `easing >= 8` 是同一条腿，
+判据前移）。**此前是裸 `as`**，于是 `easing = 256` 截断成 `0` 静默变线性、`easing = 264` 落 8
+被正确拒掉——能不能拒取决于越界值模 256 落在哪里；`dur = -1` 变成"缓动 65535 帧"。
+五条**共用同一个 helper**（`narrow_dur_easing`），判别式测试
+`all_five_move_verbs_share_the_same_narrowing_leg` 逐条押着，漏掉任一入口即红。
+
 | 号 | 名 | 参数（压栈序） | 返回 |
 |---|---|---|---|
 | 400 | `move_enemy_to` | **dur,x,y,easing** | —（owner 须为敌，否则 Fault(0)；参数序以 syscall.rs 为准，勿凭直觉写 x,y 在前。**P4-b 两码分开**：悬垂 owner 句柄 → no-op + `contract_viol` +1 + **`STALE_HANDLE`**；`easing >= 8` → no-op + `contract_viol` +1 + **`BAD_ARGS`**（不钳位）。`dur == 0` = 瞬移 + 硬停（写位置、清 `vx/vy` 并**回填** `speed`/`angle`、清在飞的位置插值），合法退化不计违约。**到点清速条件化**（敌人运动动词族刀 2026-07-31）：位置插值到点仅在黏滞位 `vel_touched == 0` 时清 `vx/vy`（清完同样回填作者视图）——判据是"脚本这一轮碰没碰过速度动词"，**不是**"速度插值还在不在跑"。⚠️ **本条是一次完整的运动接管**（终审裁定 2026-07-31）：武装时（`dur == 0` 与 `dur > 0` **两条路径**）既清黏滞位 `vel_touched`、**也清在飞的速度插值** `vel_active`——"表达过速度意图"这个事实都作废了，"意图正在执行中"更该作废；不清的话敌到点只停一帧就被旧 `from/to` 写回速度继续飘。要落地后继续飘，把 410-421 写在本条**之后**） |

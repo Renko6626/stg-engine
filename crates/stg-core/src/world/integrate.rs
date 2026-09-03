@@ -437,7 +437,11 @@ mod tests {
         assert_eq!(w.body.bullets.vx[i], rvx);
     }
 
-    /// delay 门冻结 POLAR：delay 期 angle/speed/位置全不动（D3：变换不走）。
+    /// delay 门冻结 POLAR：delay 期 angle/**speed**/位置全不动（D3：变换不走）。
+    ///
+    /// **B6（2026-09-03 补）：`accel` 必须非零，否则 speed 那条断言没有判别力**——原版只设
+    /// `ang_vel`、`accel` 恒 0，于是"delay 期 speed 冻结"两条路都过（门开着 speed 也不变），
+    /// 断言是摆设。现在 `accel = 0.5`：门若失效，delay 两帧后 speed 会变成 3.0。
     #[test]
     fn delay_gate_freezes_polar_fx() {
         let mut w = crate::step::World::new(1);
@@ -447,17 +451,28 @@ mod tests {
         w.body.bullets.angle[i] = Angle::ZERO;
         w.body.refresh_vel_from_polar(i);
         w.body.set_ang_vel_at(i, 1024);
+        w.body.set_accel_at(i, Fx::from_raw(32768)); // +0.5 px/帧² —— speed 冻结的判别力来源
         w.body.bullets.delay[i] = 2;
         for f in 0..2u32 {
             crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
         }
         assert_eq!(w.body.bullets.angle[i], Angle::ZERO, "delay 期角度不得推进");
+        assert_eq!(
+            w.body.bullets.speed[i],
+            Fx::from_int(2),
+            "delay 期 speed 不得推进（accel≠0 才验得出来）"
+        );
         assert_eq!(w.body.bullets.x[i], Fx::ZERO, "delay 期不得移动");
         crate::world::test_support::step_t(&mut w, &InputFrame::empty(2));
         assert_eq!(
             w.body.bullets.angle[i],
             Angle(1024),
             "delay 尽后首帧推进一步"
+        );
+        assert_eq!(
+            w.body.bullets.speed[i].raw(),
+            2 * 65536 + 32768,
+            "delay 尽后 speed 也推进一步 —— 冻结的是门、不是这条通路本身"
         );
     }
 

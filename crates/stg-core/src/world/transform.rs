@@ -492,6 +492,58 @@ mod tests {
         assert_eq!(w.body.xforms.seg_slots(seg)[1].args[1], 1, "耗尽态永停 1");
     }
 
+    /// B10：**LOOP 回跳会收缩 fired-region `[0, xform_next)`**——那一帧扫不到跳过点之后的
+    /// `BOUNCE_ARM`，`bounce_walls_of` 读 0、反弹暂时失效，直到游标重新走过那条 op 重武装。
+    ///
+    /// 这是 spec 的字面执行（两处扫描都以 `xform_next` 为右界，LOOP 把它改小了）、确定且
+    /// 跨平台一致，**但此前既无测试也无文档句**——它是那种"看起来像 bug 的正确行为"，
+    /// 下一个读到 `bounce_walls_of` 的人很可能会"顺手修好"，而 walls 影响弹的轨迹、
+    /// 直接进校验和。
+    ///
+    /// **判别力**：三个时间点的期望值不同（0xF → 0 → 0xF）。若有人把扫描右界从
+    /// `xform_next` 改成 `SLOTS_PER_SEG`（"扫全段更省事"），中间那点变 0xF 即红；
+    /// 若把 LOOP 的回跳做成不改 `xform_next`，同样红。只断言首尾两点则两种改法都逃掉。
+    #[test]
+    fn loop_jump_shrinks_fired_region_so_bounce_walls_read_zero_for_one_frame() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_SPEED, Fx::from_int(1).raw(), 0), // 槽0
+                slot(1, OP_BOUNCE_ARM, 0xF, 3),                  // 槽1：四面墙、剩 3 次，wait 1
+                slot(0, OP_LOOP, 0, 0),                          // 槽2：无限跳回槽0
+            ],
+        );
+        // 第 1 帧：槽0、槽1 连发（槽1 的 wait=1 停下）⇒ fired-region = [0,2)，扫得到 ARM
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.bullets.xform_next[i], 2);
+        assert_eq!(
+            w.body.bounce_walls_of(i),
+            0xF,
+            "ARM 已在 fired-region 内，四面墙可读"
+        );
+
+        // 第 2 帧：wait 归零放行 → 发槽2 的 LOOP → xform_next 回 0 ⇒ region 收缩成 [0,0)
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
+        assert_eq!(w.body.bullets.xform_next[i], 0, "LOOP 已跳回槽0");
+        assert_eq!(
+            w.body.bounce_walls_of(i),
+            0,
+            "回跳把 fired-region 收成空 ⇒ 扫不到 ARM ⇒ walls 读 0（反弹当帧失效）。\
+             这是 spec 字面执行、不是 bug——别把扫描右界改成扫全段"
+        );
+        // flags 里的剩余次数**没被清**：失效的只是"读得到哪面墙"，不是武装状态本身
+        assert_ne!(
+            w.body.bullets.flags[i] & crate::bullets::BULLET_BOUNCE_MASK,
+            0,
+            "回跳不清 flags 的反弹计数——两者是分开的两件事"
+        );
+
+        // 第 3 帧：游标从槽0 重走，重新发到槽1 ⇒ 重武装，walls 恢复
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(2));
+        assert_eq!(w.body.bounce_walls_of(i), 0xF, "重武装后 walls 恢复");
+    }
+
     /// LOOP count=0 无限：跑 60 帧角度持续推进、序列不终止。
     #[test]
     fn loop_count_zero_is_infinite() {
@@ -877,6 +929,41 @@ mod tests {
         assert_eq!(
             w.body.bullets.sprite[i], 31,
             "wrapping 后必须落在逐位确定的截断值，不是 panic 也不是未定义行为"
+        );
+        assert_eq!(
+            w.body.bullets.life[i], 1,
+            "坏参数确定性降级，不得终止序列——后续 op 必须照常执行"
+        );
+    }
+
+    /// B27：`OP_SET_SHAPE` 的近 `i32::MAX` 对称腿——两臂的 `wrapping_add` 覆盖此前不对称
+    /// （只有 `OP_SET_COLOR` 有腿，`OP_SET_SHAPE` 若被误改回裸 `+`，全套测试抓不到，要等
+    /// 某个真实脚本凑巧撞上大数值才在别处炸出来）。
+    ///
+    /// **判别力**：手算截断值，不照抄实现表达式——`sprite=37`、`stride=16` ⇒ `cur % stride`
+    /// = 5；`i32::MAX.wrapping_add(5)` 位模式 `0x8000_0004`，`as u16` 取低 16 位 = 4。
+    /// 后随的 `OP_SET_LIFE` 押住"坏参数不得终止序列"。
+    #[test]
+    fn set_shape_wraps_instead_of_panicking_on_near_max_args() {
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_SHAPE, i32::MAX, 16),
+                slot(0, OP_SET_LIFE, 1, 0), // 判别力：panic 或提前终止的话这一条读不到 1
+            ],
+        );
+        w.body.bullets.sprite[i] = 37; // 2*16+5：cur % stride = 5
+
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = crate::world::PH_XFORM;
+        }
+        w.body.run_transforms(); // 不 panic 即达标
+
+        assert_eq!(
+            w.body.bullets.sprite[i], 4,
+            "wrapping 后必须落在逐位确定的截断值（0x8000_0004 的低 16 位）"
         );
         assert_eq!(
             w.body.bullets.life[i], 1,

@@ -1,21 +1,30 @@
 # 7 · 速查：内建函数 / `$` 变量 / 引擎常量
 
 > 这一篇是纯查表页，不讲道理——每一条的"为什么"在前六篇里。写脚本时把它开在旁边。
-> 内建函数那一段是**从 `builtins.rs` 生成的**，改签名请改代码再跑 `gen-ecl-meta`。
+> 内建函数与 `$` 变量两段都是**从 `builtins.rs` 生成的**（`all()` / `ENGINE_VARS`），
+> 改签名或加变量请改代码再跑 `gen-ecl-meta`。
 
 ## `$` 引擎变量（只读；读取即 syscall）
 
-| 变量 | 类型 | 含义 |
+> 下表**从 `builtins.rs::ENGINE_VARS` 生成**（同一张表还喂编辑器的补全与 hover）——加变量
+> 请改代码再跑 `gen-ecl-meta`，别手改这里。
+
+<!-- gen:engvars:begin -->
+| 名字 | 类型 | 含义 |
 |---|---|---|
 | `$frame` | `int` | 当前世界帧号 |
-| `$player_x` / `$player_y` | `fx` | 玩家 0 的位置 |
-| `$self_x` / `$self_y` | `fx` | 任务 owner 的位置——敌→敌池坐标，弹→弹池坐标，关卡(STAGE)→`(0,0)` |
-| `$self_hp` | `int` | owner 当前血量——仅敌（ENEMY）有意义，其余 owner 种类恒 0 |
-| `$self_hp_max` | `int` | owner 上限血量——仅敌（ENEMY）有意义，其余 owner 种类恒 0 |
-| `$self_age` | `int` | **任务**（不是 owner 实体）出生以来的帧数，对全部 owner 种类（含关卡）均有意义 |
-| `$self_vx` / `$self_vy` | `fx` | owner 的笛卡尔速度分量（px/帧）——敌→敌池，弹→弹池，其余 owner 恒 0 |
-| `$self_speed` | `fx` | owner 的速率（作者视图，与 `$self_vx/$self_vy` 恒同步） |
-| `$self_angle` | `angle` | owner 的朝向（作者视图，BAM）。**类型是 `angle` 不是 `fx`**——能直接喂 `move_angle`/`fire`，但和 `fx` 之间没有隐式转换 |
+| `$player_x` | `fx` | 玩家 0 的 x 坐标 |
+| `$player_y` | `fx` | 玩家 0 的 y 坐标 |
+| `$self_x` | `fx` | 任务 owner 的 x——敌→敌池坐标，弹→弹池坐标，关卡(STAGE)→0 |
+| `$self_y` | `fx` | 任务 owner 的 y——敌→敌池坐标，弹→弹池坐标，关卡(STAGE)→0 |
+| `$self_hp` | `int` | owner 当前血量——仅敌(ENEMY)有意义，其余 owner 种类恒 0 |
+| `$self_hp_max` | `int` | owner 上限血量——仅敌(ENEMY)有意义，其余 owner 种类恒 0 |
+| `$self_age` | `int` | **任务**(不是 owner 实体)出生以来的帧数，对全部 owner 种类(含关卡)均有意义 |
+| `$self_vx` | `fx` | owner 的笛卡尔速度 x 分量(px/帧)——敌→敌池，弹→弹池，其余 owner 恒 0 |
+| `$self_vy` | `fx` | owner 的笛卡尔速度 y 分量(px/帧)——敌→敌池，弹→弹池，其余 owner 恒 0 |
+| `$self_speed` | `fx` | owner 的速率(作者视图，与 $self_vx/$self_vy 恒同步) |
+| `$self_angle` | `angle` | owner 的朝向(作者视图，BAM)。**类型是 angle 不是 fx**——能直接喂 move_angle/fire，但与 fx 之间没有隐式转换；近乎静止时不更新(回填有速度下限)，零速下读到的是最后一次有效朝向 |
+<!-- gen:engvars:end -->
 
 速度那四个（`$self_vx`/`$self_vy`/`$self_speed`/`$self_angle`）是敌人运动动词族刀
 （2026-07-31）加的，全部**读活值**，不是发起动词那刻的快照：速度插值在飞的过程中逐帧读会
@@ -38,6 +47,7 @@
 | `GLOBALS_SYS_SEGMENT` | `16` | `globals` 系统段/自由段分界槽号 |
 | `REQ_*` | 见 `consts.rs` | 通道 B 引擎保留请求 id（`REQ_STAGE_CLEAR`/`REQ_BGM`/…） |
 | `ITEM_POWER` / `ITEM_POINT` / `ITEM_LIFE_PIECE` / `ITEM_BOMB_PIECE` / `ITEM_STAR` | `0`/`1`/`2`/`3`/`4` | 道具类型号（编号**冻结**，非表驱动），`drop_add(type, n)` 的第一参 |
+| `SHOOTERS_PER_TASK` | `4` | 每任务的发射器槽数——`sh_*` 族槽号 `id` 的**上界**（合法 `0 ..= SHOOTERS_PER_TASK - 1`）|
 | `BULLET_COLOR_STRIDE` | 内建 `16` | **表派生**：当前绑定表的每种弹型色数 |
 
 脚本**不得**重新声明同名 `const`，无论写的值是否一致——会在类型检查阶段报错

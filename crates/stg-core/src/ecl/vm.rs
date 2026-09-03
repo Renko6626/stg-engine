@@ -49,6 +49,25 @@ pub const FAULT_CALL_DEPTH: u8 = 5;
 /// 任何路径产出。保留常量值（不重排）——fault 码"编号即契约"，占位过的号不回收复用。
 pub const FAULT_UNIMPLEMENTED: u8 = 6;
 
+/// Fault 码的**规范短名**，下标即码号（`FAULT_NAMES[FAULT_BUDGET as usize] == "BUDGET"`）。
+///
+/// **为什么它住在 core**：断层线以上的工具（`stg-harness run` 会把 fault 逐条打给作者看）
+/// 需要把码渲染成人话，此前只能在 harness 侧**抄一份码→名字表**——第二真相源，core 加了新码
+/// 而那边没跟就会静默漂（follow-ups **F9**）。表放 core、数组长度即码数，加码时**必须**在这里
+/// 加一行才编得过，漂移就此不可能。
+///
+/// 分工：core 出**短名**（与 `docs/ecl-ops.md` 号表同字），消费方自己接**解释文案**——
+/// 于是 core 加码而 harness 没跟时，最坏结果是"打出短名、没有中文解释"，而不是"未知码"。
+pub const FAULT_NAMES: [&str; 7] = [
+    "BAD_OP",
+    "PC_OOB",
+    "STACK",
+    "BUDGET",
+    "DIV_ZERO",
+    "CALL_DEPTH",
+    "UNIMPLEMENTED",
+];
+
 /// 单次 `exec` 调用的执行结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Exec {
@@ -2112,6 +2131,40 @@ mod tests {
             w.body.enemies.flags[eidx] & crate::enemy::ENEMY_DYING,
             0,
             "别名防护：同槽复用的非 main 子任务结束不应误杀 owner"
+        );
+    }
+
+    /// F9：`FAULT_NAMES` 的**下标即码号**，逐条钉住配对。
+    ///
+    /// **判别力**：对调表里任意两行（如 `"STACK"` 与 `"BUDGET"`）立刻转红——断言比的是
+    /// "第 c 号的名字里含它自己的词干"，不是"表里有这些词"。若只断言 `len() == 7`，
+    /// 表整个写反了也照绿。
+    #[test]
+    fn fault_names_are_indexed_by_their_own_code() {
+        let pairs: [(u8, &str); 7] = [
+            (FAULT_BAD_OP, "BAD_OP"),
+            (FAULT_PC_OOB, "PC_OOB"),
+            (FAULT_STACK, "STACK"),
+            (FAULT_BUDGET, "BUDGET"),
+            (FAULT_DIV_ZERO, "DIV_ZERO"),
+            (FAULT_CALL_DEPTH, "CALL_DEPTH"),
+            (FAULT_UNIMPLEMENTED, "UNIMPLEMENTED"),
+        ];
+        for (code, name) in pairs {
+            assert_eq!(
+                FAULT_NAMES[code as usize], name,
+                "fault 码 {code} 的短名错位——下标即码号是 F9 那张表的全部保证"
+            );
+        }
+        // 码号连续、无空洞：加了新码却忘了在 FAULT_NAMES 里加一行，编译期就过不去
+        // （数组长度固定），这里再钉一次"常量集合恰好铺满表"。
+        let mut seen = [false; 7];
+        for (code, _) in pairs {
+            seen[code as usize] = true;
+        }
+        assert!(
+            seen.iter().all(|&b| b),
+            "FAULT_NAMES 有码号没被任何常量认领"
         );
     }
 }
