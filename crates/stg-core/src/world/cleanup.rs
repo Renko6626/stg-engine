@@ -14,6 +14,10 @@ use crate::math::Fx;
 impl WorldBody {
     pub(crate) fn cleanup(&mut self) {
         self.phase_enter(super::PH_CLEANUP);
+        // C 组：冻 C 时没有新的越界/消弹/死亡标记产生（相位 4~7 全停），无需回收。
+        if self.scene_frozen() {
+            return;
+        }
         let nw = self.bullets.alive.len();
         for w in 0..nw {
             let mut bits = self.bullets.alive[w];

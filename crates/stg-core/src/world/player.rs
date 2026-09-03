@@ -24,38 +24,57 @@ impl WorldBody {
             self.players[i].input = input.actions[i].buttons;
         }
     }
+    /// 本相位横跨**两个冻结组**（时停刀 spec §3），故循环体按 A/C 切成两段：
+    /// 生死状态机计时是 **C 组**（世界对自机的裁决），移动/发弹是 **A 组**（自机的主动行为）。
+    ///
+    /// 计时归 C 而非 A 是有理由的——它不是自机的行动。放 A 会造出"演出定住你、你中弹进
+    /// 决死窗口而窗口计时被冻、又不能 bomb ⇒ 永远挂在决死窗里"的怪状态（spec §3）。
+    ///
+    /// **未冻时逐位等价于拆分前**：`LIFE_ABSENT | LIFE_GAMEOVER => continue` 从 `match` 的
+    /// 一个臂提到循环开头（那两态原本就直接 `continue`，别的臂一个不碰）；`commit_death`
+    /// 之后的 GAMEOVER 复查**原样保留在 C 段末**，否则刚耗尽的自机会在同一帧继续动。
     pub(crate) fn update_players(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_PLAYERS);
+        let scene = self.scene_frozen();
+        let actor = self.actor_frozen();
         for i in 0..crate::MAX_PLAYERS {
-            // 生死状态机计时（A4 相位 3 职责）
-            match self.players[i].life_state {
-                LIFE_ABSENT | LIFE_GAMEOVER => continue,
-                LIFE_DEATHWINDOW => {
-                    // bomb 救人 stub：本切片无 bomb 输入 → 窗口必耗尽。
-                    if self.players[i].state_timer > 0 {
-                        self.players[i].state_timer -= 1;
-                    }
-                    if self.players[i].state_timer == 0 {
-                        self.commit_death(i);
-                    }
-                }
-                LIFE_RESPAWNING => {
-                    if self.players[i].invuln > 0 {
-                        self.players[i].invuln -= 1;
-                    }
-                    if self.players[i].invuln == 0 {
-                        self.players[i].life_state = LIFE_ALIVE;
-                    }
-                }
-                LIFE_ALIVE => {
-                    if self.players[i].invuln > 0 {
-                        self.players[i].invuln -= 1; // bomb 无敌（本切片恒 0）
-                    }
-                }
-                _ => {}
+            if matches!(self.players[i].life_state, LIFE_ABSENT | LIFE_GAMEOVER) {
+                continue;
             }
-            // commit_death 可能刚把 lives 耗尽置 GAMEOVER → 再判一次跳过移动/发弹
-            if self.players[i].life_state == LIFE_GAMEOVER {
+            // ── C 组：生死状态机计时（A4 相位 3 职责）
+            if !scene {
+                match self.players[i].life_state {
+                    LIFE_DEATHWINDOW => {
+                        // bomb 救人 stub：本切片无 bomb 输入 → 窗口必耗尽。
+                        if self.players[i].state_timer > 0 {
+                            self.players[i].state_timer -= 1;
+                        }
+                        if self.players[i].state_timer == 0 {
+                            self.commit_death(i);
+                        }
+                    }
+                    LIFE_RESPAWNING => {
+                        if self.players[i].invuln > 0 {
+                            self.players[i].invuln -= 1;
+                        }
+                        if self.players[i].invuln == 0 {
+                            self.players[i].life_state = LIFE_ALIVE;
+                        }
+                    }
+                    LIFE_ALIVE => {
+                        if self.players[i].invuln > 0 {
+                            self.players[i].invuln -= 1; // bomb 无敌（本切片恒 0）
+                        }
+                    }
+                    _ => {}
+                }
+                // commit_death 可能刚把 lives 耗尽置 GAMEOVER → 再判一次跳过移动/发弹
+                if self.players[i].life_state == LIFE_GAMEOVER {
+                    continue;
+                }
+            }
+            // ── A 组：自机的主动行为（移动 / 发弹 / 用能力）
+            if actor {
                 continue;
             }
             self.move_player(i, tables);

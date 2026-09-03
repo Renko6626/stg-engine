@@ -18,6 +18,11 @@ pub(crate) const STEP_ACTIVE: i32 = 1 << 31;
 impl WorldBody {
     pub(crate) fn run_transforms(&mut self) {
         self.phase_enter(super::PH_XFORM);
+        // C 组：xform 游标（`xform_wait`/`xform_next`）随场景一起冻结——它是弹幕演化的
+        // 一部分，跑了就等于时停期间弹还在"变形"。
+        if self.scene_frozen() {
+            return;
+        }
         let nw = self.bullets.alive.len();
         for w in 0..nw {
             let mut bits = self.bullets.alive[w];

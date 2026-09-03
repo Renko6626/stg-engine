@@ -121,6 +121,11 @@ impl WorldBody {
 
     pub(crate) fn settle(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_SETTLE);
+        // 同 collide，spec §4：门禁挂 C 组、不是"是否冻结"。顺手堵上一个漏洞——符卡
+        // 计时住本相位尾（`settle_spells`）⇒ 冻 C 时符卡不倒计时，没法用时停白嫖 survival 卡。
+        if self.scene_frozen() {
+            return;
+        }
         // ── 趟一 · 清除/防护：行 6 消弹 ──────────────────────────────────
         // **只标记不回收**（趟二/趟三随后按索引读这颗弹；回收在相位 9 cleanup）。
         // **先于趟二**——故同帧作用区能救下本会命中自机的弹（bomb 救命）。

@@ -1088,23 +1088,21 @@ impl WorldBody {
         &self.frame_events[..self.frame_events_len as usize]
     }
 
-    // 三个读口本 Task 只挂状态、不接相位门禁（后者是 Task 3），故 release 编译下暂无
-    // 生产调用点——`#[cfg_attr(not(test), allow(dead_code))]` 只压掉这条"没人调"的噪音，
-    // 不改变签名/可见性契约（Task 3 消费者认的是这三个名字，见任务简报）。
+    // 三个读口的生产消费者是各相位函数体内的门禁（Task 3 已接线，见 `world/player.rs`
+    // 相位 3、`world/integrate.rs` 相位 5、`transform`/`collide`/`settle`/`cleanup` 的早退
+    // 与 `step.rs` 相位 2）——`#[cfg_attr(not(test), allow(dead_code))]` 随之撤掉：本仓
+    // 不用 allow 盖住"其实有人用"的事实。
     /// A 组（自机主动行为：移动/发弹/用能力）是否冻结 —— ECL 演出（`freeze_left[1]`）。
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn actor_frozen(&self) -> bool {
         self.freeze_left[1] > 0
     }
     /// C 组（世界演化与裁决：敌/弹/ECL/道具/作用区/背景/自机被动计时/相位 6·7）
     /// 是否冻结 —— 玩家技能（`freeze_left[0]`）。
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn scene_frozen(&self) -> bool {
         self.freeze_left[0] > 0
     }
     /// B 组（自机弹的飞行）是否冻结 —— **任一方向的时停都冻它**。这不是巧合：
     /// 弹一旦离开枪口就不再属于自机（spec §3）。
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn shots_frozen(&self) -> bool {
         self.freeze_left[0] > 0 || self.freeze_left[1] > 0
     }
@@ -1121,6 +1119,13 @@ impl WorldBody {
     }
     pub(crate) fn advance(&mut self) {
         self.phase_enter(PH_ADVANCE);
+        // 背景停滞**不是"什么都不做"就有的**：背景动画由 `frame − bg_phase_frame` 驱动，
+        // 而 `frame` 恒增（时停不是"帧不走"，是"世界不演化"）⇒ 只冻别的会让背景照样走。
+        // 冻 C 时把锚点同步推进，让"背景经过的时间"这个差值不增长（spec §5）。
+        // wrapping：锚点与 frame 同为 u32 且只做差值比较，回绕语义一致。
+        if self.scene_frozen() {
+            self.bg_phase_frame = self.bg_phase_frame.wrapping_add(1);
+        }
         self.frame += 1;
     }
 }

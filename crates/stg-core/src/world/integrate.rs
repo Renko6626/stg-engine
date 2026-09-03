@@ -19,13 +19,20 @@ impl WorldBody {
     pub(crate) fn integrate(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_INTEGRATE);
         // 冻结趟序（stg-world-design.md:168）：弹 → 自机弹 → 敌人 → 道具 → 作用区。
-        // **顺序是宪法，别重排**——五个私有函数只是把原函数体切开，零行为变更
-        // （自机能力刀 Task 2；门禁在 Task 3 加）。
-        self.integrate_bullets();
-        self.integrate_shots();
-        self.integrate_enemies();
-        self.integrate_items(tables);
-        self.integrate_fields();
+        // **顺序是宪法，门禁不得重排它**——只在原位加条件。
+        // 本相位横跨 B/C 两组：自机弹的飞行是 B（任一方向的时停都冻），其余四趟是 C。
+        let scene = self.scene_frozen();
+        if !scene {
+            self.integrate_bullets();
+        }
+        if !self.shots_frozen() {
+            self.integrate_shots();
+        }
+        if !scene {
+            self.integrate_enemies();
+            self.integrate_items(tables);
+            self.integrate_fields();
+        }
     }
 
     /// 相位 5 趟一：弹（delay 门 → 模式效果 → pos+=vel → 反弹 → life）。
