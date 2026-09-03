@@ -165,6 +165,7 @@ impl World {
         d.bg_id = s.bg_id;
         d.bg_phase = s.bg_phase;
         d.bg_phase_frame = s.bg_phase_frame;
+        d.freeze_left = s.freeze_left;
         s.shots.copy_into(&mut d.shots);
         s.enemies.copy_into(&mut d.enemies);
         s.fields.copy_into(&mut d.fields);
@@ -2221,6 +2222,20 @@ mod tests {
         // alive 掩码，多出来的 512 个空槽从帧 0 就进哈希；③ **D10 容量预算适用**（本刀就是
         // 池 cap 变更，`stg-world-design.md` 的 D10 表已同步）；④ SaveBytes 走 derive 自动
         // ⇒ 存档 wire format 变化，故 `ENGINE_VER` 13→14（见 lib.rs）。
+        // 2026-09-03（自机能力刀 Task 1）：`WorldBody` 新增 `freeze_left: [u16; 2]`
+        // （4 B，插在 `bg_phase_frame` 与 `reqs` 之间）。**本次是这张账目表第一次出现
+        // 对齐吸收**：`WorldBody`/`World` 整体对齐是 8（内部有 u64，如 `rng: Pcg32`），
+        // 插入前两者的裸字段和已比各自的 8 对齐边界少 4 B、靠编译器尾部 padding 补齐；
+        // 插入的 4 B 恰好填掉这份尾部 padding，两个 `size_of` 因此**实测不动**——不是漏改，
+        // 是量出来的真结果（本条注释头就是"别手算，按测试实测口径"的例证）。
+        // ① `copy_into` 手写清单**必须同步**加 `dst.freeze_left = self.freeze_left;`
+        //    ——它不是池、不走 `define_pool!` 生成，位于 struct 内部，参不参与尾部 padding
+        //    与要不要拷贝无关；② checksum 走 derive 默认全量入（未加 skip，判别面 =
+        //    `freeze_left_enters_the_checksum`）；③ D10 容量预算：非池 cap 变更，标量 4 B，
+        //    `stg-world-design.md` D10 表已加行；④ SaveBytes 走 derive **按字段序列化**
+        //    （非按 `size_of` 整块拷贝），故即便内存尺寸没变，序列化字节流仍多出这 4 B
+        //    ⇒ 存档 wire format 照样变化，故 `ENGINE_VER` 14→15（见 lib.rs）——尺寸哨兵
+        //    绿只说明"没漏 padding"，管不了"存档格式变没变"，两件事分开判。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
         const EXPECTED: (usize, usize) = (989152, 1148952);
@@ -2291,8 +2306,13 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            14,
-            "bump 必须是有意识决定(评审 + 改本测试)——13→14：道具池 cap 512→1024\
+            15,
+            "bump 必须是有意识决定(评审 + 改本测试)——14→15：自机能力刀(时间停止 + bomb)。\
+             **布局 + 号表 + 输入词表三重变更**:World 变宽(freeze_left 4B + time_stops 1B×2)\
+             ⇒ 旧存档尺寸对不上、响亮失败;号表新增 513 add_time_stops / 560 \
+             time_stop_player;输入词表新增 BTN_TIMESTOP=7(位=0 等价旧行为);WorldTables \
+             新增 CharacterCfg.bomb ⇒ 表 content_hash 变。金向量预期改变(新字段进哈希)。\
+             前一次 13→14：道具池 cap 512→1024\
              (F12 定案,人类裁定取'抬 cap + 写口径'两条、不给转换设上限)。**这条是布局变更**,\
              与前两次'含义变了'不同侧:World 真的变宽了(WorldBody 977824→989152、\
              World 1137624→1148952,+11328 B),快照与存档 wire format 随之改变,旧存档在新\

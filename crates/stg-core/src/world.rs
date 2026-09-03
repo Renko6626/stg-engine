@@ -195,6 +195,15 @@ pub struct WorldBody {
     pub(crate) bg_id: u16,
     pub(crate) bg_phase: u16,
     pub(crate) bg_phase_frame: u32,
+    /// 时停剩余帧（自机能力刀，2026-09-03）：`[0]` = 玩家技能（冻 B+C）、
+    /// `[1]` = ECL 演出（冻 A+B）。**冻结掩码是推导的、不存**——见
+    /// [`Self::actor_frozen`]/[`Self::scene_frozen`]/[`Self::shots_frozen`]；
+    /// 存一份掩码只会多一个与倒计时不同步的机会。
+    ///
+    /// **两个都在相位 0 `begin` 无条件递减**，不属于任何冻结组：若各自跟组走，
+    /// 两边同时开启时 A 被演出冻住 ⇒ 技能倒计时不走、C 被技能冻住 ⇒ 演出倒计时
+    /// 不走，**世界永远解不开**（spec §5）。
+    pub(crate) freeze_left: [u16; 2],
     #[checksum(skip = "纯输出缓冲，回滚重演确定性再生（P6/§6.2 通道 B）")]
     pub(crate) reqs: [RenderReq; REQS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 reqs 一并 skip（通道 B）")]
@@ -1079,12 +1088,36 @@ impl WorldBody {
         &self.frame_events[..self.frame_events_len as usize]
     }
 
+    // 三个读口本 Task 只挂状态、不接相位门禁（后者是 Task 3），故 release 编译下暂无
+    // 生产调用点——`#[cfg_attr(not(test), allow(dead_code))]` 只压掉这条"没人调"的噪音，
+    // 不改变签名/可见性契约（Task 3 消费者认的是这三个名字，见任务简报）。
+    /// A 组（自机主动行为：移动/发弹/用能力）是否冻结 —— ECL 演出（`freeze_left[1]`）。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn actor_frozen(&self) -> bool {
+        self.freeze_left[1] > 0
+    }
+    /// C 组（世界演化与裁决：敌/弹/ECL/道具/作用区/背景/自机被动计时/相位 6·7）
+    /// 是否冻结 —— 玩家技能（`freeze_left[0]`）。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn scene_frozen(&self) -> bool {
+        self.freeze_left[0] > 0
+    }
+    /// B 组（自机弹的飞行）是否冻结 —— **任一方向的时停都冻它**。这不是巧合：
+    /// 弹一旦离开枪口就不再属于自机（spec §3）。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn shots_frozen(&self) -> bool {
+        self.freeze_left[0] > 0 || self.freeze_left[1] > 0
+    }
+
     // ── 相位函数（pub(crate)，每个先 phase_enter 保序）────────────────────
     pub(crate) fn begin(&mut self) {
         self.phase_enter(PH_BEGIN);
         self.hits_len = 0;
         self.frame_events_len = 0;
         self.reqs_len = 0;
+        // 时停倒计时挂**真实帧**、不属于任何冻结组（spec §5 的死锁解）。
+        self.freeze_left[0] = self.freeze_left[0].saturating_sub(1);
+        self.freeze_left[1] = self.freeze_left[1].saturating_sub(1);
     }
     pub(crate) fn advance(&mut self) {
         self.phase_enter(PH_ADVANCE);
@@ -1971,5 +2004,57 @@ mod tests {
             "批量入口的验证序是 xform 先拒、短路返回——半径那次根本没走到，故只 +1。\
              这条不对称是既定语义（见 create_bullets_batch 的实现注释），不是待修的 bug"
         );
+    }
+
+    /// 倒计时挂**真实帧**、不属于任何冻结组——两边同时开时若各自跟组走会互相冻死
+    /// （spec §5「死锁与它的解」）。本条守的就是"它在相位 0 无条件递减"。
+    #[test]
+    fn freeze_countdowns_tick_in_begin_unconditionally() {
+        let mut w = crate::step::World::new(1);
+        w.body.freeze_left = [2, 3];
+        // ⚠️ `begin()` 头一句是 `phase_enter(PH_BEGIN)`，它在 debug 下断言
+        // `phase_guard == 0` 并推进。连调多次必须每次把护栏拨回相位 0——本模块其余
+        // 直调相位函数的测试是同款写法。
+        let tick = |w: &mut crate::step::World| {
+            #[cfg(debug_assertions)]
+            {
+                w.body.phase_guard = PH_BEGIN;
+            }
+            w.body.begin();
+        };
+        tick(&mut w);
+        assert_eq!(w.body.freeze_left, [1, 2], "两个倒计时都必须在相位 0 递减");
+        tick(&mut w);
+        assert_eq!(w.body.freeze_left, [0, 1]);
+        tick(&mut w);
+        assert_eq!(w.body.freeze_left, [0, 0], "到 0 后饱和，不回绕");
+    }
+
+    /// 掩码是**推导**的：A 冻 ⇔ left[1]>0、C 冻 ⇔ left[0]>0、B 冻 ⇔ 任一 >0。
+    /// 判别力：四种组合逐个断言——只测"全零"与"全非零"的话，把 A/C 写反照样绿。
+    #[test]
+    fn freeze_mask_is_derived_from_the_two_countdowns() {
+        let mut w = crate::step::World::new(1);
+        let cases = [
+            ([0u16, 0u16], (false, false, false)),
+            ([5, 0], (false, true, true)), // 玩家技能：冻 B+C，A 跑
+            ([0, 5], (true, false, true)), // ECL 演出：冻 A+B，C 跑
+            ([5, 5], (true, true, true)),  // 全场静止
+        ];
+        for (left, (a, c, b)) in cases {
+            w.body.freeze_left = left;
+            assert_eq!(w.body.actor_frozen(), a, "actor @ {left:?}");
+            assert_eq!(w.body.scene_frozen(), c, "scene @ {left:?}");
+            assert_eq!(w.body.shots_frozen(), b, "shots @ {left:?}");
+        }
+    }
+
+    /// P6：新字段必须进校验和（derive 默认全量入，本条是它的可观测面）。
+    #[test]
+    fn freeze_left_enters_the_checksum() {
+        let mut w = crate::step::World::new(1);
+        let base = w.checksum();
+        w.body.freeze_left[0] = 1;
+        assert_ne!(w.checksum(), base, "freeze_left 必须入校验和");
     }
 }

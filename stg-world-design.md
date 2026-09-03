@@ -617,7 +617,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | hits | 8192 × 6 B | | 48 KB |
 | frame_events | 512 × 24 B | | 12 KB |
 | reqs | 256 × 28 B | | 7 KB |
-| 自机×2 / boss_ui×2 / spells×2（符卡计器槽，36 B/槽，2026-07-24；含刀 2 加的 epoch 代际戳）/ spell_seq×2 / signals×8 / 表现锚点四字段（bgm_id/bg_id/bg_phase u16 + bg_phase_frame u32，10 B，2026-07-25 整局流程刀）/ RNG / 帧计数 / 诊断计数器 | | | <1 KB |
+| 自机×2 / boss_ui×2 / spells×2（符卡计器槽，36 B/槽，2026-07-24；含刀 2 加的 epoch 代际戳）/ spell_seq×2 / signals×8 / 表现锚点四字段（bgm_id/bg_id/bg_phase u16 + bg_phase_frame u32，10 B，2026-07-25 整局流程刀）/ freeze_left（时停倒计时 [u16;2]，4 B，2026-09-03 自机能力刀）/ RNG / 帧计数 / 诊断计数器 | | | <1 KB |
 | **World 总计** | | | **≈ 1.3 MB** |
 
 16 帧快照环 ≈ 21 MB（环归回滚调度器所有，非 stg-world 财产）。

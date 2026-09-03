@@ -52,6 +52,11 @@ impl<'w> WorldView<'w> {
     pub fn bg_phase_frame(self) -> u32 {
         self.body.bg_phase_frame
     }
+    /// 时停剩余帧只读口（自机能力刀）：`[0]` = 玩家技能、`[1]` = ECL 演出。
+    /// 表现层据此画停时画面效果。
+    pub fn freeze_left(self) -> [u16; 2] {
+        self.body.freeze_left
+    }
     /// boss 公告板只读切片（A2/D6）——`WorldBody::boss_ui` 收 `pub(crate)` 后跨 crate
     /// 消费者（godot 桥/harness viewer）的唯一读口；写口仍是 `WorldBody::boss_set`。
     pub fn boss_ui(self) -> &'w [crate::boss::BossUiSlot] {
