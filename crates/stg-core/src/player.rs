@@ -34,6 +34,12 @@ pub struct PlayerState {
     pub hit_radius: Fx,
     pub graze_radius: Fx,
     pub input: u32,
+    /// 上一帧的原始动作位（相位 1 `decode_input` 滚存）。**沿检测的唯一原料**：
+    /// `EDGE_MASK` 声明了哪些位是"沿"语义，但词表本身不做译码期沿处理（当帧原始电平
+    /// 直接搬进 `input`）——真正的"按下瞬间"要靠对比 `input` 与 `prev_input` 求出，
+    /// 见 `world/player.rs::WorldBody::pressed_edge`。随快照/回滚（P6 全量入校验和，
+    /// 无例外）——rollback 后重放沿检测必须逐位一致，否则重演会在错误的帧上补触发。
+    pub prev_input: u32,
     pub life_state: u8,
     pub state_timer: u16,
     pub invuln: u16,
@@ -96,6 +102,7 @@ impl PlayerState {
             hit_radius: cfg.hit_radius,
             graze_radius: cfg.graze_radius,
             input: 0,
+            prev_input: 0,
             life_state: LIFE_ALIVE,
             state_timer: 0,
             invuln: 0,

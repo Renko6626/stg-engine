@@ -2259,6 +2259,18 @@ mod tests {
         //    derive 按字段序列化，存档 wire format 因此仍多出 2 B（1 B×2 名自机）——
         //    `ENGINE_VER` 已在 Task 1 一并算进 14→15（lib.rs `engine_ver_anchored` 早已
         //    把本刀 time_stops 计入同一次 bump，本 Task 不再二次 bump）。
+        // 2026-09-04（自机能力刀 Task 4 复审纠偏）：`PlayerState` 又在 `input` 后插
+        // `prev_input: u32`（逐槽 +4 B，×MAX_PLAYERS=2 ⇒ 逻辑 +8 B——沿检测的滚存位，
+        // 见 `world/player.rs::pressed_edge`）。**第三次对齐吸收**：插入点之后到
+        // `score: u64` 之间那串字段整体后移 4 B，但 `score` 前的对齐 padding 恰好从
+        // 5 B 缩到 1 B 抵消掉这次位移，`size_of::<PlayerState>()` 实测仍是 64（前一刀
+        // 插 `time_stops` 时已把 padding 从原本的 6 吃到 5，本刀再吃掉 4 到 1，两次插入
+        // 累计 5 B 恰好等于原始 padding 富余量，压线吸收干净）；`WorldBody`/`World` 两个
+        // `size_of` 因此同样不动——不是漏改，是量出来的真结果。
+        // ①`players`仍是`[PlayerState;N]`（Copy）整块赋值，无手写清单要同步；②checksum
+        // 走 derive 全量入（未 skip，`prev_input` 必须随快照回滚——rollback 后重放沿检测
+        // 要逐位一致，这正是本字段存在的理由）；③D10 不适用（非池cap变更）；④SaveBytes
+        // 同②走 derive，wire format 再多 8 B，`ENGINE_VER` 不二次 bump（同一炉 14→15）。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
         const EXPECTED: (usize, usize) = (989152, 1148952);

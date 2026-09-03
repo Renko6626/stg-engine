@@ -18,11 +18,23 @@ use crate::shots::ShotInit;
 use crate::tables::WorldTables;
 
 impl WorldBody {
+    /// **沿检测的滚存点**：`prev_input` 必须在这里、在覆写 `input` 之前滚存旧值——本相位
+    /// （1）无论哪个冻结组开着都**照跑**（不受 A/B/C 任何门禁影响），所以即便自机被 ECL
+    /// 演出定住（A 组冻），输入记录仍然诚实：`prev_input` 永远是"上一次 `decode_input`
+    /// 跑过的电平"，不会被冻结跳过而漂移——`pressed_edge` 才能在解冻的第一帧照样判对。
     pub(crate) fn decode_input(&mut self, input: &crate::input::InputFrame) {
         self.phase_enter(super::PH_DECODE);
         for i in 0..crate::MAX_PLAYERS {
+            self.players[i].prev_input = self.players[i].input;
             self.players[i].input = input.actions[i].buttons;
         }
+    }
+
+    /// 上升沿判定：本帧该位为 1 且上一帧为 0。**`EDGE_MASK` 声明的沿语义在这里第一次被
+    /// 真正消费**——词表译码（`decode_input`）本身只搬电平，不做沿处理，沿检测靠比较
+    /// `input`/`prev_input` 两帧快照实现（P6：两者都随快照回滚，重放沿检测逐位可复现）。
+    pub(crate) fn pressed_edge(&self, i: usize, btn: u32) -> bool {
+        self.players[i].input & btn != 0 && self.players[i].prev_input & btn == 0
     }
     /// 本相位横跨**两个冻结组**（时停刀 spec §3），故循环体按 A/C 切成两段：
     /// 生死状态机计时是 **C 组**（世界对自机的裁决），移动/发弹是 **A 组**（自机的主动行为）。
@@ -112,19 +124,29 @@ impl WorldBody {
         }
     }
 
-    /// 时停触发（A 组）。门禁四条：动作位沿 + 资源 > 0 + 该能力未在进行 + 自机 ALIVE。
+    /// 时停触发（A 组）。门禁四条：动作位**上升沿**（`pressed_edge`）+ 资源 > 0 +
+    /// 该能力未在进行 + 自机 ALIVE。
     ///
-    /// **`BTN_TIMESTOP` 声明是 Edge，但 `decode_input`（本文件顶部）对任何位都不做沿处理
-    /// ——`players[i].input` 就是当帧原始电平，按住则连续多帧为 1**（已读 `decode_input`
-    /// 实现确认：全词表没有 `prev_input` 字段，`EDGE_MASK` 目前无人真正消费）。故"沿"不是
-    /// 靠输入译码给的，是靠下面 `freeze_left[0] != 0` 这条门禁自己造的防抖：一旦触发，
-    /// `freeze_left[0]` 整个 `TIMESTOP_FRAMES` 窗口内非零，按住不放也只在第一帧命中一次
-    /// ——这正是 spec §9.1 钦定的门禁形态（`BTN_TIMESTOP` 沿 + `time_stops>0` +
-    /// `freeze_left[0]==0` + `LIFE_ALIVE`），不是漏做边沿检测。
+    /// **两条门禁各管一段、缺一不可**（复审 2026-09-04 纠偏——此前误以为
+    /// `freeze_left[0] != 0` 能替代真正的沿检测，被"按住跨过整个冻结窗口"戳穿）：
+    ///
+    /// - `pressed_edge` 管"按下瞬间"：`decode_input` 对任何位都不做沿译码
+    ///   （`players[i].input` 就是当帧原始电平，按住则连续多帧为 1），真正的"这一帧是不是
+    ///   刚按下"必须靠比较 `input`/`prev_input` 求出，见 `pressed_edge` 文档。
+    /// - `freeze_left[0] != 0` 管"时停中再按"：这是裁定 #6 的语义（no-op 且不扣资源），
+    ///   与"防抖"是两件不同的事——即便沿检测完全正确，玩家也可能在时停生效期间又按了
+    ///   一次新的沿（松开重按），这条门禁负责把那次新沿也挡掉。
+    ///
+    /// **只用 `freeze_left[0]!=0` 当防抖为什么不够**：`freeze_left[0]` 只在
+    /// `TIMESTOP_FRAMES` 窗口内非零。若玩家从触发帧起持续按住不放、跨过整个窗口，
+    /// 第 `TIMESTOP_FRAMES` 帧 `freeze_left[0]` 归零而 `input` 仍是同一次物理按压的延续
+    /// （电平仍为 1，`decode_input` 不知道"这是不是新按下的"）——只查电平的旧实现会在
+    /// 那一帧误判成"新的一次触发"，按住不放即可连环耗尽全部资源。判别测试见
+    /// `holding_through_expiry_consumes_exactly_one_charge`。
     ///
     /// 时停期间再按 = **no-op 且不扣资源**（裁定 #6）。
     fn try_time_stop(&mut self, i: usize) {
-        if self.players[i].input & crate::input::BTN_TIMESTOP == 0
+        if !self.pressed_edge(i, crate::input::BTN_TIMESTOP)
             || self.players[i].time_stops == 0
             || self.freeze_left[0] != 0
             || self.players[i].life_state != LIFE_ALIVE
@@ -584,5 +606,58 @@ mod tests {
             "第 TIMESTOP_FRAMES+1 帧必须已解除"
         );
         assert_eq!(w.body.freeze_left[0], 0, "倒计时必须归零");
+    }
+
+    /// 复审纠偏（2026-09-04）：只查电平会在解冻边界"自己骗自己"——之前的实现拿
+    /// `freeze_left[0] != 0` 当防抖，但那只在 `TIMESTOP_FRAMES` 窗口**内**非零。若玩家从
+    /// 触发帧起持续按住不放、跨过整个窗口，第 `TIMESTOP_FRAMES` 帧 `freeze_left[0]`
+    /// 归零而 `input` 仍是同一次物理按压的延续（电平仍是 1）——只查电平的旧实现会把
+    /// 这一帧误判成"新的一次触发"，按住不放就能连环耗尽全部资源。
+    ///
+    /// 判别力：起始 2 点资源，从触发帧起连续按住直到跨过 `TIMESTOP_FRAMES`（含解冻那
+    /// 一帧本身仍不松手），断言资源**只扣一次**、`freeze_left` 没有被重新点燃——这条对
+    /// 旧的纯电平实现是红的（会在解冻帧误触发第二次，`time_stops` 会变成 0）。
+    #[test]
+    fn holding_through_expiry_consumes_exactly_one_charge() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].time_stops = 2;
+        // 触发帧 + 之后连续按住到解冻那一帧（含）：0..=TIMESTOP_FRAMES 共
+        // TIMESTOP_FRAMES+1 次按压，覆盖"窗口内每一帧"以及"窗口恰好耗尽的那一帧"。
+        for _ in 0..=crate::player::TIMESTOP_FRAMES {
+            press(&mut w, crate::input::BTN_TIMESTOP);
+        }
+        assert_eq!(
+            w.body.players[0].time_stops, 1,
+            "全程按住只应扣一次资源——电平误判成新触发的话这里会变 0"
+        );
+        assert_eq!(
+            w.body.freeze_left[0], 0,
+            "窗口早已跑完，不应被电平误判重新点燃"
+        );
+    }
+
+    /// 与上条互补：真的松开一帧再按 = 合法的第二次触发，必须照常发动——否则一个"矫枉
+    /// 过正、永不二次触发"的实现（比如把 `prev_input` 死锁成恒等于 `input`）也能骗过
+    /// 上一条。真沿检测的判别面必须两头都占：假沿要挡、真沿要过。
+    #[test]
+    fn genuine_second_press_after_release_fires_again() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].time_stops = 2;
+        press(&mut w, crate::input::BTN_TIMESTOP); // 第一次触发
+        assert_eq!(w.body.players[0].time_stops, 1);
+
+        // 松手,跑完整个窗口——freeze_left 与 prev_input 都归零/清位。
+        for _ in 0..crate::player::TIMESTOP_FRAMES {
+            let f = w.frame();
+            crate::world::test_support::step_t(&mut w, &crate::input::InputFrame::empty(f));
+        }
+        assert_eq!(w.body.freeze_left[0], 0, "窗口应已自然跑完");
+
+        press(&mut w, crate::input::BTN_TIMESTOP); // 真正的第二次按下（新的上升沿）
+        assert_eq!(
+            w.body.players[0].time_stops, 0,
+            "合法的第二次按下必须照常发动"
+        );
+        assert_eq!(w.body.freeze_left[0], crate::player::TIMESTOP_FRAMES);
     }
 }
