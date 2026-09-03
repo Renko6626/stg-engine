@@ -18,6 +18,18 @@ use crate::tables::WorldTables;
 impl WorldBody {
     pub(crate) fn integrate(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_INTEGRATE);
+        // 冻结趟序（stg-world-design.md:168）：弹 → 自机弹 → 敌人 → 道具 → 作用区。
+        // **顺序是宪法，别重排**——五个私有函数只是把原函数体切开，零行为变更
+        // （自机能力刀 Task 2；门禁在 Task 3 加）。
+        self.integrate_bullets();
+        self.integrate_shots();
+        self.integrate_enemies();
+        self.integrate_items(tables);
+        self.integrate_fields();
+    }
+
+    /// 相位 5 趟一：弹（delay 门 → 模式效果 → pos+=vel → 反弹 → life）。
+    fn integrate_bullets(&mut self) {
         let nw = self.bullets.alive.len();
         for w in 0..nw {
             let mut bits = self.bullets.alive[w];
@@ -55,6 +67,10 @@ impl WorldBody {
                 }
             }
         }
+    }
+
+    /// 相位 5 趟二：自机弹（pos += vel；无 delay/life）。
+    fn integrate_shots(&mut self) {
         // 自机弹：pos += vel（无 delay/life）
         let nw = self.shots.alive.len();
         for w in 0..nw {
@@ -66,6 +82,10 @@ impl WorldBody {
                 self.shots.y[i] = self.shots.y[i] + self.shots.vy[i];
             }
         }
+    }
+
+    /// 相位 5 趟三：敌人（速度插值 / 位置插值 / pos+=vel / invuln / hit_flash）。
+    fn integrate_enemies(&mut self) {
         // 敌人：分层 —— ① 速度插值恒跑，② move_to 插值器接管位置（D5），否则 pos += vel；
         // 计时器 tick 分支外照常。遍历按池索引升序（I4）。
         let nw = self.enemies.alive.len();
@@ -130,6 +150,10 @@ impl WorldBody {
                 }
             }
         }
+    }
+
+    /// 相位 5 趟四：道具（触发判定先于移动）。
+    fn integrate_items(&mut self, tables: &WorldTables) {
         // 道具（D7）：触发判定先于移动；物理即状态（磁吸=magnet_to、下落=重力到终速）。
         let poc_player = (0..crate::MAX_PLAYERS).find(|&p| {
             self.players[p].life_state == crate::player::LIFE_ALIVE
@@ -144,6 +168,10 @@ impl WorldBody {
                 self.integrate_item(i, poc_player, tables);
             }
         }
+    }
+
+    /// 相位 5 趟五：作用区 life 倒数。
+    fn integrate_fields(&mut self) {
         // 作用区：寿命倒数（照抄弹的模式；life=1 → 本帧减到 0，相位6 仍参与判定，相位9 回收）
         let nw = self.fields.alive.len();
         for w in 0..nw {
