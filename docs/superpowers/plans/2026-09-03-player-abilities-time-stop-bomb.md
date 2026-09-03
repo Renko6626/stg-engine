@@ -1410,10 +1410,17 @@ pub enum BombOrigin {
         let nbf = r.u32()? as usize;
         let mut bomb_fields = Vec::with_capacity(nbf);
         for _ in 0..nbf {
-            let origin = match r.u8()? {
+            let d = r.u8()?;
+            let origin = match d {
                 0 => BombOrigin::FieldCenter,
                 1 => BombOrigin::PlayerAtCast,
-                _ => return Err(TableLoadError::…), // 照本文件既有的坏数据错误变体
+                // 坏字节**必须拒**，不得静默变成默认值——那是静默数据损坏。
+                _ => {
+                    return Err(TableLoadError::BadDiscriminant {
+                        field: "bomb_origin",
+                        value: d,
+                    });
+                }
             };
             bomb_fields.push(BombField {
                 origin,
@@ -1428,8 +1435,19 @@ pub enum BombOrigin {
 并在 `CharacterCfg { .. }` 构造里加 `bomb: BombCfg { frames: bomb_frames, invuln:
 bomb_invuln, attract_items: bomb_attract, fields: bomb_fields.into_boxed_slice() }`。
 
-⚠️ **`r.u8()` / `r.u16()` 若不存在就照 `r.fx()`/`r.u32()` 的形状加**（同一个 `Reader`
-辅助结构，别另起一套）。错误变体**照本文件既有的 `TableLoadError` 用**，不要新造。
+`Reader` 已有 `u8`/`u16`/`u32`/`i32`/`fx`（`tables.rs:402-414`），直接用，别另起一套。
+
+`TableLoadError`（`tables.rs:377`）**没有"坏枚举判别值"的变体**——现有六个是
+`Truncated`/`BadMagic`/`UnsupportedVersion`/`HashMismatch`/`ArityMismatch`/`ValidateFailed`。
+**加一个新变体**（裁定 R-5），别拿 `ArityMismatch` 硬凑（它的字段名会让错误信息说谎）：
+
+```rust
+    /// 枚举判别值超出已定义范围（如 `bomb_origin` 读到 2）。
+    BadDiscriminant {
+        field: &'static str,
+        value: u8,
+    },
+```
 
 - [ ] **Step 7: 重烘 `tables_v0.bin` 并复验**
 
@@ -1458,18 +1476,35 @@ fn bomb_cfg_survives_a_bytes_roundtrip() {
 }
 
 /// 坏的 origin 判别值必须被**拒绝**，不得静默变成默认值（静默 = 数据损坏）。
+///
+/// 定位方式：按写入顺序，v0 第一条 bomb field 的字节是
+/// `origin=0x00` ⧺ `radius = Fx::from_int(400).raw() = 26_214_400 = 0x0190_0000`
+/// 的小端 `00 00 90 01` ⧺ `flags = FIELD_CLEAR_BULLETS = 0x01`。这个 6 字节窗口在
+/// 整份表里唯一（断言里押着"唯一"，模式若不再唯一这条会红而不是悄悄改错地方）。
 #[test]
 fn bomb_origin_rejects_unknown_discriminant() {
     let mut bytes = build_tables_v0().to_bytes();
-    // 找到 bomb 段第一条 field 的 origin 字节并改成非法值 —— 用 from_bytes 的
-    // 错误类型断言被拒。定位方法：先跑通往返测试，再用二分或按写入顺序算偏移。
-    let pos = bytes
-        .windows(1)
-        .position(|_| false)
-        .unwrap_or(0);
-    let _ = (pos, &mut bytes);
-    // 实现时把上面两句换成真实定位；断言形如：
-    // assert!(WorldTables::from_bytes(&bytes).is_err(), "未知 origin 判别值须被拒");
+    const PAT: [u8; 6] = [0x00, 0x00, 0x00, 0x90, 0x01, 0x01];
+    let hits: Vec<usize> = bytes
+        .windows(PAT.len())
+        .enumerate()
+        .filter(|(_, w)| *w == PAT)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(hits.len(), 1, "定位模式必须唯一（表变了就改这条，别让它悄悄错位）");
+    bytes[hits[0]] = 7; // 非法 origin
+    // hash 会因篡改而对不上——先确认它不是被 HashMismatch 挡下的，再确认判别值被拒。
+    match WorldTables::from_bytes(&bytes) {
+        Err(TableLoadError::BadDiscriminant { field, value }) => {
+            assert_eq!((field, value), ("bomb_origin", 7));
+        }
+        Err(TableLoadError::HashMismatch) => {
+            // 若哈希校验先于字段解析发生，本条改为直接构造字节流的单元测试；
+            // 实现者按 from_bytes 的实际顺序二选一，**不许留成空壳**。
+            panic!("哈希先挡下了篡改：把本测试改成绕过哈希的构造式，或调整断言");
+        }
+        other => panic!("未知 origin 判别值须被拒，实得 {other:?}"),
+    }
 }
 ```
 
