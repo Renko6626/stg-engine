@@ -12,9 +12,10 @@
 - **道具池第二压力入口已实测过关**：灌到 rank-3 峰值弹量（约 814）、真起一发满屏 bomb 跑满
   整段效果，`diag.pool_full[POOL_ITEM]` 全程 0（永久回归测试，`crates/stg-core/src/world/player.rs`），
   1024 cap 还有约 210 格余量，**未触发**再抬 cap 的裁决。
-- `follow-ups.md`：**48 → 49 条**——整节销 E 组（bomb 那一刀开工前，三条均已兑现），新记
-  **D20**（尺寸哨兵测试被对齐 padding 连续吃掉三次真实字段新增而未响，`PlayerState` 只剩
-  1 字节空档，候选修法记档待人裁定）。
+- `follow-ups.md`：整刀（design→Task 9）**47 → 49 条**——设计阶段记的 **F13**
+  （`checksum_report()` 从未实现）+ Task 9 新记 **D20**（尺寸哨兵测试被对齐 padding 连续
+  吃掉三次真实字段新增而未响，`PlayerState` 只剩 1 字节空档，候选修法记档待人裁定）；
+  Task 9 同时整节销 E 组（bomb 那一刀开工前，三条均已兑现）。
 - **待目验**（卡在"要有头环境"）：B26 余 ②`visible_instances` 断言 + ③ 可玩性目验（两卡序）。
 - **下一阶段候选**：M3 环形快照回滚 / `stg-py` RL 线 / 背景刀（A4）/ 内容线（难度真分档、杂兵段扩写、A9 演出打磨）。
 - **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。

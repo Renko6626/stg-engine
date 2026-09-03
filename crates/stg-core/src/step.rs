@@ -2741,6 +2741,27 @@ mod tests {
 
     /// 造一个"什么都在动"的世界：弹在飞、敌在动、道具在落、作用区在倒数、自机在移动。
     /// 五类都要有，否则主测的观测面是空的、押不住任何东西。
+    /// 相位 2 门禁的判别负载：一个 STAGE 根任务，每个活跃帧记 1 分再等 1 帧、循环——
+    /// `players[0].score` 变没变就是这道门禁唯一直接的判别信号（复审 Important 1）。
+    fn busy_ecl_image() -> EclImage {
+        root_image(vec![
+            OP_PUSHI as u32,
+            1,
+            OP_SYS as u32,
+            crate::ecl::syscall::SYS_ADD_SCORE as u32,
+            OP_PUSHI as u32,
+            1,
+            OP_WAIT as u32,
+            OP_JMP as u32,
+            0,
+        ])
+    }
+
+    /// **复审 Important 1**：此前这个"忙"世界没有 ECL 任务、没有带 xform 段的弹、
+    /// 没有待回收的弹——相位 2/4/9 三道门禁即使被拆掉，本文件全部测试也照样绿
+    /// （三处都无事可做，门禁在与不在没有可观测差异）。三条新增负载把这三道门禁
+    /// 分别摆到"有东西可能被冻结期间偷跑"的处境：任务会不会记分、弹的变换游标
+    /// 会不会推进、已标记清除的弹会不会被提前收走。
     fn busy_world() -> Box<World> {
         use crate::field::FIELD_CLEAR_BULLETS;
         let mut w = World::new(1);
@@ -2784,14 +2805,63 @@ mod tests {
             owner: 0,
             flags: FIELD_CLEAR_BULLETS,
         });
+        // 相位 2 负载：STAGE 根任务。`start_main` 把 `born_frame` 戳成当前帧（次帧首跑
+        // 门禁），但本函数不想为了预热单独多跑一帧去扰动上面几件的初始状态——直接把
+        // 出生帧往回拨一格，越过那道无关的门禁，让它在调用方的第一个真实 `step` 里
+        // 就已经"随时可跑"。
+        let root_idx = w
+            .start_main(&busy_ecl_image())
+            .expect("busy_world 根任务必须能启动");
+        w.tasks.slots[root_idx as usize].born_frame = w.body.frame.wrapping_sub(1);
+        // 相位 4 负载：一颗挂了一步 `OP_SET_SPRITE` 的弹。初始 `xform_wait=0` ⇒ 它在
+        // 第一个真正跑到相位 4 的活跃帧就会立即发射并把 `xform_wait` 支到 5——冻 C 时
+        // 这一发必须完全不发生（sprite 停在初值、`xform_wait` 停在 0）。
+        w.body.create_bullet_with_xform(
+            crate::bullets::BulletInit {
+                x: Fx::from_int(200),
+                y: Fx::from_int(100),
+                vx: Fx::ZERO,
+                vy: Fx::ZERO,
+                speed: Fx::ZERO,
+                angle: Angle::ZERO,
+                ang_vel: 0,
+                accel: Fx::ZERO,
+                ax: Fx::ZERO,
+                ay: Fx::ZERO,
+                sprite: 0,
+                radius: Fx::from_int(2),
+                delay: 0,
+                life: 0xFFFF,
+                flags: 0,
+                grazed_by: 0,
+                transform_head: 0,
+                xform_wait: 0,
+                xform_next: 0,
+            },
+            &[crate::xform::XformSlot {
+                wait: 5,
+                op: crate::xform::OP_SET_SPRITE,
+                _pad: 0,
+                args: [77, 0],
+            }],
+        );
+        // 相位 9 负载：一颗提前标好 `BULLET_CLEARED` 的弹——冻 C 时这一枪不该被收走，
+        // 解冻后应立刻被清掉。
+        let cleared_h = crate::world::test_support::bullet_at(&mut w, 300, 100);
+        let cleared_i = w.body.bullets.get(cleared_h).unwrap();
+        w.body.bullets.flags[cleared_i] |= crate::bullets::BULLET_CLEARED;
         w
     }
 
+    /// **复审 Important 1**：曾经喂 `EclImage::empty()`——`busy_world()` 现在真的挂了一个
+    /// 任务，喂空镜像会让它试图从空字节数组里取指令而 panic。换成 `busy_ecl_image()`：
+    /// 对没有任务的世界（本文件其余不经 `busy_world()` 的测试）无害——`run_tasks` 只遍历
+    /// 存活任务，池空则镜像内容从不被读。
     fn step_empty(w: &mut World) {
         crate::step::step(
             w,
             &TABLES_V0,
-            &crate::ecl::image::EclImage::empty(),
+            &busy_ecl_image(),
             &InputFrame::empty(w.frame()),
         );
     }
@@ -2835,6 +2905,11 @@ mod tests {
 
     /// 玩家技能（冻 B+C）：C 组停、A 组跑。判别力=两侧都断言，只断一侧的话
     /// "门禁写成恒冻一切"或"恒不冻"各能骗过其中一条。
+    ///
+    /// **复审 Important 1 追加**：C 组冻的不只是弹/敌/自机弹——相位 2（ECL 任务）、
+    /// 相位 4（变换游标）、相位 9（回收）同样挂在 `scene_frozen()` 上。三条新断言
+    /// （分数/xform sprite/待回收弹）分别把这三道门禁单独摘出来逐个变异验证过：
+    /// 拆掉任一个都会让对应那条从绿翻红（见 `task-9-report.md` 的记录）。
     #[test]
     fn player_skill_freezes_scene_but_not_the_actor() {
         let mut w = busy_world();
@@ -2842,22 +2917,48 @@ mod tests {
         let enemy_i = w.body.enemies.iter_alive().next().unwrap();
         let enemy_y = w.body.enemies.y[enemy_i];
         let shot_y = w.body.shots.y[0];
+        let score0 = w.body.players[0].score;
+        let xform_i = w
+            .body
+            .bullets
+            .iter_alive()
+            .find(|&i| w.body.bullets.transform_head[i] != crate::xform::XFORM_NONE)
+            .unwrap();
+        let sprite0 = w.body.bullets.sprite[xform_i];
+        let wait0 = w.body.bullets.xform_wait[xform_i];
+        let cleared_i = w
+            .body
+            .bullets
+            .iter_alive()
+            .find(|&i| w.body.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0)
+            .unwrap();
         w.body.players[0].x = Fx::ZERO;
 
         w.body.freeze_left = [10, 0];
         let mut input = InputFrame::empty(w.frame());
         input.actions[0].buttons = crate::input::BTN_RIGHT;
-        crate::step::step(
-            &mut w,
-            &TABLES_V0,
-            &crate::ecl::image::EclImage::empty(),
-            &input,
-        );
+        crate::step::step(&mut w, &TABLES_V0, &busy_ecl_image(), &input);
 
         assert_eq!(w.body.bullets.y[0], bullet_y, "C 组：敌弹必须冻住");
         assert_eq!(w.body.enemies.y[enemy_i], enemy_y, "C 组：敌人必须冻住");
         assert_eq!(w.body.shots.y[0], shot_y, "B 组：自机弹必须冻住");
         assert_ne!(w.body.players[0].x, Fx::ZERO, "A 组：自机必须还能移动");
+        assert_eq!(
+            w.body.players[0].score, score0,
+            "相位 2 门禁：冻 C 时 ECL 任务不得记分"
+        );
+        assert_eq!(
+            w.body.bullets.sprite[xform_i], sprite0,
+            "相位 4 门禁：sprite 不得改写"
+        );
+        assert_eq!(
+            w.body.bullets.xform_wait[xform_i], wait0,
+            "相位 4 门禁：变换游标不得推进"
+        );
+        assert!(
+            w.body.bullets.is_alive(cleared_i),
+            "相位 9 门禁：已标记清除的弹冻结期间不得被回收"
+        );
     }
 
     /// ECL 演出（冻 A+B）：A 组停、C 组跑。与上一条互为镜像。
@@ -2866,17 +2967,26 @@ mod tests {
         let mut w = busy_world();
         let bullet_y = w.body.bullets.y[0];
         let shot_y = w.body.shots.y[0];
+        let score0 = w.body.players[0].score;
+        let xform_i = w
+            .body
+            .bullets
+            .iter_alive()
+            .find(|&i| w.body.bullets.transform_head[i] != crate::xform::XFORM_NONE)
+            .unwrap();
+        let wait0 = w.body.bullets.xform_wait[xform_i];
+        let cleared_i = w
+            .body
+            .bullets
+            .iter_alive()
+            .find(|&i| w.body.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0)
+            .unwrap();
         w.body.players[0].x = Fx::ZERO;
 
         w.body.freeze_left = [0, 10];
         let mut input = InputFrame::empty(w.frame());
         input.actions[0].buttons = crate::input::BTN_RIGHT;
-        crate::step::step(
-            &mut w,
-            &TABLES_V0,
-            &crate::ecl::image::EclImage::empty(),
-            &input,
-        );
+        crate::step::step(&mut w, &TABLES_V0, &busy_ecl_image(), &input);
 
         assert_ne!(w.body.bullets.y[0], bullet_y, "C 组：敌弹必须照飞");
         assert_eq!(
@@ -2884,6 +2994,19 @@ mod tests {
             "B 组：自机弹仍要冻住（两个方向都冻 B）"
         );
         assert_eq!(w.body.players[0].x, Fx::ZERO, "A 组：自机必须被定住");
+        assert_eq!(
+            w.body.players[0].score,
+            score0 + 1,
+            "相位 2 门禁：C 组未冻，ECL 任务该照常记分（镜像上一条的判别）"
+        );
+        assert_ne!(
+            w.body.bullets.xform_wait[xform_i], wait0,
+            "相位 4 门禁：C 组未冻，变换游标该照常推进"
+        );
+        assert!(
+            !w.body.bullets.is_alive(cleared_i),
+            "相位 9 门禁：C 组未冻，已标记清除的弹该被回收"
+        );
     }
 
     /// **规则不能照搬**（spec §4）：门禁挂在 C 组、不是"是否冻结"。ECL 演出把自机定住时
@@ -2948,11 +3071,14 @@ mod tests {
         for n in [1u16, 2] {
             let mut w = busy_world();
             let y0 = w.body.bullets.y[0];
-            // 第 1 冻结帧：相位 2 点火，本帧相位 3 起即已冻
+            // 第 1 冻结帧：相位 2 点火，本帧相位 3 起即已冻。相位 2（导演槽）跑在
+            // `director` 闭包**之前**，故点火帧本身对 `run_tasks` 而言仍是"冻结前"的
+            // 旧状态——`busy_world()` 挂的任务这一帧会照常尝试跑一次，必须喂真镜像
+            // （空镜像 + 存活任务 = 从空字节数组取指令，越界 panic）。
             crate::step::step_with_director(
                 &mut w,
                 &TABLES_V0,
-                &crate::ecl::image::EclImage::empty(),
+                &busy_ecl_image(),
                 &InputFrame::empty(0),
                 |b| b.freeze_left = [n, n],
             );

@@ -846,7 +846,8 @@ mod tests {
         assert_eq!(w.body.enemies.hp[fi], fhp, "圈外敌不得掉血");
     }
 
-    /// ④ 伤害圆**不跟随**：起爆后把自机挪走，圆心不动（裁定 #10 的后半句）。
+    /// ④ 伤害圆圆心 = 起爆点（`PlayerAtCast`），不是场心（裁定 #10 的前半句——"不跟随"
+    /// 这半句本身在当前实现下无法单独测出，见函数体内 Minor 4 的说明）。
     #[test]
     fn bomb_damage_field_does_not_follow_the_player() {
         use crate::math::Fx;
@@ -861,18 +862,16 @@ mod tests {
             .iter_alive()
             .find(|&i| w.body.fields.flags[i] & crate::field::FIELD_DAMAGE != 0)
             .expect("应铺了伤害 field");
-        let (fx, fy) = (w.body.fields.x[f], w.body.fields.y[f]);
-        assert_eq!(
-            (fx, fy),
-            (Fx::ZERO, Fx::from_int(200)),
-            "圆心 = 起爆当帧的自机位（PlayerAtCast）"
-        );
-        w.body.players[0].x = Fx::from_int(150); // 把自机挪走
-        press(&mut w, 0);
+        // 复审 Minor 4：此前这里还有第二半——挪走自机再跑一帧，断言圆心坐标不变。那半条
+        // 测不出任何东西：全仓没有任何代码路径会在创建之后再写 `fields.x`/`fields.y`
+        // （唯二写点是 `create_field` 本身，读点在 `collide.rs`/`settle.rs`），所以那句
+        // 断言不可能失败，删掉，不补别的等价物——判别力全在下面这一句：起爆点 `(0,200)`
+        // 与场心 `FieldCenter` 默认值 `(0, FIELD_HEIGHT/2=224)` 不同，圆心落在前者才说明
+        // `PlayerAtCast` 真被接上了（若实现误接成场心，这句当场红）。
         assert_eq!(
             (w.body.fields.x[f], w.body.fields.y[f]),
-            (fx, fy),
-            "圆心必须钉在起爆点"
+            (Fx::ZERO, Fx::from_int(200)),
+            "圆心 = 起爆当帧的自机位（PlayerAtCast），不是场心"
         );
     }
 

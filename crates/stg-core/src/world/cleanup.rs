@@ -15,6 +15,19 @@ impl WorldBody {
     pub(crate) fn cleanup(&mut self) {
         self.phase_enter(super::PH_CLEANUP);
         // C 组：冻 C 时没有新的越界/消弹/死亡标记产生（相位 4~7 全停），无需回收。
+        // **推论**：冻结开始前那一帧刚被标记的东西（`ENEMY_DYING` 的敌、`BULLET_CLEARED`
+        // 的弹）会一直挂在池里、槽位占着不还，直到 C 解冻那一帧才真正被收走——是确定性的
+        // "残留"而非泄漏（帧号/回放/校验和都不受影响，只是槽位暂时不空）。
+        //
+        // **同一类推论的手足**：`signals[]`（信号黑板）只在**相位 4**（`run_transforms`,
+        // `transform.rs` 的 `WAIT_SIGNAL` 分支）按边沿消费——`signals[ch] == frame + 1`
+        // 才算命中。点火那一帧（`director` 在相位 2 之后才把 `freeze_left` 写上）相位 2
+        // 仍按冻结前的旧状态跑，脚本这一帧发出的 `pulse_signal` 照常写入 `signals[ch] =
+        // frame + 1`；但同一帧的相位 4 已经看得到刚写好的 `freeze_left`，被冻结跳过——
+        // 这一戳永远不会被看到。下一帧 `frame` 已经 +1，`signals[ch]` 却还停在
+        // "旧 frame + 1"，条件再也凑不齐：这一发脉冲**永久性地**丢了。确定性（同样的输入
+        // 序列永远丢在同一处），但脚本作者若恰好在开启时停的那一帧脉冲信号，会发现等在
+        // `WAIT_SIGNAL` 上的弹再也等不到那个边沿。
         if self.scene_frozen() {
             return;
         }
