@@ -540,7 +540,7 @@ fn read_shooter(r: &mut Reader) -> Result<Shooter, TableLoadError> {
 
 /// 头 16B：magic(4) + version(2) + reserved(2) + content_hash(8)。body = 其后全部字节。
 const TABLE_MAGIC: &[u8; 4] = b"STGT";
-const TABLE_VERSION: u16 = 3;
+const TABLE_VERSION: u16 = 4;
 const TABLE_HEADER: usize = 16;
 
 impl WorldTables {
