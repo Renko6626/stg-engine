@@ -2212,11 +2212,20 @@ mod tests {
         // ① `copy_into` 走 `s.enemies.copy_into(...)`（`define_pool!` 生成，非手写，无需
         // 同步）；② checksum 走 derive 默认全量入（未加 skip）；③ 不是新池，D10 容量预算
         // 不适用（cap 仍 256，只是每槽宽了 30 B）；④ SaveBytes 走 derive 自动。
+        // 2026-09-03（F12 定案）：`ItemPool` cap 512 → 1024。22 B/槽（x/y/vx/vy 4×4 +
+        // item_type/magnet_to 各 1 + timer 2 = 20，加 gen 2 B/槽）+ alive u64×8→×16
+        // ⇒ 池 11 328→22 656，净 **+11 328**，无对齐吸收：WorldBody 977824→989152、
+        // World 1137624→1148952，增量 1:1（无新池、无 Task 字段改动）。
+        // ① `copy_into` 走 `s.items.copy_into(..)`（`define_pool!` 生成，非手写，无需同步）；
+        // ② checksum 走 derive 默认全量入——**注意这正是金向量变化的来源**：哈希全槽不用
+        // alive 掩码，多出来的 512 个空槽从帧 0 就进哈希；③ **D10 容量预算适用**（本刀就是
+        // 池 cap 变更，`stg-world-design.md` 的 D10 表已同步）；④ SaveBytes 走 derive 自动
+        // ⇒ 存档 wire format 变化，故 `ENGINE_VER` 13→14（见 lib.rs）。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (977824, 1137624);
+        const EXPECTED: (usize, usize) = (989152, 1148952);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (977824, 1137624);
+        const EXPECTED: (usize, usize) = (989152, 1148952);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2242,12 +2251,12 @@ mod tests {
             ("fields", size_of::<crate::field::FieldPool>()),
             ("xform", size_of::<crate::xform::XformSegPool>()),
         ];
-        // cap: bullets 8192 / enemies 256 / shots 1024 / items 512 / fields 16 / xform 4096
+        // cap: bullets 8192 / enemies 256 / shots 1024 / items 1024 / fields 16 / xform 4096
         let expected = [
             ("bullets", 443_392), // 52 B/弹 ×8192 + gen 16384 + alive 1024  ≈ 433 KiB
             ("enemies", 27_424),  // 105 B/敌 ×256 + gen 512 + alive 32      ≈ 26.8 KiB
             ("shots", 28_800),
-            ("items", 11_328),
+            ("items", 22_656), // 22 B/道具 ×1024 + gen 2048 + alive 128（F12：512→1024）
             ("fields", 328),
             ("xform", 393_472),
         ];
@@ -2282,8 +2291,18 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            13,
-            "bump 必须是有意识决定(评审 + 改本测试)——12→13：运动动词参数收窄(D19,\
+            14,
+            "bump 必须是有意识决定(评审 + 改本测试)——13→14：道具池 cap 512→1024\
+             (F12 定案,人类裁定取'抬 cap + 写口径'两条、不给转换设上限)。**这条是布局变更**,\
+             与前两次'含义变了'不同侧:World 真的变宽了(WorldBody 977824→989152、\
+             World 1137624→1148952,+11328 B),快照与存档 wire format 随之改变,旧存档在新\
+             引擎上**尺寸就对不上**,是响亮失败而非悄悄走岔。起因是真内容实测:消弹转星星\
+             是 1:1 而弹池 8192、道具池 512,demo 收卡一帧 626 颗弹让**四个难度档全部溢出**\
+             (Easy 3/Normal 37/Hard 67/Lunatic 104 颗星星没生成 = 丢分)。**金向量必然改变**\
+             且形态是本刀指纹:校验和哈希全槽不用 alive 掩码(P6),多出的 512 个空道具槽从\
+             **帧 0** 就进哈希 ⇒ 两段场景自帧 0 起全差,不是行为回归。⚠ 1024 不是结构性\
+             保证只是把线挪远(rank 3 弹数峰值 814、道具峰值 612),溢出后走 P4-a 逐颗降级\
+             ——**已知设计边界,不是待修的债**。前一次 12→13：运动动词参数收窄(D19,\
              人类裁定'收窄成拒收')。五条运动动词 syscall 的 dur/easing 从裸 as u16/as u8 \
              收窄成 try_from,越界即 P4-b(contract_viol + BAD_ARGS + **整条 no-op**)。\
              同一份镜像在新旧两版**产出不同的世界演化**:move_enemy_to(30,x,y,256) 旧版\

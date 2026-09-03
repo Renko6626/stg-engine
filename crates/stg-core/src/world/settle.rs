@@ -568,6 +568,67 @@ mod tests {
         }
     }
 
+    /// 道具池满时的消弹降级（P4-a）：**逐颗计数、循环不短路**——`spawn_star_at` 的文档
+    /// 明写这一条，而它此前无测试；F12 正是在真内容里踩到的这条路（收卡一帧 626 颗弹全转
+    /// 星星，四个难度档都溢出过道具池）。
+    ///
+    /// 判别力来源：先把池灌满，再消 **3** 颗弹 ⇒ `pool_full[POOL_ITEM]` 必须恰好 +3。
+    /// 若实现改成"第一颗分配失败就 break"（最自然的错法）得到 +1；若整批只记一次也得 +1。
+    /// 两种错法都被这条捉住，而"消 1 颗"的写法对它们全瞎。
+    #[test]
+    fn star_pool_full_counts_every_missing_star() {
+        use crate::field::FIELD_CLEAR_BULLETS;
+        use crate::world::POOL_ITEM;
+        let mut w = crate::step::World::new(1);
+        // 灌满道具池（哑星星，位置无关紧要）。
+        while w
+            .body
+            .items
+            .alloc(crate::items::ItemInit {
+                x: Fx::ZERO,
+                y: Fx::ZERO,
+                vx: Fx::ZERO,
+                vy: Fx::ZERO,
+                item_type: crate::items::ITEM_STAR,
+                magnet_to: crate::items::MAGNET_NONE,
+                timer: 0,
+            })
+            .is_some()
+        {}
+        let alive_before = w.body.items.iter_alive().count();
+        let full_before = w.body.diag.pool_full[POOL_ITEM];
+
+        spawn_field(&mut w, 0, 100, 40, FIELD_CLEAR_BULLETS, 1);
+        bullet_at(&mut w, -10, 100);
+        bullet_at(&mut w, 0, 100);
+        bullet_at(&mut w, 10, 90);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+
+        assert_eq!(
+            w.body.diag.pool_full[POOL_ITEM],
+            full_before + 3,
+            "三颗弹被消而池满 ⇒ 逐颗计三次（短路或整批只计一次都会给 +1）"
+        );
+        assert_eq!(
+            w.body.items.iter_alive().count(),
+            alive_before,
+            "池满 ⇒ 一颗星星都不该多出来"
+        );
+        // 弹照消不误——星星生不出来不影响消弹本身。（真正的回收在相位 9 `cleanup`，
+        // 本相位只置 `BULLET_CLEARED`，故这里查标志位而非存活数。）
+        for i in w.body.bullets.iter_alive() {
+            assert!(
+                w.body.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0,
+                "弹 {i} 应已被标记消除"
+            );
+        }
+    }
+
     /// 无 ALIVE 自机（决死窗口）→ 星星 MAGNET_NONE 正常下落。
     #[test]
     fn star_without_alive_player_falls_unmagnetized() {

@@ -5,7 +5,10 @@ extends SubViewportContainer
 
 # 池容量镜像(值源 crates/stg-core/src/{bullets,shots,enemy,items}.rs define_pool! 声明;
 # 桥面冻结不出容量口——漂移由 register_layer false + 冒烟兜底,见 setup)
-const CAPS := { 0: 8192, 1: 1024, 2: 256, 3: 512 } # key = WorldBridge.LAYER_*
+# 2026-09-03(F12):道具层 512→1024,跟 items.rs 的 cap 一起改。这条镜像**没有编译期护栏**,
+# 唯一的网就是本工程冒烟——改核心池 cap 而忘了这里,冒烟会以 "register_layer(N) 被拒
+# (容量镜像漂移?)" + SMOKE FAIL: boot(0) 的形态报出来(本刀就是这么被抓住的)。
+const CAPS := { 0: 8192, 1: 1024, 2: 256, 3: 1024 } # key = WorldBridge.LAYER_*
 # cell 尺寸 = 该层图集的格边长(也是 QuadMesh 边长,1px=1unit)。
 # bullets = 16:原作弹片本就是 16×16 网格,取 16 即精确切割、零留白,渲染出来正好是
 # 东方在 384×448 场界里的原生比例。将来若补 32×32 大玉,整张图要改按 32 排、小图元

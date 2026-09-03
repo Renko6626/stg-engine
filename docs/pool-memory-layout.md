@@ -42,7 +42,7 @@ struct BulletPool {
 | `XformSegPool` | 4096 | — | 393 472 B ≈ 384 KiB |
 | `ShotPool` | 1024 | — | 28 800 B ≈ 28 KiB |
 | `EnemyPool` | 256 | 105 | 27 424 B ≈ 26.8 KiB |
-| `ItemPool` | 512 | — | 11 328 B ≈ 11 KiB |
+| `ItemPool` | 1024 | 22 | 22 656 B ≈ 22.1 KiB |
 | `FieldPool` | 16 | — | 328 B |
 
 **这张表由 `step.rs` 的 `pool_size_sentinel_guards_the_layout_doc_account` 押运**：池宽了而
