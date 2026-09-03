@@ -57,7 +57,9 @@ impl WorldBody {
             if !scene {
                 match self.players[i].life_state {
                     LIFE_DEATHWINDOW => {
-                        // bomb 救人 stub：本切片无 bomb 输入 → 窗口必耗尽。
+                        // deathbomb 挂点已接：窗口内按 bomb 会在 A 组 `try_bomb` 里把
+                        // 状态拨回 LIFE_ALIVE 并清 state_timer；这里只处理"没人救"的那条
+                        // 分支——窗口只在无 bomb 到达时才耗尽。
                         if self.players[i].state_timer > 0 {
                             self.players[i].state_timer -= 1;
                         }
