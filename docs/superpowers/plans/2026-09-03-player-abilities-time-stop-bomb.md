@@ -187,7 +187,15 @@ Expected: `world_size_sentinel_guards_copy_into_field_list` 红，打出实测�
         //    故 `ENGINE_VER` 14→15（见 lib.rs）。
 ```
 
-⚠️ **同时检查 `copy_into`**：打开 `crates/stg-core/src/world.rs` 找到 `fn copy_into`，确认 `freeze_left` 已在逐字段清单里；没有就加。**漏拷编译不报错，这正是那条哨兵存在的原因。**
+⚠️ **同时改 `copy_into`（必做，位置已核实）**：手写逐字段清单在
+`crates/stg-core/src/step.rs:153` 的 `World::copy_into`（**不在 `world.rs`**）。在
+`d.bg_phase_frame = s.bg_phase_frame;` 之后加一行：
+
+```rust
+        d.freeze_left = s.freeze_left;
+```
+
+**漏拷编译不报错**——这正是那条尺寸哨兵存在的全部理由。
 
 - [ ] **Step 7: 更新池账目文档与 D10 表**
 
@@ -789,6 +797,7 @@ PhaseGuard 断言当场失败，而且 §3.5 宪法顺序归组装层（P2）。
 - Modify: `crates/stg-core/src/step.rs`（`new_game_at` 写 `time_stops`；两条哨兵）
 - Modify: `crates/stg-core/src/consts.rs`（C14 ① 段注入 `TIMESTOP_FRAMES`）
 - Modify: `crates/stg-core/src/world/player.rs`（`try_time_stop`）
+- Modify: `crates/stg-godot/src/bridge.rs:145`（`Loadout` 穷尽初始化会被打断）
 - Test: `crates/stg-core/src/world/player.rs` 的 `mod tests`
 
 **Interfaces:**
@@ -902,6 +911,18 @@ pub const TIMESTOP_FRAMES: u16 = 180;
 `PlayerState::spawn` 的**穷尽初始化**里加 `time_stops: ld.time_stops,`。
 
 `Loadout` 加 `pub time_stops: u8,`，其 `Default` 给 `time_stops: 1`。
+
+⚠️ **`Loadout` 有四个构造点，其中三处是穷尽初始化、加字段会直接编译失败**（已核实）：
+
+| 位置 | 现状 | 处置 |
+|---|---|---|
+| `crates/stg-godot/src/bridge.rs:145` | 穷尽 | 加 `..Default::default()` |
+| `crates/stg-core/src/step.rs:2556` | 穷尽（测试） | 加 `..Default::default()` |
+| `crates/stg-core/src/step.rs:2584` | 穷尽（测试） | 加 `..Default::default()` |
+| `crates/stg-godot/src/boot.rs:95` | 已有 `..Default::default()` | 不动 |
+
+**不要给桥面加 `time_stops` 入参**——默认值 1 已够，加参数是没人要的接口扩张（裁定 R-2）。
+`stg-godot` 编译不过的话两个冒烟都跑不了，所以这一步不能跳。
 
 `crates/stg-core/src/step.rs` 的 `new_game_at`，在 `p.bombs = loadout.bombs;` 之后加：
 ```rust
@@ -1183,8 +1204,16 @@ git add -A && git commit -m "feat(ecl): 560 time_stop_player——ECL 演出方�
 ### Task 7: `BombCfg` 表结构与 v0 内容
 
 **Files:**
-- Modify: `crates/stg-core/src/tables.rs`（`BombCfg`/`BombField`/`BombOrigin` + `CharacterCfg.bomb` + `build_tables_v0` + `validate`）
+- Modify: `crates/stg-core/src/tables.rs`（`BombCfg`/`BombField`/`BombOrigin` + `CharacterCfg.bomb` + `build_tables_v0` + `validate` + **`to_bytes`/`from_bytes` 两侧**）
+- Regenerate & commit: `crates/stg-core/src/tables/tables_v0.bin`
 - Test: `crates/stg-core/src/tables.rs` 的 `mod tests`
+
+⚠️ **先读这条，它决定本 Task 的真实范围（裁定 R-3，已在代码里核实）**：
+`TABLES_V0` **不是** `build_tables_v0()` 直接来的，而是
+`from_bytes(include_bytes!("tables/tables_v0.bin"))`（`tables.rs:282`）——**内建表来自提交
+进仓的二进制**。所以给 `CharacterCfg` 加字段必须连表的 wire format 一起改，否则：
+① `from_bytes` 里的 `CharacterCfg { .. }` 构造点（`tables.rs:634` 附近）**直接编译失败**；
+② 就算补上默认值，内建表也拿不到 bomb 配置，"表驱动"名存实亡。
 
 **Interfaces:**
 - Consumes: `crate::field::{FIELD_CLEAR_BULLETS, FIELD_DAMAGE, FIELD_RADIUS_FULLSCREEN}`。
@@ -1348,7 +1377,106 @@ pub enum BombOrigin {
 ⚠️ `radius_in_range` 是本文件既有的私有助手（`appearances` 与角色半径都用它），直接复用，
 **别自己写一遍双边比较**。
 
-- [ ] **Step 6: 跑测试并提交**
+- [ ] **Step 6: 扩展表二进制格式（`to_bytes` / `from_bytes` 两侧）**
+
+`to_bytes()`（`tables.rs:459`）的 characters 循环里，在 `option_pos` 之后追加 bomb 段。
+**写入顺序 = 读出顺序**，两侧必须逐字对应：
+
+```rust
+            // bomb 段（自机能力刀）：frames/invuln/attract_items + 变长 fields。
+            out.extend_from_slice(&c.bomb.frames.to_le_bytes());
+            out.extend_from_slice(&c.bomb.invuln.to_le_bytes());
+            out.push(c.bomb.attract_items as u8);
+            out.extend_from_slice(&(c.bomb.fields.len() as u32).to_le_bytes());
+            for f in c.bomb.fields.iter() {
+                out.push(match f.origin {
+                    BombOrigin::FieldCenter => 0u8,
+                    BombOrigin::PlayerAtCast => 1u8,
+                });
+                out.extend_from_slice(&f.radius.raw().to_le_bytes());
+                out.push(f.flags);
+                out.extend_from_slice(&f.dmg_per_frame.to_le_bytes());
+                out.extend_from_slice(&f.life.to_le_bytes());
+            }
+```
+
+`from_bytes()`（`tables.rs:526`）的对应位置读回来。**枚举的反序列化必须拒绝未知判别值**
+（坏字节不得变成"默认值"——那是静默数据损坏）：
+
+```rust
+        let bomb_frames = r.u16()?;
+        let bomb_invuln = r.u16()?;
+        let bomb_attract = r.u8()? != 0;
+        let nbf = r.u32()? as usize;
+        let mut bomb_fields = Vec::with_capacity(nbf);
+        for _ in 0..nbf {
+            let origin = match r.u8()? {
+                0 => BombOrigin::FieldCenter,
+                1 => BombOrigin::PlayerAtCast,
+                _ => return Err(TableLoadError::…), // 照本文件既有的坏数据错误变体
+            };
+            bomb_fields.push(BombField {
+                origin,
+                radius: r.fx()?,
+                flags: r.u8()?,
+                dmg_per_frame: r.u16()?,
+                life: r.u16()?,
+            });
+        }
+```
+
+并在 `CharacterCfg { .. }` 构造里加 `bomb: BombCfg { frames: bomb_frames, invuln:
+bomb_invuln, attract_items: bomb_attract, fields: bomb_fields.into_boxed_slice() }`。
+
+⚠️ **`r.u8()` / `r.u16()` 若不存在就照 `r.fx()`/`r.u32()` 的形状加**（同一个 `Reader`
+辅助结构，别另起一套）。错误变体**照本文件既有的 `TableLoadError` 用**，不要新造。
+
+- [ ] **Step 7: 重烘 `tables_v0.bin` 并复验**
+
+```bash
+cargo run -q -p stg-harness -- bake-tables
+cargo run -q -p stg-harness -- verify-tables
+git status --short crates/stg-core/src/tables/tables_v0.bin
+```
+Expected: `bake-tables` 重写那个 `.bin`（文件出现在 `git status` 里）、`verify-tables`
+通过。**必须把新的 `.bin` 一起提交**——它是内建表的唯一真相源。
+
+⚠️ 若 `bake-tables` 不负责 `tables_v0.bin`（它主要烘 `math/tables/`），改用 harness 的
+`crates/stg-harness/src/tables.rs:90` 那条 `gen_world_tables_v0` 走的入口；**先读那个文件
+确认哪个子命令写它**，别猜。
+
+- [ ] **Step 8: 加一条往返测试**
+
+```rust
+/// bomb 段的 to_bytes/from_bytes 往返：写出去再读回来必须逐字段相等。
+/// 判别力：漏写任何一个字段、或读写顺序错位，这条都会红（而只测"能解析"的写法不会）。
+#[test]
+fn bomb_cfg_survives_a_bytes_roundtrip() {
+    let t0 = build_tables_v0();
+    let t1 = WorldTables::from_bytes(&t0.to_bytes()).expect("往返应成功");
+    assert_eq!(t1.characters[0].bomb, t0.characters[0].bomb);
+}
+
+/// 坏的 origin 判别值必须被**拒绝**，不得静默变成默认值（静默 = 数据损坏）。
+#[test]
+fn bomb_origin_rejects_unknown_discriminant() {
+    let mut bytes = build_tables_v0().to_bytes();
+    // 找到 bomb 段第一条 field 的 origin 字节并改成非法值 —— 用 from_bytes 的
+    // 错误类型断言被拒。定位方法：先跑通往返测试，再用二分或按写入顺序算偏移。
+    let pos = bytes
+        .windows(1)
+        .position(|_| false)
+        .unwrap_or(0);
+    let _ = (pos, &mut bytes);
+    // 实现时把上面两句换成真实定位；断言形如：
+    // assert!(WorldTables::from_bytes(&bytes).is_err(), "未知 origin 判别值须被拒");
+}
+```
+
+⚠️ 第二条测试的定位方式**由实现者决定**（按写入顺序算偏移最稳）。**不许留成空壳**——
+要么写成真断言，要么删掉它并在报告里说明为什么无法定位。
+
+- [ ] **Step 9: 跑测试并提交**
 
 ```bash
 cargo test -p stg-core --lib bomb_cfg 2>&1 | tail -6
