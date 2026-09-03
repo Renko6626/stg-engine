@@ -94,6 +94,19 @@ step 之间取走。**
 `load_state` 成功后必须一次性读 `anchors()` 对表；游玩期只走请求增量。
 bg 段内局部时间 = `frame - bg_phase_frame`（A4 mini-VM 的 seek 契约，本刀 phase 硬编码）。
 
+## 5.5 时停/bomb 的表现层读口（`freeze_left`）
+
+`WorldView::freeze_left()`（`world/view.rs`）暴露 `[u16; 2]`——`[0]` 是自机能力（时停技能/
+bomb 的伤害无敌位复用同一冻结机制的挂点），`[1]` 是 ECL 演出档 `time_stop_player()`。
+两个槽都非零即代表对应冻结组当前生效，数值是剩余帧数；表现层可以直接拿它画停时特效
+（比如给场景整体叠一层滤镜、把 HUD 边框变色）而不需要另外猜测"现在是不是冻着"。
+
+**背景相位锚点在冻 C 时同步推进，表现层不需要自己特判**：`bg_phase_frame` 不是独立计时器，
+是背景 mini-VM 的锚点——冻结期间它跟 `frame` 一起走，`frame − bg_phase_frame`（背景段内
+局部时间）因此在时停/bomb 全程保持不变，效果是"背景画面看起来也停住了"。这层豁免逻辑
+在核内，表现层只管照常按 `anchors()`/请求增量算 `frame − bg_phase_frame`，不用为冻结状态
+另写一套背景寻位分支。
+
 ## 6. 坐标与画面
 
 场界 x∈[-192,192], y∈[0,448]（中轴原点）；SubViewport 384×448 @容器(32,16)，

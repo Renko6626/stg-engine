@@ -116,6 +116,19 @@
 > 逐字节不变（两段场景压不到这条新路径）。两条变异实证：改回裸截断 / 拒收改成钳位，
 > 各自转红。
 
+> **自机能力刀（2026-09-03）销账**：整节删除 **E. bomb 那一刀开工前**——三条逐条核实
+> 已兑现（`try_bomb` 已接 deathbomb 救人路径 / graze 与消弹的口径注释原样保留、未被本刀
+> 触碰 / bomb 已成为 `FieldPool` 的首个真租户，铺 `FIELD_CLEAR_BULLETS | FIELD_DAMAGE`
+> 两条 field）。本刀新记 **D20**——`world_size_sentinel_guards_copy_into_field_list`
+> 这条尺寸哨兵本刀又被对齐 padding 吃掉三次真实字段新增（`freeze_left`/`time_stops`/
+> `prev_input`）而未响，`PlayerState` 复审实测只剩 1 字节空档，下一个 `u8` 还会重演；
+> 真正逮住这三次改动的全程是金向量而非这条哨兵，候选修法（押字段数 / 押存档 payload
+> 长度）记在条目里，留人裁定。道具池第二压力入口（bomb 消弹×120帧 1:1 转星星 + 全屏
+> 吸取）已实测：灌到 rank-3 峰值量级（约 814 颗弹）、真起一发 bomb、跑满整段效果时长，
+> `diag.pool_full[POOL_ITEM]` 全程为 0（`bomb_at_rank3_peak_bullet_count_does_not_overflow_item_pool`，
+> `crates/stg-core/src/world/player.rs`）——1024 的道具池对当前内容仍有约 210 格
+> （~20%）余量，**未触发**需要人类裁定 cap 的场景。
+
 ---
 
 ## A. 有触发条件的（动到对应模块前先做）
@@ -697,22 +710,30 @@ appearance** 时，`batch` 会 **Fault**（先撞 appearance），`sh_fire` 只 
 口径"**——现在不是。改哪一边都会动金向量（Fault 与 no-op 的世界演化不同），同样要
 bump `ENGINE_VER`。
 
----
+### D20. `world_size_sentinel_guards_copy_into_field_list` 对齐 padding 是盲区——三次真实字段新增全被吃掉未响（自机能力刀 Task 9 记档，2026-09-03）
 
-## E. bomb 那一刀开工前
+这条哨兵（`step.rs`）押的是"改 `WorldBody`/`World` 的 `size_of` 就逼你走一遍四件套清单
+（`copy_into`/checksum/D10 容量预算/存档格式）"。本刀**恰好三次**给它出题，**三次都绿**：
+`WorldBody.freeze_left`（`[u16; 2]`，4 B）、`PlayerState.time_stops`（`u8`，1 B）、
+`PlayerState.prev_input`（`u32`，4 B）——三处新增分别落进了既有的对齐空隙，`size_of`
+前后一字节不差，测试本该报警的时刻，它睡得很沉。
 
-> **设计已完成（2026-09-03）**：见
-> [`docs/superpowers/specs/2026-09-03-time-stop-design.md`](superpowers/specs/2026-09-03-time-stop-design.md)
-> ——bomb 与时间停止合并成一刀（共用自机能力触发骨架），含 deathbomb 与表驱动的 `BombCfg`。
-> **本节三条在实施时逐条兑现，兑现后整节删除。** 下面第一条的 stub 正是 §10.2 要接的挂点。
+复审手工摊开 `PlayerState` 布局：64 字节里排到第一个 `u64` 成员前有 6 字节空档，本刀
+先后插 `time_stops`（吃 1，剩 5）、`prev_input`（吃 4，剩 1）——**只剩 1 字节了，
+下一个 `u8` 还是会被吃掉、`size_of` 还是不会动**。`step.rs` 自己的哨兵注释已经在
+`ShooterSlot`（44 B、留 2 字节尾部 padding）那道题上记过同一个盲区——这是**第二次**
+在同一份文件里踩到它，不是孤例。
 
+真正逮住这三次改动的，全程是**金向量**：checksum derive 按字段全量入、不看对齐，
+新字段进哈希与 padding 是否被吃光无关——`size_of` 测的是布局的副作用，金向量测的是
+字段本身，二者不是同一件事，这条哨兵能守住的只是"布局意外变宽"这个真子集。
 
-- **`world/player.rs` 的 `update_players`** 里，`LIFE_DEATHWINDOW` 臂有一句
-  `// bomb 救人 stub：本切片无 bomb 输入 → 窗口必耗尽。` —— 那是 M0-7 留的挂点。
-- **「被消弹区清掉的弹还算不算 graze？」已答：算**（擦在相位 6 已发生、清弹是相位 7 的事；
-  设计明写 graze 独立于中弹）。理由与推导记在 `world/settle.rs` 趟三的注释里 + M0-8 spec。
-- bomb 是 `FieldPool` 的**首个真租户**（消弹区已就位，bomb 只需铺一个 `FIELD_CLEAR_BULLETS |
-  FIELD_DAMAGE` 的 field）。
+**候选修法**（本条只记录、不实现，由人裁定）：①把 `assert_eq!` 的对象从
+`size_of::<WorldBody>()`/`size_of::<World>()` 换成**字段数**（如 derive 宏生成的
+`FIELD_COUNT` 常量，或手数一份清单常量）——加字段必挂，不看是否被 padding 吃掉；
+②改押**存档 payload 长度**（`SaveBytes` 序列化后的字节数，逐字段写出、天然不含
+padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那一项同源，更贴近哨兵
+真正想守的东西。两案都要连带更新测试里长年累积的"逐刀追记"注释风格。
 
 ---
 

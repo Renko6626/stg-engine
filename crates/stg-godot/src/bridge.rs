@@ -64,6 +64,8 @@ impl WorldBridge {
     #[constant]
     const BTN_SLOW: i64 = stg_core::input::BTN_SLOW as i64;
     #[constant]
+    const BTN_TIMESTOP: i64 = stg_core::input::BTN_TIMESTOP as i64;
+    #[constant]
     const LAYER_BULLETS: i64 = frame::LAYER_BULLETS as i64;
     #[constant]
     const LAYER_SHOTS: i64 = frame::LAYER_SHOTS as i64;

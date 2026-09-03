@@ -330,8 +330,11 @@ sub 需要判它。开机时 `rank` 越 `0..=4` 一律被拒（宿主 `new_game_
   （Easy 3 / Normal 37 / Hard 67 / Lunatic 104 颗），F12 把池抬到 1024 才盖住。写"一次清
   非常多弹"的编排时（尤其是收卡消弹叠上一屏弹幕）心里有个数。
 - **不给无敌帧**。它只消弹，不碰自机状态——刚清完弹下一帧照样能被新弹打死。想要"清弹 +
-  保命"的是 bomb（消弹区 + 伤害位 + 自机无敌），那是另一刀的事，别拿 `clear_bullets()` 当
-  bomb 用。
+  保命"的是 bomb（消弹区 + 伤害位 + 自机无敌），别拿 `clear_bullets()` 当 bomb 用。
+  bomb 走的正是同一套消弹区机制——自机按 `BTN_BOMB` 触发时铺的也是 `FieldPool` 里的
+  `FIELD_CLEAR_BULLETS` 区，只是它是引擎侧固定接线（自机能力，不是脚本 syscall），铺哪些
+  field（消弹区半径/时长、要不要叠一个伤害圆、起爆时吸不吸道具）由角色表里的 `BombCfg`
+  描述——换角色即换表，不是换代码。
 
 典型用法是关底转场：`clear_bullets();` 把残留弹幕抹掉，再 `add_score(bonus);` 记完账，
 最后 `emit_req(REQ_STAGE_CLEAR, …);` 挂牌（见「关卡结算转场协议」）。

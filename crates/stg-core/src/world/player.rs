@@ -1073,4 +1073,38 @@ mod tests {
         assert_ne!(w.body.players[0].bomb_phase, 0, "前提：bomb 真的起爆了");
         assert_eq!(w.body.spells[0].capture_ok, 0, "起爆后本卡不予收卡");
     }
+
+    /// 永久容量回归闸（Task 9 Step A）：满屏消弹 × 全屏吸取是道具池的**第二个**压力入口
+    /// （第一个是符卡收卡瞬间的批量转换，`star_pool_full_counts_every_missing_star` /
+    /// `docs/follow-ups.md` F12 记录的那条）。demo 局 rank-3 峰值在场弹数约 814——把弹池
+    /// 灌到这个量级、真起一发 bomb、把效果整段（`cfg.frames` 帧）跑完，断言道具池全程
+    /// 未打满。全屏消弹区半径覆盖整个场（`FIELD_RADIUS_FULLSCREEN` = 400 > 场对角线的
+    /// 一半），814 颗弹会在起爆当帧**一次性**全部转换——这是比"分帧逐渐消弹"更狠的
+    /// 真实上限场景，直接回答"1024 还够不够"。若变红，**不要现场调池 cap**——记录实测
+    /// 数字、留给人裁定（同 F12 的处置流程）。
+    #[test]
+    fn bomb_at_rank3_peak_bullet_count_does_not_overflow_item_pool() {
+        use crate::world::POOL_ITEM;
+        const RANK3_PEAK_BULLETS: usize = 814;
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].bombs = 1;
+        // 全部落在场心 (0, FIELD_HEIGHT/2) 附近，稳进全屏消弹区半径。
+        for _ in 0..RANK3_PEAK_BULLETS {
+            crate::world::test_support::bullet_at(&mut w, 0, 224);
+        }
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            RANK3_PEAK_BULLETS,
+            "前提：弹已灌够峰值量级"
+        );
+        press(&mut w, crate::input::BTN_BOMB);
+        let frames = crate::tables::TABLES_V0.characters[0].bomb.frames;
+        for _ in 1..frames {
+            press(&mut w, 0);
+        }
+        assert_eq!(
+            w.body.diag.pool_full[POOL_ITEM], 0,
+            "满屏 bomb 在 rank-3 峰值弹量下不应打满道具池"
+        );
+    }
 }
