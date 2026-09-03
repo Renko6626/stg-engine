@@ -999,6 +999,14 @@ CI 的 clippy 步跑的是 **debug**（`cargo clippy --workspace --all-targets -
 **触发点 = 谁要让 `cargo clippy --release -- -D warnings` 进 CI**（或谁被这条 warning 挡住），
 届时连同 ①②③ 一并裁。在那之前它只是噪声一行。
 
+**复核（2026-09-03）：仍在，且比本条记的宽——不是一条 warning，是 5 条。** 实测
+`cargo clippy --workspace --release --all-targets` 输出：`NUM_PHASES is never used`（lib，
+1 条）加 **`unused import: crate::world::PH_COLLIDE` ×3 与 `PH_CLEANUP` ×1**（lib test，4 条，
+`cargo clippy --fix` 认得其中 4 条建议）。同一个根因——相位常量整族只服务 `PhaseGuard`，
+release 下 `debug_assertions` 不成立 ⇒ 常量与那几处 `use` 一起变成死物。上面三条修法照旧适用，
+但**裁的时候要按"相位常量族"整体裁，不是只裁 `NUM_PHASES` 一个**。CI 仍绿（debug），
+结论不变：这条**不挡任何人合入**，只挡自己在本地跑 release clippy 的人。
+
 ### F8. 引擎里有**两套不一致的瞄准政策**——自机 game over 之后两条路各走各的（run 刀记档，2026-08-01）
 
 同一句"瞄自机"在引擎里有两份实现，对**自机不在场**的处置正好相反：
