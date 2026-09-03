@@ -2,6 +2,11 @@
 //! u16 天然模 65536 回绕；**一切加减用 `wrapping_*`**，绝不用会在 debug 触发 overflow-checks 的 `+/-`。
 
 /// BAM 角度。`repr(transparent)` ⇒ 与裸 `u16` 同布局。
+///
+/// ⚠️ **派生的 `Ord`/`PartialOrd` 是 raw 上的线性序，不是环形序**（C20②）：`Angle(65535)`
+/// 与 `Angle(0)` 线性上最远、环上只差 1 BAM。`a < b` 只能用来做"确定性排序/去重"这类
+/// **需要一个全序但不关心它的几何意义**的事；表达"更接近某个方向"必须走差值
+/// （`a.sub(b)` 后判 `raw() <= Angle::HALF.raw()` 之类），别拿 `<` 硬套。
 #[repr(transparent)]
 #[derive(
     Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, crate::checksum::Checksum,
@@ -13,6 +18,11 @@ impl Angle {
     pub const QUARTER: Angle = Angle(16384); // π/2
     pub const HALF: Angle = Angle(32768); // π
     pub const THREE_QUARTER: Angle = Angle(49152); // 3π/2
+
+    /// 一整圈的 BAM 计数（**不是** `Angle` 值——整圈回绕到 `ZERO`，`Angle` 表示不了它）。
+    /// 断层线以上做 BAM↔弧度/角度换算要除以它（`Fx::ONE` 有对称物，此前 `Angle` 没有，
+    /// 于是外接层只能硬编 `65536`，C20①）。
+    pub const FULL_TURN: u32 = 65536;
 
     /// 回绕加。
     #[inline]

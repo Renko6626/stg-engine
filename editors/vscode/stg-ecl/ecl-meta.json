@@ -65,5 +65,19 @@
     {"name": "sh_task", "signature": "sh_task(id: int, sub: sub|none)", "ret": null, "doc": "给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹", "params": [{"name": "id", "ty": "int"}, {"name": "sub", "ty": "sub|none"}]},
     {"name": "sh_req", "signature": "sh_req(id: int, req_id: int)", "ret": null, "doc": "设开火时顺带发的通道 B 请求 id(音效等);0 = 不发", "params": [{"name": "id", "ty": "int"}, {"name": "req_id", "ty": "int"}]},
     {"name": "sh_fire", "signature": "sh_fire(id: int)", "ret": null, "doc": "用发射器槽 id 的参数开火;无返回值;池满走 P4-a 计数", "params": [{"name": "id", "ty": "int"}]}
+  ],
+  "engine_vars": [
+    {"name": "frame", "ty": "int", "doc": "当前世界帧号"},
+    {"name": "player_x", "ty": "fx", "doc": "玩家 0 的 x 坐标"},
+    {"name": "player_y", "ty": "fx", "doc": "玩家 0 的 y 坐标"},
+    {"name": "self_x", "ty": "fx", "doc": "任务 owner 的 x——敌→敌池坐标，弹→弹池坐标，关卡(STAGE)→0"},
+    {"name": "self_y", "ty": "fx", "doc": "任务 owner 的 y——敌→敌池坐标，弹→弹池坐标，关卡(STAGE)→0"},
+    {"name": "self_hp", "ty": "int", "doc": "owner 当前血量——仅敌(ENEMY)有意义，其余 owner 种类恒 0"},
+    {"name": "self_hp_max", "ty": "int", "doc": "owner 上限血量——仅敌(ENEMY)有意义，其余 owner 种类恒 0"},
+    {"name": "self_age", "ty": "int", "doc": "**任务**(不是 owner 实体)出生以来的帧数，对全部 owner 种类(含关卡)均有意义"},
+    {"name": "self_vx", "ty": "fx", "doc": "owner 的笛卡尔速度 x 分量(px/帧)——敌→敌池，弹→弹池，其余 owner 恒 0"},
+    {"name": "self_vy", "ty": "fx", "doc": "owner 的笛卡尔速度 y 分量(px/帧)——敌→敌池，弹→弹池，其余 owner 恒 0"},
+    {"name": "self_speed", "ty": "fx", "doc": "owner 的速率(作者视图，与 $self_vx/$self_vy 恒同步)"},
+    {"name": "self_angle", "ty": "angle", "doc": "owner 的朝向(作者视图，BAM)。**类型是 angle 不是 fx**——能直接喂 move_angle/fire，但与 fx 之间没有隐式转换；近乎静止时不更新(回填有速度下限)，零速下读到的是最后一次有效朝向"}
   ]
 }

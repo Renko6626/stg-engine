@@ -337,6 +337,24 @@ impl WorldTables {
         {
             return false;
         }
+        // **每张掉落表的条目须按 `ty` 严格升序**（D11，2026-09-03 落地）。
+        //
+        // 为什么这是格式硬契约而不只是洁癖：掉落早已从"死时查表逐条撒"迁成"敌身上按类型
+        // 计数、死时按**类型升序**撒"（`world::settle::spill_drops`），条目书写序在运行期
+        // 被 `drop_counts` 的展开彻底抹掉——集合相同，但**世界 RNG 的抽取顺序**会随书写序
+        // 改变（每颗掉落的 `(vx, vy)` 都抽 RNG）。于是一张非升序的内容包表会**静默**产出
+        // 另一条世界线：三平台仍然一致，所以金向量闸门照绿（见 CLAUDE.md「金向量闸门的
+        // 能力边界」）。升序即"书写序 == 撒出序"，把这条巧合升级成可校验的契约。
+        //
+        // 严格升序顺带禁掉同类型重复条目（`[(POWER,1),(POWER,2)]`）——它们本来就会被
+        // `drop_counts` 累加成一条，写两行只会让作者以为能控制顺序。
+        if !self
+            .drop_tables
+            .iter()
+            .all(|t| t.windows(2).all(|w| w[0].0 < w[1].0))
+        {
+            return false;
+        }
         // join 校验（防 FM1）：每个 ② 表符号 id 必须是 appearances 的合法行。**② 段自
         // 颜色轴刀（2026-07-26）起为空**（弹型名归内容包），故本循环当前不执行；机制保留
         // ——② 段将来重新长出**可加载表行**的符号时自动生效，届时按 tag 分流。
@@ -779,6 +797,40 @@ mod tests {
         let (cb, okb) = drop_counts(&TABLES_V0, bad);
         assert!(!okb, "越界表号必须报 false");
         assert_eq!(cb, [0u8; crate::items::ITEM_TYPE_COUNT]);
+    }
+
+    /// D11：掉落表条目须按 `ty` **严格升序**——非升序 / 重复类型各一条判别腿。
+    ///
+    /// **为什么要判别式而不是"能过就行"**：条目序在运行期被 `drop_counts` 抹掉，集合相同、
+    /// 只有世界 RNG 的抽取顺序变——这是三平台**一致地错**的形态，金向量闸门抓不到。
+    ///
+    /// **判别力**：把 `validate` 的判据从 `<`（严格升序）放松成 `<=` ⇒ 第二条（重复类型）
+    /// 转绿即红；把整条校验删掉 ⇒ 两条都红；只测降序而不测重复 ⇒ `<=` 那种写法逃掉。
+    /// 第三条正例押住"内建表本来就满足"这个前提（它是本条不需要重烘焙 `tables_v0.bin`
+    /// 的全部理由）。
+    #[test]
+    fn validate_rejects_drop_table_not_strictly_ascending() {
+        use crate::items::{ITEM_POINT, ITEM_POWER};
+
+        let with_drops = |rows: Vec<(u8, u8)>| {
+            let mut t = build_tables_v0();
+            t.drop_tables = Box::new([Box::new([]) as DropTable, rows.into_boxed_slice()]);
+            t
+        };
+
+        // ① 降序：撒出去仍是 POWER 在前，但作者以为是 POINT 在前 ⇒ RNG 消耗序与预期不符
+        assert!(
+            !with_drops(vec![(ITEM_POINT, 1), (ITEM_POWER, 2)]).validate(),
+            "掉落表条目降序必须被拒"
+        );
+        // ② 同类型重复：会被 drop_counts 累加成一条，写两行纯属误解
+        assert!(
+            !with_drops(vec![(ITEM_POWER, 1), (ITEM_POWER, 2)]).validate(),
+            "同类型重复条目必须被拒（严格升序，不是非降序）"
+        );
+        // ③ 正例 + 内建表：升序照过，且 v0 内建表**本来就满足**（故不需要重烘焙）
+        assert!(with_drops(vec![(ITEM_POWER, 2), (ITEM_POINT, 1)]).validate());
+        assert!(build_tables_v0().validate(), "内建 v0 表须满足新契约");
     }
 
     /// 判别腿：interval=0 / radius 超上限 / option 号越界的坏表各自 `validate() == false`。

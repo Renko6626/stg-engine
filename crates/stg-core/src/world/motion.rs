@@ -57,6 +57,14 @@ impl WorldBody {
         let vx = self.bullets.vx[i];
         let vy = self.bullets.vy[i];
         let sp = Fx::from_raw(isqrt(len_sq(vx, vy) as u64) as i32);
+        // C6/C20③：`isqrt` 返 u64、这里窄化成 i32 塞进 `Fx`。数学上 `|v|` 逼近 `Fx` 上限
+        // （速度分量 ≥ ~23000 px/帧）时可回绕成**负 speed**——正常速度不可达，且当帧就被越界
+        // 回收兜底，故属"引擎自身 bug"而非调用方违约：按 P4-c 用 debug 帧内断言接，release
+        // 不检查（`Fx::mul`/`div` 的同款窄化早有 debug_assert，此前唯独这两处裸奔）。
+        debug_assert!(
+            sp.raw() >= 0,
+            "backfill: isqrt 窄化回绕成负 speed（|v| 越界，vx={vx:?} vy={vy:?}）"
+        );
         self.bullets.speed[i] = sp;
         if sp.raw() >= BACKFILL_MIN_SPEED.raw() {
             self.bullets.angle[i] = atan2(vy, vx);
@@ -80,6 +88,14 @@ impl WorldBody {
         let vx = self.enemies.vx[i];
         let vy = self.enemies.vy[i];
         let sp = Fx::from_raw(isqrt(len_sq(vx, vy) as u64) as i32);
+        // C6/C20③：`isqrt` 返 u64、这里窄化成 i32 塞进 `Fx`。数学上 `|v|` 逼近 `Fx` 上限
+        // （速度分量 ≥ ~23000 px/帧）时可回绕成**负 speed**——正常速度不可达，且当帧就被越界
+        // 回收兜底，故属"引擎自身 bug"而非调用方违约：按 P4-c 用 debug 帧内断言接，release
+        // 不检查（`Fx::mul`/`div` 的同款窄化早有 debug_assert，此前唯独这两处裸奔）。
+        debug_assert!(
+            sp.raw() >= 0,
+            "backfill: isqrt 窄化回绕成负 speed（|v| 越界，vx={vx:?} vy={vy:?}）"
+        );
         self.enemies.speed[i] = sp;
         if sp.raw() >= BACKFILL_MIN_SPEED.raw() {
             self.enemies.angle[i] = atan2(vy, vx);

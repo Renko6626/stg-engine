@@ -64,9 +64,8 @@ headless 高速模拟。核心性质是**确定性**——同一份 `(初始状�
 - **P6** 全量校验：住在 World 里的字段就参与校验和，无例外（含 `facing` 等"纯表现"字段）。
   唯一例外是三条纯输出缓冲（`reqs`/`hits`/`frame_events`）+ debug 的 `phase_guard`，每个 skip
   必须在 derive 属性里给理由字符串。
-  > **名字漂移警告**：设计文档叫 `frame_events`，**代码里的字段是 `events`**（`hits`/`reqs`
-  > 两边一致；`reqs` 已落地——通道 B 刀，2026-07-23，出口 `take_requests()`）。拿设计去
-  > grep `frame_events` 在代码里搜不到。见 `docs/follow-ups.md`。
+  > **三条缓冲的名字设计与代码一致**（`frame_events`/`hits`/`reqs`）——`frame_events` 曾在
+  > 代码里叫 `events`，拿设计去 grep 搜不到，2026-09-03 的技术债刀已把字段改回同名（D2 销）。
 
 ## 确定性契约要点（细节见 D1/D11/§2.1）
 

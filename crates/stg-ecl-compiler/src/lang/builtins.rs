@@ -824,27 +824,190 @@ pub struct EngVarInfo {
     pub ty: Ty,
 }
 
+/// 一个 `$` 引擎变量的**全部**元数据：枚举值 + 脚本里写的名字 + 类型 + syscall 号 + 一句 doc。
+///
+/// **为什么要有名字和 doc**（D18 已还，2026-09-03）：此前名字只散在
+/// `lang::parse::resolve_engine_var` 的 `match` 里、doc 只存在于手写的手册表格里，于是
+/// `gen-ecl-meta` **导不出引擎变量**——编辑器对 `$` 只有一条通配高亮正则：打 `$` 没有补全、
+/// 悬停没有 hover、写错名字（`$self_vel`）编辑器不吭声，要到 `check` 才报错；手册那张表
+/// 也不受生成块的漂移保护（加了变量却忘改表，没有任何东西会红）。
+#[derive(Debug, Clone, Copy)]
+pub struct EngVarMeta {
+    pub ev: EngVar,
+    /// 脚本里 `$` 之后的名字（不含 `$`）。
+    pub name: &'static str,
+    pub ty: Ty,
+    pub syscall: u16,
+    pub doc: &'static str,
+}
+
+/// `$` 引擎变量全表——**名字/类型/号/doc 的唯一真相源**。
+///
+/// 三个消费者：`lang::parse::resolve_engine_var`（名字→枚举）、[`engine_var_info`]
+/// （枚举→号+型）、`stg-harness gen-ecl-meta`（导出给编辑器与手册生成段）。
+/// 加一个引擎变量 = 在这里加一行 + 在 [`EngVar`] 加一个变体（`engine_var_info` 的穷尽性
+/// 由一条测试押着，漏了会红）。
+pub const ENGINE_VARS: &[EngVarMeta] = &[
+    EngVarMeta {
+        ev: EngVar::Frame,
+        name: "frame",
+        ty: Int,
+        syscall: syscall::SYS_FRAME,
+        doc: "当前世界帧号",
+    },
+    EngVarMeta {
+        ev: EngVar::PlayerX,
+        name: "player_x",
+        ty: Fx,
+        syscall: syscall::SYS_PLAYER_X,
+        doc: "玩家 0 的 x 坐标",
+    },
+    EngVarMeta {
+        ev: EngVar::PlayerY,
+        name: "player_y",
+        ty: Fx,
+        syscall: syscall::SYS_PLAYER_Y,
+        doc: "玩家 0 的 y 坐标",
+    },
+    EngVarMeta {
+        ev: EngVar::SelfX,
+        name: "self_x",
+        ty: Fx,
+        syscall: syscall::SYS_SELF_X,
+        doc: "任务 owner 的 x——敌→敌池坐标，弹→弹池坐标，关卡(STAGE)→0",
+    },
+    EngVarMeta {
+        ev: EngVar::SelfY,
+        name: "self_y",
+        ty: Fx,
+        syscall: syscall::SYS_SELF_Y,
+        doc: "任务 owner 的 y——敌→敌池坐标，弹→弹池坐标，关卡(STAGE)→0",
+    },
+    EngVarMeta {
+        ev: EngVar::SelfHp,
+        name: "self_hp",
+        ty: Int,
+        syscall: syscall::SYS_SELF_HP,
+        doc: "owner 当前血量——仅敌(ENEMY)有意义，其余 owner 种类恒 0",
+    },
+    EngVarMeta {
+        ev: EngVar::SelfHpMax,
+        name: "self_hp_max",
+        ty: Int,
+        syscall: syscall::SYS_SELF_HP_MAX,
+        doc: "owner 上限血量——仅敌(ENEMY)有意义，其余 owner 种类恒 0",
+    },
+    EngVarMeta {
+        ev: EngVar::SelfAge,
+        name: "self_age",
+        ty: Int,
+        syscall: syscall::SYS_SELF_AGE,
+        doc: "**任务**(不是 owner 实体)出生以来的帧数，对全部 owner 种类(含关卡)均有意义",
+    },
+    EngVarMeta {
+        ev: EngVar::SelfVx,
+        name: "self_vx",
+        ty: Fx,
+        syscall: syscall::SYS_SELF_VX,
+        doc: "owner 的笛卡尔速度 x 分量(px/帧)——敌→敌池，弹→弹池，其余 owner 恒 0",
+    },
+    EngVarMeta {
+        ev: EngVar::SelfVy,
+        name: "self_vy",
+        ty: Fx,
+        syscall: syscall::SYS_SELF_VY,
+        doc: "owner 的笛卡尔速度 y 分量(px/帧)——敌→敌池，弹→弹池，其余 owner 恒 0",
+    },
+    EngVarMeta {
+        ev: EngVar::SelfSpeed,
+        name: "self_speed",
+        ty: Fx,
+        syscall: syscall::SYS_SELF_SPEED,
+        doc: "owner 的速率(作者视图，与 $self_vx/$self_vy 恒同步)",
+    },
+    EngVarMeta {
+        ev: EngVar::SelfAngle,
+        name: "self_angle",
+        ty: Angle,
+        syscall: syscall::SYS_SELF_ANGLE,
+        doc: "owner 的朝向(作者视图，BAM)。**类型是 angle 不是 fx**——能直接喂 move_angle/fire，但与 fx 之间没有隐式转换；近乎静止时不更新(回填有速度下限)，零速下读到的是最后一次有效朝向",
+    },
+];
+
+/// 名字（不含 `$`）→ 元数据。`lang::parse` 的白名单判定走这条。
+pub fn engine_var_by_name(name: &str) -> Option<&'static EngVarMeta> {
+    ENGINE_VARS.iter().find(|m| m.name == name)
+}
+
 pub fn engine_var_info(ev: EngVar) -> EngVarInfo {
-    let (syscall, ty) = match ev {
-        EngVar::Frame => (syscall::SYS_FRAME, Int),
-        EngVar::PlayerX => (syscall::SYS_PLAYER_X, Fx),
-        EngVar::PlayerY => (syscall::SYS_PLAYER_Y, Fx),
-        EngVar::SelfX => (syscall::SYS_SELF_X, Fx),
-        EngVar::SelfY => (syscall::SYS_SELF_Y, Fx),
-        EngVar::SelfHp => (syscall::SYS_SELF_HP, Int),
-        EngVar::SelfHpMax => (syscall::SYS_SELF_HP_MAX, Int),
-        EngVar::SelfAge => (syscall::SYS_SELF_AGE, Int),
-        EngVar::SelfVx => (syscall::SYS_SELF_VX, Fx),
-        EngVar::SelfVy => (syscall::SYS_SELF_VY, Fx),
-        EngVar::SelfSpeed => (syscall::SYS_SELF_SPEED, Fx),
-        EngVar::SelfAngle => (syscall::SYS_SELF_ANGLE, Angle),
-    };
-    EngVarInfo { syscall, ty }
+    // 穷尽 `match` 换成查表：表是唯一真相源（D18）。表与枚举的**双向覆盖**由
+    // `engine_var_table_covers_every_variant` 押运，故这里的 `expect` 不可达。
+    let m = ENGINE_VARS
+        .iter()
+        .find(|m| m.ev == ev)
+        .expect("ENGINE_VARS 漏了一个 EngVar 变体——见 engine_var_table_covers_every_variant");
+    EngVarInfo {
+        syscall: m.syscall,
+        ty: m.ty,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D18：`ENGINE_VARS` 覆盖 `EngVar` 的**每一个**变体。
+    ///
+    /// **判别力来自那个穷尽 `match`**：给 `EngVar` 加一个变体而忘了往表里加行，本测试
+    /// **编译不过**（不是运行时失败），逼作者回到这里——切片/数组式的"列举一遍"抓不住
+    /// 这种漏，因为漏掉的那个从来不会被列进去。运行期那半边再押住反向（表里的每行都能
+    /// 按名字查回自己，且名字互异）。
+    #[test]
+    fn engine_var_table_covers_every_variant() {
+        fn covered(ev: EngVar) {
+            // 这个 match 只为触发穷尽性检查，不产出任何值
+            match ev {
+                EngVar::Frame
+                | EngVar::PlayerX
+                | EngVar::PlayerY
+                | EngVar::SelfX
+                | EngVar::SelfY
+                | EngVar::SelfHp
+                | EngVar::SelfHpMax
+                | EngVar::SelfAge
+                | EngVar::SelfVx
+                | EngVar::SelfVy
+                | EngVar::SelfSpeed
+                | EngVar::SelfAngle => {}
+            }
+            assert!(
+                ENGINE_VARS.iter().any(|m| m.ev == ev),
+                "{ev:?} 不在 ENGINE_VARS 里——engine_var_info 会 panic"
+            );
+        }
+        for m in ENGINE_VARS {
+            covered(m.ev);
+            // 名字能查回自己（`resolve_engine_var` 走的正是这条路）
+            let back = engine_var_by_name(m.name).expect("表里的名字必须能查回");
+            assert_eq!(back.ev, m.ev, "名字 {} 查回了别的变体", m.name);
+            // 查表结果与 `engine_var_info` 一致（两个读口不得分家）
+            let info = engine_var_info(m.ev);
+            assert_eq!((info.syscall, info.ty), (m.syscall, m.ty), "{}", m.name);
+            assert!(
+                !m.doc.is_empty(),
+                "{} 缺 doc——编辑器 hover 会是空的",
+                m.name
+            );
+        }
+        // 名字互异（重名会让 `engine_var_by_name` 静默取第一条）
+        let mut names: Vec<&str> = ENGINE_VARS.iter().map(|m| m.name).collect();
+        names.sort_unstable();
+        let n = names.len();
+        names.dedup();
+        assert_eq!(names.len(), n, "ENGINE_VARS 有重名");
+        // 不认识的名字不得被放行（`$self_vel` 这类笔误）
+        assert!(engine_var_by_name("self_vel").is_none());
+    }
 
     /// **`is_op` 旗标必须与它指向的东西一致**——`is_op=true` 的 `syscall` 字段装的是 VM
     /// op 码、`is_op=false` 装的是 syscall 号，两个号空间**互不相干**，标错就发错指令。

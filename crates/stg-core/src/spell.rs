@@ -155,7 +155,7 @@ mod tests {
     }
 
     fn last_event(w: &crate::step::World) -> Event {
-        w.body.events[(w.body.events_len - 1) as usize]
+        w.body.frame_events[(w.body.frame_events_len - 1) as usize]
     }
 
     #[test]
@@ -545,8 +545,8 @@ mod tests {
             w.body
                 .spell_begin_internal(0, boss, 42, 100, 1000, SPELL_SURVIVAL, 300)
         );
-        assert_eq!(w.body.events_len, 1);
-        let ev = w.body.events[0];
+        assert_eq!(w.body.frame_events_len, 1);
+        let ev = w.body.frame_events[0];
         assert_eq!(ev.kind, EVT_SPELL_DECLARED);
         assert_eq!(ev.a_index, boss.index);
         assert_eq!(ev.a_gen, boss.generation);

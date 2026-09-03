@@ -110,6 +110,11 @@ pub const ENEMY_OOB_MARGIN: i32 = 256;
 pub(crate) const POC_LINE_Y: i32 = 128; // 回收线（PoC）：ALIVE 自机 y 低于此线 → 全场道具磁吸
 
 // ── 相位索引（A4 v2，0-based；PhaseGuard 押运）───────────────────────────
+/// 相位数。**debug 专用**：唯一使用者是 `phase_enter` 里那个 `#[cfg(debug_assertions)]` 块
+/// （P2：debug 押运 §3.5 时序，release 不检查），故条件编译跟着走——否则 release 下它真的
+/// 没有任何使用者，`cargo clippy --release` 报一条 `dead_code`（follow-ups **F7**/**C3**）。
+/// 取 `#[cfg]` 而非 `#[allow(dead_code)]`：后者把"release 里没人用"这个事实盖住了。
+#[cfg(debug_assertions)]
 pub(crate) const NUM_PHASES: u8 = 11;
 pub(crate) const PH_BEGIN: u8 = 0;
 pub(crate) const PH_DECODE: u8 = 1;
@@ -174,9 +179,9 @@ pub struct WorldBody {
     #[checksum(skip = "纯输出缓冲，len 随 hits 一并 skip（A5）")]
     pub(crate) hits_len: u16,
     #[checksum(skip = "纯输出缓冲，相位 8/表现层只读，重演确定性再生（A5）")]
-    pub(crate) events: [Event; EVENTS_CAP],
+    pub(crate) frame_events: [Event; EVENTS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 events 一并 skip（A5）")]
-    pub(crate) events_len: u16,
+    pub(crate) frame_events_len: u16,
     /// 符卡计器槽（每 boss 一个；spec 2026-07-24）。生而封口，读经 `view().spells()`。
     pub(crate) spells: [crate::spell::SpellSlot; crate::boss::MAX_BOSSES],
     /// 每槽持久单调代际计数器（ABA 修复，复审 Task 2）：`spell_begin_internal` 成功时
@@ -982,9 +987,9 @@ impl WorldBody {
     /// 产出一条世界大事记（P4-a：满则丢弃 + 计数，不 panic）。
     /// 生产端：settle 趟二（敌人致死/自机中弹→窗口）+ update_players 的 commit_death（自机死亡结算）。
     pub(crate) fn push_event(&mut self, ev: Event) {
-        if (self.events_len as usize) < EVENTS_CAP {
-            self.events[self.events_len as usize] = ev;
-            self.events_len += 1;
+        if (self.frame_events_len as usize) < EVENTS_CAP {
+            self.frame_events[self.frame_events_len as usize] = ev;
+            self.frame_events_len += 1;
         } else {
             self.diag.events_overflow = self.diag.events_overflow.wrapping_add(1);
         }
@@ -1058,18 +1063,18 @@ impl WorldBody {
         self.frame
     }
 
-    /// 世界大事记出口(A9 契约名 `frame_events`;代码字段名 `events` 的漂移见 follow-ups D2)。
+    /// 世界大事记出口(A9 契约名 `frame_events`,代码字段同名——D2 漂移已销，2026-09-03)。
     /// 幂等只读,按 `events_len` 切片——数组本体从不清零,切片界即真相,消费者永不见陈旧尾槽。
     /// 缓冲下帧 `begin` 清 len,与 `take_requests`/`hits` 同生命周期(A5)。
     pub fn frame_events(&self) -> &[Event] {
-        &self.events[..self.events_len as usize]
+        &self.frame_events[..self.frame_events_len as usize]
     }
 
     // ── 相位函数（pub(crate)，每个先 phase_enter 保序）────────────────────
     pub(crate) fn begin(&mut self) {
         self.phase_enter(PH_BEGIN);
         self.hits_len = 0;
-        self.events_len = 0;
+        self.frame_events_len = 0;
         self.reqs_len = 0;
     }
     pub(crate) fn advance(&mut self) {
@@ -1369,7 +1374,7 @@ mod tests {
         // begin 清空
         w.body.begin();
         assert_eq!(w.body.hits_len, 0);
-        assert_eq!(w.body.events_len, 0);
+        assert_eq!(w.body.frame_events_len, 0);
     }
 
     #[test]
@@ -1384,8 +1389,8 @@ mod tests {
             y: Fx::from_int(384),
             data: [2, 0],
         });
-        assert_eq!(w.body.events_len, 1);
-        assert_eq!(w.body.events[0].kind, EVT_PLAYER_DIED);
+        assert_eq!(w.body.frame_events_len, 1);
+        assert_eq!(w.body.frame_events[0].kind, EVT_PLAYER_DIED);
     }
 
     /// P4-a：`push_event` 溢出 → 停收 + 计数，不 panic（`push_hit` 的同构缺口，B2）。
@@ -1393,7 +1398,7 @@ mod tests {
     fn events_push_overflow_counts_and_drops() {
         use crate::events::{EVENTS_CAP, Event};
         let mut w = crate::step::World::new(1);
-        w.body.events_len = EVENTS_CAP as u16;
+        w.body.frame_events_len = EVENTS_CAP as u16;
         w.body.push_event(Event {
             kind: crate::events::EVT_ENEMY_DIED,
             a_index: 0,
@@ -1402,7 +1407,7 @@ mod tests {
             y: Fx::ZERO,
             data: [0, 0],
         });
-        assert_eq!(w.body.events_len, EVENTS_CAP as u16, "满后未增");
+        assert_eq!(w.body.frame_events_len, EVENTS_CAP as u16, "满后未增");
         assert_eq!(w.body.diag.events_overflow, 1, "须计一次溢出");
     }
 
@@ -1826,6 +1831,136 @@ mod tests {
             w.body.rand_range(1000),
             reference.rand_range(1000),
             "同流续抽"
+        );
+    }
+
+    /// C9：**负 `speed` = 倒飞**（方向翻 180°），三个入口口径一致——本条钉的是接口契约的
+    /// 一个无声角落。
+    ///
+    /// 不是 bug（东方语义里负速有用），但此前**全链无测试**：若哪天有人在 `polar_to_vec`
+    /// 或某个入口加一句"负速钳零"，全套测试仍绿、行为已变。
+    ///
+    /// **判别力**：断言的是**逐位相反数**（`v(-s, θ) == -v(s, θ)`），不是"vx < 0" 这种
+    /// 方向性弱断言——钳零那种改法会让 vx 变成 0、两侧都不等；而 `speed.abs()` 那种改法
+    /// 会让两侧相等（同号），同样红。批量腿另外押住 `speed_step` 负步**跨零**：五层从
+    /// +2.0 每层 −1.0，第三层恰好 0、第四五层为负，覆盖"跨零那一步没被特判掉"。
+    #[test]
+    fn negative_speed_means_reversed_direction_on_every_entry() {
+        use crate::math::geom::polar_to_vec;
+
+        // ① 数学核：负速与正速逐位互为相反数（三个入口最终都落到这里）
+        for ang in [Angle::ZERO, Angle(9000), Angle::QUARTER, Angle(50000)] {
+            let (px, py) = polar_to_vec(Fx::from_int(3), ang);
+            let (nx, ny) = polar_to_vec(Fx::from_int(-3), ang);
+            assert_eq!(
+                nx.raw(),
+                -px.raw(),
+                "负速 vx 必须是正速的逐位相反数 @{ang:?}"
+            );
+            assert_eq!(
+                ny.raw(),
+                -py.raw(),
+                "负速 vy 必须是正速的逐位相反数 @{ang:?}"
+            );
+        }
+
+        // ② 单发入口：直填负 speed，refresh 后 v 与正速反向
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 0, 0);
+        let i = w.body.bullets.get(h).unwrap();
+        w.body.bullets.angle[i] = Angle::ZERO; // 朝 +x
+        w.body.bullets.speed[i] = Fx::from_int(-3);
+        w.body.refresh_vel_from_polar(i);
+        assert_eq!(
+            w.body.bullets.vx[i],
+            Fx::from_int(-3),
+            "朝 +x 的负速弹必须往 −x 飞（倒飞），不是停住也不是取绝对值"
+        );
+
+        // ③ 批量入口：speed_step 负步跨零（+2/+1/0/−1/−2 五层，同一角度）
+        let mut w2 = crate::step::World::new(1);
+        let n = w2.body.create_bullets_batch(
+            min_bullet_init(),
+            &[],
+            1,
+            Angle::ZERO,
+            0,
+            5,
+            Fx::from_int(2),
+            Fx::from_int(-1),
+        );
+        assert_eq!(n, 5);
+        let vxs: Vec<i32> = w2
+            .body
+            .bullets
+            .iter_alive()
+            .map(|k| w2.body.bullets.vx[k].raw())
+            .collect();
+        let one = Fx::from_int(1).raw();
+        assert_eq!(
+            vxs,
+            vec![2 * one, one, 0, -one, -2 * one],
+            "负步跨零必须一路穿过去：第三层恰 0、后两层反向，没有任何一层被钳住"
+        );
+    }
+
+    /// B9：**`contract_viol` 跨类别各计一次**（半径越界 +1、坏 xform +1，同一次调用共 +2）。
+    ///
+    /// `clamp_radius` 的注释里那句"只计一次"说的是**同一类别内多个半径字段合并算一次**，
+    /// 从没覆盖"跨类别是否各自计数"这条轴——现状（各计一次）站得住，但此前无测试锁死：
+    /// 下次改动若悄悄把它并成"整次调用最多计 1"，没有任何东西会红，而 `diag` 的计数值
+    /// **进校验和**（P6），那是一次静默的世界线变更。
+    ///
+    /// 第二条腿顺带钉住**两条路径的验证序相反**这件既定事实（`world.rs` 的批量入口注释
+    /// 明写"故意不同于单发 API，勿修正成对齐"）：`create_bullets_batch` 是 xform 先拒、
+    /// 短路返回，同样一对坏参数只 +1。
+    ///
+    /// **判别力**：两条断言的期望值不同（2 vs 1）。若把跨类别改成"最多计 1"，第一条红；
+    /// 若有人"顺手对齐"两条路径的验证序，第二条红。
+    #[test]
+    fn contract_viol_counts_once_per_category_within_one_call() {
+        // 坏 xform：ARITY>0 的 op 的 easing id 越界（args[1] 高 16 位 >= 8）
+        let bad_xform = [crate::xform::XformSlot {
+            wait: 0,
+            op: crate::xform::OP_STEP_SPEED,
+            _pad: 0,
+            args: [Fx::from_int(1).raw(), 2 | (8 << 16)],
+        }];
+
+        // ① 单发入口（验证序 radius → xform）：两类各计一次 ⇒ +2
+        let mut w = crate::step::World::new(1);
+        let mut init = min_bullet_init();
+        init.radius = Fx::from_int(-1); // 负半径 → 钳 0 + 计一次
+        let before = w.body.diag.contract_viol;
+        let h = w.body.create_bullet_with_xform(init, &bad_xform);
+        assert_eq!(h, crate::bullets::BulletHandle::NULL, "坏 xform 整体拒");
+        assert_eq!(
+            w.body.diag.contract_viol - before,
+            2,
+            "半径越界与坏 xform 是两个类别，同一次调用各计一次"
+        );
+
+        // ② 批量入口（验证序 xform → radius，xform 拒先短路）：同一对坏参数只 +1
+        let mut w2 = crate::step::World::new(1);
+        let mut init2 = min_bullet_init();
+        init2.radius = Fx::from_int(-1);
+        let before2 = w2.body.diag.contract_viol;
+        let n = w2.body.create_bullets_batch(
+            init2,
+            &bad_xform,
+            1,
+            crate::math::Angle::ZERO,
+            0,
+            1,
+            Fx::from_int(1),
+            Fx::ZERO,
+        );
+        assert_eq!(n, 0, "坏 xform 整体拒，实发 0");
+        assert_eq!(
+            w2.body.diag.contract_viol - before2,
+            1,
+            "批量入口的验证序是 xform 先拒、短路返回——半径那次根本没走到，故只 +1。\
+             这条不对称是既定语义（见 create_bullets_batch 的实现注释），不是待修的 bug"
         );
     }
 }

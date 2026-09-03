@@ -25,6 +25,14 @@ pub(crate) mod vm;
 
 pub use image::EclImage;
 
+/// Fault 码与其规范短名（F9）——`vm` 模块本身是 `pub(crate)`，这几件却是**断层线以上要用的
+/// 契约**（`stg-harness run` 把 fault 打给脚本作者看），故在这里单独开口。只出常量与名字表，
+/// 不出 `Exec`/`run_tasks` 那些派发内脏。
+pub use vm::{
+    FAULT_BAD_OP, FAULT_BUDGET, FAULT_CALL_DEPTH, FAULT_DIV_ZERO, FAULT_NAMES, FAULT_PC_OOB,
+    FAULT_STACK, FAULT_UNIMPLEMENTED,
+};
+
 /// VM fuzz 冒烟（§9 承诺的最小版，M1-T5）：确定性 PRNG 生成随机字节码，断言两件事——
 /// ① 任意垃圾码永不 panic（只许确定性 Fault）；② 剥去副作用 op（SYS/SPAWN）的垃圾码
 /// **无法越权触碰 WorldBody**（对照空镜像参考世界逐字段哈希全等——白名单沙箱的实证）。

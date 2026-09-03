@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 use stg_ecl_compiler::lang::ast::Ty;
-use stg_ecl_compiler::lang::builtins::{Builtin, ParamKind, all};
+use stg_ecl_compiler::lang::builtins::{Builtin, ENGINE_VARS, ParamKind, all};
 
 pub fn meta_path() -> std::path::PathBuf {
     // harness 的 CARGO_MANIFEST_DIR = crates/stg-harness
@@ -88,6 +88,17 @@ pub fn render_meta_json() -> String {
             if i + 1 == n { "" } else { "," }
         ));
     }
+    out.push_str("  ],\n  \"engine_vars\": [\n");
+    let m = ENGINE_VARS.len();
+    for (i, v) in ENGINE_VARS.iter().enumerate() {
+        out.push_str(&format!(
+            "    {{\"name\": \"{}\", \"ty\": \"{}\", \"doc\": \"{}\"}}{}\n",
+            esc(v.name),
+            ty_str(v.ty),
+            esc(v.doc),
+            if i + 1 == m { "" } else { "," }
+        ));
+    }
     out.push_str("  ]\n}\n");
     out
 }
@@ -102,8 +113,25 @@ pub fn render_doc_segment() -> String {
     out
 }
 
+/// `$` 引擎变量表的文档生成段（D18）——与 [`render_doc_segment`] 同源同纪律，只是读的是
+/// `ENGINE_VARS` 而非 `all()`。此前这张表在手册里是**手写**的，不受生成块的漂移保护。
+pub fn render_engvar_segment() -> String {
+    let mut out = String::from("\n| 名字 | 类型 | 含义 |\n|---|---|---|\n");
+    for v in ENGINE_VARS {
+        out.push_str(&format!(
+            "| `${}` | `{}` | {} |\n",
+            v.name,
+            ty_str(v.ty),
+            v.doc
+        ));
+    }
+    out
+}
+
 const DOC_BEGIN: &str = "<!-- gen:builtins:begin -->";
 const DOC_END: &str = "<!-- gen:builtins:end -->";
+const ENGVAR_BEGIN: &str = "<!-- gen:engvars:begin -->";
+const ENGVAR_END: &str = "<!-- gen:engvars:end -->";
 
 /// 手册正文目录（`docs/ecl-lang/`，按教学顺序编号的 8 篇）。
 pub fn doc_dir() -> std::path::PathBuf {
@@ -148,11 +176,21 @@ pub fn splice_doc() -> Result<(), String> {
     let (Some(b), Some(e)) = (s.find(DOC_BEGIN), s.find(DOC_END)) else {
         return Err("docs/ecl-lang/7-reference.md 缺生成段标记".into());
     };
-    let new = format!(
+    let s = format!(
         "{}\n{}{}",
         &s[..b + DOC_BEGIN.len()],
         render_doc_segment(),
         &s[e..]
+    );
+    // 第二个生成段：`$` 引擎变量表（D18）。同一份文件、同样的幂等替换纪律。
+    let (Some(b2), Some(e2)) = (s.find(ENGVAR_BEGIN), s.find(ENGVAR_END)) else {
+        return Err("docs/ecl-lang/7-reference.md 缺 gen:engvars 生成段标记".into());
+    };
+    let new = format!(
+        "{}{}{}",
+        &s[..b2 + ENGVAR_BEGIN.len()],
+        render_engvar_segment(),
+        &s[e2..]
     );
     std::fs::write(&p, new).map_err(|e| e.to_string())
 }
@@ -213,6 +251,22 @@ mod tests {
             s[b..e].trim_end(),
             format!("\n{}", render_doc_segment()).trim_end(),
             "跑 `cargo run -p stg-harness -- gen-ecl-meta` 再 commit(会同步刷新 7-reference.md 生成段)"
+        );
+    }
+
+    /// D18：`$` 引擎变量表的生成段防漂移（与上面 builtins 那条对称）。
+    ///
+    /// 此前这张表是**手写**的，加了引擎变量却忘了改表没有任何东西会红——敌人运动动词族刀
+    /// 把变量从 8 个加到 12 个时正是靠人肉记得改。现在它和 builtins 段一样受押。
+    #[test]
+    fn committed_engvar_segment_matches_generated() {
+        let s = std::fs::read_to_string(doc_path()).unwrap();
+        let b = s.find(ENGVAR_BEGIN).expect("缺 engvars begin 标记") + ENGVAR_BEGIN.len();
+        let e = s.find(ENGVAR_END).expect("缺 engvars end 标记");
+        assert_eq!(
+            s[b..e].trim_end(),
+            render_engvar_segment().trim_end(),
+            "跑 `cargo run -p stg-harness -- gen-ecl-meta` 再 commit"
         );
     }
 

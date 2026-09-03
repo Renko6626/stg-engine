@@ -272,7 +272,32 @@ impl<'p, 't> Checker<'p, 't> {
                 }
             }
             Stmt::Wait { frames, span } => match self.type_expr(frames, locals) {
-                Some(t) if t.ty == Ty::Int => Some(TypedStmt::Wait { frames: t }),
+                Some(t) if t.ty == Ty::Int => {
+                    // A10：**只挡编译期常量**的越界值。`wait` 的操作数在 VM 里取低 16 位，
+                    // 于是 `wait(65536)`（及一切 65536 的倍数）截断成 0——而 `wait(0)` 自
+                    // 2026-08-01 语义修正起是"当这句不存在"的真 no-op ⇒ `loop { wait(65536); }`
+                    // 变成烧穿指令预算被 `FAULT_BUDGET` 杀掉的死循环。运行期这么处置没毛病
+                    // （确定性的响亮失败，P4-c），但这个值**只要是编译期常量就一定是笔误**
+                    // ——没有脚本会真心想写 `wait(65536)` 或 `wait(-1)`。
+                    //
+                    // **运行期表达式照旧走截断语义、不加运行期检查**：那会落进断层线以下，
+                    // 而且 `wait(0)` 的 no-op 是刻意裁定的、不该在运行期被"救"。
+                    // `Err(_)` = 非编译期常量 ⇒ 静默放行，正是这条分工。
+                    if let Ok((_ty, v)) = crate::lang::const_eval::evaluate(frames, &self.consts)
+                        && !(0..=65535).contains(&v)
+                    {
+                        self.err(
+                            expr_span(frames).unwrap_or(*span),
+                            format!(
+                                "wait({v}) 越界——n 取低 16 位，合法范围 0..=65535。\
+                                 {v} 会被截断成 {}，而 wait(0) 是同帧继续的真 no-op，\
+                                 写在 loop 里就是烧穿指令预算的死循环。",
+                                v as u16
+                            ),
+                        );
+                    }
+                    Some(TypedStmt::Wait { frames: t })
+                }
                 Some(t) => {
                     self.push_type_mismatch(
                         expr_span(frames).unwrap_or(*span),

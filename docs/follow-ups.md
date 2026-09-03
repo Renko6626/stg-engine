@@ -67,6 +67,24 @@
 > `spill_drops` 的类型升序决定），而 `validate()` 不要求条目升序 ⇒ 非升序的内容包表会
 > **静默**改变 RNG 消耗顺序，无任何检查会红。
 
+> **技术债零风险批（2026-09-03）销账 17 条**，逐条在代码里核实过、金向量逐字节不变
+> （`17fe7e32…` 与 base 相同）：**A10**〔`wait` 常量越界编译期闸 + 两条判别式测试〕/
+> **B6**〔delay 门补 `accel≠0` 腿——原版对 speed 冻结无判别力〕/**B9**〔`contract_viol`
+> 跨类别各计一次 + 顺带钉住两条路径验证序相反〕/**B10**〔LOOP 回跳收缩 fired-region ⇒
+> walls 读 0 一帧，判别式测试 + `xform-ops.md` 语义句〕/**B27**〔`OP_SET_SHAPE` 近
+> `i32::MAX` 对称腿〕/**C3**+**F7**〔相位常量族按 `#[cfg(debug_assertions)]` 整体裁，
+> 复核发现是 5 条 warning 不是 1 条〕/**C6**+**C20③**〔两处 `isqrt` 窄化补 P4-c debug 护栏〕/
+> **C9**〔负 speed = 倒飞，三入口逐位相反数 + 批量负步跨零〕/**C20①②**〔`Angle::FULL_TURN`
+> + 派生 `Ord` 是线性序非环形序的警示〕/**C21**〔池布局账目实测重算 + **池尺寸哨兵**押运，
+> 弹池 625KB→433KB、敌池 `~94B`→105B〕/**C23**〔`SHOOTERS_PER_TASK` 进 ① 段注入〕/
+> **D2**〔`events` → `frame_events`，设计与代码同名〕/**D11**〔掉落表条目严格升序进
+> `validate`〕/**D18**〔`builtins::ENGINE_VARS` 成唯一真相源，`gen-ecl-meta` 加第三个
+> sink，手册那张表改成生成段，扩展补上 `$` 补全与 hover〕/**F9**〔`FAULT_NAMES` 进 core，
+> harness 不再抄第二份〕/**F10**〔`sh_task` 与 xformdef 差 1 帧并进 `4-bullets.md` 主干〕。
+>
+> **D19 的裁定已下**（人类拍板：**收窄成拒收**，不是钳位也不是只收 dur），但它带
+> `ENGINE_VER` bump + 金向量重出，**不属零风险批**，条目保留、见其正文。
+
 ---
 
 ## A. 有触发条件的（动到对应模块前先做）
@@ -149,21 +167,6 @@ boss 条/符卡行会残留上一次刷新的陈旧值而非归零；④ `hud.gd
 会带着旧世界坐标残留，直到自身计时器跑完才消失）。五条都不阻塞可玩性，**触发点 = 内容与
 美术期**顺手一并做。
 
-### A10. 常量 `wait(n)` 的越界值编译期挡一道（`wait` 语义修正刀留下的新陷阱，2026-08-01）
-
-`wait` 语义修正（`ENGINE_VER` 11→12）之后 **`wait(0)` 是同帧继续的真 no-op**，于是低 16 位
-截断制造了一个新的坏路径：`wait(65536)`（以及一切 65536 的倍数）截断成 0 ⇒
-`loop { wait(65536); }` 从旧语义下的"每 1 帧转一圈"变成**烧穿指令预算被 `FAULT_BUDGET`
-杀掉的死循环**。运行期行为本身没毛病（确定性的响亮失败，符合 P4-c，且比旧语义那种"悄悄
-等 1 帧"更好），文档也写清楚了；但这个值**只要是编译期常量就一定是作者笔误**——没有任何
-脚本会真心想写 `wait(65536)`。
-
-**建议**：`lang` 前端在常量折叠后，对字面量/`const` 折出的 `wait(n)` 校验 `0 <= n <= 65535`，
-越界报编译错（`wait(-1)` 同理——"等 65535 帧"几乎肯定也不是本意）。**只挡编译期常量**：
-运行期表达式（`wait(target - elapsed)`）照旧走截断语义、**不加运行期检查**——那会落进断层线
-以下，而且 `wait(0)` 的 no-op 语义本身是刻意裁定的，不该在运行期被"救"。**触发点 = 下次动
-`lang/typeck.rs` 或 `codegen.rs` 的常量折叠路径时**顺手做掉；单独开刀不值。
-
 ## B. 测试覆盖缺口
 
 ### B3. 多自机 graze 位隔离 —— 被 co-op 阻塞
@@ -177,11 +180,6 @@ M0-8 最终复审的分诊：比较两侧都是精确的 i64 Q32.32 同域整数
 补测试只是钉住 `<=`（含边界即撞）这个**约定**，而非防任何精度风险。列在此仅为存档；
 真要做也就是几行，但别把它当"缺口"焦虑。
 
-### B6. integrate delay 门测试未断言 speed 冻结（accel=0 无判别力）（D3 终审分诊）
-
-delay 门测试只覆盖了 POLAR 弹 `angle`/位置冻结，`accel=0` 时 `speed` 冻不冻结两条路都过——
-无判别力。下次动 `integrate` 时补一条 `accel != 0` 的腿，让 speed 冻结成为可判别断言。
-
 ### B7. 互斥 debug_assert 无 should_panic 覆盖（D3 终审分诊）
 
 模式位互斥的 debug 断言（若存在类似兜底）没有 `#[should_panic]` 测试触发；需 `pub(crate)`
@@ -192,19 +190,6 @@ delay 门测试只覆盖了 POLAR 弹 `angle`/位置冻结，`accel=0` 时 `spee
 
 实现用严格小于（`d2 < bd`）保证并列时取低索引（I4 口径），但没有"两个自机等距"的判别测试
 去区分 `<` 与 `<=`。被 co-op 阻塞（`players[1]` 目前恒 `LIFE_ABSENT`），与 B3 同期做。
-
-### B9. `contract_viol` 跨类别双计语义未钉（D4 终审分诊）
-
-同一次调用若同时踩中两类契约违规（例如半径越界 + 变换坏参数），当前实现会各计一次、共 +2。
-`clamp_radius` 注释里的"只计一次"约定明说的对象是"同一类别里多个半径字段合并算一次"，没有
-覆盖"跨类别是否各自计数"这条轴。现状（跨类别各计一次）站得住，但缺一条测试锁死——不锁的话
-下次改动可能悄悄把它并成"整次调用最多计 1"而没人发现是语义变化。**建议**：补一条构造出同一
-调用内两类违规同时触发的测试，断言 `contract_viol` 恰 +2。
-
-### B10. 金向量⑨/STEP/LOOP 的"fired-region × LOOP 回跳"角落语义缺测试与文档句（11b 终审分诊）
-
-LOOP 跳回后 `[0, xform_next)` 收缩：活跃 STEP 冻结至重武装、武装反弹弹该窗口 walls 读 0
-暂时失效——均确定性且属 spec 字面执行，但缺一条判别式测试与一句设计文档明写这条角落语义。
 
 ### B13. 道具近距磁吸 v0 的自机选择与优先裁决序偏离 spec —— 与 B3/B8 co-op 族同批（M0-12 终审分诊）
 
@@ -327,19 +312,6 @@ demo 局的图集贴图是否如预期摆放、HUD 排版是否重叠、boss 战
 **剩余**：② `visible_instances` 断言要改冒烟脚本后在有头环境重跑；③ 的可玩性部分需要
 真打一局到结算。两件仍共享同一次有头启动成本，凑一起做。
 
-### B27. `OP_SET_SHAPE` 缺近 `i32::MAX` 溢出判别式测试——与 `OP_SET_COLOR` 覆盖不对称（颜色轴刀 T7 复审修复轮遗留，2026-07-26）
-
-T7 复审修复轮把 `OP_SET_SHAPE`/`OP_SET_COLOR` 两臂的裸 `+` 都改成了 `wrapping_add`
-（`world/transform.rs`，见该刀"必修二"）——**实现本身对称**，两臂都不会在 `args[0]` 接近
-`i32::MAX` 时 panic。但补的判别式测试
-`partial_sprite_ops_wrap_instead_of_panicking_on_near_max_args` 只构造了 `OP_SET_COLOR`
-的近溢出槽，`OP_SET_SHAPE` 没有同款腿——如果将来有人把 `OP_SET_SHAPE` 的 `wrapping_add`
-误改回裸 `+`，现有测试套件抓不到，得等到某个真实脚本凑巧撞上大数值才会在别处炸出来。
-**修法**：照抄该测试的模式给 `OP_SET_SHAPE` 补一条对称腿（`args[0] = i32::MAX` 的
-`OP_SET_SHAPE` 槽，手算 `wrapping_add` 后的截断值，断言不 panic + 值落在预期位 + 序列不
-终止）。**触发点 = 下次改动 `world/transform.rs` 的 `fire_op` 或该文件近溢出测试组时**
-顺手补，不必单独开工。
-
 ### B28. 擦弹特效未接——事件化须先定聚合口径（命中事件刀记档，2026-07-27）
 
 自机弹命中已走 `EVT_SHOT_HIT_ENEMY`（逐命中发，见 `render-contract.md` §3.5），**擦弹刻意
@@ -363,12 +335,6 @@ T7 复审修复轮把 `OP_SET_SHAPE`/`OP_SET_COLOR` 两臂的裸 `+` 都改成�
 `pub(crate)` 是对的。但 `OOB_MARGIN` 只被 `cleanup.rs` 用。可沉为 `cleanup.rs` 私有，
 也可为「D7 场界几何三件套聚在一处」留着 —— **两个选择都站得住，别为它开会**。
 
-### C3. `NUM_PHASES` 在 release 构建触发 `dead_code`
-
-只在 `phase_enter` 的 `#[cfg(debug_assertions)]` 块里用。CI 的 clippy 跑 debug 故不报，
-但 `cargo build --release` 会。修法：`#[cfg_attr(not(debug_assertions), allow(dead_code))]`。
-**先于 M0-9 存在**，非拆分所致。
-
 ### C4. `push_hit` / `push_event` ~6 行结构重复
 
 两个缓冲、不同元素类型、不同 diag 计数器。两处调用点抽象属过早 —— 与 C1 同款判断。
@@ -378,12 +344,6 @@ T7 复审修复轮把 `OP_SET_SHAPE`/`OP_SET_COLOR` 两臂的裸 `+` 都改成�
 `field_life_one_lives_exactly_one_frame` / `field_life_n_survives_n_frames` 测的是
 「integrate 倒数 ↔ cleanup 回收」的跨相位时序，留在了既不拥有相位 5 也不拥有相位 9 的 `world.rs`。
 `step.rs` 有 step 级兜底，故低急。真要动就挪到 `cleanup.rs` 或 `step.rs`（后者拥有跨相位顺序）。
-
-### C6. `backfill_polar` 的 `isqrt(..) as i32` 理论回绕（D3 终审分诊）
-
-`|v|` 逼近 `Fx` 上限时 `isqrt(len_sq(vx,vy) as u64) as i32` 理论上可回绕为负 `speed`——
-确定性无损（跨平台仍逐位一致）、当帧越界回收兜底，纯理论风险。按 P4-c 对称性（引擎自身
-bug → debug 帧内断言）补一条 `debug_assert!(sp.raw() >= 0)` 之类的兜底。
 
 ### C7. `create_bullet_with_xform` 严格化两件（11b 终审分诊）
 
@@ -402,15 +362,6 @@ no-op/计数兜底），与 easing id 的 create 期拒收不对称——两条�
 （构造 `XformSlot`）+ `world/transform.rs`/`world/integrate.rs` 各一份 `fn xf_bullet`
 （挂变换序列造弹），三处复制。可归拢进 `world.rs` 的 `test_support`（`bullet_at` 已在
 那），非阻塞，两可。
-
-### C9. 负 speed 语义全链无测试钉（M0-14 终审分诊）
-
-`speed` 为负（作者直填，或 `speed_step` 为负跨零，或 `ADD_SPEED` 减过头）时
-`polar_to_vec` 方向翻转 180°——单发/批量/变换三入口行为一致且确定，但没有任何测试
-钉住这个语义。不是 bug（东方语义里"负速=倒飞"甚至有用），但它是接口契约的无声角落：
-若未来有人在 `polar_to_vec` 或某入口加"负速钳零"，全套测试仍绿、行为已变。补一条
-单测（负速直填 + 批量负步跨零各一断言）即可钉死，M1 ECL 暴露 `create_bullets_batch`
-给脚本作者前值得做。
 
 ### C10. homing 自机弹单刀设计注记（M0-17 grill 后置）
 
@@ -534,20 +485,6 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 少(四件)尚可承受,将来若长出更多装备维度(如子机类型/初始道具)时考虑 Dictionary 化。下次动
 壳时与①一并顺手打磨。
 
-### C20. 数学核小件三包（2026-07-23 系统审阅分诊）
-
-① `Angle` 缺 `FULL_TURN`/全圆 raw 具名常量——外接层做 BAM→弧度换算得硬编 65536（`Fx::ONE`
-有对称物，`Angle` 没有）；② `Angle` 派生的 `Ord`/`PartialOrd` 是线性序非环形序，现无用点，
-但谁用 `a < b` 表达"更接近"就踩坑（65535 与 0 线性远环上近）；③ `world/motion.rs` 的
-`isqrt(len_sq) as i32 → Fx` 窄化缺 debug 护栏（`Fx::mul`/`div` 同款坑都有 debug_assert，
-唯此处裸奔;正常速度不可达,速度分量 ≥~23000px/帧才触发）。三件都一行级，路过 math/motion 顺手。
-
-### C21. 池布局文档账目过期（2026-07-23 系统审阅分诊）
-
-`docs/pool-memory-layout.md` 弹池汇总行按 19 字段全 4B 估（~625KB），实际近半字段 u8/u16，
-精确 ≈433KB（虚高 ~30%；四热字段各 32KB 的 L1 论证不受影响）；`stg-world-design.md` D5
-"~64B/敌 16KB" 实为 ~74B/敌 ≈18.5KB（`enemy.rs` 模块注释已自行改口 ~70B）。重算续表即可。
-
 ### C22. `tables.rs::validate` 的 ② join 校验循环现空转、无测试覆盖（颜色轴刀 T4 清空 ② 段的残余，2026-07-26）
 
 `WorldTables::validate()` 里 `for c in crate::consts::TABLE_SYMBOLS { if (c.value as usize)
@@ -562,43 +499,7 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 复审者看到"零覆盖的校验逻辑"误判为遗留 bug 想删掉它。**触发点 = ② 段再长出符号**
 （如道具类型符号表落地）时，记得给这条 join 校验重新配一对正/负测试，别让它继续裸奔。
 
-### C23. `SHOOTERS_PER_TASK` 没作为 C14 引擎常量注入，脚本只能硬编码 `0..=3`（shooter 刀终审记档，2026-07-31）
-
-`crate::ecl::shooter::SHOOTERS_PER_TASK = 4` 是 `sh_*` 族（syscall 600-660）**槽号 `id` 的
-合法上界**，越界走 P4-b（no-op + `contract_viol`，不 Fault）。但它**没有进 `consts.rs` 的
-① 结构常量段**，而它的每一个同类兄弟都进了：`GLOBALS_SYS_SEGMENT`（同样是"脚本必须知道的
-边界值"）、`REQ_SCRIPT_BASE`、`ITEM_*` 五个；连表派生的 `BULLET_COLOR_STRIDE` 都由
-`compile_with_options` 注入。后果是 `docs/ecl-lang.md` 的发射器节与**所有将来的 `.ecl`**
-都只能把 `4` / `0..=3` 写成字面量——正是 C14 那条"跨语言常量引用缺失"要消灭的形态。
-
-**为什么本刀没做**（不是遗漏，是范围判断）：K=4 由 D-1 拍死、短期不会动，而注入它要碰
-`consts.rs` 的 ① 段 ⇒ 改 `ENGINE_CONSTS` 的内容 ⇒ 所有脚本可见词汇表变化，本该和别的
-常量增补一起走一次。**触发点 = 下次动 `consts.rs` ① 段**（或有人真想改 K）时顺手加一行
-`SHOOTERS_PER_TASK: usize as int = crate::ecl::shooter::SHOOTERS_PER_TASK;`，同时把
-`ecl-lang.md` 那句"编号 `0..=3`"改成引用常量。注意 `engine_consts!` 的 v0 限制是
-`$val as i32` 要求原生整数——`usize` 可以，但 ① 段现有各条都是 `u16`/`u8`，加进去时
-顺带确认宏的 `@ty` 分支与 `assert` 口径。
-
----
-
 ## D. 设计层面的已知裂缝
-
-### D2. 设计与代码的名字漂移：`frame_events` vs `events`
-
-`stg-world-design.md` 通篇（16 处）+ `design_doc.md`（2 处）+ CLAUDE.md 的 P6 都叫 **`frame_events`**；
-**代码里的字段是 `events`**（`WorldBody.events` / `events_len` / `EVENTS_CAP` / `push_event` /
-`diag.events_overflow`）。拿设计文档去 grep `frame_events`，代码里**一个都搜不到**。
-
-`hits` 两边一致；`reqs` 已落地且两边同名（通道 B 刀，2026-07-23——设计/代码都叫 `reqs`，
-本条漂移仅剩 `frame_events`↔`events` 一处）。
-
-**这不只是审美**：A5 那张表刻意用 `hits`（碰撞命中缓冲）对 `frame_events`（世界大事记）来区分两条
-缓冲，`frame_events` 里的 "frame" 正是它的生命周期语义。代码的 `events` 丢了这个区分度。
-
-**修法二选一**（都便宜，但要选一个）：
-- 代码 `events` → `frame_events`：纯重命名，`events` 本就 checksum-skip，**金向量校验和零影响**。
-  波及 `world.rs`/`world/settle.rs`/`world/player.rs` + harness 探针（无）。
-- 或反过来把设计改口径为 `events`（但会丢掉与 `hits` 的对照度，不推荐）。
 
 ### D3. 金向量导演的补敌逻辑是计数式补位
 
@@ -680,23 +581,6 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 （不像 `Init` 那种 exhaustive 结构体），只能靠这条记录 + 新动词自带一条同款仲裁腿测试。
 **触发点 = 下一个位置动词落地时**（大概率是 D16 的高阶轨迹那刀）。
 
-### D18. 编辑器补全/hover **不覆盖任何 `$engine_var`**——既有工具链缺口（敌人运动动词族刀 T6 撞见，2026-07-31）
-
-**不是本刀引入的**：`$frame`/`$player_x`/`$self_x` 等原有 8 个引擎变量一样没被覆盖，本刀只是
-把数量从 8 加到 12 时撞见。
-
-链路缺口在源头：`gen-ecl-meta` 只导出 **builtins**（`builtins::all()` 的 `name`/`params`/
-`param_names`/`doc`），产出的 `ecl-meta.json` **没有引擎变量节**；VS Code 扩展
-（`editors/vscode/stg-ecl/`）对 `$name` 只有一条**通配正则**做高亮，于是：`$` 打出来没有
-补全候选、悬停没有 hover、写错名字（`$self_vel`）编辑器不吭声——要到 `check` 才报错。
-`docs/ecl-lang.md` 的引擎变量表是**手写**的，也就不受 `<!-- gen -->` 漂移测试保护（生成块只
-盖 builtins 那一段）：加了引擎变量却忘了改表，没有任何东西会红。
-
-**修法**（一起做才划算）：`builtins.rs` 侧把 `EngVar` 的名字/类型/doc 也做成一张可枚举的表
-（现在只有 `engine_var_info` 给号和型，**没有名字也没有 doc**——名字散在 lex/parse 侧），
-`gen-ecl-meta` 加第三个 sink 导出它，扩展读来做补全/hover，手册那张表也改成生成块。
-**触发点 = 下一次动引擎变量**，或者编辑体验再做一刀时顺手。
-
 ### D19. 运动动词 `easing`/`dur` 的**五处裸截断**——`easing = 256` 绕过 P4-b 检查（敌人运动动词族刀终审记档，2026-07-31）
 
 `syscall.rs` 把栈上弹出的 `i32` 直接 `as u8` / `as u16` 交给世界层写 API，**五处**：
@@ -716,7 +600,10 @@ loadout 参数是 `character`/`power`/`lives`/`bombs` 四个平铺标量,非 Dic
 判据顺势前移到收窄这一步）。**没放进终审修复波的理由**：它会**改变 `move_to` 的既有行为**
 ——此前越界 `easing` 是静默变 Linear（脚本可能已经依赖），改成拒收是行为变更，
 且 `ENGINE_VER`/金向量都要跟着动，属于需要单独裁定的一刀。
-**触发点 = 下一次动运动动词族**，或做 syscall 参数收窄的统一整理时。
+**裁定（2026-09-03，人类拍板）：收窄成拒收。** 不钳位（钳位会把笔误变成"能跑但不是你要的"）、
+也不只收 `dur`（那会留下"一半收窄"的不对称）。执行时连同 `ENGINE_VER` bump 与金向量重出一起走，
+**故没有并进 2026-09-03 那批零风险债**——那批的判据是"金向量逐字节不变"，本条必然会动它。
+**触发点 = 本条自己就是下一刀**（裁定已下，只欠执行）。
 
 ### D10. 部分设运行期只护 stride、不查 `valid`——编译期空格闸只覆盖 `.ecl` 源码路径（颜色轴刀 T6 记档，2026-07-26）
 
@@ -733,31 +620,6 @@ no-op；算术上 `wrapping_add` 防近 `i32::MAX` panic）——**从不索引
 路径下都造不出来。**触发点 = 出现直接构造/反序列化 `XformSlot` 的消费者时**（候选：
 mod 提供的二进制 xform 段格式、M4 rollback 对端镜像重放）——届时需要在运行期臂补一条
 `valid` 校验，或明确记录"信任构造方已经过编译期闸"这条前提由谁来担保。
-
-### D11. 掉落表的条目顺序自此**不再影响任何东西**，但 `validate` 不要求升序（敌人死亡效果刀 T1 复审记档，2026-07-30）
-
-掉落从"敌身上存 `drop_table: u16`、死时查表逐条撒"迁成"敌身上存
-`drop_count: [u8; ITEM_TYPE_COUNT]`、死时按**类型升序**撒"（`world::settle::spill_drops`）
-之后，`WorldTables.drop_tables` 里某张表的**条目书写顺序**在运行期已被
-`tables::drop_counts` 的展开彻底抹掉——它只把每条 `(ty, n)` 累加进对应类型的槽。后果两条：
-
-① **内容作者若以为能靠调整条目顺序控制掉落的产出顺序，那是错的**，写
-`[(POINT,1),(POWER,2)]` 与 `[(POWER,2),(POINT,1)]` 得到完全相同的 `drop_count`，撒出来
-一律是 POWER 在前。这本身不是 bug——I4 要求的是确定性顺序，不是"作者书写序"——但它是一条
-没写在任何地方的**语义变更**。
-
-② 更咬人的是**迁移等价性论证的脚下**：T1 的等价性（掉落内容 + `spawn_drop` 的世界 RNG 消耗
-顺序逐字不变）成立，完全是因为内建表 1 恰好是 `[(ITEM_POWER,2),(ITEM_POINT,1)]` 而
-`ITEM_POWER=0 < ITEM_POINT=1`——**表序恰好就是类型升序**这个巧合。特征化测试
-`enemy_death_drop_sequence_is_pinned`（`world/settle.rs`）押的是**这个具体巧合**，不是一般性
-保证：换一张条目非升序的表，撒出的集合仍相同、但逐颗 `(vx, vy)` 会因 RNG 抽取顺序改变而
-**静默**不同，而 `validate()`（`tables.rs`，只校验 `ty < ITEM_TYPE_COUNT`）不会红、
-金向量闸门只互比三平台也不会红。
-
-**倾向处置：给 `validate()` 加一条"每张掉落表的条目须按 `ty` 严格升序"的校验**（配一条坏表
-判别式单测），把上面这个"巧合"升级成表格式的硬契约——比只在文档里写一句更能防住内容包。
-代价是内建表 `tables_v0.bin` 恰好已满足，不需要重烘焙。**触发点 = 第一张非内建掉落表出现时**
-（C11 资产管线的 owned 表 / mod 内容包），届时若还没加就必须先加。
 
 ### D12. 死亡加分硬编码给自机 0——"谁打死谁得分"在联机/多人下不存在（2026-07-30 记档）
 
@@ -973,40 +835,6 @@ PC 推进，操作数永远不会被当成 opcode 解码，**运行期不存在�
 **触发点**：若将来撞到**第三处**由这个重叠引发的真实麻烦，再把 `0xx` 整族挪到 `8xx`（届时
 又是一次冻结面变更 + `ENGINE_VER` bump，且两条守卫测试仍然有效、与号无关）。撞到了往这条底下追加。
 
-### F7. release 下 `NUM_PHASES` 报 `dead_code`——`cargo clippy --release` 现在跑不绿（syscall 号表重排刀终审修复波撞见，2026-07-31）
-
-```
-warning: constant `NUM_PHASES` is never used
-   --> crates/stg-core/src/world.rs:113:18
-```
-
-`pub(crate) const NUM_PHASES: u8 = 11;` 只被 **`PhaseGuard`** 用，而 `PhaseGuard` 整个住在
-`#[cfg(debug_assertions)]` 里（P2：debug 押运 §3.5 相位时序，release 不检查）。于是
-**release 编译时它真的没有任何使用者**。
-
-**先于本波存在，与本波无关**（本波只改了 `world.rs` 的两行注释）。之所以一直没人撞见：
-CI 的 clippy 步跑的是 **debug**（`cargo clippy --workspace --all-targets -- -D warnings`），
-`debug_assertions` 成立 ⇒ 有使用者 ⇒ 不报。`cargo build --release` 只是 warning 不是 error，
-所以 `storm`/`bench` 那几条 release 命令照跑不误。
-
-**没有顺手修**：三条修法各有取舍，都是行为面选择，不该混进一把纯注释刀——
-
-1. `#[cfg(debug_assertions)]` 挂在常量上 —— 最诚实（它本来就是 debug 专用），但要确认没有
-   将来的 release 使用者；
-2. `#[allow(dead_code)]` —— 一行了事，代价是把"它在 release 里没人用"这个事实盖住；
-3. 让它在 release 也有用（例如相位数进某个诊断/校验面）—— 那是**加东西**，得单独立项。
-
-**触发点 = 谁要让 `cargo clippy --release -- -D warnings` 进 CI**（或谁被这条 warning 挡住），
-届时连同 ①②③ 一并裁。在那之前它只是噪声一行。
-
-**复核（2026-09-03）：仍在，且比本条记的宽——不是一条 warning，是 5 条。** 实测
-`cargo clippy --workspace --release --all-targets` 输出：`NUM_PHASES is never used`（lib，
-1 条）加 **`unused import: crate::world::PH_COLLIDE` ×3 与 `PH_CLEANUP` ×1**（lib test，4 条，
-`cargo clippy --fix` 认得其中 4 条建议）。同一个根因——相位常量整族只服务 `PhaseGuard`，
-release 下 `debug_assertions` 不成立 ⇒ 常量与那几处 `use` 一起变成死物。上面三条修法照旧适用，
-但**裁的时候要按"相位常量族"整体裁，不是只裁 `NUM_PHASES` 一个**。CI 仍绿（debug），
-结论不变：这条**不挡任何人合入**，只挡自己在本地跑 release clippy 的人。
-
 ### F8. 引擎里有**两套不一致的瞄准政策**——自机 game over 之后两条路各走各的（run 刀记档，2026-08-01）
 
 同一句"瞄自机"在引擎里有两份实现，对**自机不在场**的处置正好相反：
@@ -1027,52 +855,6 @@ ZUN 各作口径也不一致）。答案定下来之前不要"顺手对齐"，�
 
 已在 [`docs/ecl-lang/4-bullets.md`](ecl-lang/4-bullets.md) 的「四条瞄准路径的解析时机与基点」
 表里如实写明现状——**文档不欠账，欠的是引擎的一致性**。
-
-### F9. fault 码名字表在 harness 抄了第二份（`run` 刀 2026-08-01 记档）
-
-`stg_core::ecl::vm` 的 fault 码常量是 `pub(crate)`，而 `harness run` 要把 `code 3` 渲染成
-`BUDGET 指令预算耗尽` 这样的人话，只能在 harness 侧**抄一份码→名字表**。这是第二真相源，
-core 那边加了新 fault 码而这边没跟，会**静默漂**。
-
-**后果有限**：跟漏只会打成 `code N 未知 fault 码`，**不会错报**成别的码，退出码逻辑也不依赖
-这张表（它只看 `diag.task_faults` 与 `EVT_TASK_FAULT` 事件）。所以不急。
-
-**正解**：把 core 里那几个 fault 码常量的可见性改成 `pub`（纯可见性变更、零行为变更、
-不动 `ENGINE_VER`），harness 直接引用。**触发点** = 下次有理由动 `stg-core` 时顺手做；
-本刀因任务书钉死"core 一行不改"而没做。
-
-### F10. `sh_task` 挂弹任务想跟 xformdef 的 `set_life` 自爆对齐帧数，天生错开 1 帧——踩坑记录（母弹分裂卡内容刀，2026-08-02）
-
-写 `godot/ecl/demo/boss_mothersplit.ecl`（母弹飞一段时间自爆、原地炸开子弹）时撞见的一个
-**静默陷阱**，没有 Fault、没有 `contract_viol`、没有 `pool_full`——画面上就是"子弹一颗都不
-出现"，只有拿 `stg-harness run --at` 逐帧扫才抓得到。
-
-两条腿要在同一帧数上会合，实际起点不同：
-
-- **xformdef 从弹的创建当帧就开始跑**：`sh_xform` 挂的序列在创建帧的变换相位（phase 4）
-  就处理第一槽，`@N` 加在某槽自己头上表示"这槽发射后再等 N 帧执行下一槽"（`wait` 属于
-  **当前槽**，不是"等 N 帧再执行这槽"——单槽 `xformdef { @N set_life(1); }` 会在创建帧
-  **立即**发 `set_life`，母弹活不过一帧，是这次踩坑的第一层；正确写法是拿一个无副作用占位
-  op（如 `add_speed(0fx)`）扛住 `@N`，把真正的 `set_life` 挪到下一槽）。
-- **`sh_task` 派的任务出生当帧不跑**（docs/ecl-lang.md 五条坑之一），首条语句要到出生后
-  第 1 帧才执行——`wait(n)` 的周期语义（`crates/stg-core/src/step.rs`
-  `wait_n_makes_the_resume_delay_exactly_n` 那条测试，2026-08-01 刚拍板"以作者心智模型为准"）
-  是从**这条 wait 语句自己执行的那一帧**起算 n 帧后恢复。
-
-两条腿因此天生差 1 帧：任务侧若直接 `wait(N)`（与 xformdef 用同一个 N），会在母弹已经被
-`cleanup` 回收**之后**才追到 `sh_fire`——owner 已死，`owner_bullet_death_kills_task_silently_
-next_frame`（`crates/stg-core/src/step.rs`）钉死的那条"owner 死后任务静默回收、不 Fault、不
-计数"门禁直接拦下，子弹一颗不出，且没有任何诊断信号能看出来。
-
-**当前处置**：`boss_mothersplit.ecl` 里任务侧的 `wait` 值比 xformdef 的自爆延迟少 1
-（`MOTHER_SPLIT_TASK_WAIT = MOTHER_LIFE - 1`），已用 `stg-harness run --at` 逐帧扫过：差 1 帧
-稳定成功、不减（原值）稳定失败。这是**内容侧绕过**，不是引擎修复。
-
-**触发点**：这条"两种起跑时间基准不同"的坑值得写进 [`docs/xform-ops.md`](xform-ops.md)
-或 [`docs/ecl-lang/4-bullets.md`](ecl-lang/4-bullets.md)「四条坑」——`sh_task` + `sh_xform`
-配合做"弹活到第 N 帧、原地触发点自己动作"这个惯用法看起来会越来越常见（母弹分裂只是第一个
-撞上的内容），下一个作者大概率会重摔一次。本刀任务书是纯内容工作，没有去改文档主干，只记
-在这里；下次有人整理「弹」或「xform」那两篇时顺手把这条并进去。
 
 ### F11. xformdef 的 `@N` 记号读法与语义相反——本刀已补文档，语义/记号本身要不要改留待评审（docs 刀，2026-08-02）
 

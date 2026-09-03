@@ -88,6 +88,13 @@ engine_consts! {
         RANK_HARD:           i32 as int = 2;
         RANK_LUNATIC:        i32 as int = 3;
         RANK_EXTRA:          i32 as int = 4;
+        //  每任务的发射器槽数（shooter 刀 D-1 拍死 K=4）。它是 `sh_*` 族（syscall 600-660）
+        //  槽号 `id` 的合法上界——越界走 P4-b（no-op + `contract_viol`，不 Fault）。
+        //  **注入的理由**（C23 已还，2026-09-03）：它和 `GLOBALS_SYS_SEGMENT` 是同一类东西
+        //  ——"脚本必须知道的边界值"——而在此之前只有它没进注入表，于是手册与所有 `.ecl`
+        //  都只能把 `4` / `0..=3` 写成字面量，正是 C14 那条"跨语言常量引用缺失"要消灭的形态。
+        //  **放①不放②**：K 是 VM/ABI 事实（槽存储在 `TaskPool` 里，定长），与可加载表无关。
+        SHOOTERS_PER_TASK:   usize as int = crate::ecl::shooter::SHOOTERS_PER_TASK;
     }
     //  ② 段目前**空**（颜色轴刀 2026-07-26）：弹型名/色名归**内容包**——由各内容包
     //  自己的 `.ecl` 用 `const` 声明（内建 demo 的一份见 `godot/ecl/demo/bullets.ecl`），

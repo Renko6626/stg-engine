@@ -4218,6 +4218,7 @@ mod tests {
         use crate::bullets::BULLET_CLEARED;
         use crate::events::EVT_FIELD_CLEARED;
         use crate::items::ITEM_STAR;
+        #[cfg(debug_assertions)]
         use crate::world::PH_COLLIDE;
         use crate::world::test_support::bullet_at;
 
@@ -4254,9 +4255,9 @@ mod tests {
             assert_eq!(w.body.items.item_type[i], ITEM_STAR, "槽 {i} 应为星星");
         }
 
-        assert_eq!(w.body.events_len, 1, "field 消弹应聚合发一条事件");
-        assert_eq!(w.body.events[0].kind, EVT_FIELD_CLEARED);
-        assert_eq!(w.body.events[0].data[0], 3, "data[0] == 弹数");
+        assert_eq!(w.body.frame_events_len, 1, "field 消弹应聚合发一条事件");
+        assert_eq!(w.body.frame_events[0].kind, EVT_FIELD_CLEARED);
+        assert_eq!(w.body.frame_events[0].data[0], 3, "data[0] == 弹数");
     }
 
     /// P4-a：field 池满 → 确定性降级（不 panic、不 Fault，计 pool_full[POOL_FIELD]）。
