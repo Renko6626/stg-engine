@@ -642,7 +642,16 @@ impl WorldBody {
     /// 消弹转星星的生成核（D9 趟一，M0-15）：原弹位、零初速、出生即磁吸（调用方给
     /// `magnet_to`——存活自机或 `MAGNET_NONE`）；**无散布无 RNG**（与 `spawn_drop` 的
     /// 关键区别——星星不喷射，直接飞向自机或原地下落）。
-    /// P4-a：池满 → 该颗不生成 + 逐颗计数（消弹循环有界，不短路）。
+    /// P4-a：池满 → 该颗不生成 + 逐颗计数（消弹循环有界，不短路；判别腿
+    /// `star_pool_full_counts_every_missing_star`）。
+    ///
+    /// **这条降级路径是真会被走到的，不是理论边界**（F12，2026-09-03）：转换是 1:1，而
+    /// 道具池 cap 1024 比弹池 cap 8192 窄 8 倍 —— demo 局收卡那一帧场上 626 颗弹全转星星，
+    /// 道具池还是 512 的时候**四个难度档全部溢出**（Easy 3 / Normal 37 / Hard 67 /
+    /// Lunatic 104 颗没生成）。把 cap 抬到 1024 盖住了当前内容的弹数峰值（rank 3 为 814），
+    /// 但 **1024 不是结构性保证，只是把线挪远**：任何一次消弹多于道具池余量都会再走到这里。
+    /// **这是已知设计边界，不是待修的债**（作者侧口径见 `docs/ecl-lang/6-spell-and-stage.md`
+    /// 的 `clear_bullets()` 一节与 `docs/ecl-ops.md` 的 540 号）。
     pub(crate) fn spawn_star_at(&mut self, x: Fx, y: Fx, magnet_to: u8) {
         if self
             .items

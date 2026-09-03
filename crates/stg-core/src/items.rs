@@ -33,8 +33,18 @@ pub const POWER_MAX: u16 = 400;
 pub const PIECES_PER_LIFE: u8 = 5;
 pub const PIECES_PER_BOMB: u8 = 5;
 
+// cap 512 → 1024（F12 定案，2026-09-03）：**消弹转星星是 1:1**（`world/settle.rs` 趟一
+// 逐颗调 `spawn_star_at`），而弹池 cap 是 8192 —— 任何一次大规模消弹都可能一帧内要走
+// 比道具池宽得多的格子。实测 demo 局收卡那一帧（4954）场上 626 颗弹全转星星，**四个难度
+// 档全部溢出**（Easy 3 / Normal 37 / Hard 67 / Lunatic 104 颗没生成）。1024 盖得住当前
+// 内容的弹数峰值（rank 3 为 814）并留余量。
+//
+// ⚠ **1024 不是结构性的保证,只是把线挪远**：弹池是道具池的 8 倍,1:1 转换天生可能溢出。
+// 溢出时的处置是 P4-a 确定性降级（该颗不生成 + 逐颗计数,消弹循环有界不短路,判别腿
+// `star_pool_full_counts_every_missing_star`）——这条口径写在 `docs/ecl-ops.md` 的 54 号
+// 与 `spawn_star_at` 的文档里,**是已知设计边界,不是待修的债**。
 define_pool! {
-    Item, cap = 512,
+    Item, cap = 1024,
     fields {
         x: Fx, y: Fx, vx: Fx, vy: Fx,
         item_type: u8, magnet_to: u8, timer: u16

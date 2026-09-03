@@ -53,6 +53,7 @@
 | 脚本写 `globals` 系统段（槽 < 16） | no-op + `contract_viol`，不 Fault | [6 · 符卡与整局编排](6-spell-and-stage.md) |
 | `add_lives`/`add_bombs`/`add_power`/`add_score` 越界 | 钳位/饱和，**是正常语义**、不计违约 | [6 · 符卡与整局编排](6-spell-and-stage.md) |
 | `clear_bullets` 时作用区池满 | 这一帧的清弹静默失效 | [6 · 符卡与整局编排](6-spell-and-stage.md) |
+| 一次消掉的弹多于道具池余量 | 弹照消，**多出的星星生不出来**（逐颗计 `pool_full`）——已知设计边界 | [6 · 符卡与整局编排](6-spell-and-stage.md) |
 | `emit_req` 时请求缓冲满 | 确定性丢弃，不 Fault | [6 · 符卡与整局编排](6-spell-and-stage.md) |
 
 字节码层的完整口径（fault 码表、每个 syscall 的越界处置）见 [`ecl-ops.md`](../ecl-ops.md)。
