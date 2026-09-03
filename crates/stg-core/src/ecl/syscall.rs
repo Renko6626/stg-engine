@@ -1663,14 +1663,36 @@ fn sys_move_enemy_to(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let y_raw = pop(task)?;
     let x_raw = pop(task)?;
     let dur = pop(task)?;
-    ctx.body.move_enemy_to(
-        h,
-        Fx::from_raw(x_raw),
-        Fx::from_raw(y_raw),
-        dur as u16,
-        easing as u8,
-    );
+    let Some((dur, easing)) = narrow_dur_easing(ctx, dur, easing) else {
+        return Ok(()); // D19：越界 dur/easing → P4-b 整条 no-op
+    };
+    ctx.body
+        .move_enemy_to(h, Fx::from_raw(x_raw), Fx::from_raw(y_raw), dur, easing);
     Ok(())
+}
+
+/// 运动动词族的 `dur`/`easing` **参数收窄**（D19，2026-09-03 裁定：收窄成拒收）。
+///
+/// 此前五处一律裸 `as u16` / `as u8`，制造了两个坏路径：
+/// - `easing = 256` → `256 as u8 == 0` → **静默变成 Linear**，绕过世界层 `easing >= 8` 的
+///   判据（那条判据收到的已经是截断后的值）；写 `easing = 264` 反而落 8、被正确拒掉
+///   ——**能不能拒取决于越界值模 256 落在哪里，毫无规律**。
+/// - `dur = -1` → `-1 as u16 == 65535` → 一条本该报错的笔误变成"缓动 18 分钟"。
+///
+/// 现在两个都走 `try_from`：任一失败即 **P4-b**（`contract_viol` +1 + `last_status =
+/// BAD_ARGS` + **整条 no-op**），与既有的 `easing >= 8` 是同一条腿，判据顺势前移到收窄这步。
+/// 不 Fault——参数笔误属"调用方违约"，确定性安全结果比杀任务有用。
+///
+/// 返回 `None` 即调用方应当整条 no-op。
+fn narrow_dur_easing(ctx: &mut VmCtx, dur: i32, easing: i32) -> Option<(u16, u8)> {
+    match (u16::try_from(dur), u8::try_from(easing)) {
+        (Ok(d), Ok(e)) => Some((d, e)),
+        _ => {
+            ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+            ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+            None
+        }
+    }
 }
 
 /// `SYS_MOVE_VEL`（410）：逆序弹出 `easing, speed, angle, dur`。
@@ -1680,12 +1702,15 @@ fn sys_move_vel(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let speed = pop(task)?;
     let angle = pop(task)?;
     let dur = pop(task)?;
+    let Some((dur, easing)) = narrow_dur_easing(ctx, dur, easing) else {
+        return Ok(()); // D19
+    };
     ctx.body.set_enemy_vel_polar(
         h,
         crate::math::Angle(angle as u16),
         Fx::from_raw(speed),
-        dur as u16,
-        easing as u8,
+        dur,
+        easing,
     );
     Ok(())
 }
@@ -1697,13 +1722,11 @@ fn sys_move_vel_xy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let vy = pop(task)?;
     let vx = pop(task)?;
     let dur = pop(task)?;
-    ctx.body.set_enemy_vel_cart(
-        h,
-        Fx::from_raw(vx),
-        Fx::from_raw(vy),
-        dur as u16,
-        easing as u8,
-    );
+    let Some((dur, easing)) = narrow_dur_easing(ctx, dur, easing) else {
+        return Ok(()); // D19
+    };
+    ctx.body
+        .set_enemy_vel_cart(h, Fx::from_raw(vx), Fx::from_raw(vy), dur, easing);
     Ok(())
 }
 
@@ -1713,12 +1736,11 @@ fn sys_move_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let easing = pop(task)?;
     let angle = pop(task)?;
     let dur = pop(task)?;
-    ctx.body.set_enemy_angle(
-        h,
-        crate::math::Angle(angle as u16),
-        dur as u16,
-        easing as u8,
-    );
+    let Some((dur, easing)) = narrow_dur_easing(ctx, dur, easing) else {
+        return Ok(()); // D19
+    };
+    ctx.body
+        .set_enemy_angle(h, crate::math::Angle(angle as u16), dur, easing);
     Ok(())
 }
 
@@ -1728,8 +1750,11 @@ fn sys_move_speed(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let easing = pop(task)?;
     let speed = pop(task)?;
     let dur = pop(task)?;
+    let Some((dur, easing)) = narrow_dur_easing(ctx, dur, easing) else {
+        return Ok(()); // D19
+    };
     ctx.body
-        .set_enemy_speed(h, Fx::from_raw(speed), dur as u16, easing as u8);
+        .set_enemy_speed(h, Fx::from_raw(speed), dur, easing);
     Ok(())
 }
 
@@ -3459,6 +3484,103 @@ mod tests {
         assert_eq!(w.body.enemies.mv_to_y[i], Fx::from_int(60));
         assert_eq!(w.body.enemies.mv_dur[i], 30);
         assert_eq!(w.body.enemies.mv_easing[i], 2);
+    }
+
+    /// D19：`dur`/`easing` 越界 → P4-b 整条 no-op（不是静默截断、也不是 Fault）。
+    ///
+    /// **旧行为的荒谬正是本条要钉死的**：裸 `as u8` 之下 `easing = 256` 截断成 0、**静默变
+    /// Linear** 并照常武装插值器，而 `easing = 264` 落 8、被世界层正确拒掉——能不能拒取决于
+    /// 越界值**模 256 落在哪里**。`dur = -1` 同理变成"缓动 65535 帧"。
+    ///
+    /// **判别力**：`easing = 256` 那条腿是核心——它在旧实现下**会成功武装**（`mv_active == 1`、
+    /// `mv_easing == 0`），只有收窄之后才 no-op。若有人把 `try_from` 改回 `as`，或把处置从
+    /// no-op 改成钳位，这条立刻红。`dur = 65536`（截断成 0）与 `dur = -1`（截断成 65535）
+    /// 两条覆盖 `dur` 的两侧。第四条正例押住"合法值一切照旧"，防"收窄收过头把好参数也拒了"。
+    #[test]
+    fn move_verbs_reject_out_of_range_dur_and_easing_instead_of_truncating() {
+        for (label, args) in [
+            // 正序 dur,x,y,easing
+            (
+                "easing=256（旧实现截断成 0 = Linear，会静默成功）",
+                [30, 0, 0, 256],
+            ),
+            ("easing=-1", [30, 0, 0, -1]),
+            ("dur=65536（旧实现截断成 0）", [65536, 0, 0, 2]),
+            ("dur=-1（旧实现截断成 65535 ≈ 18 分钟）", [-1, 0, 0, 2]),
+        ] {
+            let (mut w, ecl) = fresh();
+            let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+            let mut task = Task {
+                owner_kind: OWNER_ENEMY,
+                owner_index: eh.index,
+                owner_gen: eh.generation,
+                ..Task::default()
+            };
+            let before = w.body.diag.contract_viol;
+            assert!(
+                call(&mut w, &ecl, &mut task, SYS_MOVE_ENEMY_TO, &args).is_ok(),
+                "{label}：坏参数是调用方违约，走 P4-b 不 Fault"
+            );
+            let i = eh.index as usize;
+            assert_eq!(
+                w.body.enemies.mv_active[i], 0,
+                "{label}：必须整条 no-op，不得武装"
+            );
+            assert_eq!(w.body.diag.contract_viol - before, 1, "{label}：违约计一次");
+            assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS, "{label}");
+        }
+
+        // 正例：边界上的合法值照常武装（收窄不得收过头）
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let mut task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        let args = [65535, Fx::from_int(50).raw(), 0, 7]; // dur 上沿 + easing 上沿(7 = 合法最大)
+        assert!(call(&mut w, &ecl, &mut task, SYS_MOVE_ENEMY_TO, &args).is_ok());
+        let i = eh.index as usize;
+        assert_eq!(w.body.enemies.mv_active[i], 1, "边界合法值必须照常武装");
+        assert_eq!(w.body.enemies.mv_dur[i], 65535);
+        assert_eq!(w.body.enemies.mv_easing[i], 7);
+    }
+
+    /// D19：四条速度动词与 `move_enemy_to` **同一条腿**——收窄是共用 helper，五个入口不得分家。
+    ///
+    /// **判别力**：逐个 syscall 号试 `easing = 256`。若只给 `move_enemy_to` 加了收窄而漏掉
+    /// 某条速度动词（本条最可能的实现失误），那一条的 `vel_active` 会是 1，立刻红。
+    #[test]
+    fn all_five_move_verbs_share_the_same_narrowing_leg() {
+        // (号, 正序参数——末位恒为 easing)
+        let cases: [(u16, &[i32]); 4] = [
+            (SYS_MOVE_VEL, &[30, 0, Fx::from_int(3).raw(), 256]),
+            (SYS_MOVE_VEL_XY, &[30, Fx::from_int(3).raw(), 0, 256]),
+            (SYS_MOVE_ANGLE, &[30, 0, 256]),
+            (SYS_MOVE_SPEED, &[30, Fx::from_int(3).raw(), 256]),
+        ];
+        for (sys, args) in cases {
+            let (mut w, ecl) = fresh();
+            let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+            let mut task = Task {
+                owner_kind: OWNER_ENEMY,
+                owner_index: eh.index,
+                owner_gen: eh.generation,
+                ..Task::default()
+            };
+            let before = w.body.diag.contract_viol;
+            assert!(
+                call(&mut w, &ecl, &mut task, sys, args).is_ok(),
+                "syscall {sys}"
+            );
+            let i = eh.index as usize;
+            assert_eq!(
+                w.body.enemies.vel_active[i], 0,
+                "syscall {sys}：easing=256 必须整条 no-op（收窄漏了这一条入口？）"
+            );
+            assert_eq!(w.body.diag.contract_viol - before, 1, "syscall {sys}");
+        }
     }
 
     /// self owner != ENEMY → Fault（误用策略：move_enemy_to 要求 self 是敌）。
