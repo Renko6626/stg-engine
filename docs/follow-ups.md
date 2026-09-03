@@ -701,6 +701,12 @@ bump `ENGINE_VER`。
 
 ## E. bomb 那一刀开工前
 
+> **设计已完成（2026-09-03）**：见
+> [`docs/superpowers/specs/2026-09-03-time-stop-design.md`](superpowers/specs/2026-09-03-time-stop-design.md)
+> ——bomb 与时间停止合并成一刀（共用自机能力触发骨架），含 deathbomb 与表驱动的 `BombCfg`。
+> **本节三条在实施时逐条兑现，兑现后整节删除。** 下面第一条的 stub 正是 §10.2 要接的挂点。
+
+
 - **`world/player.rs` 的 `update_players`** 里，`LIFE_DEATHWINDOW` 臂有一句
   `// bomb 救人 stub：本切片无 bomb 输入 → 窗口必耗尽。` —— 那是 M0-7 留的挂点。
 - **「被消弹区清掉的弹还算不算 graze？」已答：算**（擦在相位 6 已发生、清弹是相位 7 的事；

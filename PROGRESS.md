@@ -13,7 +13,10 @@
 - **`ENGINE_VER` 13→14，而且这次是布局变更**（前两次都是"同一字节序列含义变了"）：
   World +11 328 B ⇒ **金向量预期改变**，新 md5 `1dc02c3e…`，形态是两段场景**自帧 0 起全差**
   （哈希全槽不用 alive 掩码，多出的 512 个空槽从帧 0 就进哈希）。
-- **在飞**：无。
+- **在飞**：**自机能力刀（时间停止 + bomb）的设计已拍板落 spec**，见
+  [`docs/superpowers/specs/2026-09-03-time-stop-design.md`](docs/superpowers/specs/2026-09-03-time-stop-design.md)
+  ——**零代码改动**，下一步是写实施计划。它插在 M3 之前（人类决定），会 bump `ENGINE_VER` 14→15
+  并销掉 follow-ups 的 E 组；新记 **F13**（`checksum_report()` 从未实现，D11 的承诺）。
 - **待目验**（卡在"要有头环境"）：B26 余 ②`visible_instances` 断言 + ③ 可玩性目验（两卡序）。
 - **下一阶段候选**：M3 环形快照回滚 / `stg-py` RL 线 / 背景刀（A4）/ 内容线（难度真分档、杂兵段扩写、A9 演出打磨）。
 - **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
