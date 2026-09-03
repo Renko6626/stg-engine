@@ -61,6 +61,8 @@ pub struct CharacterCfg {
     pub hit_radius: Fx,
     pub graze_radius: Fx,
     pub shot: ShotTypeCfg,
+    /// 该角色的 bomb 描述（自机能力刀）。含 `Box` ⇒ `CharacterCfg` 继续"去 `Copy`、留 `Clone`"。
+    pub bomb: BombCfg,
 }
 
 /// shottype 表：5 档 × 2 焦点 = 10 槽。owned 化后每槽独立 `Box`（**去 `Copy`、留 `Clone`**）。
@@ -70,6 +72,47 @@ pub struct ShotTypeCfg {
     pub sets: [[Box<[Shooter]>; 2]; 5],
     /// 每档子机偏移（`option` 号 1..=len 查此表；v0 前四档空）。
     pub option_pos: [Box<[(Fx, Fx)]>; 5],
+}
+
+/// 一发 bomb 的完整描述（**静态数据**，住 `WorldTables`、不进 `World`——与 `ShotTypeCfg`
+/// 同构，M0-17 立下的先例）。把"铺哪些 field / 多久 / 吸不吸道具"做成数据而非代码，是
+/// 为了让将来的 bomb 变体成为**换表**而不是改引擎；这不违反 P5（数据不是回调）。
+///
+/// ⚠️ **数据变不出新形状**：`FieldPool` 只有圆。"锁定敌人的 bomb"只需加一个
+/// [`BombOrigin`] 变体（跟随 = 上层每帧重铺 `life = 1`，是 `FieldPool` 设计时就写好的
+/// 用法）；但"激光形状的 bomb"必须给 field 加形状字段并改碰撞行 6/7 —— 那是**改碰撞
+/// 矩阵**，过评审、另开一刀（spec §13）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BombCfg {
+    /// 效果时长（帧）。
+    pub frames: u16,
+    /// 无敌帧。**允许 > `frames`**：那正是"防炸完立刻死"的旋钮，调它不改任何结构。
+    pub invuln: u16,
+    /// 起爆当帧是否全屏吸道具。
+    pub attract_items: bool,
+    /// 起爆时铺的作用区，**按声明序**（I4）。
+    pub fields: Box<[BombField]>,
+}
+
+/// bomb 铺的一条作用区。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BombField {
+    pub origin: BombOrigin,
+    pub radius: Fx,
+    /// `FIELD_CLEAR_BULLETS` | `FIELD_DAMAGE` 的组合。
+    pub flags: u8,
+    pub dmg_per_frame: u16,
+    pub life: u16,
+}
+
+/// 作用区圆心的来源。**用枚举而非 bool**，并在起爆处以穷尽 `match` 消费：加变体而忘了
+/// 处理 ⇒ **编译不过**（D18 立下的押运手法）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BombOrigin {
+    /// 场心（全屏效果用）。
+    FieldCenter,
+    /// **起爆那一帧**的自机位置，之后不动（裁定 #10：不跟随）。
+    PlayerAtCast,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,6 +291,30 @@ pub fn build_tables_v0() -> WorldTables {
             hit_radius: CHAR0_HIT_RADIUS,
             graze_radius: CHAR0_GRAZE_RADIUS,
             shot,
+            bomb: BombCfg {
+                frames: 120,
+                invuln: 120,
+                attract_items: true,
+                fields: Box::new([
+                    // ① 全屏消弹：life = frames ⇒ 整段期间**逐帧消掉新飞进来的弹**，
+                    //    bomb 的"保护时长"因此天然成立（spec §10.4）。
+                    BombField {
+                        origin: BombOrigin::FieldCenter,
+                        radius: crate::field::FIELD_RADIUS_FULLSCREEN,
+                        flags: crate::field::FIELD_CLEAR_BULLETS,
+                        dmg_per_frame: 0,
+                        life: 120,
+                    },
+                    // ② 起爆点伤害圆（不跟随）：120 帧 × 4 ≈ 480 伤害，约半管风铃卡血。
+                    BombField {
+                        origin: BombOrigin::PlayerAtCast,
+                        radius: Fx::from_int(120),
+                        flags: crate::field::FIELD_DAMAGE,
+                        dmg_per_frame: 4,
+                        life: 120,
+                    },
+                ]),
+            },
         }],
         item_cfg: ITEM_CFG_V0,
         drop_tables,
@@ -328,6 +395,23 @@ impl WorldTables {
                     }
                 }
             }
+            // bomb 描述层校验（自机能力刀）。半径用与其余池同一把尺 `radius_in_range`
+            // （`create_field` 也会双边钳，但表校验先拦更响亮）。
+            if c.bomb.frames == 0 {
+                return false;
+            }
+            for f in c.bomb.fields.iter() {
+                if f.life == 0 {
+                    return false;
+                }
+                if f.flags & !(crate::field::FIELD_CLEAR_BULLETS | crate::field::FIELD_DAMAGE) != 0
+                {
+                    return false;
+                }
+                if !radius_in_range(f.radius) {
+                    return false;
+                }
+            }
         }
         if !self
             .drop_tables
@@ -383,6 +467,11 @@ pub enum TableLoadError {
         field: &'static str,
         expected: usize,
         actual: usize,
+    },
+    /// 枚举判别值超出已定义范围（如 `bomb_origin` 读到 2）。坏字节不得静默变默认值。
+    BadDiscriminant {
+        field: &'static str,
+        value: u8,
     },
     ValidateFailed,
 }
@@ -514,6 +603,22 @@ impl WorldTables {
                     out.extend_from_slice(&y.raw().to_le_bytes());
                 }
             }
+            // bomb 段（自机能力刀）：frames/invuln/attract_items + 变长 fields。
+            // **写入顺序 = 读出顺序**，与 `from_bytes` 的对应块逐字对齐。
+            out.extend_from_slice(&c.bomb.frames.to_le_bytes());
+            out.extend_from_slice(&c.bomb.invuln.to_le_bytes());
+            out.push(u8::from(c.bomb.attract_items));
+            out.extend_from_slice(&(c.bomb.fields.len() as u32).to_le_bytes());
+            for f in c.bomb.fields.iter() {
+                out.push(match f.origin {
+                    BombOrigin::FieldCenter => 0u8,
+                    BombOrigin::PlayerAtCast => 1u8,
+                });
+                out.extend_from_slice(&f.radius.raw().to_le_bytes());
+                out.push(f.flags);
+                out.extend_from_slice(&f.dmg_per_frame.to_le_bytes());
+                out.extend_from_slice(&f.life.to_le_bytes());
+            }
         }
 
         let mut h = Fnv1a64::new();
@@ -629,6 +734,34 @@ impl WorldTables {
             *slot = v.into_boxed_slice();
         }
 
+        // bomb 段：顺序与 `to_bytes` 逐字对应。
+        let bomb_frames = r.u16()?;
+        let bomb_invuln = r.u16()?;
+        let bomb_attract = r.u8()? != 0;
+        let nbf = r.u32()? as usize;
+        let mut bomb_fields = Vec::with_capacity(nbf);
+        for _ in 0..nbf {
+            let d = r.u8()?;
+            let origin = match d {
+                0 => BombOrigin::FieldCenter,
+                1 => BombOrigin::PlayerAtCast,
+                // 坏字节**必须拒**，不得静默变成默认值——那是静默数据损坏。
+                _ => {
+                    return Err(TableLoadError::BadDiscriminant {
+                        field: "bomb_origin",
+                        value: d,
+                    });
+                }
+            };
+            bomb_fields.push(BombField {
+                origin,
+                radius: r.fx()?,
+                flags: r.u8()?,
+                dmg_per_frame: r.u16()?,
+                life: r.u16()?,
+            });
+        }
+
         let t = WorldTables {
             content_hash: stored,
             characters: [CharacterCfg {
@@ -638,6 +771,12 @@ impl WorldTables {
                 hit_radius,
                 graze_radius,
                 shot: ShotTypeCfg { sets, option_pos },
+                bomb: BombCfg {
+                    frames: bomb_frames,
+                    invuln: bomb_invuln,
+                    attract_items: bomb_attract,
+                    fields: bomb_fields.into_boxed_slice(),
+                },
             }],
             item_cfg,
             drop_tables: drops.into_boxed_slice(),
@@ -1113,5 +1252,94 @@ mod tests {
                 actual: 3
             })
         );
+    }
+    /// v0 内容锚点：两条 field（全屏消弹 + 起爆点伤害圆），120 帧，吸道具。
+    /// 改内容要有意识地改本测试。
+    #[test]
+    fn bomb_cfg_v0_is_two_fields() {
+        let b = &TABLES_V0.characters[0].bomb;
+        assert_eq!((b.frames, b.invuln, b.attract_items), (120, 120, true));
+        assert_eq!(b.fields.len(), 2);
+        assert_eq!(b.fields[0].origin, BombOrigin::FieldCenter);
+        assert_eq!(b.fields[0].flags, crate::field::FIELD_CLEAR_BULLETS);
+        assert_eq!(b.fields[1].origin, BombOrigin::PlayerAtCast);
+        assert_eq!(b.fields[1].flags, crate::field::FIELD_DAMAGE);
+        assert_eq!(b.fields[1].dmg_per_frame, 4);
+        // 两条都活满整段 —— 消弹 field 的 life = frames 是"持续保护"的来源（spec §10.4）
+        assert!(b.fields.iter().all(|f| f.life == b.frames));
+    }
+
+    /// validate 的四条：radius 越界 / flags 含未定义位 / frames==0 / life==0 都要被拒。
+    /// 判别力=四条各造一个坏表，只测一条的话另外三条的校验漏写也绿。
+    #[test]
+    fn bomb_cfg_validate_rejects_bad_rows() {
+        let mk = |mutate: &dyn Fn(&mut BombCfg)| {
+            let mut t = build_tables_v0();
+            let mut b = t.characters[0].bomb.clone();
+            mutate(&mut b);
+            t.characters[0].bomb = b;
+            t
+        };
+        assert!(
+            !mk(&|b| b.fields[0].radius = Fx::from_int(-1)).validate(),
+            "radius 越界须拒"
+        );
+        assert!(
+            !mk(&|b| b.fields[0].flags = 0x80).validate(),
+            "未定义 flags 位须拒"
+        );
+        assert!(!mk(&|b| b.frames = 0).validate(), "frames==0 须拒");
+        assert!(!mk(&|b| b.fields[0].life = 0).validate(), "life==0 须拒");
+        assert!(build_tables_v0().validate(), "内建表本身必须合法");
+    }
+
+    /// bomb 段的 to_bytes/from_bytes 往返：写出去再读回来必须逐字段相等。
+    /// 判别力：漏写任何一个字段、或读写顺序错位，这条都会红（而只测"能解析"的写法不会）。
+    #[test]
+    fn bomb_cfg_survives_a_bytes_roundtrip() {
+        let t0 = build_tables_v0();
+        let t1 = WorldTables::from_bytes(&t0.to_bytes()).expect("往返应成功");
+        assert_eq!(t1.characters[0].bomb, t0.characters[0].bomb);
+    }
+
+    /// 坏的 origin 判别值必须被**拒绝**，不得静默变成默认值（静默 = 数据损坏）。
+    ///
+    /// ⚠️ `from_bytes` 的 hash 自校**先于**字段解析（`tables.rs` 的 `HashMismatch` 分支在
+    /// 建 `Reader` 之前），所以"改一个字节就交给 from_bytes"只会撞 `HashMismatch`、根本走
+    /// 不到判别值那行。故本测试**篡改后重算 body 的 FNV 回填头部**——造一份"自洽但内容非法"
+    /// 的表，这正是外部内容包能真实递进来的形态（哈希只证完整性，不证合法性）。
+    ///
+    /// 定位方式：按写入顺序，v0 第一条 bomb field 的字节是
+    /// `origin=0x00` ⧺ `radius = Fx::from_int(400).raw() = 26_214_400 = 0x0190_0000`
+    /// 的小端 `00 00 90 01` ⧺ `flags = FIELD_CLEAR_BULLETS = 0x01`。这个 6 字节窗口在
+    /// 整份表里唯一（断言里押着"唯一"，模式若不再唯一这条会红而不是悄悄改错地方）。
+    #[test]
+    fn bomb_origin_rejects_unknown_discriminant() {
+        use crate::checksum::Fnv1a64;
+        let mut bytes = build_tables_v0().to_bytes();
+        const PAT: [u8; 6] = [0x00, 0x00, 0x00, 0x90, 0x01, 0x01];
+        let hits: Vec<usize> = bytes
+            .windows(PAT.len())
+            .enumerate()
+            .filter(|(_, w)| *w == PAT)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "定位模式必须唯一（表变了就改这条，别让它悄悄错位）"
+        );
+        bytes[hits[0]] = 7; // 非法 origin
+        // 重算 body 哈希回填，绕开先于解析的完整性闸门。
+        let mut h = Fnv1a64::new();
+        h.write_bytes(&bytes[TABLE_HEADER..]);
+        let fixed = h.finish().to_le_bytes();
+        bytes[8..TABLE_HEADER].copy_from_slice(&fixed);
+        match WorldTables::from_bytes(&bytes) {
+            Err(TableLoadError::BadDiscriminant { field, value }) => {
+                assert_eq!((field, value), ("bomb_origin", 7));
+            }
+            other => panic!("未知 origin 判别值须被拒，实得 {other:?}"),
+        }
     }
 }
