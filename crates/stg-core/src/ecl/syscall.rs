@@ -1184,14 +1184,18 @@ fn sys_sh_fire(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let origin_x = bx + sh.off_x + px;
     let origin_y = by + sh.off_y + py;
 
-    // ⑥ 基准角（spec §10 步 3）——**在这一刻**解析 aim（无存活自机时的取值沿用既有
-    //    `aim_player` 口径：直接对 `players[0]` 求 atan2，不另立规矩）。
+    // ⑥ 基准角（spec §10 步 3）——**在这一刻**解析 aim。"瞄谁"走引擎唯一口径
+    //    `WorldBody::aim_target`（F8 统一，2026-09-03）：从**出弹口**看过去最近的可瞄
+    //    自机，一个都没有则回退 `players[0]` 的最后坐标（发射这条路必须产出一个角度，
+    //    没有"不瞄"这个选项——那是弹上 setter 那半边的处置）。基点是出弹口而非 owner
+    //    位置，判别腿见 `aim_is_measured_from_the_fire_origin_not_from_the_owner`。
     //    角度算术一律在 `i32` 里做、最后才回绕成 `Angle`（`Angle` 底层 u16，直接加会在
     //    debug 触发 overflow-checks）。
     let base: i32 = if sh.flags & SH_AIMED != 0 {
+        let p = ctx.body.aim_target(origin_x, origin_y);
         let a = crate::math::cordic::atan2(
-            ctx.body.players[0].y - origin_y,
-            ctx.body.players[0].x - origin_x,
+            ctx.body.players[p].y - origin_y,
+            ctx.body.players[p].x - origin_x,
         );
         a.raw() as i32 + sh.angle0.raw() as i32
     } else {
@@ -1944,12 +1948,19 @@ fn sys_spell_end(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// 瞄准角查询（SYS 120）：0 参；self 位置（owner 未知/STAGE→原点）朝向 P0 的 `atan2`，
-/// 押回 BAM raw（不消 RNG、不改世界，纯读）。
+/// 瞄准角查询（SYS 120）：0 参；self 位置（owner 未知/STAGE→原点）朝向**目标自机**的
+/// `atan2`，押回 BAM raw（不消 RNG、不改世界，纯读）。
+///
+/// 目标自机走引擎唯一的"瞄谁"口径 [`crate::world::WorldBody::aim_target`]（F8 统一，
+/// 2026-09-03）：从 self 位置看过去最近的可瞄自机，一个可瞄的都没有则回退 `players[0]`
+/// 的最后坐标——查询必须产出一个角度。
+/// 单人局（`players[1]` 恒 ABSENT）下这与旧的"恒 `players[0]`"逐位等同——改的是 co-op：
+/// P1 已 game over 而 P2 还活着时，不再朝着尸体坐标算角。
 fn sys_aim_player_angle(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let (sx, sy) = self_pos(task, ctx);
-    let px = ctx.body.players[0].x;
-    let py = ctx.body.players[0].y;
+    let p = ctx.body.aim_target(sx, sy);
+    let px = ctx.body.players[p].x;
+    let py = ctx.body.players[p].y;
     let angle = crate::math::cordic::atan2(py - sy, px - sx);
     push(task, angle.raw() as i32)
 }
@@ -3870,6 +3881,67 @@ mod tests {
         assert_eq!(task.stack[0] as u16 as u32, expect.raw() as u32);
     }
 
+    /// 判别式（F8 瞄准口径统一）：`aim_player()` 取的是**最近的可瞄自机**，不是恒
+    /// `players[0]`。P0 已 GAMEOVER 冻在左上、P1 存活在右下——两个方向截然相反，取错
+    /// 人一眼可辨。摆位不可重合：圆心重合式的摆法对"瞄谁"这条映射是瞎的
+    /// （`CLAUDE.md` 点名的 M0-7 变异检验教训）。
+    #[test]
+    fn sys_aim_player_angle_skips_unaimable_player() {
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        w.body.players[0].x = Fx::from_int(-200);
+        w.body.players[0].y = Fx::from_int(-150);
+        w.body.players[0].life_state = crate::player::LIFE_GAMEOVER;
+        w.body.players[1] = crate::player::PlayerState::spawn(0, &TABLES_V0.characters[0]);
+        w.body.players[1].x = Fx::from_int(200);
+        w.body.players[1].y = Fx::from_int(150);
+        let mut task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut task, SYS_AIM_PLAYER_ANGLE, &[]).is_ok());
+        let to_p1 = crate::math::cordic::atan2(Fx::from_int(150), Fx::from_int(200));
+        let to_p0 = crate::math::cordic::atan2(Fx::from_int(-150), Fx::from_int(-200));
+        assert_eq!(
+            task.stack[0] as u16 as u32,
+            to_p1.raw() as u32,
+            "应瞄唯一可瞄的 P1"
+        );
+        assert_ne!(
+            task.stack[0] as u16 as u32,
+            to_p0.raw() as u32,
+            "瞄了已 GAMEOVER 的 P0 尸体坐标"
+        );
+    }
+
+    /// 一个可瞄自机都没有时的 fallback 口径（F8 拍板，本条押的是"别改成别的"）：查询与
+    /// 发射这两条**必须产出一个角度**的路回退到 `players[0]` 的最后坐标——不是朝下的
+    /// 约定角、不是 0、更不是 no-op。no-op 是弹上 setter 那半边的处置，两半有意不同：
+    /// 查询必须给值，弹上的 setter 可以拒绝改动。
+    #[test]
+    fn sys_aim_player_angle_falls_back_to_p0_when_none_aimable() {
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        w.body.players[0].x = Fx::from_int(-200);
+        w.body.players[0].y = Fx::from_int(-150);
+        w.body.players[0].life_state = crate::player::LIFE_GAMEOVER; // players[1] 本就 ABSENT
+        let mut task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut task, SYS_AIM_PLAYER_ANGLE, &[]).is_ok());
+        let to_corpse = crate::math::cordic::atan2(Fx::from_int(-150), Fx::from_int(-200));
+        assert_eq!(
+            task.stack[0] as u16 as u32,
+            to_corpse.raw() as u32,
+            "无可瞄自机时应回退到 P0 的最后坐标"
+        );
+    }
+
     /// 坏 syscall 号（不在 v1 号表内）→ Fault（`dispatch` 默认臂，复用 `FAULT_BAD_OP`）。
     #[test]
     fn dispatch_bad_syscall_number_faults() {
@@ -5405,6 +5477,53 @@ mod tests {
         assert_ne!(
             got, from_owner,
             "aim 从 owner 位置量了（顺手复用 sys_aim_player_angle 的口径就是这个结果）"
+        );
+    }
+
+    /// 判别式（F8）：`sh_aim` 瞄的也是**最近的可瞄自机**，与 `aim_player()` 同一条规矩。
+    /// owner 是 STAGE、无偏移 ⇒ 出弹口在原点；P0 尸体在左上、P1 活着在右下。
+    #[test]
+    fn shooter_aim_skips_unaimable_player() {
+        let (mut w, ecl) = fresh_with_shooters();
+        w.body.players[0].x = Fx::from_int(-200);
+        w.body.players[0].y = Fx::from_int(-150);
+        w.body.players[0].life_state = crate::player::LIFE_GAMEOVER;
+        w.body.players[1] = crate::player::PlayerState::spawn(0, &TABLES_V0.characters[0]);
+        w.body.players[1].x = Fx::from_int(200);
+        w.body.players[1].y = Fx::from_int(150);
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_AIM, &[0, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+
+        let i = w.body.bullets.iter_alive().next().expect("应发一颗");
+        let to_p1 = crate::math::cordic::atan2(Fx::from_int(150), Fx::from_int(200));
+        let to_p0 = crate::math::cordic::atan2(Fx::from_int(-150), Fx::from_int(-200));
+        assert_eq!(w.body.bullets.angle[i], to_p1, "发射器应瞄唯一可瞄的 P1");
+        assert_ne!(
+            w.body.bullets.angle[i], to_p0,
+            "发射器瞄了已 GAMEOVER 的 P0 尸体坐标"
+        );
+    }
+
+    /// 同上的 fallback 腿：发射器这条路也**必须产出角度**，无可瞄自机时回退到 P0 最后坐标
+    /// （与 `sys_aim_player_angle_falls_back_to_p0_when_none_aimable` 成对，两条路同一口径）。
+    #[test]
+    fn shooter_aim_falls_back_to_p0_when_none_aimable() {
+        let (mut w, ecl) = fresh_with_shooters();
+        w.body.players[0].x = Fx::from_int(-200);
+        w.body.players[0].y = Fx::from_int(-150);
+        w.body.players[0].life_state = crate::player::LIFE_GAMEOVER; // players[1] 本就 ABSENT
+        let mut t = Task::default();
+        sh(&mut w, &ecl, &mut t, SYS_SH_SPRITE, &[0, ROW_A]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_AIM, &[0, 1]);
+        sh(&mut w, &ecl, &mut t, SYS_SH_FIRE, &[0]);
+
+        let i = w.body.bullets.iter_alive().next().expect("应发一颗");
+        let to_corpse = crate::math::cordic::atan2(Fx::from_int(-150), Fx::from_int(-200));
+        assert_eq!(
+            w.body.bullets.angle[i], to_corpse,
+            "无可瞄自机时发射器应回退到 P0 的最后坐标"
         );
     }
 

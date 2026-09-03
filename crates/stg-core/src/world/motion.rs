@@ -207,6 +207,22 @@ impl WorldBody {
         best.map(|(p, _)| p)
     }
 
+    /// 瞄准目标自机（**引擎唯一的"瞄谁"口径**，F8 统一，2026-09-03）：从 `(x, y)` 看过去
+    /// 最近的可瞄自机；一个可瞄的都没有 → 回退 `players[0]`。
+    ///
+    /// **`unwrap_or(0)` 不是偷懒，是拍板过的 fallback**：本函数的消费者是那些**必须产出
+    /// 一个角度**的路（`aim_player()` 查询、`sh_fire` 发射），它们没有"什么都不做"这个
+    /// 选项。回退到 `players[0]` 的最后坐标（GAMEOVER 时冻在死亡那一刻，见
+    /// `world::player::commit_death`）而非某个约定角，是因为它保持了单人局的既有行为
+    /// 逐位不变，且不引入新的魔数。
+    ///
+    /// 弹上的 setter（[`Self::aim_at_player_at`]）**有意不走这里**：它能拒绝改动，
+    /// 于是 `None` 时保持原角度、纯 no-op。两半的"瞄谁"一致，"没人可瞄时"按路径性质分
+    /// ——这条分野写在 `docs/ecl-lang/4-bullets.md` 的四条瞄准路径表里。
+    pub(crate) fn aim_target(&self, x: Fx, y: Fx) -> usize {
+        self.nearest_aimable_player(x, y).unwrap_or(0)
+    }
+
     /// 瞄最近可瞄自机 + delta 偏移，回填 v（索引核；D4 op 与公开 setter 共用）。
     /// 无可瞄自机 → 纯 no-op（不计数）。
     pub(crate) fn aim_at_player_at(&mut self, i: usize, delta: Angle) {
@@ -630,6 +646,24 @@ mod tests {
         w.body.aim_bullet_at_player(h, Angle::ZERO);
         assert_eq!(w.body.bullets.angle[0], Angle::QUARTER, "角度不得变");
         assert_eq!(w.body.diag.contract_viol, cv0, "不得计违约");
+    }
+
+    /// 并列取低索引（I4：升序遍历 + **严格 `<`** 才替换）——两个自机与弹等距、方向相反时
+    /// 取 P0。判别式：把 `<` 写成 `<=` 当场红（会替换成后来的 P1）。等距摆位是这条唯一
+    /// 有判别力的摆法——两人重合或同向的摆法对"取哪个索引"是瞎的。
+    #[test]
+    fn aim_ties_break_to_lowest_player_index() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 0, 0);
+        w.body.players[0].x = Fx::from_int(-100);
+        w.body.players[0].y = Fx::ZERO;
+        w.body.players[1] =
+            crate::player::PlayerState::spawn(0, &crate::tables::TABLES_V0.characters[0]);
+        w.body.players[1].x = Fx::from_int(100);
+        w.body.players[1].y = Fx::ZERO;
+        w.body.aim_bullet_at_player(h, Angle::ZERO);
+        let to_p0 = crate::math::cordic::atan2(Fx::ZERO, Fx::from_int(-100));
+        assert_eq!(w.body.bullets.angle[0], to_p0, "等距时应取低索引的 P0");
     }
 
     /// 悬垂句柄照常计数（与其余 setter 同律）。
