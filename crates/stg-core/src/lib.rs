@@ -165,7 +165,15 @@ extern crate self as stg_core;
 /// ⇒ 表 `content_hash` 变 ⇒ 身份三元组变。
 ///
 /// **金向量预期改变**（新字段进哈希，同道具池刀的道理）：形态可解释，不是行为回归。
-pub const ENGINE_VER: u32 = 15;
+///
+/// **15 → 16**（表现契约 v2，2026-09-07）：**布局 + 号表两重变更**。① `World` 变宽：弹池
+/// `born_frame: u32`（×8192）+ 敌池 `anm_state_frame: u32`（×256）进校验和与存档；
+/// `WorldBody` 新增第四条纯输出缓冲 `vanished`（1024 × 12 B + len，checksum/存档皆 skip，
+/// 但结构尺寸变）+ `diag.vanished_overflow`（进校验和）。② syscall 号表新增
+/// `430 set_anm_state` / `721 fx_at` / `722 fx_on`；通道 B 引擎段新增 `REQ_FX_AT = 8` /
+/// `REQ_FX_ATTACHED = 9`。**金向量预期改变**（两个新字段进哈希，自帧 0 起），行为零改动：
+/// `vanished` 不改任何相位决策，两个帧号字段在核内无消费者。
+pub const ENGINE_VER: u32 = 16;
 
 pub use stg_derive::define_pool;
 

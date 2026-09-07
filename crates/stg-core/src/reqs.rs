@@ -17,6 +17,16 @@
 //! | `REQ_BGM` | id (int，= 写入的 `bgm_id`) | 0 | 0 | 0 | 0 |
 //! | `REQ_BG` | id (int，= 写入的 `bg_id`) | 0 | 0 | 0 | 0 |
 //! | `REQ_BG_PHASE` | phase (int，= 写入的 `bg_phase`) | 0 | 0 | 0 | 0 |
+//! | `REQ_FX_AT` | x (fx raw) | y (fx raw) | kind (int) | param (int) | 0 |
+//! | `REQ_FX_ATTACHED` | enemy index (int) | enemy gen (int) | kind (int) | param (int) | 0 |
+//!
+//! ## 类别（表现契约 v2，2026-09-07；壳侧分发器按此处置，见 `render-contract.md` §4）
+//! - **即发即忘**：`REQ_ENEMY_DEATH` / `REQ_FX_AT` / `REQ_FX_ATTACHED`——播完即忘，回滚
+//!   误播接受为鬼影。
+//! - **须确认**：`REQ_SPELL_DECLARE` / `REQ_SPELL_RESULT` / `REQ_STAGE_CLEAR`——M3 后只在越过
+//!   回滚地平线后播。
+//! - **电平镜像**：`REQ_BGM` / `REQ_BG` / `REQ_BG_PHASE`——边沿通知，真值在 `anchors()`
+//!   四字段，宿主开机/读档后先对表。
 
 /// 一条渲染请求（§6.2，28 B）。id 语义世界不解释；`(frame, seq)` 全局唯一。
 #[repr(C)]

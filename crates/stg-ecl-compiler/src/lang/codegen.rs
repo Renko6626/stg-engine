@@ -1556,6 +1556,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],

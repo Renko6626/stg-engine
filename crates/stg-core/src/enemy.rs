@@ -38,6 +38,10 @@ define_pool! {
         radius: Fx, hurtbox: Fx,
         invuln: u16, hit_flash: u8, flags: u8,
         sprite: u16, anm_state: u16,
+        // `anm_state` 最后一次被写的帧号（表现契约 v2）：`spawn_enemy` 与 `set_anm_state`
+        // 都盖；同状态重设也盖（= 重播，对应 ZUN interrupt 重触发）。表现层算
+        // `state_age = frame_after_step − anm_state_frame`。进校验和。
+        anm_state_frame: u32,
         // main_task（follow-ups B25 口径，D9 起有消费者）：存"任务槽号+1"（0=无），不带
         // generation。`ecl::vm::run_tasks` 的 D9 自燃判据读它——任务终止时若其槽号命中
         // 本字段即视为"owner 敌的主协程"，自然 `End` 就把 owner 标 `ENEMY_DYING`（ZUN ECL
@@ -99,6 +103,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],

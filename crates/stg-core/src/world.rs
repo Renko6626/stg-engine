@@ -21,7 +21,7 @@
 
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
 use crate::enemy::{EnemyHandle, EnemyInit, EnemyPool};
-use crate::events::{EVENTS_CAP, Event, HITS_CAP, Hit};
+use crate::events::{EVENTS_CAP, Event, HITS_CAP, Hit, VANISHED_CAP, Vanished};
 use crate::field::{FieldHandle, FieldInit, FieldPool};
 use crate::math::{Angle, Fx};
 use crate::player::PlayerState;
@@ -139,6 +139,9 @@ pub struct DiagCounters {
     pub contract_viol: u32,
     pub hits_overflow: u32,   // hits 满丢弃计数（P4-a）
     pub events_overflow: u32, // events 满丢弃计数（P4-a）
+    /// `vanished` 满丢弃计数（表现契约 v2，P4-a）——同 `events_overflow`，两机必须丢得一样多，
+    /// **入校验和**。
+    pub vanished_overflow: u32,
     /// ECL 任务确定性报错被杀的累计计数（M1 T2；`derive(Checksum)` 自动入校验和，
     /// 与 owner 死亡的静默回收物理区分——owner 死不计这里）。
     pub task_faults: u32,
@@ -208,6 +211,12 @@ pub struct WorldBody {
     pub(crate) reqs: [RenderReq; REQS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 reqs 一并 skip（通道 B）")]
     pub(crate) reqs_len: u16,
+    /// 本帧离开池的敌弹（表现契约 v2 spec §3.4）：相位 9 弹回收分支写、表现层读做消弹淡出。
+    /// 第四条纯输出缓冲，与 `hits`/`frame_events`/`reqs` 同族。
+    #[checksum(skip = "纯输出缓冲，帧首清空，与 reqs/hits/frame_events 同族（表现契约 v2）")]
+    pub(crate) vanished: [Vanished; VANISHED_CAP],
+    #[checksum(skip = "纯输出缓冲，len 随 vanished 一并 skip（表现契约 v2）")]
+    pub(crate) vanished_len: u16,
     /// 诊断计数器。断层线以上只读走 `view().diag()`（D6，2026-07-25：收 `pub(crate)`，
     /// `Copy` 按值出）。
     pub(crate) diag: DiagCounters,
@@ -486,6 +495,21 @@ impl WorldBody {
                 EnemyHandle::NULL
             }
         }
+    }
+
+    /// 敌人表现状态号（表现契约 v2 spec §3.2）：写 `anm_state` 并**无条件**盖
+    /// `anm_state_frame = frame`——同状态重设也盖（= 重播，对应 ZUN interrupt 重触发语义）。
+    /// 世界自身不解释 `anm_state`；表现层按 `(sprite, anm_state, frame − anm_state_frame)`
+    /// 选帧。P4-b：悬垂句柄 → no-op + `contract_viol` + `STALE_HANDLE`。
+    pub fn set_anm_state(&mut self, h: EnemyHandle, state: u16) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        self.enemies.anm_state[i] = state;
+        self.enemies.anm_state_frame[i] = self.frame;
+        self.last_status = STATUS_OK;
     }
 
     /// 敌人限时缓动位移（D5；杂鱼"飘入-停-飘出"的世界侧状态机，将来 ECL syscall 直通）。
@@ -1013,6 +1037,23 @@ impl WorldBody {
         }
     }
 
+    /// `vanished` 推送（表现契约 v2）：相位 9 弹回收分支专用。满 → 丢弃 + `vanished_overflow`
+    /// （P4-a，同 `push_event`）。
+    pub(crate) fn push_vanished(&mut self, x: Fx, y: Fx, sprite: u16, reason: u8) {
+        if (self.vanished_len as usize) < VANISHED_CAP {
+            self.vanished[self.vanished_len as usize] = Vanished {
+                x,
+                y,
+                sprite,
+                reason,
+                _pad: 0,
+            };
+            self.vanished_len += 1;
+        } else {
+            self.diag.vanished_overflow = self.diag.vanished_overflow.wrapping_add(1);
+        }
+    }
+
     /// 世界 RNG 唯一外部触点（本刀迁移面探测漏收：`rng` 封 `pub(crate)` 前，
     /// `stg-harness` 场景搭建代码经 `WorldBody.rng` 直取随机弹幕扩散角——发现于 Task 2
     /// 实现期编译红，非 brief 原定产物，机械补齐见 task-2-report.md）。转发
@@ -1088,6 +1129,12 @@ impl WorldBody {
         &self.frame_events[..self.frame_events_len as usize]
     }
 
+    /// 本帧离开池的敌弹（表现契约 v2 §3.4）。幂等只读，`begin` 清 len——**必须在两次 step
+    /// 之间取走**。消费者：消弹淡出。
+    pub fn vanished(&self) -> &[Vanished] {
+        &self.vanished[..self.vanished_len as usize]
+    }
+
     // 三个读口的生产消费者是各相位函数体内的门禁（Task 3 已接线，见 `world/player.rs`
     // 相位 3、`world/integrate.rs` 相位 5、`transform`/`collide`/`settle`/`cleanup` 的早退
     // 与 `step.rs` 相位 2）——`#[cfg_attr(not(test), allow(dead_code))]` 随之撤掉：本仓
@@ -1113,6 +1160,7 @@ impl WorldBody {
         self.hits_len = 0;
         self.frame_events_len = 0;
         self.reqs_len = 0;
+        self.vanished_len = 0;
         // 时停倒计时挂**真实帧**、不属于任何冻结组（spec §5 的死锁解）。
         self.freeze_left[0] = self.freeze_left[0].saturating_sub(1);
         self.freeze_left[1] = self.freeze_left[1].saturating_sub(1);
@@ -1171,6 +1219,7 @@ pub(crate) mod test_support {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: w.body.frame,
         })
     }
 
@@ -1214,6 +1263,7 @@ pub(crate) mod test_support {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: w.body.frame,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
@@ -1268,6 +1318,7 @@ mod tests {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         }
     }
 
@@ -1322,6 +1373,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
@@ -1440,6 +1492,32 @@ mod tests {
         assert_eq!(w.body.frame_events[0].kind, EVT_PLAYER_DIED);
     }
 
+    /// P4-a：`push_vanished` 溢出 → 停收 + 计数（进校验和）；`begin` 清空（表现契约 v2）。
+    #[test]
+    fn vanished_push_overflow_counts_and_begin_clears() {
+        use crate::events::{VANISH_LIFE, VANISHED_CAP};
+        let mut w = crate::step::World::new(1);
+        for k in 0..VANISHED_CAP {
+            w.body
+                .push_vanished(Fx::from_int(k as i32), Fx::ZERO, k as u16, VANISH_LIFE);
+        }
+        assert_eq!(w.body.vanished().len(), VANISHED_CAP);
+        assert_eq!(w.body.diag.vanished_overflow, 0);
+        w.body.push_vanished(Fx::ZERO, Fx::ZERO, 0, VANISH_LIFE);
+        assert_eq!(w.body.vanished().len(), VANISHED_CAP, "满后不再收");
+        assert_eq!(w.body.diag.vanished_overflow, 1, "计一次溢出");
+        assert_eq!(
+            w.body.vanished()[VANISHED_CAP - 1].sprite,
+            (VANISHED_CAP - 1) as u16
+        );
+        w.body.begin();
+        assert!(w.body.vanished().is_empty(), "begin 清空第四条缓冲");
+        assert_eq!(
+            w.body.diag.vanished_overflow, 1,
+            "计数不随 begin 清（它是状态）"
+        );
+    }
+
     /// P4-a：`push_event` 溢出 → 停收 + 计数，不 panic（`push_hit` 的同构缺口，B2）。
     #[test]
     fn events_push_overflow_counts_and_drops() {
@@ -1539,6 +1617,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
@@ -1614,6 +1693,7 @@ mod tests {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         })
     }
 
@@ -1672,6 +1752,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],

@@ -404,6 +404,7 @@ mod tests {
                 transform_head: 0,
                 xform_wait: 0,
                 xform_next: 0,
+                born_frame: 0,
             },
             seq,
         );

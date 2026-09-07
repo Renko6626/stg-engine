@@ -510,6 +510,7 @@ mod tests {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         });
         // 弹静止、贴着自机 → 连跑 3 帧，graze 只 +1（grazed_by 逐弹一次）
         for _ in 0..3 {
@@ -783,6 +784,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, 1).0,
@@ -1191,6 +1193,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, table).0,

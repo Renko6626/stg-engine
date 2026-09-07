@@ -37,10 +37,27 @@ impl WorldBody {
             while bits != 0 {
                 let i = w * 64 + bits.trailing_zeros() as usize;
                 bits &= bits - 1;
-                let dead = (self.bullets.life[i] != 0xFFFF && self.bullets.life[i] == 0)
-                    || self.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0
-                    || Self::out_of_bounds(self.bullets.x[i], self.bullets.y[i]);
+                let life_out = self.bullets.life[i] != 0xFFFF && self.bullets.life[i] == 0;
+                let cleared = self.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0;
+                let oob = Self::out_of_bounds(self.bullets.x[i], self.bullets.y[i]);
+                let dead = life_out || cleared || oob;
                 if dead {
+                    // `vanished`（表现契约 v2 §3.4）：只记场内的两种死因，越界不记（屏外没有
+                    // 淡出可画）。同时越界又寿尽/被清的弹按越界处置——它已经在屏外。
+                    // 清除优先于寿尽：被 bomb 消掉的那一帧恰好寿尽，表现层要的是"被消"。
+                    if !oob {
+                        let reason = if cleared {
+                            crate::events::VANISH_CLEARED
+                        } else {
+                            crate::events::VANISH_LIFE
+                        };
+                        self.push_vanished(
+                            self.bullets.x[i],
+                            self.bullets.y[i],
+                            self.bullets.sprite[i],
+                            reason,
+                        );
+                    }
                     if self.bullets.transform_head[i] != crate::xform::XFORM_NONE {
                         self.xforms.free(self.bullets.transform_head[i]);
                     }
@@ -210,6 +227,7 @@ mod tests {
             transform_head: 0xFFFF, // 被覆写，值无关
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         };
         let h = w.body.create_bullet_with_xform(init, &seq);
         let i = w.body.bullets.get(h).unwrap();
@@ -270,5 +288,92 @@ mod tests {
             Fx::from_int(-100)
         ));
         assert!(WorldBody::out_of_bounds(Fx::from_int(0), Fx::from_int(600)));
+    }
+
+    // ── `vanished`（表现契约 v2 spec §3.4）────────────────────────────────────
+
+    /// 场内寿尽 / 被清各记一行（reason 可辨）、越界不记；同时越界又被清按越界处置。
+    #[test]
+    fn vanished_records_life_and_cleared_but_not_oob() {
+        use crate::bullets::BULLET_CLEARED;
+        use crate::events::{VANISH_CLEARED, VANISH_LIFE};
+        #[cfg(debug_assertions)]
+        use crate::world::PH_CLEANUP;
+        let mut w = crate::step::World::new(1);
+        let mk = crate::world::test_support::bullet_at;
+        let life = mk(&mut w, 10, 20);
+        let cleared = mk(&mut w, 30, 40);
+        let oob = mk(&mut w, 2000, 0);
+        let oob_cleared = mk(&mut w, -2000, 0);
+        let survivor = mk(&mut w, 50, 60);
+        {
+            let b = &mut w.body.bullets;
+            let i = b.get(life).unwrap();
+            b.life[i] = 0;
+            b.sprite[i] = 7;
+            let i = b.get(cleared).unwrap();
+            b.flags[i] |= BULLET_CLEARED;
+            b.sprite[i] = 9;
+            let i = b.get(oob_cleared).unwrap();
+            b.flags[i] |= BULLET_CLEARED;
+        }
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_CLEANUP;
+        }
+        w.body.cleanup();
+        assert!(w.body.bullets.get(life).is_none());
+        assert!(w.body.bullets.get(cleared).is_none());
+        assert!(w.body.bullets.get(oob).is_none());
+        assert!(w.body.bullets.get(oob_cleared).is_none());
+        assert!(w.body.bullets.get(survivor).is_some());
+        let v = w.body.vanished();
+        assert_eq!(v.len(), 2, "只有场内两颗入账（越界两颗不记）");
+        // 池索引升序 = 创建序：life 在前、cleared 在后
+        assert_eq!((v[0].x, v[0].y), (Fx::from_int(10), Fx::from_int(20)));
+        assert_eq!((v[0].sprite, v[0].reason), (7, VANISH_LIFE));
+        assert_eq!((v[1].x, v[1].y), (Fx::from_int(30), Fx::from_int(40)));
+        assert_eq!((v[1].sprite, v[1].reason), (9, VANISH_CLEARED));
+        assert_eq!(w.body.diag.vanished_overflow, 0);
+    }
+
+    /// 被清优先于寿尽：同一颗弹两个标记都在，reason = CLEARED。
+    #[test]
+    fn vanished_prefers_cleared_over_life() {
+        use crate::bullets::BULLET_CLEARED;
+        use crate::events::VANISH_CLEARED;
+        #[cfg(debug_assertions)]
+        use crate::world::PH_CLEANUP;
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::bullet_at(&mut w, 0, 100);
+        let i = w.body.bullets.get(h).unwrap();
+        w.body.bullets.life[i] = 0;
+        w.body.bullets.flags[i] |= BULLET_CLEARED;
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_CLEANUP;
+        }
+        w.body.cleanup();
+        assert_eq!(w.body.vanished().len(), 1);
+        assert_eq!(w.body.vanished()[0].reason, VANISH_CLEARED);
+    }
+
+    /// 冻 C（玩家时停）时 cleanup 早退：寿尽弹留池、`vanished` 无行——与"残留而非泄漏"推论一致。
+    #[test]
+    fn vanished_is_empty_while_scene_frozen() {
+        #[cfg(debug_assertions)]
+        use crate::world::PH_CLEANUP;
+        let mut w = crate::step::World::new(1);
+        let h = crate::world::test_support::bullet_at(&mut w, 0, 100);
+        let i = w.body.bullets.get(h).unwrap();
+        w.body.bullets.life[i] = 0;
+        w.body.freeze_left[0] = 5;
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_CLEANUP;
+        }
+        w.body.cleanup();
+        assert!(w.body.bullets.get(h).is_some(), "冻结帧不回收");
+        assert!(w.body.vanished().is_empty());
     }
 }

@@ -100,9 +100,12 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `move_vel_xy(dur: int, vx: fx, vy: fx, easing: int)` — 同 move_vel 但收笛卡尔分量,且 dur>0 时**在笛卡尔空间插值**(两分量各自线性插,中途速率会掉——线性缓动即恒定加速度);要匀速转向用 move_vel。保住一轴的写法:move_vel_xy(30, $self_vx, 4.0fx, 2)
 - `move_angle(dur: int, angle: angle, easing: int)` — 只转向、速率一字不动;dur>0 走**最短弧**(350deg→10deg 走 +20deg 不走 -340deg)。相对转向:move_angle(60, $self_angle + 15deg, 3)
 - `move_speed(dur: int, speed: fx, easing: int)` — 只调速、方向一字不动。相对加速:move_speed(30, $self_speed * 2.0fx, 2)
+- `set_anm_state(state: int)` — 敌自身(self owner 非 ENEMY → Fault)写表现状态号 anm_state 并无条件盖 anm_state_frame=当前帧(同状态重设=重播,即 ZUN anmInterrupt 的电平版);世界不解释状态号,表现层按 (sprite,anm_state,state_age) 选帧
 - `boss_set(slot: int, hp_ratio: fx, spell_id: int, timer_frames: int, phase_left: int, active: int)` — 整槽写 boss_ui 公告板(脚本写/UI 读);enemy 字段取自 self owner(非 ENEMY → NULL,不 Fault);符卡 active 期 enemy/spell_id/timer_frames/hp_ratio 由引擎逐帧自动覆写,phase_left 不受影响仍归脚本
 - `pulse_signal(channel: int)` — 脉冲一条信号通道(边沿语义,仅当帧有效);放行处于弹变换 WAIT_SIGNAL 停驻态的弹(非 ECL 任务)
 - `emit_req(id: int, a0: int|fx|angle, a1: int|fx|angle, a2: int|fx|angle, a3: int|fx|angle, a4: int|fx|angle, a5: int|fx|angle)` — 通道 B 渲染请求;void 只能裸语句;args 裸载荷(fx 过 raw/angle 过 BAM/int 原样)
+- `fx_at(x: fx, y: fx, kind: int, param: int)` — 在 (x,y) 起一次性演出:发 REQ_FX_AT [x raw,y raw,kind,param,0,0](对应 ZUN anmPlayPos);kind/param 引擎不解释,归内容包与壳侧约定;owner 无限制;即发即忘
+- `fx_on(kind: int, param: int)` — 在敌自身上起依附演出(self owner 非 ENEMY → Fault):发 REQ_FX_ATTACHED [index,gen,kind,param,0,0](对应 ZUN anmPlay);壳侧按句柄每帧跟随、句柄失效即自毁;即发即忘
 - `rand(n: int) -> int` — 模拟 RNG 均匀 [0,n);确定性,随快照回卷
 - `global(slot: int) -> int` — 读 globals 槽(GVAR_RANK=0 为难度)
 - `set_global(slot: int, value: int)` — 写 globals 槽;系统段(slot<16)脚本写为 no-op+计数,不 Fault(GVAR_RANK=0 建议脚本只读)

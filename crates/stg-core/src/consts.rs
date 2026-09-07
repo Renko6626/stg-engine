@@ -63,6 +63,9 @@ engine_consts! {
         REQ_BGM:             u16 as int = 5;
         REQ_BG:              u16 as int = 6;
         REQ_BG_PHASE:        u16 as int = 7;
+        //  表现契约 v2（2026-09-07）：一次性演出两条（`fx_at`/`fx_on` 的钉死布局，即发即忘）
+        REQ_FX_AT:           u16 as int = 8;
+        REQ_FX_ATTACHED:     u16 as int = 9;
         REQ_SCRIPT_BASE:     u16 as int = 64;
         //  道具类型编号（`items.rs` 冻结编号；`drop_add` 的第 1 参）。**放①不放②**：
         //  ②段 join 校验（`tables.rs`）是用来抓"符号 vs 可加载表行"漂移的，而

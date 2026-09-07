@@ -29,7 +29,10 @@ define_pool! {
         ax: Fx, ay: Fx,
         sprite: u16, radius: Fx,
         delay: u8, life: u16, flags: u8, grazed_by: u8,
-        transform_head: u16, xform_wait: u16, xform_next: u8
+        transform_head: u16, xform_wait: u16, xform_next: u8,
+        // 出生帧（表现契约 v2，2026-09-07）：写一次、模拟相位不读，只有表现层编码器读它算
+        // 弹龄（`frame_after_step − born_frame`，首帧 = 1）。进校验和（P6）。
+        born_frame: u32
     }
 }
 
@@ -165,6 +168,7 @@ mod tests {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         }
     }
 

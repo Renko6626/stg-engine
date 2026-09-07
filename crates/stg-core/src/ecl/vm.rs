@@ -1797,6 +1797,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, 1).0,

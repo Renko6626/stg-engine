@@ -170,7 +170,7 @@ owner 类别全族无限制。
 |---|---|---|---|
 | 300-330 | 弹 setter 族 | 按 motion.rs 九连 | —（owner 须为弹，否则 Fault） |
 
-### 4xx —— 敌运动（5）
+### 4xx —— 敌运动·表现状态（6）
 
 对齐 ZUN ECL 的 `4xx`（`move` 族）。**self owner 必须是 ENEMY**，否则 Fault(0)；**敌句柄取自
 owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P4-b 校验（悬垂句柄 →
@@ -191,6 +191,7 @@ owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P
 | 411 | `move_vel_xy`（同刀） | dur,vx,vy,easing | —（同 410 号的 owner 门禁 / P4 / `dur==0` 口径，只有插值空间不同：`dur > 0` 时在**笛卡尔空间**插值——`vx`/`vy` 各自线性插、再回填 `speed`/`angle`。**这不是 410 号的语法糖**：同一对端点两条走的轨迹不同（笛卡尔是速度矢量直线穿过、中途速率掉，线性缓动即恒定加速度；极坐标是匀速扫弧）。把这条实现成"转极坐标再插"就退化成 410 号了，`integrate.rs` 的招牌判别式 `polar_and_cartesian_velocity_interpolation_take_different_paths` 就是钉这个的。薄封装 `world::set_enemy_vel_cart`） |
 | 420 | `move_angle`（同刀） | dur,angle,easing | —（**只转向、速率一字不动**：终点 = `(当前 speed, 目标 angle)`，走极坐标空间。3 位压栈。其余口径同 410 号） |
 | 421 | `move_speed`（同刀） | dur,speed,easing | —（**只调速、方向一字不动**：终点 = `(目标 speed, 当前 angle)`，走极坐标空间。3 位压栈。其余口径同 410 号） |
+| 430 | `set_anm_state`（表现契约 v2，2026-09-07） | state | —（**self-only**，owner 非敌 → Fault(0)；悬垂 owner 句柄 → no-op + `contract_viol` + `STALE_HANDLE`。写 `anm_state = state as u16` 并**无条件**盖 `anm_state_frame = 当前帧`——同状态重设 = 重播（ZUN `anmInterrupt` 重触发语义的电平版）。世界不解释状态号；表现层按 `(sprite, anm_state, frame − anm_state_frame)` 选帧，见 `render-contract.md` §7。**不是** ZUN 的 `anmSetSprite`：运行期换贴图不进核，换形态用状态号映射） |
 
 ### 5xx —— 局面·记账·道具（14）
 
@@ -241,7 +242,7 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
 | 652 | `sh_req`（shooter 刀） | id,req_id | —（开火时顺带发的通道 B 请求 id；`clamp(0, u16::MAX)` 收窄，**`0` = 不发**（ZUN 608 的 sound1 归并进通道 B）。载荷布局见 660 号。<br>⚠️ **本族唯一不"保号越界性"的 setter，与 `emit_req`(720)/`bgm`(550) 等同 id 空间的兄弟口径不同，是有意的**：那些兄弟对越界 id 是 **no-op + `contract_viol` + `BAD_ARGS`**，而本条**钳**——`sh_req(0, 100000)` 存下 65535，于是 660 号会发出一个脚本从没要求过的 id。两条理由：① 危害有界——`reqs` 是 `#[checksum(skip)]` 的**纯输出缓冲**，请求分发器对未知 id 是 warn-and-ignore，坏 id 顶多是"少放一个音效"，不像 610 号 `sh_sprite` 那样一旦洗掉越界性就再也拒不掉隐形弹；② "修好"它要动 `contract_viol`，而**那个是进校验和的**——改一个纯表现通道的参数校验去动确定性状态，代价方向反了。要在设的那一刻就拒坏 id，用 `emit_req` 自己发。参照 ZUN `608 etSound` 的 sound1；sound2 与 ZUN 的音效通道概念一并归并进通道 B，不单列） |
 | 660 | `sh_fire`（shooter 刀） | id | —（**无返回值**，人类裁定 D-8：本语言要求值必须消费，有返回就得写 `_ = sh_fire(0);` 而开火是循环里最高频的语句——**别"补全"成返回实发数**。用槽 `id` 的参数造弹，七步：① 退化网格 → ② appearance → ③ xform 区间 → ④ 挂弹任务号 → ⑤ 原点 → ⑥ 基准角 → ⑦ 网格循环，**一切拒绝都发生在任何世界写之前**（同 `create_bullet` 的先验后建）。<br>**P4 处置逐条**：`id` 越界 → no-op + `contract_viol`（同 600-652）；`n_angle==0 \|\| n_speed==0 \|\| n_angle*n_speed > BulletPool::CAP` → **不发 + `contract_viol` + `BAD_ARGS`，不 Fault**（对齐 `create_bullets_batch` 的退化网格口径）；appearance 越界或 `!valid` → **Fault(0)**；`xform_cnt > 16` 或 `off + cnt*3 > LOCALS` → **Fault(0)**；`task_script` 不在册 / 非零参 `Async` sub → **Fault(0)**；弹池满 → **短路本次开火的剩余部分**（同 `batch` 的 `'grid`，同相位无回收 ⇒ 后续必然同败），已发的留着；**xform 段池满**（只在 `sh_xform` 非空时可达）→ **同样短路剩余部分** + `pool_full[POOL_XFORM]` +1 + `STATUS_POOL_FULL`，**不 Fault**（P4-a）——`create_bullet_with_xform` 是"先段后弹"，段分配不到就直接返回 NULL，`'grid` 短路不区分是弹池还是段池，但**计数器是两个、失败模式是两条**；**段消耗账**：`sh_xform` 非空时每颗弹自有段拷贝 ⇒ 一次 `sh_fire` 吃 `n_angle × n_speed` 个段（段池共 **2048**），`sh_xform` + `sh_count(0, 28, 5)` = **140 段**，与 `batch` 的段消耗账逐字同一件事（见 [`xform-ops.md`](xform-ops.md)"消费入口"）；挂弹任务池满 → **弹保留、任务丢** + `pool_full[POOL_TASK]` +1，**不 Fault**（P4-a，同 `fire`）。<br>网格序 = **角度外层、速度内层**（= 池槽分配序，I4）。fan：`base + i·step − ((n−1)·step)/2`（**居中**，D-7）；ring：`base + (i×65536)/n + j·step`（逐颗算、余数均摊 ⇒ 精确闭合；`i ≤ 254` 故 i32 不溢出）。`on_fire_req != 0` 时发 `emit_req(on_fire_req, [origin_x, origin_y, appearance, **实际创建数**, 0, 0])`——`args[3]` 是实发数**不是**请求数（池满时要能区分）。owner 类别无限制。参照 ZUN `601 etOn`） |
 
-### 7xx —— 控制·事件·符卡·globals（7）
+### 7xx —— 控制·事件·符卡·globals（9）
 
 剩下的控制面。`get_var`/`set_var` 的段纪律见下方"globals 段纪律"；`spell_begin`/`spell_end`
 的完整口径见下方"符卡计器"。
@@ -253,6 +254,8 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
   `world::GLOBALS_SYS_SEGMENT` 文档） |
 | 710 | `pulse_signal` | ch | — |
 | 720 | `emit_req` | id a0 a1 a2 a3 a4 a5 | — |
+| 721 | `fx_at`（表现契约 v2） | x,y,kind,param | —（owner 无限制。= `emit_req(REQ_FX_AT, [x raw, y raw, kind, param, 0, 0])` 的钉死布局版，对应 ZUN `anmPlayPos`；`kind`/`param` 引擎不解释，归内容包与壳侧约定。即发即忘类；缓冲满走 D12） |
+| 722 | `fx_on`（表现契约 v2） | kind,param | —（**self-only**，owner 非敌 → Fault(0)。发 `REQ_FX_ATTACHED, [index, gen, kind, param, 0, 0]`，句柄取自 owner 敌、**裸 index/gen 两位**不打包；壳侧按 `(index, gen)` 每帧跟随（桥面 `entity_pos`）、句柄失效即自毁。对应 ZUN `anmPlay`。即发即忘类） |
 | 730 | `boss_set` | slot,hp_ratio,spell_id,timer,phase_left,active | —（enemy 字段写 NULL，见 boss_ui 契约） |
 | 740 | `spell_begin`（符卡机构，见下方"符卡计器"） | slot,spell_id,pattern_sub,time_limit,bonus0,flags,hp_threshold | —（owner 须为敌，否则 Fault） |
 | 741 | `spell_end`（符卡机构，见下方"符卡计器"） | — | —（owner 绑定槽走 HP 路径结算；无绑定槽 → no-op，重复调用安全） |

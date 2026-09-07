@@ -183,6 +183,7 @@ impl World {
         d.hits_len = 0;
         d.frame_events_len = 0;
         d.reqs_len = 0;
+        d.vanished_len = 0;
         #[cfg(debug_assertions)]
         {
             d.phase_guard = s.phase_guard;
@@ -309,6 +310,10 @@ impl World {
     /// 世界大事记读口委派(见 `WorldBody::frame_events`)。
     pub fn frame_events(&self) -> &[crate::events::Event] {
         self.body.frame_events()
+    }
+    /// 转发 [`crate::world::WorldBody::vanished`]（表现契约 v2）。
+    pub fn vanished(&self) -> &[crate::events::Vanished] {
+        self.body.vanished()
     }
 
     /// 任务池只读口:mutator 全 `pub(crate)`,`&TaskPool` 交出去只能读——同 `&Pool`
@@ -479,6 +484,7 @@ mod tests {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         }
     }
 
@@ -2271,11 +2277,23 @@ mod tests {
         // 走 derive 全量入（未 skip，`prev_input` 必须随快照回滚——rollback 后重放沿检测
         // 要逐位一致，这正是本字段存在的理由）；③D10 不适用（非池cap变更）；④SaveBytes
         // 同②走 derive，wire format 再多 8 B，`ENGINE_VER` 不二次 bump（同一炉 14→15）。
+        // 2026-09-07（表现契约 v2）：三处变宽，逐项对账 **+46088**（989152→1035240；
+        // `World` 同步 1148952→1195040，增量 1:1）：弹池 `born_frame: u32`×8192 = +32768、
+        // 敌池 `anm_state_frame: u32`×256 = +1024、`WorldBody` 新增 `vanished: [Vanished;
+        // 1024]`（12 B×1024 = +12288）+ `vanished_len: u16`（+2）+ `diag.vanished_overflow:
+        // u32`（+4），逐项相加 46086，余 2 B 是 `vanished_len` 后的对齐 padding。
+        // ① `copy_into`：两个池字段走 `define_pool!` 生成清单，自动；`vanished` 数组本体
+        //    与 hits/events/reqs 同款不复制、**显式 `d.vanished_len = 0`**（已加）；
+        //    `diag` 整块赋值自动带上新计数。② checksum：两个池字段 derive 全量入；
+        //    `vanished`/`vanished_len` 加了带理由的 skip；`vanished_overflow` 全量入（P4-a
+        //    两机必须丢得一样多）。③ D10：非池 cap 变更，每弹 +4 B、每敌 +4 B；`vanished`
+        //    是新输出缓冲 12 KB。④ SaveBytes：与 checksum 共享 skip 清单 ⇒ 两个池字段入档、
+        //    `vanished` 不入档，wire format 变 ⇒ `ENGINE_VER` 15→16。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (989152, 1148952);
+        const EXPECTED: (usize, usize) = (1035240, 1195040);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (989152, 1148952);
+        const EXPECTED: (usize, usize) = (1035240, 1195040);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2303,8 +2321,8 @@ mod tests {
         ];
         // cap: bullets 8192 / enemies 256 / shots 1024 / items 1024 / fields 16 / xform 4096
         let expected = [
-            ("bullets", 443_392), // 52 B/弹 ×8192 + gen 16384 + alive 1024  ≈ 433 KiB
-            ("enemies", 27_424),  // 105 B/敌 ×256 + gen 512 + alive 32      ≈ 26.8 KiB
+            ("bullets", 476_160), // 56 B/弹 ×8192 + gen 16384 + alive 1024  ≈ 465 KiB（v2：+born_frame u32）
+            ("enemies", 28_448), // 109 B/敌 ×256 + gen 512 + alive 32      ≈ 27.8 KiB（v2：+anm_state_frame u32）
             ("shots", 28_800),
             ("items", 22_656), // 22 B/道具 ×1024 + gen 2048 + alive 128（F12：512→1024）
             ("fields", 328),
@@ -2341,8 +2359,14 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            15,
-            "bump 必须是有意识决定(评审 + 改本测试)——14→15：自机能力刀(时间停止 + bomb)。\
+            16,
+            "bump 必须是有意识决定(评审 + 改本测试)——15→16：表现契约 v2(2026-09-07)。\
+             **布局 + 号表两重变更**:弹池 born_frame u32×8192 + 敌池 anm_state_frame \
+             u32×256 进校验和与存档;WorldBody 新增第四条纯输出缓冲 vanished(1024×12B, \
+             checksum/存档皆 skip 但结构尺寸变)+ diag.vanished_overflow;号表新增 430 \
+             set_anm_state / 721 fx_at / 722 fx_on;通道 B 引擎段新增 REQ_FX_AT=8 / \
+             REQ_FX_ATTACHED=9。金向量预期改变(新字段自帧 0 进哈希),行为零改动。\
+             ——前一次 14→15：自机能力刀(时间停止 + bomb)。\
              **布局 + 号表 + 输入词表三重变更**:World 变宽(freeze_left 4B + time_stops 1B×2 \
              + prev_input 4B×2,后者是复审纠偏加的沿检测滚存位,见 try_time_stop 文档)\
              ⇒ 旧存档尺寸对不上、响亮失败;号表新增 513 add_time_stops / 560 \
@@ -2440,6 +2464,7 @@ mod tests {
             flags: 0,
             sprite: 3,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
@@ -2837,6 +2862,7 @@ mod tests {
                 transform_head: 0,
                 xform_wait: 0,
                 xform_next: 0,
+                born_frame: 0,
             },
             &[crate::xform::XformSlot {
                 wait: 5,
