@@ -345,6 +345,15 @@ impl Timeline {
         cut
     }
 
+    /// 封印历史（关底用）：环里只留当前帧，之后的遡行最远只能退到这里。关卡结算是遡行的
+    /// **硬边界**——否则恢复 step 后 30 帧内被弹会退到上一关挂牌之前，`EVT_STAGE_CLEARED`
+    /// 重发、结算页弹两遍。log 不动（回放照样从头重放；封印只影响遡行落点）。
+    pub fn seal_history(&mut self) {
+        self.ring.frames.fill(None);
+        self.ring.newest = None;
+        self.ring.push(&self.world);
+    }
+
     // ── 影子世界（観測）──
 
     /// 开始一次预览：权威世界克隆进影子，清掉影子自机 0 的 `BTN_JUMP` 旧电平（玩家正按着键
@@ -915,6 +924,26 @@ mod tests {
         t.world().copy_into(&mut probe);
         probe.body.players[0].invuln = 0;
         assert_eq!(probe.checksum(), init_sum);
+    }
+
+    /// 封印后遡行最远只到封印帧（关底硬边界）。
+    #[test]
+    fn seal_history_bounds_rewind_to_the_seal_frame() {
+        let mut t = bare(14);
+        while t.frame() < 50 {
+            t.advance(&InputFrame::empty(0));
+        }
+        t.seal_history();
+        assert_eq!(t.ring.oldest(), Some(50));
+        assert!(t.ring_get(49).is_none());
+        for _ in 0..5 {
+            t.advance(&InputFrame::empty(0));
+        }
+        plant_hit(&mut t);
+        t.advance(&InputFrame::empty(0)); // hit_frame = 55 → 想退到 25，钳到 50
+        let adv = t.advance(&keys(BTN_REWIND));
+        assert_eq!(adv.rewound.map(|c| c.to), Some(50));
+        assert_eq!(t.log().frames.len(), 50, "log 仍是从头的线性历史");
     }
 
     /// 决死窗口耗尽（没按遡行）→ 正常死亡，timeline 不插手。

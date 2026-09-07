@@ -2369,8 +2369,11 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            17,
-            "bump 必须是有意识决定(评审 + 改本测试)——16→17：时间机制内核刀(2026-09-07)。\
+            18,
+            "bump 必须是有意识决定(评审 + 改本测试)——17→18：壳子刀·转场协议修正(2026-09-07)。\
+             号表新增 723 stage_clear + 事件 EVT_STAGE_CLEARED=11(流程信号从通道 B 挂牌改走\
+             通道 A 事实流,且表层追发 WAIT 1 让出帧);布局未动,金向量逐字节不变。\
+             ——前一次 16→17：时间机制内核刀(2026-09-07)。\
              **布局 + 词表 + 事件号三重变更**:PlayerState.hit_frame u32×2 进校验和与存档\
              (被尾部 4B padding 吃掉,size_of 不变——D20 第四次);输入词表新增 BTN_JUMP=8 /\
              BTN_REWIND=9(位=0 等价旧行为,vocab_hash 变);生命态新增 LIFE_JUMPING=5、事件\

@@ -150,7 +150,7 @@ ECL 侧 `set_anm_state(n)` 写状态并盖帧（同状态重设 = 重播，即 Z
 | 类别 | id | 处置 |
 |---|---|---|
 | 即发即忘 | `REQ_ENEMY_DEATH` / `REQ_FX_AT` / `REQ_FX_ATTACHED` | 收到即播；回滚误播接受为鬼影 |
-| 须确认 | `REQ_SPELL_DECLARE` / `REQ_SPELL_RESULT` / `REQ_STAGE_CLEAR` | 缓冲到 `frame ≤ confirmed_frame` 才播（M3 前 `confirmed_frame` = 当前帧，行为与从前一致） |
+| 须确认 | `REQ_SPELL_DECLARE` / `REQ_SPELL_RESULT`（`REQ_STAGE_CLEAR` 已退役，流程走 `EVT_STAGE_CLEARED` 事件） | 缓冲到 `frame ≤ confirmed_frame` 才播（M3 前 `confirmed_frame` = 当前帧，行为与从前一致） |
 | 电平镜像 | `REQ_BGM` / `REQ_BG` / `REQ_BG_PHASE` | 边沿通知；真值在 `anchors()`，开机/读档后先对表（§5） |
 
 水位：`frame ≤ watermark` 的请求丢弃（回滚重演已呈现过的帧）；重开/读档 `dispatcher.reset()`。
@@ -248,7 +248,7 @@ bg 段内局部时间 = `frame - bg_phase_frame`（A4 mini-VM 的 seek 契约，
 | 遡行倒放 | `view_ring(f)` | 落地后每 tick | 三层 + 木偶按环里那一帧重画（§3.9/§5.6） | 否 |
 | 时间提示 | `hud_player().life_state` + 壳状态机 | 每帧 | 一行文字：観測 N / 跳躍 / V 遡行 | 是 |
 | HUD | `hud_*` | 每帧 | 数字 + boss 条 + 符卡行 | 否 |
-| 横幅 | `REQ_SPELL_*`/`REQ_STAGE_CLEAR` | 边沿（须确认） | 文本 | 是 |
+| 横幅 | `REQ_SPELL_*` / `EVT_STAGE_CLEARED`（事件） | 边沿（须确认 / 事实） | 文本 | 是 |
 | 背景 | `anchors()` + `REQ_BG*` | 电平镜像 | 见 follow-ups A4 | 是 |
 
 ## 8. 有头目验（`--shots` 模式）

@@ -1,5 +1,6 @@
 // demo 局主编排。多文件单元:目录整取按名排序(boss_windchime < main < stage1),入口 main。
-// 转场协议:风铃卡后 emit REQ_STAGE_CLEAR 挂牌,宿主停拍(世界时间线冻结),脚本驻留。
+// 转场协议(壳子刀 2026-09-07):风铃卡后 stage_clear(1) 发 EVT_STAGE_CLEARED 事实事件并让出一帧,
+// 宿主停拍(世界时间线冻结);下一条语句在玩家确认后的第一帧才跑——这里没有下一关,驻留。
 sub main() {
     bgm(1);
     bg(1);
@@ -11,10 +12,7 @@ sub main() {
     }
     boss_battle();
     bg_phase(0);
-    add_score(100000); // 关底 bonus 世界内入账(结算数字在挂牌前定格)
-    // args[0]=1 载荷脚本自定(ecl-lang.md:REQ_STAGE_CLEAR 无引擎登记语义,纯挂牌协议
-    // 常量);main.gd 的 `_on_stage_clear()` 处理器现按 `func(_a): ...` 弃参,壳侧当前
-    // 不读这个值。
-    emit_req(REQ_STAGE_CLEAR, 1, 0, 0, 0, 0, 0);
-    loop { wait(600); } // 挂牌后驻留
+    add_score(100000); // 关底 bonus 世界内入账(结算数字在停拍前定格)
+    stage_clear(1); // = SYS 723 + wait(1):事件走通道 A,不再是 emit_req 挂牌
+    loop { wait(600); } // 停拍后驻留(没有下一关)
 }

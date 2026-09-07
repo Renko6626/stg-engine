@@ -65,6 +65,11 @@ pub const EVT_SHOT_HIT_ENEMY: u8 = 9;
 /// 兑现（恢复快照 + `rewind_landed`）归 `stg_core::timeline`；World 之上没有 timeline
 /// 的宿主（如裸 harness）看到它就是一条无人认领的事实，决死窗口照常走完。
 pub const EVT_REWIND_REQUESTED: u8 = 10;
+/// 关卡结束的**世界事实**（壳子刀 2026-09-07；脚本 `stage_clear(stage)` = `SYS_STAGE_CLEAR` 723
+/// 外加让出一帧）：`data = [stage, 0]`。宿主看见它就停拍画结算页、`seal_history()`，玩家确认
+/// 后恢复 step，下一关第一帧才发生。**流程信号走通道 A 事实流，不走通道 B 渲染请求**
+/// （`REQ_STAGE_CLEAR` 那条挂牌协议自此退役为纯演出/兼容位）。
+pub const EVT_STAGE_CLEARED: u8 = 11;
 
 // ── `vanished`：本帧离开池的敌弹（表现契约 v2 spec §3.4）────────────────────
 /// 弹 `life` 归零。

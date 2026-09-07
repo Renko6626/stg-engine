@@ -128,6 +128,12 @@ fn emits_kill_self_after(name: &str) -> bool {
     name == "die"
 }
 
+/// 降低后要追发 `wait(1)` 的内建（当前仅 `stage_clear`）：`emit`/`SYS` 本身不让出帧，
+/// 而「本关到此为止」的语义要求下一条语句在宿主放行后的第一帧才跑（壳子刀 2026-09-07）。
+fn emits_wait_one_after(name: &str) -> bool {
+    name == "stage_clear"
+}
+
 /// 循环栈簿记（clox 惯用法）：`break`/`continue` 各自的跳转占位位置列表，循环结构生成
 /// 完毕、`continue`/`break` 的真实目标（本地 code 位置）已知后统一回填。
 #[derive(Default)]
@@ -785,6 +791,11 @@ impl<'p> Gen<'p> {
                 // `Result<(), u8>`，没有"结束本任务"的返回通道——与其给六十个 match arm
                 // 换返回类型，不如在这里发第二条指令（零 VM 改动、零 op 表改动）。
                 b.raw_emit_op(stg_core::ecl::ops::OP_KILL_SELF);
+            }
+            if emits_wait_one_after(bi.name) {
+                // `stage_clear(n)` = `SYS 723` + `wait(1)`：让出一帧，宿主看见事件就停拍。
+                b.push_i(1);
+                b.raw_wait();
             }
         }
     }
@@ -1844,6 +1855,44 @@ mod tests {
     ///
     /// 判别力：敌放在 **x ≠ y** 的 (60, −80)，故"两条读口写反"会让 `atan2` 落到
     /// 另一个象限——`swapped` 那条 `assert_ne!` 就是把这个变异钉死的靶子。
+    #[test]
+    fn stage_clear_emits_fact_event_and_yields_one_frame() {
+        // 判别式：`stage_clear` 之后的 `set_global(20, 7)` 必须在**下一帧**才执行——
+        // 若降低漏了 wait(1)，事件帧里 g[20] 已经是 7。
+        let src = "sub main() {\n\
+                     wait(2);\n\
+                     stage_clear(3);\n\
+                     set_global(20, 7);\n\
+                     loop { wait(60); }\n\
+                   }";
+        let image = compile(src, "e2e.ecl").unwrap_or_else(|e| panic!("编译失败：{e:?}"));
+        let mut w = World::new(1);
+        w.start_main(&image).expect("main 应能派生");
+        let mut seen_at = None;
+        for f in 0..8 {
+            step(&mut w, &TABLES_V0, &image, &InputFrame::empty(f));
+            let ev = w
+                .frame_events()
+                .iter()
+                .find(|e| e.kind == stg_core::events::EVT_STAGE_CLEARED)
+                .copied();
+            if let Some(ev) = ev {
+                assert_eq!(ev.data[0], 3, "载荷 = stage");
+                assert_eq!(w.body.view().globals()[20], 0, "事件帧内下一条语句不得执行");
+                assert!(w.body.take_requests().is_empty(), "不走通道 B");
+                seen_at = Some(f);
+                break;
+            }
+        }
+        let f = seen_at.expect("8 帧内应看见 EVT_STAGE_CLEARED");
+        step(&mut w, &TABLES_V0, &image, &InputFrame::empty(f + 1));
+        assert_eq!(
+            w.body.view().globals()[20],
+            7,
+            "放行后的第一帧才执行下一条语句"
+        );
+    }
+
     #[test]
     fn nearest_enemy_to_enemy_pos_to_atan2_to_fire_is_wired_end_to_end() {
         use stg_core::math::{Fx, cordic};

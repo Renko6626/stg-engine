@@ -121,6 +121,11 @@ pub const SYS_FX_AT: u16 = 721;
 /// （owner 非 ENEMY → Fault(0)）。发 `REQ_FX_ATTACHED, [index, gen, kind, param, 0, 0]`，
 /// 句柄取自 owner 敌；壳侧按 `(index, gen)` 每帧跟随、句柄失效即自毁。即发即忘类。
 pub const SYS_FX_ON: u16 = 722;
+/// 关卡结束（壳子刀 2026-09-07；表层 `stage_clear(stage)`）：1 参 `stage`，发**事件**
+/// `EVT_STAGE_CLEARED{data0 = stage}`（通道 A 事实，不是通道 B 请求），owner 无限制。
+/// 表层 codegen 在它后面追发 `PUSHI 1; WAIT`——本关到此为止，下一条语句在宿主放行后的
+/// **第一帧**才执行；手写字节码只发 `SYS 723` 不会让出帧。
+pub const SYS_STAGE_CLEAR: u16 = 723;
 /// 符卡宣言（符卡机构 spec 2026-07-24 §5）：owner 必须 ENEMY（misuse → Fault）；7 参
 /// 正序压栈 `slot, spell_id, pattern:SubRef, time_limit, bonus0, flags, hp_threshold`
 /// （`pattern` 同 `fire` task 参同款 `SubRef`，负值=none）。
@@ -356,13 +361,13 @@ pub const SYS_SELF_ANGLE: u16 = 25;
 /// （百分区制下号非连续，同 [`crate::ecl::ops::op_implemented`] 的纪律）。不在表内的号
 /// 由 `dispatch` 的兜底臂返 `FAULT_BAD_OP`。
 ///
-/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、79 条结构测试的表是 `cfg(test)`，
+/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、80 条结构测试的表是 `cfg(test)`，
 /// 编译器 crate 两个都够不着）：`stg-ecl-compiler` 的 `builtins::BUILTINS` 要能断言
 /// "`is_op == false` 的条目，其 `syscall` 字段装的确实是个会被派发的号"。见
 /// `builtins.rs::builtin_dispatch_kind_matches_what_the_field_holds`。
 ///
 /// **与 `dispatch` 的同步靠测试押运，不靠自律**：`syscall_whitelist_matches_the_frozen_table`
-/// 断言"全 `u16` 域里为真的号恰好是那 79 条"，漏一条/多一条即红。
+/// 断言"全 `u16` 域里为真的号恰好是那 80 条"，漏一条/多一条即红。
 pub const fn syscall_implemented(no: u16) -> bool {
     matches!(
         no,
@@ -450,6 +455,7 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_EMIT_REQ
             | SYS_FX_AT
             | SYS_FX_ON
+            | SYS_STAGE_CLEAR
             | SYS_BOSS_SET
             | SYS_SPELL_BEGIN
             | SYS_SPELL_END
@@ -1114,6 +1120,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_EMIT_REQ => sys_emit_req(task, ctx),
         SYS_FX_AT => sys_fx_at(task, ctx),
         SYS_FX_ON => sys_fx_on(task, ctx),
+        SYS_STAGE_CLEAR => sys_stage_clear(task, ctx),
         SYS_BOSS_SET => sys_boss_set(task, ctx),
         SYS_SPELL_BEGIN => sys_spell_begin(task, ctx),
         SYS_SPELL_END => sys_spell_end(task, ctx),
@@ -1903,6 +1910,18 @@ fn sys_fx_on(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
+/// 关卡结束（[`SYS_STAGE_CLEAR`]=723）：1 参弹出，发 `EVT_STAGE_CLEARED{data0 = stage}`。
+/// 世界侧只记事实，不改任何状态；让出一帧由表层 codegen 追发的 `WAIT` 负责。
+fn sys_stage_clear(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let stage = pop(task)?;
+    ctx.body.push_event(crate::events::Event {
+        kind: crate::events::EVT_STAGE_CLEARED,
+        data: [stage, 0],
+        ..Default::default()
+    });
+    Ok(())
+}
+
 /// 符卡宣言（`SYS_SPELL_BEGIN`=740；符卡机构 spec 2026-07-24 §5）：7 参逆序弹出；
 /// `self_enemy_handle`（非敌 misuse → Fault，同 `move_enemy_to` 误用策略）。
 ///
@@ -2150,14 +2169,15 @@ mod tests {
             (SYS_EMIT_REQ, "emit_req", 7),
             (SYS_FX_AT, "fx_at", 7),
             (SYS_FX_ON, "fx_on", 7),
+            (SYS_STAGE_CLEAR, "stage_clear", 7),
             (SYS_BOSS_SET, "boss_set", 7),
             (SYS_SPELL_BEGIN, "spell_begin", 7),
             (SYS_SPELL_END, "spell_end", 7),
         ]
     }
 
-    /// 【本刀的主判据】号表族结构：79 条、无重号、每条落在其声明族的百位区间内
-    /// （原 74 条 + 自机能力刀 `513`/`560` = 76；表现契约 v2 再加 `430 set_anm_state`/`721 fx_at`/`722 fx_on` = 79）。
+    /// 【本刀的主判据】号表族结构：80 条、无重号、每条落在其声明族的百位区间内
+    /// （原 74 条 + 自机能力刀 `513`/`560` = 76；表现契约 v2 再加 `430 set_anm_state`/`721 fx_at`/`722 fx_on` = 79；壳子刀加 `723 stage_clear` = 80）。
     ///
     /// 这一刀是大规模机械重排，判别力要求与常规刀不同——不是"新行为对不对"，而是
     /// "**有没有搬错、搬漏、搬重**"。故判据是号表自身的结构性质，不是某条 syscall 的行为。
@@ -2185,8 +2205,8 @@ mod tests {
 
         assert_eq!(
             table.len(),
-            79,
-            "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）= 79：增改需同步这个数"
+            80,
+            "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 = 80：增改需同步这个数"
         );
 
         // (a) 族归属：搬错族立刻红
@@ -2352,7 +2372,7 @@ mod tests {
     ///
     /// 两个方向都断言（缺一个就只是半张网）：
     /// - **文档 → 常量**：文档里出现的每个 `(号, 名)` 对都得在 [`frozen_table`] 里；
-    /// - **常量 → 文档**：79 条常量每条都得在文档里出现，**漏记一条即红**。
+    /// - **常量 → 文档**：80 条常量每条都得在文档里出现，**漏记一条即红**。
     ///
     /// **它还有第二重职责，别只当它是"防文档漂移"**：本条是**全仓唯一**能抓到
     /// **族内互换**（号换了、族没换，如 `SYS_ATAN2` ↔ `SYS_DIST`）的测试。
@@ -4108,6 +4128,26 @@ mod tests {
             call(&mut w, &ecl, &mut task, SYS_SET_VAR, &[]),
             Err(FAULT_STACK)
         );
+    }
+
+    #[test]
+    fn sys_stage_clear_pushes_fact_event_not_request() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_STAGE_CLEAR, &[3]).is_ok());
+        let evs: Vec<_> = w
+            .frame_events()
+            .iter()
+            .filter(|e| e.kind == crate::events::EVT_STAGE_CLEARED)
+            .collect();
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].data[0], 3, "载荷 = stage");
+        assert_eq!(
+            w.body.take_requests().len(),
+            0,
+            "走通道 A 事实流，不发通道 B 请求"
+        );
+        assert_eq!(task.sp, 0, "参数弹尽");
     }
 
     #[test]
