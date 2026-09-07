@@ -14,7 +14,7 @@ pub struct ActionInput {
 /// 一帧的全体输入（§5）。**不进 World 校验和**（外部输入，非世界状态；
 /// 译码后的 `players[i].input` 才入校验和）。
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct InputFrame {
     pub frame: u32,
     pub actions: [ActionInput; crate::MAX_PLAYERS],

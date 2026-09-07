@@ -292,6 +292,11 @@ impl World {
         self.seed
     }
 
+    /// 本世界绑定的表 `content_hash`（回放头/日志头用；与 `save_bytes` 写进头里的是同一个值）。
+    pub fn tables_hash(&self) -> u64 {
+        self.tables_hash
+    }
+
     /// 通道 A 只读视图（委派 `WorldBody::view`）——godot/表现层持 `World`，经它读世界状态。
     pub fn view(&self) -> crate::world::WorldView<'_> {
         self.body.view()

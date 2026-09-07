@@ -293,20 +293,19 @@ impl WorldBody {
         self.push_event(ev);
     }
 
-    /// 遡行落地（写 API，spec §2.3）：timeline 把世界恢复到被弹前的快照后调它。
-    /// 落点在被弹之前，自机必为 ALIVE（不是则引擎 bug，P4-c debug 断言）。写落点无敌帧
-    /// `REWIND_INVULN`。**将来库存扣一、偏差值加一都从这一个口进**——"一切代价在落地侧付"。
-    /// `i` 越界 = 调用方违约 → no-op + `contract_viol`（P4-b）。
+    /// 遡行落地（写 API，spec §2.3）：timeline 把世界恢复到被弹前的快照后调它。写落点无敌帧
+    /// `invuln = max(invuln, REWIND_INVULN)`。**落点不一定是 ALIVE**（回放闸实测揪出来的）：
+    /// 被弹前 30 帧内自机可能正在跳躍（JUMPING）、刚重生（RESPAWNING，自带 120 无敌）——
+    /// 所以不断言状态，只取无敌帧的 max；JUMPING 下 C 组不减 invuln，落地回 ALIVE 后才开始数，
+    /// 等于"跳完再送 30 帧"，无害。**将来库存扣一、偏差值加一都从这一个口进**——"一切代价
+    /// 在落地侧付"。`i` 越界 = 调用方违约 → no-op + `contract_viol`（P4-b）。
     pub fn rewind_landed(&mut self, i: usize) {
         if i >= crate::MAX_PLAYERS {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             return;
         }
-        debug_assert_eq!(
-            self.players[i].life_state, LIFE_ALIVE,
-            "遡行落点必在被弹之前（timeline 落点计算或环内容有误）"
-        );
-        self.players[i].invuln = crate::player::REWIND_INVULN;
+        let p = &mut self.players[i];
+        p.invuln = p.invuln.max(crate::player::REWIND_INVULN);
     }
 
     /// 移动（东方手感：方向 + 低速 + 对角归一 + 场界钳制）。移速三值读角色配置表
