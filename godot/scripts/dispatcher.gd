@@ -43,6 +43,13 @@ func reset() -> void:
 	watermark = -1
 	pending.clear()
 
+## 遡行落地(时间机制内核刀 spec §5):水位重置到落点 F——F 及以前的请求都已呈现过,
+## 恢复出的世界缓冲里若还有它们(不会有:copy_into 清 len)也不再播;F 之后的是新事件。
+## 须确认类的待播队列整个作废(它们属于被丢弃的分支)。
+func reset_to(frame: int) -> void:
+	watermark = frame
+	pending.clear()
+
 func drain(arr: Array, confirmed_frame: int) -> void:
 	var top := watermark
 	for d in arr:

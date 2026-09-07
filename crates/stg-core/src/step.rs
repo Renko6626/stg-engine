@@ -292,6 +292,11 @@ impl World {
         self.seed
     }
 
+    /// 本世界绑定的表 `content_hash`（回放头/日志头用；与 `save_bytes` 写进头里的是同一个值）。
+    pub fn tables_hash(&self) -> u64 {
+        self.tables_hash
+    }
+
     /// 通道 A 只读视图（委派 `WorldBody::view`）——godot/表现层持 `World`，经它读世界状态。
     pub fn view(&self) -> crate::world::WorldView<'_> {
         self.body.view()
@@ -2289,6 +2294,11 @@ mod tests {
         //    两机必须丢得一样多）。③ D10：非池 cap 变更，每弹 +4 B、每敌 +4 B；`vanished`
         //    是新输出缓冲 12 KB。④ SaveBytes：与 checksum 共享 skip 清单 ⇒ 两个池字段入档、
         //    `vanished` 不入档，wire format 变 ⇒ `ENGINE_VER` 15→16。
+        // 2026-09-07（时间机制内核刀）：`PlayerState.hit_frame: u32`（×2）——**被吃掉未响**
+        // （D20 第四次）：`PlayerState` 尾部 `graze: u32` 之后到 8 对齐还有 4 B padding，
+        // u32 正好填满，`size_of` 仍是 64；两值不变。真正逮住它的是金向量（md5 变）与
+        // `vocab_hash_pinned`。四件套：① `copy_into` 走 `d.players = s.players`（Copy）自动；
+        // ② checksum derive 全量入；③ 非池；④ SaveBytes derive 自动入档 ⇒ `ENGINE_VER` 16→17。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
         const EXPECTED: (usize, usize) = (1035240, 1195040);
@@ -2359,8 +2369,13 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            16,
-            "bump 必须是有意识决定(评审 + 改本测试)——15→16：表现契约 v2(2026-09-07)。\
+            17,
+            "bump 必须是有意识决定(评审 + 改本测试)——16→17：时间机制内核刀(2026-09-07)。\
+             **布局 + 词表 + 事件号三重变更**:PlayerState.hit_frame u32×2 进校验和与存档\
+             (被尾部 4B padding 吃掉,size_of 不变——D20 第四次);输入词表新增 BTN_JUMP=8 /\
+             BTN_REWIND=9(位=0 等价旧行为,vocab_hash 变);生命态新增 LIFE_JUMPING=5、事件\
+             新增 EVT_REWIND_REQUESTED=10。金向量预期改变(新字段自帧 0 进哈希),风铃卡\
+             不按新键、行为零改动。——前一次 15→16：表现契约 v2(2026-09-07)。\
              **布局 + 号表两重变更**:弹池 born_frame u32×8192 + 敌池 anm_state_frame \
              u32×256 进校验和与存档;WorldBody 新增第四条纯输出缓冲 vanished(1024×12B, \
              checksum/存档皆 skip 但结构尺寸变)+ diag.vanished_overflow;号表新增 430 \

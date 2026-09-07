@@ -9,7 +9,7 @@ use crate::math::Fx;
 use crate::math::cordic::atan2;
 use crate::math::geom::{len_sq, polar_to_vec};
 use crate::math::isqrt::isqrt;
-use crate::player::{LIFE_ABSENT, LIFE_GAMEOVER};
+use crate::player::{LIFE_ABSENT, LIFE_GAMEOVER, LIFE_JUMPING};
 use crate::world::{STATUS_BAD_ARGS, STATUS_STALE_HANDLE};
 
 /// 低速回填阈值 = 1/16 px/帧。契约常量：`speed` 恒回填、`angle` 仅 `speed >= 此值` 时回填
@@ -191,12 +191,14 @@ impl WorldBody {
     }
 
     /// 最近可瞄自机：平方距离最小、并列取低索引（I4：升序遍历 + 严格小于才替换）。
-    /// 可瞄 = 非 ABSENT 且非 GAMEOVER（决死窗口/重生无敌期仍在场上，照瞄——ZUN 语义）。
+    /// 可瞄 = 非 ABSENT 且非 GAMEOVER（决死窗口/重生无敌期仍在场上，照瞄——ZUN 语义）
+    /// 且非 JUMPING（跳躍 = 缺席，时间机制内核刀；单人局下与不排除逐位同——坐标未动，
+    /// `aim_target` 回退到的就是同一个人——排除只为语义一致）。
     pub(crate) fn nearest_aimable_player(&self, x: Fx, y: Fx) -> Option<usize> {
         let mut best: Option<(usize, i64)> = None;
         for p in 0..crate::MAX_PLAYERS {
             let st = self.players[p].life_state;
-            if st == LIFE_ABSENT || st == LIFE_GAMEOVER {
+            if st == LIFE_ABSENT || st == LIFE_GAMEOVER || st == LIFE_JUMPING {
                 continue;
             }
             let d2 = len_sq(self.players[p].x - x, self.players[p].y - y);
@@ -646,6 +648,22 @@ mod tests {
         w.body.aim_bullet_at_player(h, Angle::ZERO);
         assert_eq!(w.body.bullets.angle[0], Angle::QUARTER, "角度不得变");
         assert_eq!(w.body.diag.contract_viol, cv0, "不得计违约");
+    }
+
+    /// 跳躍中 = 不可瞄（时间机制内核刀）：弹上 setter no-op，`aim_target` 回退 0 号最后坐标。
+    #[test]
+    fn jumping_player_is_not_aimable_but_aim_target_falls_back() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 100, 100);
+        w.body.bullets.angle[0] = Angle::QUARTER;
+        w.body.players[0].life_state = crate::player::LIFE_JUMPING;
+        w.body.aim_bullet_at_player(h, Angle::ZERO);
+        assert_eq!(w.body.bullets.angle[0], Angle::QUARTER, "缺席不可瞄");
+        assert_eq!(
+            w.body.aim_target(Fx::ZERO, Fx::ZERO),
+            0,
+            "回退 0 号最后坐标"
+        );
     }
 
     /// 并列取低索引（I4：升序遍历 + **严格 `<`** 才替换）——两个自机与弹等距、方向相反时

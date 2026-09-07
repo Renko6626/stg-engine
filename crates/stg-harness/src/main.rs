@@ -17,6 +17,7 @@
 use std::process::ExitCode;
 
 mod eclmeta;
+mod replay;
 mod run;
 mod storm;
 mod tables;
@@ -34,10 +35,11 @@ fn main() -> ExitCode {
         Some("storm") => storm::cmd_storm(&args[2..]),
         Some("check") => cmd_check(&args[2..]),
         Some("run") => run::cmd_run(&args[2..]),
+        Some("replay") => replay::cmd_replay(&args[2..]),
         Some("gen-ecl-meta") => eclmeta::cmd_gen(),
         _ => {
             eprintln!(
-                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] [--ecl PATH] | dump --out FILE [--frames N] [--seed S] [--ecl PATH] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl|目录> | run <file.ecl|目录> [--frames N] [--seed S] [--rank R] [--at F] | gen-ecl-meta>"
+                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] [--ecl PATH] | dump --out FILE [--frames N] [--seed S] [--ecl PATH] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl|目录> | run <file.ecl|目录> [--frames N] [--seed S] [--rank R] [--at F] | replay <log.stgr> --ecl <file.ecl|目录> [--every N] | gen-ecl-meta>"
             );
             ExitCode::FAILURE
         }

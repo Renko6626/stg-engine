@@ -8,6 +8,10 @@ pub const LIFE_ALIVE: u8 = 1;
 pub const LIFE_DEATHWINDOW: u8 = 2; // 决死窗口（中弹后可 bomb 救）
 pub const LIFE_RESPAWNING: u8 = 3; // 场底重生、无敌
 pub const LIFE_GAMEOVER: u8 = 4; // 命尽、不再重生
+/// 跳躍中（时间机制内核刀 2026-09-07）：自机**缺席**——不动、不射、不用能力、不碰撞、
+/// 不擦弹、不拾取、不可瞄；`state_timer` 从 `JUMP_FRAMES` 倒数到 0 回 ALIVE。
+/// 不复用 `LIFE_ABSENT`：那个态连 C 组计时都跳过，本态需要倒计时。
+pub const LIFE_JUMPING: u8 = 5;
 pub const DEATHBOMB_WINDOW: u16 = 8; // 决死窗口帧
 pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
 
@@ -15,6 +19,14 @@ pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
 /// 相反，全部住 `CharacterCfg.bomb`（避免第二真相源）。若将来"每个自机时停时长不同"
 /// 成为内容需求，迁进 `CharacterCfg` 的路径与 `BombCfg` 完全同构（spec §14）。
 pub const TIMESTOP_FRAMES: u16 = 180;
+
+/// 跳躍跨过的帧数（时间机制内核刀 spec §2.2）。也是宿主影子世界（観測）的预览步数——
+/// 影子 = 克隆 + 喂一帧 `BTN_JUMP` + step 本数，与真跳同一条代码路径。先 30（0.5 s），
+/// 手感要 1 s 再提 60。
+pub const JUMP_FRAMES: u16 = 30;
+/// 遡行落地后的无敌帧（spec §2.3）——策划案 2.3「落点附加短暂无敌帧」那条退路的实现，
+/// 由 `WorldBody::rewind_landed` 写入。
+pub const REWIND_INVULN: u16 = 30;
 
 // ── 角色配置：M0-17 T3 起移速/半径五常量已迁 `crate::tables::CharacterCfg`
 // （`TABLES_V0.characters[..]`）；`PlayerState::spawn` 从表取值，`update_players` 移动逻辑
@@ -60,6 +72,9 @@ pub struct PlayerState {
     pub bomb_pieces: u8,
     pub score: u64,
     pub graze: u32,
+    /// 进入决死窗口那一帧的 `World.frame`（时间机制内核刀）。`EVT_REWIND_REQUESTED` 把它带
+    /// 给 timeline 算遡行落点（`hit_frame − REWIND_DEPTH`）。ALIVE 期间保留上次值，无消费者。
+    pub hit_frame: u32,
 }
 
 /// 开局装备面（整局流程刀 spec §2.2/§3）——回放/握手身份组成部分之一
@@ -108,6 +123,7 @@ impl PlayerState {
             invuln: 0,
             bomb_phase: 0,
             bomb_timer: 0,
+            hit_frame: 0,
             shot_timer: 0,
             power: ld.power,
             lives: ld.lives,

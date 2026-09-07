@@ -183,7 +183,7 @@ sub main() {
 
     fn step_once(g: &mut crate::boot::Game) {
         let input = stg_core::input::InputFrame::empty(0);
-        stg_core::step::step_with_director(&mut g.world, g.tables, &g.image, &input, |_| {});
+        g.timeline.advance(&input);
     }
 
     fn stepped_game() -> crate::boot::Game {
@@ -201,7 +201,13 @@ sub main() {
 
     fn encode(g: &crate::boot::Game, layer: usize) -> (u32, Vec<f32>) {
         let mut out = vec![0.0f32; layer_cap(layer) * FLOATS_PER_INSTANCE];
-        let n = encode_layer(g.world.view(), g.tables, g.world.frame(), layer, &mut out);
+        let n = encode_layer(
+            g.world().view(),
+            g.tables,
+            g.world().frame(),
+            layer,
+            &mut out,
+        );
         (n, out)
     }
 
@@ -223,8 +229,8 @@ sub main() {
         // 局部"上"是 (0,-1)，变换后 = (-xy, -yy) = (sin, -cos)。世界侧速度方向则是
         // `polar_to_vec` 的 (cs, sn)。两者必须相等——这一条同时钉死了四分之一圈补偿的
         // **存在**与**方向**：去掉补偿或补反，两侧立刻对不上。
-        let angles = g.world.view().bullets().angle();
-        for (k, i) in g.world.view().bullets().iter_alive().enumerate() {
+        let angles = g.world().view().bullets().angle();
+        for (k, i) in g.world().view().bullets().iter_alive().enumerate() {
             let base = k * FLOATS_PER_INSTANCE;
             let (up_x, up_y) = (out[base + 4], -out[base + 5]); // (sin, -cos)
             let (sn, cs) = stg_core::math::sincos(angles[i]);
@@ -276,10 +282,10 @@ sub main() {
         assert_eq!(layer_cap(3), 0);
         let g = stepped_game();
         assert_eq!(
-            encode_layer(g.world.view(), g.tables, g.world.frame(), 3, &mut []),
+            encode_layer(g.world().view(), g.tables, g.world().frame(), 3, &mut []),
             0
         );
-        let c = crate::puppets::encode_puppets(g.world.view(), g.world.frame());
+        let c = crate::puppets::encode_puppets(g.world().view(), g.world().frame());
         assert_eq!((c.x[0], c.y[0]), (-96.0, -64.0), "敌人从木偶喂料读");
     }
 
@@ -324,14 +330,14 @@ sub main() {
     #[test]
     fn shots_layer_nonempty_matches_pool() {
         let mut g = crate::boot::boot("sub main() { }", 7, 2).expect("boot");
-        let mut input = stg_core::input::InputFrame::empty(g.world.frame());
+        let mut input = stg_core::input::InputFrame::empty(g.world().frame());
         input.actions[0].buttons = stg_core::input::BTN_SHOT;
         for _ in 0..4 {
-            input.frame = g.world.frame();
-            stg_core::step::step_with_director(&mut g.world, g.tables, &g.image, &input, |_| {});
+            input.frame = g.world().frame();
+            g.timeline.advance(&input);
         }
 
-        let p = g.world.view().shots();
+        let p = g.world().view().shots();
         let first = p
             .iter_alive()
             .next()

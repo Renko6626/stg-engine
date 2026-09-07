@@ -1,7 +1,8 @@
 # 时间机制内核刀 —— timeline + 観測/跳躍/遡行（设计，2026-09-07）
 
-> 状态：**已评审拍板，待写实施计划**。本文是 brainstorming 环的产出，口径由人类逐条裁定
-> （§10「人类拍板记录」留痕）。实施计划另起 `docs/superpowers/plans/`。
+> 状态：**已实施收口（2026-09-07，三段提交：核 0804508 / timeline 43593a6 / 桥壳 a2da229）**，
+> 实施偏差见 §11。本文是 brainstorming 环的产出，口径由人类逐条裁定（§10「人类拍板记录」
+> 留痕）。按用户要求未走完整 superpowers 执行流程（无独立 plan 文件），直接按 §7 三段实施。
 > 玩法来源：`docs/project_overview.md`（東方時環譜 v0.5）§2.1/§2.3/§2.5/§7.6。
 > 本刀**重新定义 M3**：原「环形快照 + 输入扰动 harness（本地回滚）」改为「时间机制内核刀」，
 > 联机回滚是附带收益不是目标。
@@ -278,3 +279,19 @@ magic "STGR" | file_ver u8=1 | ENGINE_VER u32 | tables_hash u64 | image_hash u64
 | ⑤ | 観測/跳躍按键协议 | 按一下进観測，窗口内再按一下跳躍（用户提出） |
 | ⑥ | 快照步长 | 做成常量，先 1 后调；用户判断隔帧够用 |
 | ⑦ | 资源/偏差值 | 之后再改，先核心机制 |
+
+## 11. 实施偏差记录（2026-09-07 收口时补）
+
+| # | spec 原文 | 实际 | 理由 |
+|---|---|---|---|
+| a | §2.3 `rewind_landed` 断言落点 ALIVE、写 `invuln = REWIND_INVULN` | 不断言，`invuln = max(invuln, REWIND_INVULN)` | 回放闸实测：被弹前 30 帧内自机可能正在跳躍或刚重生（`RESPAWNING` 自带 120 无敌），落点不是 ALIVE 是正常态。JUMPING 下 C 组不减 invuln，落地回 ALIVE 后才数，等于"跳完再送 30 帧"。 |
+| b | §3.2 落点"钳到 `ring.oldest`"+ 步长 > 1 时"就近恢复再补 step" | 落点先向下取整到步长倍数再钳位，永远是存档帧，无补 step 路径 | 少一条只在步长 > 1 才活的代码路径；步长 2 时落点误差 ≤ 1 帧，可接受。 |
+| c | §3.1 `Boot::Snapshot { save_hash }` | `Boot::Snapshot { world_checksum }` | 桥侧拿不到存档载荷 FNV（`fnv1a64` 是 core 私有），载入世界的校验和同样唯一且现成。 |
+| d | §3.1 环槽淘汰"比 F 新的槽作废" | `truncate_to` 只动 `newest`，作废槽内容保留、经 `get_discarded` 可读到下一次 `advance` | 壳侧倒放动画要从请求帧 G 倒着读到 F，那些帧正是被丢弃的分支；下一 step 起同槽被新帧覆写，语义不变。 |
+| e | §3.3 `preview(n)` = `n` 步 | `preview(n)` = 起跳那一步 + `n` 步，`n = JUMP_FRAMES` 时返回落地那一帧 | 首版按 spec 走 30 步，影子停在"还剩 1 帧"的 JUMPING；改成 n = 跳过的帧数，与真跳"喂一帧 JUMP 再走 n 帧空帧"一一对应，测试 `preview_equals_a_real_jump` 押运。 |
+| f | §4 `LAYER_GHOST_BULLETS` 新注册层号 | 独立 `register_ghost_layer(rid)`，不占 `LAYER_*` 号 | `step_frame` 对 `layers[]` 无条件从权威世界编码上传，影子层若混进去每帧会被权威世界覆写；独立持有更直白。 |
+| g | §6 桥级冒烟"构造决死窗口" | 自机上到 y≈300 再向左走进 `godot_smoke.ecl` 的弹流，真中弹 | GDScript 没有世界写口，构造不了；走进弹流反而是端到端的真判别（含 `hit_frame` 读口）。 |
+| h | §6 有头目验"受击→遡行"截图 | 本次无 `rewind_land` 张 | `--shots` 的脚本化输入没撞上弹；遡行的数值判别在桥级冒烟，倒放视觉留下次目验。 |
+| i | §7 三段提交 | 同；文档单独一提交 | — |
+| j | 流程 | 未写 `docs/superpowers/plans/`，spec 拍板后直接三段实施 | 用户要求（"计划简单写，直接开干"）。 |
+

@@ -1,17 +1,31 @@
-//! 纯 Rust:源码文本 → EclImage → World::new_game(spec §12)。零 gdext 类型。
+//! 纯 Rust:源码文本 → EclImage → Timeline::new_game_at(spec §12)。零 gdext 类型。
+//! 时间机制内核刀(2026-09-07):桥持的不再是裸 `World` 而是 `Timeline`(权威世界 + 快照环
+//! + 影子 + 输入日志);镜像随 Timeline 走,`game.image()` 读口。
 
-use stg_core::ecl::image::EclImage;
-use stg_core::step::World;
 use stg_core::tables::{TABLES_V0, WorldTables};
+use stg_core::timeline::Timeline;
 
-/// `#[derive(Debug)]` 借 `World` 手写占位 Debug(`finish_non_exhaustive`,见 step.rs)与
-/// `EclImage`/`WorldTables` 自身 derive——只为满足测试 `Result::expect`/`{:?}` 打印场景
-/// (`boot_at` 失败测试用 `panic!("...{other:?}")`),不逐字段展开真实状态。
-#[derive(Debug)]
 pub struct Game {
-    pub world: Box<World>,
-    pub image: EclImage,
+    pub timeline: Timeline,
     pub tables: &'static WorldTables, // v1 恒 &TABLES_V0(follow-ups A3)
+}
+
+impl Game {
+    pub fn world(&self) -> &stg_core::step::World {
+        self.timeline.world()
+    }
+    pub fn image(&self) -> &stg_core::ecl::image::EclImage {
+        self.timeline.image()
+    }
+}
+
+/// 只为满足测试 `Result::expect`/`{:?}` 打印场景,不逐字段展开(World 挂着 ~50 MB 的环)。
+impl std::fmt::Debug for Game {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Game")
+            .field("frame", &self.timeline.frame())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -35,11 +49,10 @@ pub fn boot_at(
         let msg: Vec<String> = errs.iter().map(|(file, e)| e.render(file)).collect();
         BootError::Compile(msg.join("\n\n"))
     })?;
-    let world = World::new_game_at(seed, rank, start, loadout, &image)
+    let timeline = Timeline::new_game_at(seed, rank, start, loadout, image)
         .map_err(|e| BootError::Start(format!("{e:?}")))?;
     Ok(Game {
-        world,
-        image,
+        timeline,
         tables: &TABLES_V0,
     })
 }
@@ -62,8 +75,8 @@ mod tests {
     #[test]
     fn boot_ok_and_frame_zero() {
         let g = boot("sub main() { loop { wait(60); } }", 7, 2).expect("boot");
-        assert_eq!(g.world.frame(), 0);
-        assert_ne!(g.world.checksum(), 0);
+        assert_eq!(g.world().frame(), 0);
+        assert_ne!(g.world().checksum(), 0);
     }
 
     #[test]
@@ -98,7 +111,7 @@ mod tests {
             },
         )
         .expect("多单元中段 boot");
-        assert_eq!(g.world.body.view().players()[0].power, 400);
+        assert_eq!(g.world().view().players()[0].power, 400);
     }
 
     #[test]

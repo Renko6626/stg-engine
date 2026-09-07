@@ -173,7 +173,14 @@ extern crate self as stg_core;
 /// `430 set_anm_state` / `721 fx_at` / `722 fx_on`；通道 B 引擎段新增 `REQ_FX_AT = 8` /
 /// `REQ_FX_ATTACHED = 9`。**金向量预期改变**（两个新字段进哈希，自帧 0 起），行为零改动：
 /// `vanished` 不改任何相位决策，两个帧号字段在核内无消费者。
-pub const ENGINE_VER: u32 = 16;
+///
+/// **16 → 17**（时间机制内核刀，2026-09-07）：**布局 + 词表 + 事件号三重变更**。
+/// ① `PlayerState.hit_frame: u32`（×2）进校验和与存档（被 `PlayerState` 尾部 4 B 对齐
+/// padding 吃掉，`size_of` 不变——D20 第四次，哨兵仍未响）；② 输入动作词表新增 `BTN_JUMP = 8` /
+/// `BTN_REWIND = 9`（位=0 等价旧行为，`actions_vocab_hash` 变）；③ 生命态新增
+/// `LIFE_JUMPING = 5`、事件新增 `EVT_REWIND_REQUESTED = 10`。**金向量预期改变**（新字段
+/// 进哈希，自帧 0 起）；风铃卡不按新键，行为零改动。
+pub const ENGINE_VER: u32 = 17;
 
 pub use stg_derive::define_pool;
 
@@ -199,6 +206,7 @@ pub mod shots;
 pub mod spell;
 pub mod step;
 pub mod tables;
+pub mod timeline;
 pub mod world;
 pub mod xform;
 

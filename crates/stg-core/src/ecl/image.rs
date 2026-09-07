@@ -232,7 +232,7 @@ pub enum ImageBuildError {
 
 /// 脚本镜像：`code` 是全部子程序共享的扁平字流（`Task.pc` 是其**绝对**字索引）。
 /// 构造期将可读的初始化记录压紧成不可变运行表，运行期不再持有名字 `String` 或参数 `Vec`。
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EclImage {
     code: Box<[u32]>,
     subs: Box<[RuntimeSubMeta]>,

@@ -3,7 +3,9 @@ extends Node
 ## 表现契约 v2(2026-09-07):`_after_step` 顺序 = 请求 → 事件 → vanished → 特效 tick →
 ## HUD → 自机/木偶;请求 id 与事件 kind 一律取 WorldBridge.REQ_*/EVT_* 常量(不手抄)。
 
-enum S { PLAYING, PAUSED, STAGE_CLEAR }
+## 时间机制内核刀(2026-09-07,spec §5):REWINDING = 遡行倒放表现态(世界已在落点,壳逐帧
+## `view_ring` 往回读到落点再恢复 PLAYING);観測/跳躍两段按键协议见 `_on_observe_key`。
+enum S { PLAYING, PAUSED, STAGE_CLEAR, REWINDING }
 
 ## 开局参数(此前是 `new_game_at(names, sources, 1, 2, start, 0, 0, 3, 3)` 里一串位置魔数——
 ## demo 一直在跑 Hard 而调用点看不出来)。本刀只让它们可见可改,取值一律维持原样。
@@ -35,11 +37,28 @@ var _smoke_saw_bgm := false # 冒烟②侦听 REQ_BGM 用(成员变量,lambda �
 var shots_mode := false
 ## 帧 60..75 向左走到 x≈-48 的杂兵正下方(自机每帧约 3px),之后自机弹持续命中:受击闪白/火花
 ## 可在 95/100 帧看到,杂兵 hp=40 打死后有爆炸环(REQ_ENEMY_DEATH)。第 200 帧放 bomb。
-const SHOT_FRAMES := { 95: "hit_a", 100: "hit_b", 130: "zako", 201: "bomb_t1", 206: "bomb_t6", 214: "bomb_t14", 620: "boss" }
+const SHOT_FRAMES := { 95: "hit_a", 100: "hit_b", 130: "zako", 201: "bomb_t1", 206: "bomb_t6", 214: "bomb_t14", 320: "observe", 361: "jump", 620: "boss" }
 const SHOT_BOMB_FRAME := 200
 const SHOT_LEFT_FRAMES := [60, 76]
 var _shots_left := 0
 var _death_shot_at := -1 # 首次 REQ_ENEMY_DEATH 后第 4 帧补一张(爆炸环 20 帧寿命的前四分之一)
+
+## ── 時環譜 时间机制(spec §5)────────────────────────────────────────────────
+## 観測:按一下 C 进入,窗口 OBSERVE_WINDOW tick 内每 tick 让影子世界跑 JUMP_FRAMES 步并
+## 显示影子层;窗口内再按一下 C = 跳躍(把 BTN_JUMP 注入**这一帧**的输入,一帧即沿);
+## 窗口到期自动退出。跳躍期间/倒放期间按 C 忽略。
+const OBSERVE_WINDOW := 60
+const SCRUB_STEP := 3 # 遡行倒放每 tick 退几帧
+var observing := false
+var _observe_left := 0
+var _inject_jump := false
+var _scrub_cur := 0
+var _scrub_to := 0
+var _last_rewind_to := -1 # 冒烟/目验用:最近一次遡行落点
+## 目验:第 SHOT_OBSERVE_FRAME 帧按 C(観測),第 SHOT_JUMP_FRAME 帧再按 C(跳躍);
+## 跳躍那一 tick 世界一口气走 31 帧,截图帧号取 SHOT_JUMP_FRAME+31。
+const SHOT_OBSERVE_FRAME := 300
+const SHOT_JUMP_FRAME := 330
 
 func _ready() -> void:
 	smoke = "--smoke" in OS.get_cmdline_user_args()
@@ -109,6 +128,7 @@ func _boot(start: int) -> bool:
 		# 新世界 = 帧号从 0 起:水位、特效行、木偶记忆全部归零(表现契约 v2 §5.2/§5.4)
 		dispatcher.reset()
 		effects.clear_all()
+		_end_observe()
 		_sync_anchors() # 双表示规矩:开机后一次性对电平(T5 实装演出)
 		if not playfield.setup(bridge):
 			return false
@@ -138,16 +158,110 @@ func _physics_process(_dt: float) -> void:
 	if state == S.PAUSED:
 		hud.show_banner("PAUSE", 0.1) # 每帧续,判据只有一条:PAUSED 不 step
 		return
+	if state == S.REWINDING:
+		_scrub_tick()
+		return
 	if state != S.PLAYING:
 		return
 	var buttons := _scripted_mask(bridge.frame()) if shots_mode else stg_input.mask() # 算一次,step_frame/update_view 共用(避免帧内读两次输入分叉)
-	bridge.step_frame(buttons)
+	# 観測/跳躍两段协议:真人局读 C 键上升沿;目验按脚本帧号;冒烟由 _run_smoke 直接调 _on_observe_key
+	if shots_mode:
+		if bridge.frame() == SHOT_OBSERVE_FRAME or bridge.frame() == SHOT_JUMP_FRAME:
+			_on_observe_key()
+	elif not smoke and stg_input.observe_pressed():
+		_on_observe_key()
+	if _inject_jump:
+		buttons |= WorldBridge.BTN_JUMP
+		_inject_jump = false
+	var g0 := bridge.frame()
+	var landed := bridge.step_frame(buttons)
+	if landed >= 0:
+		_begin_rewind(g0 + 1, landed)
+		return
+	# 跳躍快进(spec §3.2/§5):缺席的那 N 帧在同一 tick 里走完,中间帧的通道 B 请求与
+	# vanished 丢弃——她不在场。上限 JUMP_FRAMES+1 防状态机异常时死循环。
+	var n := 0
+	while int(bridge.hud_player().get("life_state", 0)) == WorldBridge.LIFE_JUMPING and n <= WorldBridge.JUMP_FRAMES:
+		landed = bridge.step_frame(0)
+		n += 1
+		if landed >= 0: # 缺席不可能被弹,防御性处理
+			_begin_rewind(g0 + 1 + n, landed)
+			return
 	_after_step(buttons)
+	if observing:
+		_observe_tick()
 	if shots_mode and SHOT_FRAMES.has(bridge.frame()):
 		_capture(SHOT_FRAMES[bridge.frame()])
 	if shots_mode and _death_shot_at == bridge.frame():
 		_shots_left += 1
 		_capture("death")
+
+## C 键:未観測 → 进入(只在自机 ALIVE 时);観測中 → 跳躍(注入一帧 BTN_JUMP)并退出観測。
+func _on_observe_key() -> void:
+	if observing:
+		_inject_jump = true
+		_end_observe()
+	elif int(bridge.hud_player().get("life_state", 0)) == 1: # LIFE_ALIVE
+		observing = true
+		_observe_left = OBSERVE_WINDOW
+		playfield.set_ghost_visible(true)
+		bridge.preview(WorldBridge.JUMP_FRAMES)
+
+func _observe_tick() -> void:
+	_observe_left -= 1
+	if _observe_left <= 0:
+		_end_observe()
+	else:
+		bridge.preview(WorldBridge.JUMP_FRAMES)
+
+func _end_observe() -> void:
+	observing = false
+	_observe_left = 0
+	if playfield != null and playfield.ghost != null:
+		playfield.set_ghost_visible(false)
+
+## 遡行落地后的倒放(spec §5):世界已在落点 F,壳从请求帧 G 开始每 tick 退 SCRUB_STEP 帧
+## `view_ring` 到 F,期间不 step、不收输入;到 F 后水位重置、fx 清空、锚点对表,回 PLAYING。
+func _begin_rewind(g: int, f: int) -> void:
+	_end_observe()
+	state = S.REWINDING
+	_scrub_cur = g
+	_scrub_to = f
+	_last_rewind_to = f
+	hud.set_time_hint("遡行 …")
+	_scrub_tick()
+
+func _scrub_tick() -> void:
+	_scrub_cur = maxi(_scrub_cur - SCRUB_STEP, _scrub_to)
+	if not bridge.view_ring(_scrub_cur):
+		_scrub_cur = _scrub_to # 环里没有(被覆写/越界):直接落地
+		bridge.view_ring(_scrub_cur)
+	playfield.update_view(bridge, 0)
+	hud.refresh(bridge)
+	if _scrub_cur <= _scrub_to:
+		_finish_rewind()
+
+func _finish_rewind() -> void:
+	dispatcher.reset_to(_scrub_to)
+	effects.clear_all()
+	_sync_anchors() # A7 记的那个"读档后必须对表"场合:遡行落地就是一次读档
+	state = S.PLAYING
+	_update_time_hint()
+	if shots_mode:
+		_shots_left += 1
+		_capture("rewind_land")
+
+## 时间机制的一行电平提示。
+func _update_time_hint() -> void:
+	var st := int(bridge.hud_player().get("life_state", 0))
+	if observing:
+		hud.set_time_hint("観測 %d  (C 跳躍)" % _observe_left)
+	elif st == WorldBridge.LIFE_JUMPING:
+		hud.set_time_hint("跳躍")
+	elif st == WorldBridge.LIFE_DEATHWINDOW:
+		hud.set_time_hint("V 遡行")
+	else:
+		hud.set_time_hint("")
 
 func _after_step(buttons: int) -> void:
 	# M3 前确认地平线 = 当前帧(须确认类立即播);接回滚时只改这个实参
@@ -157,6 +271,7 @@ func _after_step(buttons: int) -> void:
 	effects.tick(bridge)
 	hud.refresh(bridge)
 	playfield.update_view(bridge, buttons)
+	_update_time_hint()
 	# I-1(终审裁定):残机耗尽的最小处置——拦假胜利。life_state==4 = LIFE_GAMEOVER
 	# (stg-core player.rs),hud_player 已暴露该键。复用既有三态与 Z 重开路径,不新增状态;
 	# continue/计分对齐等深度流程留内容期(follow-ups A8)。
@@ -202,6 +317,7 @@ func _capture(name: String) -> void:
 	var vis := []
 	for kind in playfield.layer_nodes:
 		vis.append([kind, RenderingServer.multimesh_get_visible_instances(playfield.layer_nodes[kind].multimesh.get_rid())])
+	vis.append(["ghost", RenderingServer.multimesh_get_visible_instances(playfield.ghost.multimesh.get_rid()), playfield.ghost.visible])
 	print("[shots] %s → %s (err %d) visible_instances=%s fx_rows=%d" % [name, path, err, str(vis), effects.n])
 	_shots_left -= 1
 	if _shots_left <= 0:
@@ -258,9 +374,24 @@ func _run_smoke() -> void:
 	var enemy_seen := false
 	var puppet_visible_seen := false
 	var waited := 0
+	# 时间机制内核刀:第 100 帧按 C(観測)→ 下一 tick 影子层可见;第 130 帧再按 C(跳躍)
+	# → 那一 tick 世界一口气走 JUMP_FRAMES+1 帧(缺席快进),影子层随之关闭。
+	var ghost_seen := false
+	var jump_from := -1
+	var jump_ok := false
 	while bridge.frame() < 240 and waited < 480:
 		await get_tree().physics_frame
 		waited += 1
+		if jump_from >= 0 and not jump_ok:
+			jump_ok = bridge.frame() == jump_from + WorldBridge.JUMP_FRAMES + 1
+			jump_from = -1
+		if observing and playfield.ghost.visible:
+			ghost_seen = true
+		if bridge.frame() == 100:
+			_on_observe_key()
+		elif bridge.frame() == 130 and observing:
+			jump_from = bridge.frame()
+			_on_observe_key()
 		var pp: Dictionary = bridge.puppets()
 		if not pp.is_empty() and pp["index"].size() > 0:
 			if absf(pp["x"][0]) > 0.01 or absf(pp["y"][0]) > 0.01:
@@ -268,7 +399,16 @@ func _run_smoke() -> void:
 			if playfield.puppets[pp["index"][0]].visible:
 				puppet_visible_seen = true
 	fails += _chk(bridge.frame() >= 240, "frame>=240, got %d" % bridge.frame())
-	fails += _chk(waited <= 241, "轮次<=目标+1(防每两 tick 一 step 回归),got %d" % waited)
+	fails += _chk(waited <= 241 - WorldBridge.JUMP_FRAMES, "轮次<=目标+1−跳过帧数(防每两 tick 一 step 回归),got %d" % waited)
+	fails += _chk(ghost_seen, "観測期间影子层应可见(两段协议第一下)")
+	fails += _chk(jump_ok, "跳躍那一 tick 应快进 JUMP_FRAMES+1 帧(缺席快进)")
+	fails += _chk(not observing and not playfield.ghost.visible, "跳躍后観測应已退出")
+	# 倒放读口往返:视图切到 5 帧前不动权威帧号,下一 tick 自动切回并 +1。
+	var f_now := bridge.frame()
+	fails += _chk(bridge.view_ring(f_now - 5), "view_ring(5 帧前) 应在环里")
+	fails += _chk(bridge.frame() == f_now, "view_ring 不动权威帧号")
+	await get_tree().physics_frame
+	fails += _chk(bridge.frame() == f_now + 1, "视图态在下一次 step 后解除")
 	fails += _chk(enemy_seen, "puppets() 窗口内出现非默认位置的敌人(demo 杂兵真的在动)")
 	fails += _chk(puppet_visible_seen, "木偶节点随 puppets() 变为可见(壳侧喂料链接上)")
 	fails += _chk(bridge.checksum() != 0, "checksum!=0")
