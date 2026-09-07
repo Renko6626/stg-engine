@@ -340,6 +340,12 @@ pub fn define_pool(input: TokenStream) -> TokenStream {
                 idx < Self::CAP && (self.alive[idx / 64] >> (idx % 64)) & 1 != 0
             }
 
+            /// 槽 `idx` 当前的 generation（表现契约 v2：表现层木偶喂料按 `(index, gen)`
+            /// 识别新生/复用；越界 → 0）。只读，不判存活——配 `iter_alive` 用。
+            pub fn generation_of(&self, idx: usize) -> u16 {
+                if idx < Self::CAP { self.generation[idx] } else { 0 }
+            }
+
             /// 升序 alive 索引迭代（只读；相位内可变遍历用拷贝 alive 字 + 索引访问，见 M0-4）。
             pub fn iter_alive(&self) -> impl ::core::iter::Iterator<Item = usize> + '_ {
                 (0..Self::NW).flat_map(move |w| {

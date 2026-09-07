@@ -17,27 +17,28 @@ func _init():
 	if not b.new_game(src, 7, 2): fail("new_game"); return
 	if b.frame() != 0: fail("frame0"); return
 
-	# register_layer 三路(task-4:B18 可达面——坏 kind/坏尺寸/合法注册全覆盖,用 LAYER_ENEMIES
-	# 因为 godot_smoke.ecl 会出一只敌;cap=EnemyPool::CAP=256,播种 256×12=3072 浮点很便宜)。
-	# 坏 kind:层号越界(LAYER_COUNT==4,99 显然越界),no-op 直接返 false。
+	# register_layer 三路(task-4:B18 可达面——坏 kind/坏尺寸/合法注册全覆盖)。表现契约 v2
+	# 起敌层退役(敌人走 puppets() 木偶喂料),改用 LAYER_BULLETS:godot_smoke.ecl 每 30 帧发一颗
+	# 弹;cap=BulletPool::CAP=8192,播种 8192×12=98304 浮点。
+	# 坏 kind:层号越界(LAYER_COUNT==3,99 显然越界),no-op 直接返 false。
 	var rid_bad_kind := RenderingServer.multimesh_create()
 	if b.register_layer(99, rid_bad_kind): fail("rl bad kind"); return
 	RenderingServer.free_rid(rid_bad_kind)
-	# 坏尺寸:播种 100×12 浮点 ≠ 需要的 256×12,register_layer 的缓冲尺寸校验拒绝(bridge.rs
+	# 坏尺寸:播种 100×12 浮点 ≠ 需要的 8192×12,register_layer 的缓冲尺寸校验拒绝(bridge.rs
 	# register_layer 判据:got==cap×12 才收)。
 	var bad := RenderingServer.multimesh_create()
 	var seed_bad := PackedFloat32Array(); seed_bad.resize(100 * 12)
 	RenderingServer.multimesh_set_buffer(bad, seed_bad)
-	if b.register_layer(b.LAYER_ENEMIES, bad): fail("rl bad size"); return
+	if b.register_layer(b.LAYER_BULLETS, bad): fail("rl bad size"); return
 	RenderingServer.free_rid(bad)
 	# 合法路径:allocate_data 走生产同款调用,再 set_buffer 播种一次定长零缓冲——headless
 	# dummy renderer 下 get_buffer 只在 set_buffer 之后才有完整往返(已验证实验事实),不播种
 	# 这条会被坏尺寸判据一并拒收。
 	var mm := RenderingServer.multimesh_create()
-	RenderingServer.multimesh_allocate_data(mm, 256, RenderingServer.MULTIMESH_TRANSFORM_2D, false, true)
-	var seed_ok := PackedFloat32Array(); seed_ok.resize(256 * 12)
+	RenderingServer.multimesh_allocate_data(mm, 8192, RenderingServer.MULTIMESH_TRANSFORM_2D, false, true)
+	var seed_ok := PackedFloat32Array(); seed_ok.resize(8192 * 12)
 	RenderingServer.multimesh_set_buffer(mm, seed_ok)
-	if not b.register_layer(b.LAYER_ENEMIES, mm): fail("rl ok path"); return
+	if not b.register_layer(b.LAYER_BULLETS, mm): fail("rl ok path"); return
 
 	var reqs_seen := 0
 	# B18 余量:hud_spell 判别(active/spell_id=7/bonus>0/frames_left>0)+ fields_info 非空
@@ -52,9 +53,17 @@ func _init():
 	var spell_seen := false
 	var bonus_floor_seen := false
 	var field_seen := false
+	# 表现契约 v2:符卡结算铺的清弹 field 会把 frame 1 发的那颗场内弹(y=300)消掉——
+	# 核内第四条纯输出缓冲 `vanished` 当帧必有一行 reason==VANISH_CLEARED、y==300。
+	# 这是 vanished 读口在真桥面上的唯一可达判别(其余弹都是越界消失、越界不记)。
+	var vanished_cleared_seen := false
 	for i in range(20):
 		b.step_frame(0)
 		reqs_seen += b.take_requests().size()
+		var vn0: Dictionary = b.vanished()
+		for j in range(vn0["reason"].size()):
+			if int(vn0["reason"][j]) == b.VANISH_CLEARED and absf(vn0["y"][j] - 300.0) < 0.0001:
+				vanished_cleared_seen = true
 		var s: Dictionary = b.hud_spell(1)
 		if not s.is_empty() and int(s.get("active", 0)) == 1 and int(s.get("spell_id", 0)) == 7 \
 				and int(s.get("bonus_now", 0)) > 0 and int(s.get("frames_left", 0)) > 0:
@@ -78,17 +87,48 @@ func _init():
 	if not spell_seen: fail("hud_spell 判别(active/spell_id=7/bonus>0/frames_left>0)"); return
 	if not bonus_floor_seen: fail("hud_spell bonus_now 触底=bonus0/10=5000(衰减公式判别)"); return
 	if not field_seen: fail("fields_info 非空(符卡清弹 field 可达)"); return
+	if not vanished_cleared_seen: fail("vanished 应在清弹帧记下 y=300 那颗弹(reason=CLEARED)"); return
 
-	# 编码→上传链回读判别(task-4):`register_layer` 在上面的 120 步循环之前就注册了,故
-	# 每一步 `step_frame` 都会编码+上传;godot_smoke.ecl 的敌 `spawn_enemy(0,-160,...)` 全程
-	# 无 move_to/xform,vx=vy=0/mv_active=0(world.rs spawn_enemy 语法糖)——120 步后仍静止
-	# 在出生点。布局 12 float/实例:[xx,yx,0,ox, xy,yy,0,oy, custom×4](frame.rs
-	# write_instance);无旋转 → cos=1/sin=0,故 xx=1.0、ox=0.0、oy=-160.0。
+	# 编码→上传链回读判别(task-4,表现契约 v2 改弹层):`register_layer` 在上面的 120 步循环
+	# 之前就注册了,故每一步 `step_frame` 都会编码+上传。godot_smoke.ecl 主循环每 30 帧在
+	# (-150,300) 朝 0deg(+x)发一颗 speed 0.5 的场内弹(另一颗 y=-160 的出生即越界回收,
+	# 见 .ecl 注释):frame 1/31/61/91 各一颗。**frame 1 那颗活不到 120**——槽 1 的符卡
+	# time_limit=8,约 frame 10 超时结算铺一帧全屏清弹 field,把它消掉(上面 20 步循环里的
+	# vanished 断言吃的正是这一行)。故 frame 120 时实例 0 = frame 31 那颗:
+	# x = -150 + 0.5×89 = -105.5(raw 精确,f32 无舍入)、y 恒 300(vy 精确为 0)。
+	# 布局 12 float/实例:[xx,yx,0,ox, xy,yy,0,oy, sprite,age,0,0](frame.rs write_instance);
+	# 弹层旋转 = 速度方向 + 90°:BAM 0 → cos=0/sin=1 → xx=0、xy=1。
+	# age = 120 − 31 = 89(custom.y,表现契约 v2 §4.2)。
 	# (multimesh_get_visible_instances 在 headless dummy renderer 下恒 0,已实验判决,
 	# 不可测——这里改用 get_buffer 回读实数据判别,不断言可见数。)
 	var back := RenderingServer.multimesh_get_buffer(mm)
-	if absf(back[0] - 1.0) > 0.0001: fail("mm xx"); return       # 无旋转 cos=1,非零判别
-	if absf(back[7] - (-160.0)) > 0.0001: fail("mm oy"); return  # 出生 y,非默认判别
+	print("[smoke] bullets instance0 = ", back.slice(0, 12), " instance1 = ", back.slice(12, 24))
+	if absf(back[0]) > 0.0001: fail("mm xx(朝右飞的弹应转 90°:cos=0)"); return
+	if absf(back[4] - 1.0) > 0.0001: fail("mm xy(sin=1)"); return
+	if absf(back[3] - (-105.5)) > 0.0001: fail("mm ox 应为 -105.5,得 %f" % back[3]); return
+	if absf(back[7] - 300.0) > 0.0001: fail("mm oy 应为 300,得 %f" % back[7]); return
+	if absf(back[9] - 89.0) > 0.0001: fail("mm custom.y 弹龄应为 89,得 %f" % back[9]); return
+
+	# puppets() 木偶喂料判别(表现契约 v2 §4.4):godot_smoke.ecl 三只敌里 boss(索引 1)约
+	# 10 帧就自燃退场(见 .ecl 注释),frame 120 时只剩索引 0(y=-160)与 2(y=200)。压实序 =
+	# 池索引升序;state_age = 120 − 出生帧 1 = 119;gen 首次分配为 1。
+	var pp: Dictionary = b.puppets()
+	for k in ["index", "gen", "x", "y", "sprite", "anm_state", "state_age", "hit_flash"]:
+		if not pp.has(k): fail("puppets 缺列 " + k); return
+	if pp["index"].size() != 2: fail("puppets 应两行(boss 已退场),得 %d" % pp["index"].size()); return
+	if pp["index"][0] != 0 or pp["index"][1] != 2: fail("puppets 压实序应为 [0,2]"); return
+	if absf(pp["y"][0] - (-160.0)) > 0.0001 or absf(pp["y"][1] - 200.0) > 0.0001: fail("puppets y"); return
+	if pp["gen"][0] != 1: fail("puppets gen 首次分配应为 1"); return
+	if pp["state_age"][0] != 119: fail("puppets state_age 应为 119,得 %d" % pp["state_age"][0]); return
+	# entity_pos:活句柄 → Vector2;死 boss 的旧句柄(索引 1,gen 1)与坏 gen → null。
+	var ep = b.entity_pos(0, 0, pp["gen"][0])
+	if ep == null or absf(ep.y - (-160.0)) > 0.0001: fail("entity_pos 活句柄"); return
+	if b.entity_pos(0, 1, 1) != null: fail("entity_pos 已退场 boss 应为 null"); return
+	if b.entity_pos(0, 0, 9999) != null: fail("entity_pos 坏 gen 应为 null"); return
+	# vanished 形状(本窗口弹只会越界消失、越界不记 → 空列,但四列必须在)。
+	var vn: Dictionary = b.vanished()
+	for k in ["x", "y", "sprite", "reason"]:
+		if not vn.has(k): fail("vanished 缺列 " + k); return
 
 	var c120 = b.checksum()
 	if c120 == 0: fail("checksum 0"); return
