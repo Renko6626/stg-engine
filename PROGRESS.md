@@ -4,26 +4,27 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-09-04）
+## 现在（2026-09-07）
 
-- **位置**：**自机能力刀（时间停止 + bomb）落地并收口**——两个新能力（时停/bomb）+ deathbomb
-  + 表驱动 `BombCfg`，`BTN_TIMESTOP` 已补进桥面与 `godot/` 键位（对称 bomb 的既有做法）。
-  `ENGINE_VER` 14→15（布局+号表+输入词表三重变更），金向量新 md5 `28e17290…`。
-- **道具池第二压力入口已实测过关**：灌到 rank-3 峰值弹量（约 814）、真起一发满屏 bomb 跑满
-  整段效果，`diag.pool_full[POOL_ITEM]` 全程 0（永久回归测试，`crates/stg-core/src/world/player.rs`），
-  1024 cap 还有约 210 格余量，**未触发**再抬 cap 的裁决。
-- `follow-ups.md`：整刀（design→Task 9）**47 → 49 条**——设计阶段记的 **F13**
-  （`checksum_report()` 从未实现）+ Task 9 新记 **D20**（尺寸哨兵测试被对齐 padding 连续
-  吃掉三次真实字段新增而未响，`PlayerState` 只剩 1 字节空档，候选修法记档待人裁定）；
-  Task 9 同时整节销 E 组（bomb 那一刀开工前，三条均已兑现）。
-- **待目验**（卡在"要有头环境"）：B26 余 ②`visible_instances` 断言 + ③ 可玩性目验（两卡序）。
-- **下一阶段候选**：M3 环形快照回滚 / `stg-py` RL 线 / 背景刀（A4）/ 内容线（难度真分档、杂兵段扩写、A9 演出打磨）。
+- **位置**：**表现契约 v2 刀落地并收口**（spec `docs/superpowers/specs/2026-09-07-presentation-contract-v2-design.md`）
+  ——电平/边沿总规则立法（`render-contract.md` §0）、核内逐实体表现计时（弹 `born_frame`、敌
+  `anm_state_frame`）+ 第四条纯输出缓冲 `vanished` + 三 syscall（`set_anm_state`/`fx_at`/`fx_on`）、
+  桥面敌层退役换 `puppets()`/`vanished()`/`entity_pos()` 三读口、壳侧敌人节点木偶 + 帧驱动 fx 层
+  + 分类分发器。`ENGINE_VER` 15→16，金向量新 md5 `86fbc52a…`。
+- **首次有头目验完成**（VNC + llvmpipe，`--shots` 模式截图，`render-contract.md` §8）：受击闪白/
+  火花/消弹淡出/爆炸环人眼确认；`visible_instances` 有真值。顺手确诊并修了场景刀以来一直存在的
+  老 bug：MultiMesh 未开 `use_colors` 时片元 `COLOR` 是垃圾，弹此前一直被画成碎彩点。
+- `follow-ups.md`：销 B18/B26（有头目验兑现）、A9 ⑤、F4 部分（`custom_aabb` + 免拷贝落地，
+  前缀上传待 Godot）；新记 F14（`puppets()` 逐帧分配）。
+- **下一阶段候选**：M3 环形快照回滚（分发器水位/`vanished` 已按回滚语义写好，接入只改
+  `confirmed_frame` 实参）/ `stg-py` RL 线 / 背景刀（A4）/ 内容线（难度真分档、杂兵段扩写、A9 余项）。
 - **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-09-07 | **表现契约 v2 刀** | 立法「电平走 A、边沿走 B、时间源只有帧号」；核加弹 `born_frame`/敌 `anm_state_frame`（进校验和）+ `vanished` 纯输出缓冲（只记场内寿尽/被清，越界不记）+ syscall `430 set_anm_state`/`721 fx_at`/`722 fx_on` + `REQ_FX_AT=8`/`REQ_FX_ATTACHED=9`；`ENGINE_VER` 15→16，金向量 md5 `86fbc52ae5ca87c5ca0549a11c5dac01`；桥面敌层退役（三层）、弹层 custom.y = 弹龄、弹旋转改查表、`puppets()`/`vanished()`/`entity_pos()` 读口、REQ_*/EVT_* 常量导出、上传免一次拷贝；壳侧 256 个 Sprite2D 敌人木偶（手动设帧）、fx MultiMesh 池（程序化 shader，帧驱动）、分发器三类 + 水位、`--shots` 有头目验模式。有头目验（VNC+llvmpipe）四件全过，并修掉 shader 乘垃圾 `COLOR` 的老 bug。闸门全绿（fmt/clippy/test 657+326+16+45/storm/verify-tables/两冒烟 SMOKE OK）。 |
 | 2026-09-04 | **自机能力刀（时间停止 + bomb）** | 两个自机能力（`try_time_stop`/`try_bomb`，A 组沿检测触发）+ deathbomb（决死窗口内的 bomb 救人，救人不退命也不退款）+ 表驱动 `BombCfg`（角色表描述铺哪些 `FieldPool` field/时长/是否吸道具，bomb 因此成为 `FieldPool` 首个真租户）。`WorldBody` 新增 `freeze_left: [u16; 2]`（自机能力档 + ECL 演出档两个冻结槽独立计时）、`PlayerState` 新增 `time_stops`/`prev_input`（沿检测滚存位，`pressed_edge` 是 `EDGE_MASK` 词表首个真消费者）。`ENGINE_VER` 14→15（布局+号表+输入词表三重变更），表二进制格式追加 bomb 段、`TABLE_VERSION` 3→4（`tables_v0.bin` 2172→2201 B），新 syscall `513 add_time_stops`/`560 time_stop_player`，新输入位 `BTN_TIMESTOP=7`（Edge）。金向量三次改变，终值 md5 `28e172902d4efe47def818c1aab0739e`。**收口刀（Task 9）**：补 `BTN_TIMESTOP` 桥面导出+`godot/` 键位（此前七位都通了、唯独这位漏桥，能力在真工程里发不出来）；实测道具池第二压力入口（bomb 消弹 1:1 转星星+全屏吸取，rank-3 峰值~814 弹）不溢出、写成永久回归测试；`follow-ups.md` 销 E 组、新记 D20（尺寸哨兵测试被 padding 连续吃掉三次字段新增仍未响）；`stg-world-design.md` D10 表补 bomb 相关容量约束；闸门全绿（fmt/clippy debug+release/test 647+326+12+45/verify-tables/check/run 四档 pool_full 0/storm 1200 帧×8 点双源一致/两个冒烟 SMOKE OK）。 |
 | 2026-09-03 | **道具池刀（F12）** | 先跑判决程序再动手,而**判决推翻了条目自己的假设**:F12 猜"长跑 + 零拾取导致池积压(harness 场景性质,无害)",拟定的探针是"给 `run` 加合成输入让自机沿轨迹吃道具"——**这个探针一行都没写就不必要了**:`run` 的 item 列在**每个采样点都是 0**,峰值只出现在**帧 4954 那一帧**(509/512)、~450 帧内回落到 0 ⇒ 不是慢慢垫满,是**一帧之内被打满**,与自机吃不吃道具无关(那些格子在"能被吃"之前就已分配失败)。真因:帧 4954 是收卡消弹,弹 626→0、道具 0→509,而**消弹转星星是 1:1**(`world/settle.rs` 趟一逐颗调 `spawn_star_at`),弹池 8192 而道具池 512。**四个难度档全部命中**(Easy 3 / Normal 37 / Hard 67 / Lunatic 104 颗星星没生成 = 丢分)——条目写的"Lunatic 下"只是数字最大的一档;**真人局同样会中**,那一刻场上有多少弹由脚本和难度决定、不由玩家操作决定。处置由人类在三条里拍板取 **1+3**:①cap 512→1024(+11 328 B,对照弹池 433 KiB 是零头;实测覆盖:改后道具峰值 rank0/1/2/3 = 513/547/578/612,**恰好等于旧峰值 + 旧丢掉的颗数**,`pool_full` 四档全 0)+ ③把"消弹转星星是 best-effort、道具池是它的限流器"写成**正式口径**(`spawn_star_at` 文档 / `ecl-ops.md` 540 号 / 手册 `6-spell-and-stage.md` 与 `8-errors.md` 各一处);**不取 ②给转换设上限**——那动的是玩家看得见的经济,为一个罕见边界不值得。**`ENGINE_VER` 13→14 且与前两次不同侧**:11→12/12→13 是"同一字节序列的含义变了",这条是**真·布局变更**(WorldBody 977824→989152、World 1137624→1148952),旧存档在新引擎上**尺寸就对不上**、是响亮失败而非悄悄走岔。**金向量预期改变**(md5 `17fe7e32…`→`1dc02c3e…`),形态是本刀的直接指纹:校验和**哈希全槽、不用 alive 掩码**(P6),多出的 512 个空道具槽从**帧 0** 就进哈希 ⇒ 两段场景自帧 0 起全差——这与前几刀"逐字节不变"的性质不同,是加宽池不可避免的结果,不是行为回归。**⚠ 1024 不是结构性保证只是把线挪远**(弹池是道具池的 8 倍,1:1 转换天生可能溢出),这句连同溢出后的 P4-a 处置一起进了文档,故 F12 **整条删除、不留残余单**。顺带补 `star_pool_full_counts_every_missing_star`:`spawn_star_at` 文档明写"逐颗计数、消弹循环有界不短路"而**此前无测试**,判别力=灌满池后消 3 颗弹须恰好 +3(短路或整批只计一次都给 +1,"消 1 颗"的写法对两种错法全瞎);写它时顺手发现第三条断言写错了相位(消弹在相位 6 只置 `BULLET_CLEARED`、相位 9 才回收),改成查标志位。**两条哨兵按其自身清单更新**(池尺寸 + World 尺寸,都逐项写了 ①copy_into②checksum③D10④SaveBytes 的判定),`stg-world-design.md` 的 D10 预算表与 `docs/pool-memory-layout.md` 的账目表同步。**唯一一处非预期的红来自真工程冒烟**:`godot/scripts/playfield.gd` 的池容量镜像还写着 512 ⇒ `register_layer(3) 被拒(容量镜像漂移?)` + `SMOKE FAIL: boot(0)`——这面镜像**没有编译期护栏**,唯一的网就是这个冒烟,本刀被它当场抓住,处置是改镜像 + 在注释里写明"改核心池 cap 别忘了这里、忘了会以什么形态报出来"。闸门:fmt · clippy debug/release 均 `-D warnings` · test(core 601→**602** / compiler 326 / harness 45) · verify-tables · check · run 四档 `pool_full` **0** · **storm 1200 帧 × 8 点 × 双源逐位一致**(存档 wire format 变了,这条是本刀该跑的那道闸) · 两个冒烟 SMOKE OK |
 | 2026-09-03 | **瞄准口径统一刀（F8）** | 同一句"瞄自机"在引擎里有**两份实现且对自机不在场的处置正好相反**:`aim_player()`(120) 与 `sh_aim`+`sh_fire`(6xx) 无条件对 `players[0]` 求 atan2,而 xformdef 的 `aim_player` op 与弹 setter `aim_at_player`(330) 走 `nearest_aimable_player`、一个可瞄的都没有就静默 no-op ⇒ 自机 game over 之后同一段弹幕的两半按两套规矩走。**真正坏掉的不是 game over 是 co-op**:`players[0]` 硬编意味着"P1 已 game over、P2 还活着"时发射器朝尸体喷、而弹身上的 xform 去瞄 P2;单人局看不见只因 `MAX_PLAYERS=2` 且 P2 恒 ABSENT。**口径由人类拍板:只统一"瞄谁",不统一"没人可瞄时"**——后者的分野**不在哪条路,在这条路能不能拒绝**:`aim_player()` 是查询、`sh_fire` 要发弹,**必须产出一个角度**,于是回退 `players[0]` 的最后坐标(GAMEOVER 时冻在死亡那一刻,见 `commit_death`);后两条是**改一颗已经存在的弹**,可以什么都不做,于是保持原角度、不报错不计数。这条分野从"意外"变成"有理由并写进文档",四条路的表在 `docs/ecl-lang/4-bullets.md` 加了第五列。实现是一个 `pub(crate) fn aim_target(&self, x, y) -> usize = nearest_aimable_player(..).unwrap_or(0)`,两个调用点改走它,`motion.rs` 那两条**一行未改**(它们本来就是对的一半)。**单人局逐位不变**是这刀零风险的根据:`players[1]` 恒 ABSENT ⇒ P0 可瞄时 `nearest_aimable` 就是它、P0 不可瞄时 `unwrap_or(0)` 还是它,两种口径给出同一个人——金向量 md5 `17fe7e3206353975a7546220cf10147e` 与 base 逐字节相同(base 走 `git worktree` 取、不动主 checkout),故 **`ENGINE_VER` 不动**、既有回放不失效。**四条新判别式测试**,摆位一律"两个自机分处相反方向"(圆心重合式的摆法对"瞄谁"这条映射是瞎的,同 M0-7 变异检验的教训):两条 skip 腿(P0 GAMEOVER 在左上、P1 存活在右下 ⇒ 必须瞄 P1,写测试时先红后绿)、两条 fallback 腿(押的是"别改成别的"——不是朝下的约定角、不是 0、更不是 no-op)。**顺带销 B8**(`nearest_aimable_player` 并列取低索引无等距判别测试):原条目写着"被 co-op 阻塞",复核发现并不阻塞——直接摆 `players[1]` 就能测,等距反向摆位下把 `<` 写成 `<=` 当场红。**`$player_x`/`$player_y`(010/011) 有意不改**:它是**坐标读、不是瞄准原语**,恒给 1P、不查存活,拿它自己算瞄准角在单人局与 `aim_player()` 等价、co-op 下就不等价了——这条写进 `ecl-ops.md` 与 `4-bullets.md` 的警示块,连同 `builtins.rs` 的 doc(改了 doc 就重跑 `gen-ecl-meta` 同步手册生成段与 VS Code 元数据)。闸门:fmt · clippy debug/release 均 `-D warnings` · test(core 596→**601** / compiler 326 / harness 45) · verify-tables · check · run 四档 fault/viol/pool_full 全 0 · 金向量与 base 逐字节相同 · 两个冒烟 SMOKE OK |

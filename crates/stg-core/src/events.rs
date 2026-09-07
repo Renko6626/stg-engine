@@ -1,6 +1,16 @@
 //! 碰撞命中缓冲 `Hit` 与世界大事记 `Event`（A5）。两者皆**纯输出**：帧内私有、
 //! checksum-skip、begin 清空、重演确定性再生。Hit 由相位 6 收集、相位 7 三趟消费；
 //! Event 由相位 7/相位 3 死亡结算产出，相位 8 ECL 挂钩 + 表现层只读消费。
+//!
+//! ## 事件聚合口径（表现契约 v2，2026-09-07；`render-contract.md` §4）
+//! `EVENTS_CAP = 512` 而弹池 8192——任何可能每帧成百上千的事实必须聚合，否则确定性丢弃
+//! 会让壳侧静默漏事件。逐 kind：
+//! | kind | 口径 |
+//! |---|---|
+//! | `EVT_ENEMY_DIED` / `EVT_PLAYER_DIED` / `EVT_ITEM_PICKED` / `EVT_TASK_FAULT` / `EVT_SPELL_*` | 逐条（低频） |
+//! | `EVT_FIELD_CLEARED` | **每 field 每帧一条**，`data[0]` = 本帧消了几颗（逐弹位置走 `vanished` 缓冲） |
+//! | `EVT_SHOT_HIT_ENEMY` | 逐命中（自机弹池 1024、现实 <50/帧） |
+//! | 擦弹（未发） | 事件化前须先定口径：每自机每帧一条带计数，或壳侧对 graze 计数做帧间差分（follow-ups B28） |
 
 use crate::math::Fx;
 

@@ -1,6 +1,6 @@
 # 表现契约 v2 —— 电平/边沿分类 + 逐实体表现计时 + 敌人木偶（设计，2026-09-07）
 
-> 状态：**已评审拍板，待写实施计划**。本文是 brainstorming 环的产出，口径由人类逐条裁定
+> 状态：**已实施收口（2026-09-07，三段提交：核 9733318 / 桥 a6f18b3 / 壳 5eae784）**，实施偏差见 §10。本文是 brainstorming 环的产出，口径由人类逐条裁定
 > （§9「人类拍板记录」留痕）。实施计划另起 `docs/superpowers/plans/`。
 
 ## 1. 是什么 / 为什么
@@ -308,3 +308,14 @@ kind 目前只认敌人（0）；句柄有效返回 `Vector2`，失效返回 `nu
 | ⑤ | 消弹淡出数据源：核内濒死几帧 vs 纯输出缓冲 | **B：`vanished` 输出缓冲**，模拟行为零改动。 |
 | ⑥ | ECL 侧 ANM 互动指令 | 加三个：`set_anm_state`、`fx_at`、`fx_on`；`set_sprite` 运行期改口、alpha/scale/color 插值、layer/blend 一律不进核。 |
 | ⑦ | 自机是否进 `puppets()` | 不进，走既有 `player_pos`/`hud_player`（补 `facing`）。 |
+
+## 10. 实施偏差记录（2026-09-07 收口时补）
+
+| # | spec 原文 | 实际 | 理由 |
+|---|---|---|---|
+| a | §5.1 预分配 256 个 `AnimatedSprite2D` | 256 个 `Sprite2D`（`hframes=4`，`frame` 手动设） | 契约的核心是"手动按 `state_age` 设帧、不用自动播放"，`Sprite2D + hframes` 更省且等价；动画序列由 `content_tables.gd::ENEMY_ANIM` 表给，换真美术只填表。要 AnimationTree 过渡时再换节点类，喂料不变。 |
+| b | §5.2 特效用 `GPUParticles2D` + `emit_particle` | 一张 fx `MultiMesh` + 程序化 `fx.gdshader`，行池在 `effects.gd`（`kind/age/param/sprite`） | 时间基必须是 step 后帧号（§2 第 3 条），GPU 粒子走壁钟且暂停/回滚无法钉帧；消弹淡出要采弹图集格，MultiMesh 一条 shader 统一；headless 可读缓冲断言。 |
+| c | — | `--shots` 有头目验模式（脚本化输入 + 逐帧存 PNG + 首次敌死补帧 + 打印 `visible_instances`） | 本机无 GPU 但有 VNC + llvmpipe，DoD 第 6 条改由截图判读兑现，且可重复。 |
+| d | — | 确诊并修老 bug：`layer.gdshader` 乘片元 `COLOR`（MultiMesh 未开 `use_colors` ⇒ 垃圾），弹一直被画成碎彩点 | 目验第一张就露馅；逐步隔离（cell/UV/uniform/采样器/贴图 dump 全对，只剩 `* COLOR`）后判决，两 shader 均改 `COLOR = tex`。 |
+| e | §3.4 `vanished` cap 1024 | 同 | 桥级冒烟在符卡结算清弹帧真实抓到一行 CLEARED。 |
+| f | §7.3 三段独立提交 | 同 | 文档单独一提交。 |

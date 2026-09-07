@@ -152,8 +152,9 @@ crates/
                     /codegen(含 mark 垫片降低+锚点自动补偿)/units(多文件编译单元,目录整取按名排序)
                     —— .ecl 源码启动时编译成 EclImage；lib.rs builder = codegen 后端
   stg-harness/      CLI：golden 两段金向量（scenes/rainbow.ecl 符卡）+ bench 基线 + 烘焙表 bake/verify（允许浮点）
-  stg-godot/        M2 桥：WorldBridge gdext cdylib（boot/frame/save 纯模块+壳；smoke/ headless 冒烟）
-godot/            真 Godot 工程（场景刀）：场景树/四层 MultiMesh 渲染链/请求分发器/HUD/
+  stg-godot/        M2 桥：WorldBridge gdext cdylib（boot/frame/puppets/save 纯模块+壳；smoke/ headless 冒烟；
+                    表现契约 v2 起三层 MultiMesh + 敌人木偶喂料 + vanished/entity_pos 读口）
+godot/            真 Godot 工程（场景刀）：场景树/三层 MultiMesh + 敌人节点木偶 + fx 层/分类分发器/HUD/
                   demo 局 .ecl（杂兵+风铃卡 boss）；渲染契约见 docs/render-contract.md；
                   冒烟 godot/smoke/run-smoke.sh
   README.md       【异机开跑第一入口】clone 后怎么build/跑/排错（Windows 与 Linux 各一条路径口径）
@@ -179,6 +180,8 @@ cargo run -p stg-harness -- serve [--ecl f]  # WebSocket 查看器(默认风铃�
 cargo run --release -p stg-harness -- storm      # 恢复重演风暴闸(存档正确性)
 bash crates/stg-godot/smoke/run-smoke.sh     # 桥级冒烟(桥面回归)
 bash godot/smoke/run-smoke.sh                # 真工程冒烟(demo 局两次开机:正常/中段)
+DISPLAY=:2 LIBGL_ALWAYS_SOFTWARE=1 godot --rendering-driver opengl3 --path godot -- --shots
+                                             # 有头目验截图(VNC+llvmpipe;render-contract §8)
 cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 先读 godot/README.md)
 ```
 
@@ -199,7 +202,8 @@ cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 
   **整局流程刀续**（2026-07-25）多文件 `compile_units`/`mark` 中段启动+自动补偿/
   `Loadout`+`new_game_at`/表现锚点四字段（spec `2026-07-25-game-flow-midstart-design.md`）。
 - **M2 ✅**（2026-07-24~26）`stg-godot` WorldBridge（桥刀，2026-07-24）+ 真 Godot 工程竖切
-  （场景刀，2026-07-26：场景树/四层 MultiMesh 渲染链/请求分发器/HUD/demo 局 .ecl/双冒烟）
+  （场景刀，2026-07-26：场景树/四层 MultiMesh 渲染链/请求分发器/HUD/demo 局 .ecl/双冒烟；
+  表现契约 v2 刀 2026-09-07 改三层 + 敌人节点木偶 + fx 层，见 `docs/render-contract.md` §0/§7）
   全部落地——headless 可玩可验证一整段 demo 局（杂兵段 → 风铃卡 boss 战 → 挂牌结算）。
 - **M3** 环形快照 + 本地回滚 harness（延迟/输入扰动/校验和风暴）。
 - **M4** `stg-net`（UDP + 会话/重同步）—— **phase 2 起点**。
