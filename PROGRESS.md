@@ -6,24 +6,29 @@
 
 ## 现在（2026-09-07）
 
-- **位置**：**表现契约 v2 刀落地并收口**（spec `docs/superpowers/specs/2026-09-07-presentation-contract-v2-design.md`）
-  ——电平/边沿总规则立法（`render-contract.md` §0）、核内逐实体表现计时（弹 `born_frame`、敌
-  `anm_state_frame`）+ 第四条纯输出缓冲 `vanished` + 三 syscall（`set_anm_state`/`fx_at`/`fx_on`）、
-  桥面敌层退役换 `puppets()`/`vanished()`/`entity_pos()` 三读口、壳侧敌人节点木偶 + 帧驱动 fx 层
-  + 分类分发器。`ENGINE_VER` 15→16，金向量新 md5 `86fbc52a…`。
-- **首次有头目验完成**（VNC + llvmpipe，`--shots` 模式截图，`render-contract.md` §8）：受击闪白/
-  火花/消弹淡出/爆炸环人眼确认；`visible_instances` 有真值。顺手确诊并修了场景刀以来一直存在的
-  老 bug：MultiMesh 未开 `use_colors` 时片元 `COLOR` 是垃圾，弹此前一直被画成碎彩点。
-- `follow-ups.md`：销 B18/B26（有头目验兑现）、A9 ⑤、F4 部分（`custom_aabb` + 免拷贝落地，
-  前缀上传待 Godot）；新记 F14（`puppets()` 逐帧分配）。
-- **下一阶段候选**：M3 环形快照回滚（分发器水位/`vanished` 已按回滚语义写好，接入只改
-  `confirmed_frame` 实参）/ `stg-py` RL 线 / 背景刀（A4）/ 内容线（难度真分档、杂兵段扩写、A9 余项）。
-- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
+- **位置**：**M3 时间机制内核刀落地并收口**（spec `docs/superpowers/specs/2026-09-07-timeline-observe-jump-rewind-design.md`；
+  M3 由「环形快照 + 输入扰动 harness」按策划案 `docs/project_overview.md` **重定义为时间机制**，
+  联机回滚是附带收益）。核：`BTN_JUMP`/`BTN_REWIND`、`LIFE_JUMPING` 缺席态、`hit_frame`、
+  `EVT_REWIND_REQUESTED`、`rewind_landed`；`stg_core::timeline`（48 槽快照环 / `advance` 认领
+  遡行 / 影子世界 `preview` / `InputLog` 线性 log + cuts 字节格式 v1 + `replay`）；桥
+  `step_frame → i64`、`preview`、`view_ring`、`register_ghost_layer`、`replay_bytes`；壳 C 観測→跳躍
+  两段协议、V 遡行、倒放态。`ENGINE_VER` 16→17，金向量 md5 `b81f81e9…`。
+- **实证**：核 675 + 编译器 326 + 桥 16 + harness 47 全绿（含 10 条 timeline 单测 + demo 整局
+  真 ECL 回放闸：7 跳 1 遡行逐位重现）；两冒烟 SMOKE OK（桥级：走进弹流 → 遡行落点 = 被弹帧 − 30、
+  影子首弹比实弹多飞 15.5px、`view_ring` 往返；工程级：観測影子可见、跳躍同 tick 快进 31 帧）；
+  有头目验 `observe_f325`/`jump_f363` 人眼确认「影子在哪，弹就到哪」。
+- **回放闸揪出的 spec 偏差**：遡行落点可能在跳躍/重生中（被弹前 30 帧内），`rewind_landed` 不再
+  断言 ALIVE、无敌帧取 max（spec §10 b）。
+- **下一阶段候选**：资源体系（遡行/停止库存 + 偏差值 + 观测冷却 + 教学免费，`rewind_landed`
+  是入口）/ 停止合并（时停 + bomb 一份库存，键位收回）/ 练习模式（关键帧 + 本 log 长时间线）/
+  余晖拖尾（读环）/ 内容线（体验版第 1 关）/ `stg-py` RL 线 / 背景刀（A4）。
+- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（本刀新记 F15–F19）。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-09-07 | **M3 时间机制内核刀（timeline + 観測/跳躍/遡行）** | 策划案定案后 M3 重定义：单机 STG 的三件时间工具。核加 `BTN_JUMP=8`/`BTN_REWIND=9`（Edge）、`LIFE_JUMPING=5` 缺席态（A 组整段跳过、相位 6/7 靠既有 ALIVE 门禁、不可瞄、`JUMP_FRAMES=30` 倒计时）、`PlayerState.hit_frame`（被尾部 padding 吃掉，D20 第四次）、`try_rewind` 只在决死窗口发 `EVT_REWIND_REQUESTED{player,hit_frame}`（bomb 优先）、`rewind_landed` 写 `invuln=max(..,30)`；`ENGINE_VER` 16→17，金向量 md5 `b81f81e92431bd086fc57ad57fde115e`。`stg_core::timeline`：`SnapshotRing` 48 槽（槽由帧号定、淘汰即覆写、`get_discarded` 供倒放）、`Timeline::advance` 一次一帧并认领遡行（落点 = `hit_frame−REWIND_DEPTH` 取整存档帧钳到最老、恢复 + 落地 + 覆写环槽 + 截 log + 记 Cut、丢弃死分支上的旧 cut）、影子世界 `preview(n)` = 克隆 + 清 JUMP 旧电平 + 喂一帧 JUMP + step（预览即真跳靠同一份代码）、`InputLog` 线性 log + cuts 字节格式 v1（STGR，头含引擎版/表/镜像/词表哈希，尾 FNV）+ `replay`/`replay_with`（线性 log 里出现遡行请求即 Err）。harness `replay <f.stgr> --ecl` 命令 + demo 整局回放闸。桥持 `Timeline`，`step_frame → i64`（-1 / 落点 F）、`view_ring(f)` 视图世界切换（含丢弃分支）、`preview(n)` 影子弹层上传、`register_ghost_layer`、`replay_bytes`，`load_state` 后 timeline 重建（`Boot::Snapshot` 不可从头重放）。壳：C 観測→跳躍两段协议（60 tick 窗口）、V 遡行、跳躍同 tick 快进 31 帧、`REWINDING` 倒放态每 tick 退 3 帧到落点后水位 `reset_to`/fx 清空/`_sync_anchors`、`ghost.gdshader`、HUD 时间提示；时停临时挪 D。回放闸实测揪出 spec 偏差：落点可在跳躍/重生中，`rewind_landed` 不断言 ALIVE。闸门全绿（fmt/clippy/test 675+326+16+47/两冒烟/目验 `observe_f325`/`jump_f363`）。 |
 | 2026-09-07 | **表现契约 v2 刀** | 立法「电平走 A、边沿走 B、时间源只有帧号」；核加弹 `born_frame`/敌 `anm_state_frame`（进校验和）+ `vanished` 纯输出缓冲（只记场内寿尽/被清，越界不记）+ syscall `430 set_anm_state`/`721 fx_at`/`722 fx_on` + `REQ_FX_AT=8`/`REQ_FX_ATTACHED=9`；`ENGINE_VER` 15→16，金向量 md5 `86fbc52ae5ca87c5ca0549a11c5dac01`；桥面敌层退役（三层）、弹层 custom.y = 弹龄、弹旋转改查表、`puppets()`/`vanished()`/`entity_pos()` 读口、REQ_*/EVT_* 常量导出、上传免一次拷贝；壳侧 256 个 Sprite2D 敌人木偶（手动设帧）、fx MultiMesh 池（程序化 shader，帧驱动）、分发器三类 + 水位、`--shots` 有头目验模式。有头目验（VNC+llvmpipe）四件全过，并修掉 shader 乘垃圾 `COLOR` 的老 bug。闸门全绿（fmt/clippy/test 657+326+16+45/storm/verify-tables/两冒烟 SMOKE OK）。 |
 | 2026-09-04 | **自机能力刀（时间停止 + bomb）** | 两个自机能力（`try_time_stop`/`try_bomb`，A 组沿检测触发）+ deathbomb（决死窗口内的 bomb 救人，救人不退命也不退款）+ 表驱动 `BombCfg`（角色表描述铺哪些 `FieldPool` field/时长/是否吸道具，bomb 因此成为 `FieldPool` 首个真租户）。`WorldBody` 新增 `freeze_left: [u16; 2]`（自机能力档 + ECL 演出档两个冻结槽独立计时）、`PlayerState` 新增 `time_stops`/`prev_input`（沿检测滚存位，`pressed_edge` 是 `EDGE_MASK` 词表首个真消费者）。`ENGINE_VER` 14→15（布局+号表+输入词表三重变更），表二进制格式追加 bomb 段、`TABLE_VERSION` 3→4（`tables_v0.bin` 2172→2201 B），新 syscall `513 add_time_stops`/`560 time_stop_player`，新输入位 `BTN_TIMESTOP=7`（Edge）。金向量三次改变，终值 md5 `28e172902d4efe47def818c1aab0739e`。**收口刀（Task 9）**：补 `BTN_TIMESTOP` 桥面导出+`godot/` 键位（此前七位都通了、唯独这位漏桥，能力在真工程里发不出来）；实测道具池第二压力入口（bomb 消弹 1:1 转星星+全屏吸取，rank-3 峰值~814 弹）不溢出、写成永久回归测试；`follow-ups.md` 销 E 组、新记 D20（尺寸哨兵测试被 padding 连续吃掉三次字段新增仍未响）；`stg-world-design.md` D10 表补 bomb 相关容量约束；闸门全绿（fmt/clippy debug+release/test 647+326+12+45/verify-tables/check/run 四档 pool_full 0/storm 1200 帧×8 点双源一致/两个冒烟 SMOKE OK）。 |
 | 2026-09-03 | **道具池刀（F12）** | 先跑判决程序再动手,而**判决推翻了条目自己的假设**:F12 猜"长跑 + 零拾取导致池积压(harness 场景性质,无害)",拟定的探针是"给 `run` 加合成输入让自机沿轨迹吃道具"——**这个探针一行都没写就不必要了**:`run` 的 item 列在**每个采样点都是 0**,峰值只出现在**帧 4954 那一帧**(509/512)、~450 帧内回落到 0 ⇒ 不是慢慢垫满,是**一帧之内被打满**,与自机吃不吃道具无关(那些格子在"能被吃"之前就已分配失败)。真因:帧 4954 是收卡消弹,弹 626→0、道具 0→509,而**消弹转星星是 1:1**(`world/settle.rs` 趟一逐颗调 `spawn_star_at`),弹池 8192 而道具池 512。**四个难度档全部命中**(Easy 3 / Normal 37 / Hard 67 / Lunatic 104 颗星星没生成 = 丢分)——条目写的"Lunatic 下"只是数字最大的一档;**真人局同样会中**,那一刻场上有多少弹由脚本和难度决定、不由玩家操作决定。处置由人类在三条里拍板取 **1+3**:①cap 512→1024(+11 328 B,对照弹池 433 KiB 是零头;实测覆盖:改后道具峰值 rank0/1/2/3 = 513/547/578/612,**恰好等于旧峰值 + 旧丢掉的颗数**,`pool_full` 四档全 0)+ ③把"消弹转星星是 best-effort、道具池是它的限流器"写成**正式口径**(`spawn_star_at` 文档 / `ecl-ops.md` 540 号 / 手册 `6-spell-and-stage.md` 与 `8-errors.md` 各一处);**不取 ②给转换设上限**——那动的是玩家看得见的经济,为一个罕见边界不值得。**`ENGINE_VER` 13→14 且与前两次不同侧**:11→12/12→13 是"同一字节序列的含义变了",这条是**真·布局变更**(WorldBody 977824→989152、World 1137624→1148952),旧存档在新引擎上**尺寸就对不上**、是响亮失败而非悄悄走岔。**金向量预期改变**(md5 `17fe7e32…`→`1dc02c3e…`),形态是本刀的直接指纹:校验和**哈希全槽、不用 alive 掩码**(P6),多出的 512 个空道具槽从**帧 0** 就进哈希 ⇒ 两段场景自帧 0 起全差——这与前几刀"逐字节不变"的性质不同,是加宽池不可避免的结果,不是行为回归。**⚠ 1024 不是结构性保证只是把线挪远**(弹池是道具池的 8 倍,1:1 转换天生可能溢出),这句连同溢出后的 P4-a 处置一起进了文档,故 F12 **整条删除、不留残余单**。顺带补 `star_pool_full_counts_every_missing_star`:`spawn_star_at` 文档明写"逐颗计数、消弹循环有界不短路"而**此前无测试**,判别力=灌满池后消 3 颗弹须恰好 +3(短路或整批只计一次都给 +1,"消 1 颗"的写法对两种错法全瞎);写它时顺手发现第三条断言写错了相位(消弹在相位 6 只置 `BULLET_CLEARED`、相位 9 才回收),改成查标志位。**两条哨兵按其自身清单更新**(池尺寸 + World 尺寸,都逐项写了 ①copy_into②checksum③D10④SaveBytes 的判定),`stg-world-design.md` 的 D10 预算表与 `docs/pool-memory-layout.md` 的账目表同步。**唯一一处非预期的红来自真工程冒烟**:`godot/scripts/playfield.gd` 的池容量镜像还写着 512 ⇒ `register_layer(3) 被拒(容量镜像漂移?)` + `SMOKE FAIL: boot(0)`——这面镜像**没有编译期护栏**,唯一的网就是这个冒烟,本刀被它当场抓住,处置是改镜像 + 在注释里写明"改核心池 cap 别忘了这里、忘了会以什么形态报出来"。闸门:fmt · clippy debug/release 均 `-D warnings` · test(core 601→**602** / compiler 326 / harness 45) · verify-tables · check · run 四档 `pool_full` **0** · **storm 1200 帧 × 8 点 × 双源逐位一致**(存档 wire format 变了,这条是本刀该跑的那道闸) · 两个冒烟 SMOKE OK |

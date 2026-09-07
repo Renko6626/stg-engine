@@ -147,11 +147,15 @@ crates/
                      / image(EclImage) / syscall(号表+白名单沙箱绑定)
     src/step.rs      P2 组装层：§3.5 宪法顺序的唯一持有者 + World{body,tasks} + 快照
                      + 正典开机 new_game/new_game_at(Loadout 装备 + mark 中段启动,2026-07-25)
+    src/timeline.rs  【M3】World 之上的时间线层：SnapshotRing 快照环 / Timeline::advance 认领遡行
+                     请求（恢复 + rewind_landed + 覆写环槽）/ 影子世界 preview（観測）/ InputLog
+                     线性 log + cuts 字节格式 v1 + replay。World 对它无知（P1/P5）
   stg-derive/       proc-macro：#[derive(Checksum)] + define_pool!
   stg-ecl-compiler/ ECL 编译器：src/lang/【M1.9 表层语言】lex/parse/typeck(三型)/slots(静态槽分配)
                     /codegen(含 mark 垫片降低+锚点自动补偿)/units(多文件编译单元,目录整取按名排序)
                     —— .ecl 源码启动时编译成 EclImage；lib.rs builder = codegen 后端
   stg-harness/      CLI：golden 两段金向量（scenes/rainbow.ecl 符卡）+ bench 基线 + 烘焙表 bake/verify（允许浮点）
+                    + replay（重放 .stgr 输入日志，storm 的时间线版）
   stg-godot/        M2 桥：WorldBridge gdext cdylib（boot/frame/puppets/save 纯模块+壳；smoke/ headless 冒烟；
                     表现契约 v2 起三层 MultiMesh + 敌人木偶喂料 + vanished/entity_pos 读口）
 godot/            真 Godot 工程（场景刀）：场景树/三层 MultiMesh + 敌人节点木偶 + fx 层/分类分发器/HUD/
@@ -175,6 +179,8 @@ cargo run -p stg-harness -- check <f.ecl|目录>   # .ecl 只编译不跑,行列
 cargo run -p stg-harness -- run <f.ecl|目录>     # 跑起来看结果:计数/峰值/末帧+--at F 单帧弹表
                                              # ⚠ task fault 会打出来并退非零码(别处一律静默)
 cargo run -p stg-harness -- gen-ecl-meta         # 改 builtins.rs 后同步元数据/文档两生成 sink
+cargo run -p stg-harness -- replay <f.stgr> --ecl <f.ecl|目录>   # 重放输入日志(桥 replay_bytes() 倒出)
+                                             # 逐帧校验和 + cuts;头/词表/FNV 任一不符退非零
 cargo run -p stg-harness -- serve [--ecl f]  # WebSocket 查看器(默认风铃卡;--ecl 跑自己的脚本,
                                              # 每次连接重编 ⇒ 刷新浏览器即热重载。ssh -L 转发)
 cargo run --release -p stg-harness -- storm      # 恢复重演风暴闸(存档正确性)
@@ -205,7 +211,11 @@ cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 
   （场景刀，2026-07-26：场景树/四层 MultiMesh 渲染链/请求分发器/HUD/demo 局 .ecl/双冒烟；
   表现契约 v2 刀 2026-09-07 改三层 + 敌人节点木偶 + fx 层，见 `docs/render-contract.md` §0/§7）
   全部落地——headless 可玩可验证一整段 demo 局（杂兵段 → 风铃卡 boss 战 → 挂牌结算）。
-- **M3** 环形快照 + 本地回滚 harness（延迟/输入扰动/校验和风暴）。
+- **M3 ✅**（2026-09-07，**时间机制内核刀**——原「环形快照 + 输入扰动 harness」按策划案
+  `docs/project_overview.md` 重定义，联机回滚是附带收益）`stg_core::timeline`（快照环 +
+  遡行兑现 + 影子世界 + `InputLog` 回放）+ 核内 `LIFE_JUMPING` 缺席态/`BTN_JUMP`/`BTN_REWIND`
+  + 桥 `preview`/`view_ring`/`replay_bytes` + 壳 観測/跳躍/遡行状态机；harness `replay` 闸。
+  spec `docs/superpowers/specs/2026-09-07-timeline-observe-jump-rewind-design.md`。
 - **M4** `stg-net`（UDP + 会话/重同步）—— **phase 2 起点**。
 - **M5** `stg-py`（PyO3 headless 并行 env）。
 

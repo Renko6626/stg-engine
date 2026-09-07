@@ -161,6 +161,22 @@ ECL 侧 `set_anm_state(n)` 写状态并盖帧（同状态重设 = 重播，即 Z
 
 **事件聚合口径**见 `events.rs` 模块文档表；擦弹若将来事件化须先定口径（follow-ups B28）。
 
+## 3.8 影子层（観測；时间机制内核刀 2026-09-07）
+
+`preview(n)`：桥让 `Timeline` 的影子世界从权威世界克隆、喂一帧 `BTN_JUMP`、再走 `n` 帧
+（`n == JUMP_FRAMES` 时影子就是跳躍**落地那一帧**），把影子的**弹层**按 §2 同一布局
+（stride 12）编码上传到 `register_ghost_layer` 注册的 MultiMesh。**影子不碰权威世界、环、
+输入日志**，是纯表现。壳侧 `ghost.gdshader` 按策划案 7.4「预测永远比实体暗、比实体细」
+去饱和 + 压暗 + 半透明，压在实弹**之下**。v1 只有弹层，敌人木偶的未来态不做（follow-ups）。
+
+## 3.9 倒放视图（`view_ring`；时间机制内核刀）
+
+`view_ring(f)` 把快照环里第 `f` 帧（含**刚被遡行丢弃的分支**——下一次 `step_frame` 之前
+那些槽原封不动）编码上传三层，并把**全部通道 A 读口**（层缓冲、`puppets()`、`hud_*`、
+`anchors()`、`player_pos()`、`fields_info()`）切到那一帧；`vanished()` 在视图态恒空；
+`frame()`/`checksum()`/`take_requests()`/`frame_events()` 始终是权威世界。下一次
+`step_frame` 自动切回。宿主用它做「逐帧倒退」动画，不需要自己存任何历史。
+
 ## 5. 锚点双表示规矩（硬规矩）
 
 事件（`REQ_BGM`/`BG`/`BG_PHASE`）= 边沿；`anchors()` 四字段 = 电平。宿主在 `new_game_at`/
@@ -185,6 +201,23 @@ bg 段内局部时间 = `frame - bg_phase_frame`（A4 mini-VM 的 seek 契约，
 推进，因为 `freeze_left` 未变、这条豁免根本没生效）。这层豁免逻辑在核内，表现层只管
 照常按 `anchors()`/请求增量算 `frame − bg_phase_frame`，不用为冻结状态另写一套背景
 寻位分支。
+
+## 5.6 遡行落地的表现规矩（时间机制内核刀 2026-09-07；spec §5）
+
+`step_frame` 返回 ≥ 0 = 本 tick 发生了遡行，值是落点帧 F，**世界已经在 F**（恢复 + 落地写
+`invuln`）。壳侧进入倒放表现态：从请求帧 G 起每 tick `view_ring` 往回读若干帧到 F，期间
+不 step、不收输入。到 F 后三件事**必须做**：
+
+1. 分发器水位 `reset_to(F)`——F 及以前的请求都已呈现过；须确认类的待播队列整个作废
+   （它们属于被丢弃的分支）。
+2. fx 池整个清空——落地后出生的行都不该活着；帧龄为负的行本来就该隐藏。
+3. `_sync_anchors()`——遡行落地就是一次读档（follow-ups A7 记的那个场合），HUD 与背景电平
+   要拉回 F。
+
+跳躍的快进（缺席的 N 帧在同一 tick 走完）**丢弃**中间帧的通道 B 请求与 `vanished`：她不在
+场，「线框态瞬时对齐为实体」。要让落地时补一次爆炸得让 timeline 攒事件（follow-ups）。
+
+`EVT_REWIND_REQUESTED` 在 `frame_events()` 里出现的那一帧已经被回滚掉了，壳侧不该再处理。
 
 ## 6. 坐标与画面
 
@@ -211,6 +244,9 @@ bg 段内局部时间 = `frame - bg_phase_frame`（A4 mini-VM 的 seek 契约，
 | 命中火花 | `EVT_SHOT_HIT_ENEMY` | 边沿 | 小圆盘 7 帧 | 是 |
 | 脚本演出 | `REQ_FX_AT` / `REQ_FX_ATTACHED` | 边沿 | 按 kind：闪点 / 依附光环 / 内容包自定 | 是 |
 | 时停滤镜 | `freeze_left()` | 每帧 | 全屏色调 | 是（未接） |
+| 影子层 | `preview(n)` → 影子弹层缓冲 | 観測期间每帧 | 去饱和压暗半透明的弹（§3.8） | 否（策划案核心机制） |
+| 遡行倒放 | `view_ring(f)` | 落地后每 tick | 三层 + 木偶按环里那一帧重画（§3.9/§5.6） | 否 |
+| 时间提示 | `hud_player().life_state` + 壳状态机 | 每帧 | 一行文字：観測 N / 跳躍 / V 遡行 | 是 |
 | HUD | `hud_*` | 每帧 | 数字 + boss 条 + 符卡行 | 否 |
 | 横幅 | `REQ_SPELL_*`/`REQ_STAGE_CLEAR` | 边沿（须确认） | 文本 | 是 |
 | 背景 | `anchors()` + `REQ_BG*` | 电平镜像 | 见 follow-ups A4 | 是 |
@@ -218,8 +254,9 @@ bg 段内局部时间 = `frame - bg_phase_frame`（A4 mini-VM 的 seek 契约，
 ## 8. 有头目验（`--shots` 模式）
 
 本机无 GPU 但有 VNC 桌面 + llvmpipe（全局 CLAUDE.md）。`main.gd` 的 `--shots` 模式用脚本化
-输入（常按射击、60–75 帧向左、200 帧放 bomb）跑 demo，在若干帧把 SubViewport 存 PNG，并在首次
-敌死后第 4 帧补一张；同时打印各层 `visible_instances` 真值。
+输入（常按射击、60–75 帧向左、200 帧放 bomb、300 帧按 C 観測、330 帧再按 C 跳躍）跑 demo，
+在若干帧把 SubViewport 存 PNG，并在首次敌死后第 4 帧补一张、遡行落地后补一张（若发生）；
+同时打印各层（含影子层）`visible_instances` 真值。
 
 ```bash
 cargo build -p stg-godot
@@ -231,3 +268,9 @@ DISPLAY=:2 LIBGL_ALWAYS_SOFTWARE=1 MESA_LOADER_DRIVER_OVERRIDE=llvmpipe STG_SHOT
 归零、`fx` 层用同格贴图淡出（淡出下面那块品红方块是星星道具的占位图，不是 bug）；敌死有
 橙色爆炸环与飘字；`visible_instances` 弹层 4–15、自机弹层 9–10 为真值。存档帧号比目标帧
 晚 1–4 帧（`await frame_post_draw` 之后才读 `frame()`），只影响文件名。
+
+2026-09-07 追加判读（时间机制内核刀）：`observe_f325`——敌人下方无实弹处出现 5 颗去饱和的
+暗色影子（`ghost` 层 `visible_instances=5`，实弹层 0）；`jump_f363`——跳躍落地后实弹层 6 颗
+青色弹正好落在影子所在处，影子层已关。脚本化输入没撞上弹，故本次无 `rewind_land` 张；
+遡行的数值判别在桥级冒烟（走进弹流 → 决死窗口 → 落点 = 被弹帧 − 30、`view_ring` 往返）。
+
