@@ -49,6 +49,8 @@
 | `ITEM_POWER` / `ITEM_POINT` / `ITEM_LIFE_PIECE` / `ITEM_BOMB_PIECE` / `ITEM_STAR` | `0`/`1`/`2`/`3`/`4` | 道具类型号（编号**冻结**，非表驱动），`drop_add(type, n)` 的第一参 |
 | `SHOOTERS_PER_TASK` | `4` | 每任务的发射器槽数——`sh_*` 族槽号 `id` 的**上界**（合法 `0 ..= SHOOTERS_PER_TASK - 1`）|
 | `TIMESTOP_FRAMES` | `180` | 玩家技能"时间停止"的固定时长（帧，3 秒 @60Hz）——自机能力刀 spec §9.1，数值单一来源 = `crate::player::TIMESTOP_FRAMES` |
+| `JUMP_FRAMES` | `30` | 跳躍跨过的帧数，也是観測影子世界的预览步数——时间机制内核刀 spec §2.2，数值单一来源 = `crate::player::JUMP_FRAMES` |
+| `REWIND_DEPTH` | `30` | 遡行落点深度（落点 = 被弹帧 − 本值，钳到快照环最老一帧）——单一来源 = `crate::timeline::REWIND_DEPTH` |
 | `BULLET_COLOR_STRIDE` | 内建 `16` | **表派生**：当前绑定表的每种弹型色数 |
 
 脚本**不得**重新声明同名 `const`，无论写的值是否一致——会在类型检查阶段报错

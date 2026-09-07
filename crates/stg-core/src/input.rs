@@ -138,6 +138,13 @@ define_actions! {
     /// 时间停止（沿触发；消费者：`world/player.rs::try_time_stop`）。
     /// **位 = 0 必须等价旧行为**——旧回放该位恒 0，故加位不是回放格式的破坏性变更。
     BTN_TIMESTOP = 7, Edge;
+    /// 跳躍（沿触发；消费者：`world/player.rs::try_jump`）。时间机制内核刀 2026-09-07。
+    /// 観測（未来预览）**不进世界**——它是宿主侧影子世界的纯表现，两次按键协议由宿主管，
+    /// 宿主只在第二下把本位送进来一帧。
+    BTN_JUMP = 8, Edge;
+    /// 遡行请求（沿触发；消费者：`world/player.rs::try_rewind`）。只在决死窗口内被响应，
+    /// 世界只发 `EVT_REWIND_REQUESTED`，兑现归 `stg_core::timeline`。
+    BTN_REWIND = 9, Edge;
 }
 
 /// 词表指纹：FNV-1a 遍历 (name, bit, kind)。将来进回放头/联机握手，
@@ -200,26 +207,28 @@ mod tests {
         assert_eq!(BTN_BOMB, 1 << 5);
         assert_eq!(BTN_SLOW, 1 << 6);
         assert_eq!(BTN_TIMESTOP, 1 << 7);
+        assert_eq!(BTN_JUMP, 1 << 8);
+        assert_eq!(BTN_REWIND, 1 << 9);
     }
 
-    /// 容量哨兵可观测面：词表当前最高位 = 7（BTN_TIMESTOP），且在 u32 容器内。
+    /// 容量哨兵可观测面：词表当前最高位 = 9（BTN_REWIND），且在 u32 容器内。
     /// （溢出情形无法用运行时测试压——那是编译失败，由宏内 const 断言把守。）
     #[test]
     fn max_bit_used_pinned() {
-        assert_eq!(MAX_BIT_USED, 7);
+        assert_eq!(MAX_BIT_USED, 9);
         assert!((MAX_BIT_USED as u32) < u32::BITS);
     }
 
-    /// `EDGE_MASK` = 全部沿触发位的并集；当前词表中 BOMB 与 TIMESTOP 是沿语义。
+    /// `EDGE_MASK` = 全部沿触发位的并集；当前词表中 BOMB / TIMESTOP / JUMP / REWIND 是沿语义。
     #[test]
-    fn edge_mask_is_exactly_bomb_and_timestop() {
-        assert_eq!(EDGE_MASK, BTN_BOMB | BTN_TIMESTOP);
+    fn edge_mask_is_exactly_the_four_edge_actions() {
+        assert_eq!(EDGE_MASK, BTN_BOMB | BTN_TIMESTOP | BTN_JUMP | BTN_REWIND);
     }
 
     /// ACTIONS 描述表与位常量逐项一致（表即地图：名字/位/语义三列齐全、顺序按位号）。
     #[test]
     fn actions_table_matches_constants() {
-        let expected: [(&str, u32, ActionKind); 8] = [
+        let expected: [(&str, u32, ActionKind); 10] = [
             ("BTN_UP", BTN_UP, ActionKind::Level),
             ("BTN_DOWN", BTN_DOWN, ActionKind::Level),
             ("BTN_LEFT", BTN_LEFT, ActionKind::Level),
@@ -228,6 +237,8 @@ mod tests {
             ("BTN_BOMB", BTN_BOMB, ActionKind::Edge),
             ("BTN_SLOW", BTN_SLOW, ActionKind::Level),
             ("BTN_TIMESTOP", BTN_TIMESTOP, ActionKind::Edge),
+            ("BTN_JUMP", BTN_JUMP, ActionKind::Edge),
+            ("BTN_REWIND", BTN_REWIND, ActionKind::Edge),
         ];
         assert_eq!(ACTIONS.len(), expected.len());
         for (a, (name, mask, kind)) in ACTIONS.iter().zip(expected) {
@@ -241,7 +252,8 @@ mod tests {
     /// 这是将来回放头/联机握手校验"双方输入语义一致"的原料（烘焙表哈希同款纪律）。
     #[test]
     fn vocab_hash_pinned() {
-        // 时停刀 Task 4：加 BTN_TIMESTOP=7,Edge，词表指纹随之变化（实测值，非手算）。
-        assert_eq!(actions_vocab_hash(), 0x2E23_FEC9_9EF0_0227); // 词表变更须有意识地更新此值
+        // 时间机制内核刀：加 BTN_JUMP=8 / BTN_REWIND=9（Edge），指纹随之变化（实测值，非手算）。
+        // 前一次：时停刀 Task 4 加 BTN_TIMESTOP=7 → 0x2E23_FEC9_9EF0_0227。
+        assert_eq!(actions_vocab_hash(), 0x6433_59C3_B41F_121D); // 词表变更须有意识地更新此值
     }
 }

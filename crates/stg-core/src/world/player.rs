@@ -12,7 +12,8 @@ use crate::events::Event;
 use crate::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SLOW, BTN_UP};
 use crate::math::Fx;
 use crate::player::{
-    LIFE_ABSENT, LIFE_ALIVE, LIFE_DEATHWINDOW, LIFE_GAMEOVER, LIFE_RESPAWNING, RESPAWN_INVULN,
+    LIFE_ABSENT, LIFE_ALIVE, LIFE_DEATHWINDOW, LIFE_GAMEOVER, LIFE_JUMPING, LIFE_RESPAWNING,
+    RESPAWN_INVULN,
 };
 use crate::shots::ShotInit;
 use crate::tables::WorldTables;
@@ -75,6 +76,17 @@ impl WorldBody {
                             self.players[i].life_state = LIFE_ALIVE;
                         }
                     }
+                    LIFE_JUMPING => {
+                        // 跳躍倒计时（时间机制内核刀）：恰好 `JUMP_FRAMES` 帧后回 ALIVE。
+                        // 计时归 C 组：场景冻结时不走——但 `try_jump` 门禁本就拒绝在冻结中
+                        // 起跳，这条只在"跳躍中被 ECL 演出定住"时才有意义。
+                        if self.players[i].state_timer > 0 {
+                            self.players[i].state_timer -= 1;
+                        }
+                        if self.players[i].state_timer == 0 {
+                            self.players[i].life_state = LIFE_ALIVE;
+                        }
+                    }
                     LIFE_ALIVE => {
                         if self.players[i].invuln > 0 {
                             self.players[i].invuln -= 1; // bomb 无敌（本切片恒 0）
@@ -101,8 +113,18 @@ impl WorldBody {
             if actor {
                 continue;
             }
+            // 跳躍中 = 缺席（spec §2.2）：A 组整段跳过。放在 `try_jump` **之前**判，
+            // 起跳帧本身也不再移动/发弹——影子世界与真跳走同一条路，起跳帧的处置必须唯一。
+            if self.players[i].life_state == LIFE_JUMPING {
+                continue;
+            }
+            self.try_jump(i);
+            if self.players[i].life_state == LIFE_JUMPING {
+                continue;
+            }
             self.try_time_stop(i);
             self.try_bomb(i, tables);
+            self.try_rewind(i);
             self.move_player(i, tables);
             // 角色模块静态分发点（A8"shottype 类似物"）：现仅 character 0，将来各角色一臂。
             #[allow(clippy::single_match)]
@@ -233,6 +255,60 @@ impl WorldBody {
         }
     }
 
+    /// 跳躍触发（A 组，时间机制内核刀 spec §2.2）。门禁三条：上升沿 + `LIFE_ALIVE` +
+    /// 场景未冻结（时停中按跳躍无效——两种时间能力不叠加，规则只有一条）。
+    /// DEATHWINDOW / RESPAWNING / JUMPING 下按下 = no-op，**不计违约**（玩家操作不是脚本坏参）。
+    /// 进入 `LIFE_JUMPING`，`state_timer = JUMP_FRAMES`，倒计时归 C 组。
+    fn try_jump(&mut self, i: usize) {
+        if !self.pressed_edge(i, crate::input::BTN_JUMP)
+            || self.players[i].life_state != LIFE_ALIVE
+            || self.scene_frozen()
+        {
+            return;
+        }
+        self.players[i].life_state = LIFE_JUMPING;
+        self.players[i].state_timer = crate::player::JUMP_FRAMES;
+    }
+
+    /// 遡行请求（A 组，spec §2.3）：仅决死窗口内响应上升沿，**只发事件不改状态**——
+    /// `EVT_REWIND_REQUESTED{a_index=自机, data=[hit_frame,0]}`，兑现归 `crate::timeline`。
+    /// 与 deathbomb 的先后：同帧既按 bomb 又按遡行，`try_bomb` 先跑并把状态拨回 ALIVE，
+    /// 本函数门禁随之不过——**bomb 优先**。一切代价（将来的库存/偏差值）都在落地侧
+    /// （`rewind_landed`）付，请求本身零副作用，所以没有"请求了但没兑现要退款"的路径。
+    fn try_rewind(&mut self, i: usize) {
+        if !self.pressed_edge(i, crate::input::BTN_REWIND)
+            || self.players[i].life_state != LIFE_DEATHWINDOW
+        {
+            return;
+        }
+        let p = &self.players[i];
+        let ev = Event {
+            kind: crate::events::EVT_REWIND_REQUESTED,
+            a_index: i as u16,
+            a_gen: 0,
+            x: p.x,
+            y: p.y,
+            data: [p.hit_frame as i32, 0],
+        };
+        self.push_event(ev);
+    }
+
+    /// 遡行落地（写 API，spec §2.3）：timeline 把世界恢复到被弹前的快照后调它。
+    /// 落点在被弹之前，自机必为 ALIVE（不是则引擎 bug，P4-c debug 断言）。写落点无敌帧
+    /// `REWIND_INVULN`。**将来库存扣一、偏差值加一都从这一个口进**——"一切代价在落地侧付"。
+    /// `i` 越界 = 调用方违约 → no-op + `contract_viol`（P4-b）。
+    pub fn rewind_landed(&mut self, i: usize) {
+        if i >= crate::MAX_PLAYERS {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            return;
+        }
+        debug_assert_eq!(
+            self.players[i].life_state, LIFE_ALIVE,
+            "遡行落点必在被弹之前（timeline 落点计算或环内容有误）"
+        );
+        self.players[i].invuln = crate::player::REWIND_INVULN;
+    }
+
     /// 移动（东方手感：方向 + 低速 + 对角归一 + 场界钳制）。移速三值读角色配置表
     /// （M0-17 T3：`tables.characters[character_id]`，迁自 player.rs 原 HIGH_SPEED/LOW_SPEED/
     /// INV_SQRT2 常量，零行为搬家）。
@@ -341,6 +417,189 @@ impl WorldBody {
 
 #[cfg(test)]
 mod tests {
+    use crate::input::{BTN_BOMB, BTN_JUMP, BTN_REWIND, InputFrame};
+    use crate::player::{JUMP_FRAMES, LIFE_JUMPING, REWIND_INVULN};
+    use crate::world::test_support::{bullet_at, step_t};
+
+    fn keys(buttons: u32) -> InputFrame {
+        let mut f = InputFrame::empty(0);
+        f.actions[0].buttons = buttons;
+        f
+    }
+
+    // ── 时间机制内核刀（2026-09-07）：跳躍 / 遡行请求 / 落地 ───────────────────
+
+    /// 跳躍进入 JUMPING 且计时恰为 `JUMP_FRAMES`；恰好 N 帧后回 ALIVE（N−1 帧仍在跳，判别
+    /// N±1）。
+    #[test]
+    fn jump_enters_jumping_and_returns_alive_after_exactly_n_frames() {
+        use crate::player::LIFE_ALIVE;
+        let mut w = crate::step::World::new(1);
+        step_t(&mut w, &keys(BTN_JUMP));
+        assert_eq!(w.body.players[0].life_state, LIFE_JUMPING);
+        assert_eq!(w.body.players[0].state_timer, JUMP_FRAMES);
+        for _ in 0..(JUMP_FRAMES - 1) {
+            step_t(&mut w, &InputFrame::empty(0));
+        }
+        assert_eq!(
+            w.body.players[0].life_state, LIFE_JUMPING,
+            "第 N−1 帧仍在跳"
+        );
+        step_t(&mut w, &InputFrame::empty(0));
+        assert_eq!(
+            w.body.players[0].life_state, LIFE_ALIVE,
+            "恰第 N 帧回 ALIVE"
+        );
+    }
+
+    /// 门禁：DEATHWINDOW / RESPAWNING / 场景冻结 / 跳躍中再按 → 零变化。
+    #[test]
+    fn jump_gate_rejects_non_alive_frozen_and_rejump() {
+        use crate::player::{DEATHBOMB_WINDOW, LIFE_DEATHWINDOW, LIFE_RESPAWNING};
+        // DEATHWINDOW
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].life_state = LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = DEATHBOMB_WINDOW;
+        step_t(&mut w, &keys(BTN_JUMP));
+        assert_eq!(w.body.players[0].life_state, LIFE_DEATHWINDOW);
+        // RESPAWNING
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].life_state = LIFE_RESPAWNING;
+        w.body.players[0].invuln = 60;
+        step_t(&mut w, &keys(BTN_JUMP));
+        assert_eq!(w.body.players[0].life_state, LIFE_RESPAWNING);
+        // 场景冻结（玩家时停中）
+        let mut w = crate::step::World::new(1);
+        w.body.freeze_left[0] = 10;
+        step_t(&mut w, &keys(BTN_JUMP));
+        assert_eq!(w.body.players[0].life_state, crate::player::LIFE_ALIVE);
+        // 跳躍中松开再按：计时不得重置
+        let mut w = crate::step::World::new(1);
+        step_t(&mut w, &keys(BTN_JUMP));
+        step_t(&mut w, &InputFrame::empty(0));
+        step_t(&mut w, &keys(BTN_JUMP));
+        assert_eq!(w.body.players[0].life_state, LIFE_JUMPING);
+        assert_eq!(
+            w.body.players[0].state_timer,
+            JUMP_FRAMES - 2,
+            "再按不重置计时"
+        );
+    }
+
+    /// 缺席语义①②：弹压在自机上，ALIVE 对照组进决死窗口，JUMPING 不中弹也不擦弹。
+    #[test]
+    fn jumping_player_is_neither_hit_nor_grazed() {
+        use crate::player::LIFE_DEATHWINDOW;
+        let mut ctl = crate::step::World::new(1);
+        bullet_at(&mut ctl, 0, 384);
+        step_t(&mut ctl, &InputFrame::empty(0));
+        assert_eq!(
+            ctl.body.players[0].life_state, LIFE_DEATHWINDOW,
+            "对照组必须中弹"
+        );
+        assert_eq!(ctl.body.players[0].graze, 1, "对照组必须擦到");
+
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].life_state = LIFE_JUMPING;
+        w.body.players[0].state_timer = JUMP_FRAMES;
+        bullet_at(&mut w, 0, 384);
+        step_t(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.players[0].life_state, LIFE_JUMPING);
+        assert_eq!(w.body.players[0].graze, 0, "缺席不擦弹");
+    }
+
+    /// 缺席语义③④⑤：按方向不动、按射击不出弹、道具贴身不拾取（ALIVE 对照组三者皆发生）。
+    #[test]
+    fn jumping_player_does_not_move_shoot_or_pick() {
+        use crate::input::{BTN_RIGHT, BTN_SHOT};
+        use crate::math::Fx;
+        let run = |jumping: bool| {
+            let mut w = crate::step::World::new(1);
+            if jumping {
+                w.body.players[0].life_state = LIFE_JUMPING;
+                w.body.players[0].state_timer = JUMP_FRAMES;
+            }
+            w.body.drop_item(
+                Fx::ZERO,
+                Fx::from_int(384),
+                crate::items::ITEM_POINT,
+                &crate::tables::TABLES_V0,
+            );
+            let x0 = w.body.players[0].x;
+            for _ in 0..3 {
+                step_t(&mut w, &keys(BTN_RIGHT | BTN_SHOT));
+            }
+            (
+                w.body.players[0].x != x0,
+                w.body.shots.iter_alive().count() > 0,
+                w.body.items.iter_alive().count() == 0,
+            )
+        };
+        assert_eq!(run(false), (true, true, true), "对照组：动了/射了/吃了");
+        assert_eq!(run(true), (false, false, false), "缺席：不动/不射/不吃");
+    }
+
+    /// 遡行请求：只在决死窗口内发事件，`data[0]` = 进入窗口那一帧的帧号；ALIVE 按下零事件。
+    #[test]
+    fn rewind_request_only_in_deathwindow_and_carries_hit_frame() {
+        use crate::events::EVT_REWIND_REQUESTED;
+        let mut w = crate::step::World::new(1);
+        // ALIVE 按下：零事件
+        step_t(&mut w, &keys(BTN_REWIND));
+        assert!(w.frame_events().is_empty(), "ALIVE 下遡行零事件");
+        step_t(&mut w, &InputFrame::empty(0)); // 松开
+        // 走到第 5 帧再中弹
+        while w.frame() < 5 {
+            step_t(&mut w, &InputFrame::empty(0));
+        }
+        bullet_at(&mut w, 0, 384);
+        step_t(&mut w, &InputFrame::empty(0)); // 帧 5 内中弹 → hit_frame = 5
+        assert_eq!(w.body.players[0].hit_frame, 5);
+        step_t(&mut w, &keys(BTN_REWIND));
+        let evs: Vec<_> = w
+            .frame_events()
+            .iter()
+            .filter(|e| e.kind == EVT_REWIND_REQUESTED)
+            .collect();
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].a_index, 0);
+        assert_eq!(evs[0].data[0], 5, "载荷 = hit_frame");
+        // 请求不改状态
+        assert_eq!(
+            w.body.players[0].life_state,
+            crate::player::LIFE_DEATHWINDOW
+        );
+    }
+
+    /// 同帧 bomb + 遡行：bomb 先跑救人，遡行门禁不过 → 零事件（bomb 优先）。
+    #[test]
+    fn bomb_wins_over_rewind_in_the_same_frame() {
+        use crate::events::EVT_REWIND_REQUESTED;
+        use crate::player::{DEATHBOMB_WINDOW, LIFE_ALIVE, LIFE_DEATHWINDOW};
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].life_state = LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = DEATHBOMB_WINDOW;
+        step_t(&mut w, &keys(BTN_BOMB | BTN_REWIND));
+        assert_eq!(w.body.players[0].life_state, LIFE_ALIVE, "deathbomb 救人");
+        assert!(
+            !w.frame_events()
+                .iter()
+                .any(|e| e.kind == EVT_REWIND_REQUESTED),
+            "bomb 优先，遡行不发"
+        );
+    }
+
+    /// 落地写 API：写 `REWIND_INVULN`；越界自机号 → no-op + 违约计数（P4-b）。
+    #[test]
+    fn rewind_landed_writes_invuln_and_rejects_bad_index() {
+        let mut w = crate::step::World::new(1);
+        w.body.rewind_landed(0);
+        assert_eq!(w.body.players[0].invuln, REWIND_INVULN);
+        let cv0 = w.body.diag.contract_viol;
+        w.body.rewind_landed(crate::MAX_PLAYERS);
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+    }
+
     #[test]
     fn deathwindow_expires_to_respawn_after_window() {
         use crate::input::InputFrame;

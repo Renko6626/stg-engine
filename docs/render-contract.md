@@ -113,6 +113,11 @@ step 之间取走。**
 够用）；对照 `EVT_FIELD_CLEARED` 必须聚合（弹池 8192 远超 events 512）。
 **擦弹若将来也要发事件，频率高一个量级，须单独评估聚合口径。**
 
+`EVT_REWIND_REQUESTED`（时间机制内核刀，2026-09-07）：自机在决死窗口内按了遡行，
+`a_index` = 自机号、`data0` = 进入决死窗口那一帧的帧号。**世界只发请求不改状态**，兑现
+（恢复快照 + 落地写）归 `stg_core::timeline`；桥面把它消化成 `step_frame` 的返回值（落点帧），
+壳侧**不该**从事件流里再处理它一遍——它在 `frame_events()` 里出现的那一帧已经被回滚掉了。
+
 ## 3.6 `vanished`（本帧离开池的敌弹；表现契约 v2）
 
 核内第四条纯输出缓冲（与 `reqs`/`hits`/`frame_events` 同族：帧内私有、checksum-skip、`begin`

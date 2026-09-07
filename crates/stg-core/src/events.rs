@@ -59,6 +59,12 @@ pub const EVT_SPELL_FAILED: u8 = 8;
 /// 绰绰有余（对照 `EVT_FIELD_CLEARED` 那条——它必须聚合，因为弹池 8192 远超 events 512）。
 /// 擦弹另说：满屏擦弹频率高一个量级，真要发事件须单独评估聚合口径。
 pub const EVT_SHOT_HIT_ENEMY: u8 = 9;
+/// 自机在决死窗口内请求遡行（时间机制内核刀，相位 3 A 组 `try_rewind` 产出）：
+/// `a_index` = 自机号（`a_gen` 恒 0），`x`/`y` = 自机当帧位置，
+/// `data = [hit_frame, 0]`（进入决死窗口那一帧的帧号）。**世界只发请求不改状态**——
+/// 兑现（恢复快照 + `rewind_landed`）归 `stg_core::timeline`；World 之上没有 timeline
+/// 的宿主（如裸 harness）看到它就是一条无人认领的事实，决死窗口照常走完。
+pub const EVT_REWIND_REQUESTED: u8 = 10;
 
 // ── `vanished`：本帧离开池的敌弹（表现契约 v2 spec §3.4）────────────────────
 /// 弹 `life` 归零。

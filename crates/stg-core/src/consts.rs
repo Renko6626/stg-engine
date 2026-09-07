@@ -101,6 +101,10 @@ engine_consts! {
         //  时停固定时长（自机能力刀 spec §9.1）：脚本/手册引用此名而非硬编 180，
         //  数值单一来源 = `crate::player::TIMESTOP_FRAMES`。
         TIMESTOP_FRAMES:     u16 as int = crate::player::TIMESTOP_FRAMES;
+        //  跳躍跨过的帧数 / 遡行落点深度（时间机制内核刀 2026-09-07）：脚本与手册引用此名，
+        //  数值单一来源 = `crate::player::JUMP_FRAMES` / `crate::timeline::REWIND_DEPTH`。
+        JUMP_FRAMES:         u16 as int = crate::player::JUMP_FRAMES;
+        REWIND_DEPTH:        u32 as int = crate::timeline::REWIND_DEPTH;
     }
     //  ② 段目前**空**（颜色轴刀 2026-07-26）：弹型名/色名归**内容包**——由各内容包
     //  自己的 `.ecl` 用 `const` 声明（内建 demo 的一份见 `godot/ecl/demo/bullets.ecl`），

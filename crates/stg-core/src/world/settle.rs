@@ -21,6 +21,7 @@ impl WorldBody {
         }
         self.players[p].life_state = crate::player::LIFE_DEATHWINDOW;
         self.players[p].state_timer = crate::player::DEATHBOMB_WINDOW;
+        self.players[p].hit_frame = self.frame; // 遡行落点的原点（时间机制内核刀）
     }
 
     /// 把敌身上的掉落计数原位撒出去——**只撒**：不清零、不加分、不发事件。
