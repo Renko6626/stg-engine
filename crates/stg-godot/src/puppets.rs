@@ -79,7 +79,7 @@ sub main() {
         let mut g = crate::boot::boot(SRC, 7, 2).expect("boot");
         let input = stg_core::input::InputFrame::empty(0);
         for _ in 0..n {
-            stg_core::step::step_with_director(&mut g.world, g.tables, &g.image, &input, |_| {});
+            g.timeline.advance(&input);
         }
         g
     }
@@ -87,7 +87,7 @@ sub main() {
     #[test]
     fn empty_world_yields_empty_columns() {
         let g = crate::boot::boot("sub main() { }", 7, 2).expect("boot");
-        let c = encode_puppets(g.world.view(), g.world.frame());
+        let c = encode_puppets(g.world().view(), g.world().frame());
         assert!(c.is_empty());
         assert_eq!(c, PuppetCols::default());
     }
@@ -98,7 +98,7 @@ sub main() {
     #[test]
     fn two_enemies_compacted_in_index_order_with_age_one() {
         let g = stepped(2);
-        let c = encode_puppets(g.world.view(), g.world.frame());
+        let c = encode_puppets(g.world().view(), g.world().frame());
         assert_eq!(c.len(), 2);
         assert_eq!(c.index, vec![0, 1]);
         assert_eq!(c.generation, vec![1, 1], "首次分配 gen 从 1 起");
@@ -114,19 +114,19 @@ sub main() {
     #[test]
     fn state_age_grows_and_restarts_on_set_anm_state() {
         let mut g = stepped(6);
-        let c = encode_puppets(g.world.view(), g.world.frame());
+        let c = encode_puppets(g.world().view(), g.world().frame());
         assert_eq!(c.state_age, vec![5, 5]);
         let h = stg_core::enemy::EnemyHandle {
             index: 1,
             generation: 1,
         };
-        g.world.body.set_anm_state(h, 4);
-        let c = encode_puppets(g.world.view(), g.world.frame());
+        g.timeline.world_mut().body.set_anm_state(h, 4);
+        let c = encode_puppets(g.world().view(), g.world().frame());
         assert_eq!(c.anm_state, vec![0, 4]);
         assert_eq!(c.state_age[1], 0, "同帧内写完即读：age 0");
         let input = stg_core::input::InputFrame::empty(0);
-        stg_core::step::step_with_director(&mut g.world, g.tables, &g.image, &input, |_| {});
-        let c = encode_puppets(g.world.view(), g.world.frame());
+        g.timeline.advance(&input);
+        let c = encode_puppets(g.world().view(), g.world().frame());
         assert_eq!(c.state_age, vec![6, 1]);
     }
 }

@@ -233,6 +233,70 @@ func _init():
 	if not b.new_game_at(names, srcs, 7, WorldBridge.RANK_EXTRA, 9, 0, 400, 3, 3):
 		fail("RANK_EXTRA(4) 是合法档,不该被拒"); return
 
+	# ── 时间机制内核刀(2026-09-07,spec §4 桥级三条)──────────────────────────
+	# 从头再开一局(单单元 new_game),用 godot_smoke.ecl 的弹流当靶:每 30 帧从 (-150,300)
+	# 朝右发一颗 0.5px/帧 的弹,y 恒 300——自机走到 y≈300 再一路向左就会撞上。
+	if not b.new_game(src, 7, 2): fail("time: new_game"); return
+	var mm_ghost := RenderingServer.multimesh_create()
+	RenderingServer.multimesh_allocate_data(mm_ghost, 8192, RenderingServer.MULTIMESH_TRANSFORM_2D, false, true)
+	var seed_g := PackedFloat32Array(); seed_g.resize(8192 * 12)
+	RenderingServer.multimesh_set_buffer(mm_ghost, seed_g)
+	if b.preview(30): fail("time: 未注册影子层时 preview 应返 false"); return
+	if not b.register_ghost_layer(mm_ghost): fail("time: register_ghost_layer"); return
+	if not b.register_layer(b.LAYER_BULLETS, mm): fail("time: rl bullets"); return
+	for i in range(40): b.step_frame(0) # 让场上有几颗弹
+	# ① 跳躍:按一帧 BTN_JUMP → LIFE_JUMPING;第 29 帧仍在跳,第 30 帧回 ALIVE(N±1 判别)。
+	if b.step_frame(WorldBridge.BTN_JUMP) != -1: fail("time: 跳躍不该返回落点"); return
+	if int(b.hud_player()["life_state"]) != WorldBridge.LIFE_JUMPING: fail("time: 按跳躍后应为 LIFE_JUMPING"); return
+	for i in range(WorldBridge.JUMP_FRAMES - 1): b.step_frame(0)
+	if int(b.hud_player()["life_state"]) != WorldBridge.LIFE_JUMPING: fail("time: 第 N−1 帧仍应在跳"); return
+	b.step_frame(0)
+	if int(b.hud_player()["life_state"]) != 1: fail("time: 第 N 帧应回 ALIVE"); return
+	# ② 影子:preview 后影子缓冲有实弹行(位置非零)、且不动权威世界(frame/checksum 不变)。
+	var f_before: int = b.frame()
+	var c_before: int = b.checksum()
+	if not b.preview(WorldBridge.JUMP_FRAMES): fail("time: preview"); return
+	if b.frame() != f_before or b.checksum() != c_before: fail("time: preview 动了权威世界"); return
+	var gb := RenderingServer.multimesh_get_buffer(mm_ghost)
+	if absf(gb[3]) < 0.0001 and absf(gb[7]) < 0.0001: fail("time: 影子层实例 0 应有弹(位置非零)"); return
+	# 影子的弹比现在的弹多飞了 31 帧(0.5px/帧 → +15.5px):同一颗弹(压实序首行)x 差 15.5。
+	var rb := RenderingServer.multimesh_get_buffer(mm)
+	if absf((gb[3] - rb[3]) - 15.5) > 0.0001: fail("time: 影子首弹应比实弹多飞 15.5px,得 %f" % (gb[3] - rb[3])); return
+	# ③ 遡行:先上到 y≈300,再向左撞弹流;进决死窗口按 V → step_frame 返回落点 F ==
+	#    max(hit_frame−30, 环最老帧);frame() 回到 F;落地后 invuln 非零。
+	var moved := 0
+	while b.player_pos().y > 300.5 and moved < 120:
+		b.step_frame(WorldBridge.BTN_UP); moved += 1
+	if absf(b.player_pos().y - 300.0) > 4.0: fail("time: 自机未到 y≈300,得 %f" % b.player_pos().y); return
+	var ring_oldest := 0 # new_game 后环首帧 = 0
+	var hit_frame := -1
+	var walked := 0
+	while hit_frame < 0 and walked < 900:
+		b.step_frame(WorldBridge.BTN_LEFT); walked += 1
+		if int(b.hud_player()["life_state"]) == WorldBridge.LIFE_DEATHWINDOW:
+			hit_frame = int(b.hud_player()["hit_frame"])
+	if hit_frame < 0: fail("time: 向左走 900 帧没撞上弹流"); return
+	var g0: int = b.frame()
+	var landed: int = b.step_frame(WorldBridge.BTN_REWIND)
+	var expect_to := maxi(hit_frame - WorldBridge.REWIND_DEPTH, ring_oldest)
+	if landed != expect_to: fail("time: 遡行落点应为 %d,得 %d(hit_frame %d)" % [expect_to, landed, hit_frame]); return
+	if b.frame() != expect_to: fail("time: frame() 应回到落点"); return
+	if int(b.hud_player()["life_state"]) != 1: fail("time: 落地应为 ALIVE"); return
+	if int(b.hud_player()["invuln"]) <= 0: fail("time: 落地应有无敌帧"); return
+	# 倒放读口:被丢弃的请求帧 g0+1 在下一次 step 前仍可读,且切走视图不动权威帧号;
+	# 落点本身也可读;step 后视图自动切回。
+	if not b.view_ring(g0 + 1): fail("time: view_ring(被丢弃的请求帧)"); return
+	if int(b.hud_player()["life_state"]) != WorldBridge.LIFE_DEATHWINDOW: fail("time: 视图帧应是决死窗口那一帧"); return
+	if b.frame() != expect_to: fail("time: view_ring 不该动权威帧号"); return
+	if not b.view_ring(expect_to): fail("time: view_ring(落点)"); return
+	if b.view_ring(expect_to + 100000): fail("time: 不在环里的帧应返 false"); return
+	b.step_frame(0)
+	if b.frame() != expect_to + 1: fail("time: step 后应从落点继续"); return
+	# replay_bytes:非空且魔数 STGR。
+	var rb_bytes: PackedByteArray = b.replay_bytes()
+	if rb_bytes.size() < 8 or rb_bytes.slice(0, 4).get_string_from_ascii() != "STGR": fail("time: replay_bytes 魔数"); return
+	RenderingServer.free_rid(mm_ghost)
+
 	RenderingServer.free_rid(mm)
 	b.free()
 	print("SMOKE OK")

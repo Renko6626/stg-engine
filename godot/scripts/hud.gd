@@ -12,6 +12,7 @@ var boss_bar: ColorRect
 var boss_bar_bg: ColorRect
 var spell_l: Label
 var banner: Label
+var time_l: Label # 时间机制提示:観測中 / 跳躍中 / 决死窗口「V 遡行」/ 遡行倒放中
 var _banner_left := 0.0
 
 func _ready() -> void:
@@ -34,6 +35,12 @@ func _ready() -> void:
 	spell_l.position = Vector2(40, 26)
 	spell_l.add_theme_font_size_override("font_size", 10)
 	add_child(spell_l)
+
+	time_l = Label.new()
+	time_l.position = Vector2(40, 440)
+	time_l.add_theme_font_size_override("font_size", 11)
+	time_l.modulate = Color(0.7, 0.9, 1.0)
+	add_child(time_l)
 
 	banner = Label.new()
 	banner.position = Vector2(120, 200)
@@ -66,6 +73,10 @@ func hide_banner() -> void:
 
 func set_bgm_label(n: String) -> void:
 	bgm_l.text = "♪ " + n
+
+## 时间机制一行提示(电平:每帧由 main.gd 按自己的状态机 + hud_player 决定文案)。
+func set_time_hint(text: String) -> void:
+	time_l.text = text
 
 func refresh(bridge: WorldBridge) -> void:
 	var p := bridge.hud_player()

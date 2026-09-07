@@ -43,6 +43,7 @@ var bg: Bg
 var player: Sprite2D
 var hitbox: Sprite2D
 var layer_nodes := {}
+var ghost: MultiMeshInstance2D # 影子层(観測):弹层布局,ghost.gdshader;在 bullets 之下
 var puppet_root: Node2D
 var puppets: Array[Sprite2D] = []
 var puppet_gen := PackedInt32Array()   # 节点记录的 gen(-1 = 空)
@@ -65,6 +66,9 @@ func _init() -> void:
 	viewport.add_child(world_root)
 
 	for kind in Z_ORDER:
+		if kind == 0: # bullets 之前插影子层:影子比实弹暗,压在实弹之下不遮真弹
+			ghost = _make_ghost()
+			world_root.add_child(ghost)
 		var mmi := _make_layer(kind)
 		layer_nodes[kind] = mmi
 		world_root.add_child(mmi)
@@ -105,6 +109,38 @@ func _make_layer(kind: int) -> MultiMeshInstance2D:
 	mm.visible_instance_count = 0
 	return mmi
 
+## 影子层(时间机制内核刀 spec §5):与弹层同图集/同网格/同容量,换 ghost.gdshader。
+func _make_ghost() -> MultiMeshInstance2D:
+	var mmi := MultiMeshInstance2D.new()
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_2D
+	mm.use_custom_data = true
+	mm.instance_count = CAPS[0]
+	var quad := QuadMesh.new()
+	quad.size = Vector2(CELLS[0], CELLS[0])
+	mm.mesh = quad
+	mmi.multimesh = mm
+	mmi.texture = load(TEXTURES[0])
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/ghost.gdshader")
+	mat.set_shader_parameter("atlas", mmi.texture)
+	mat.set_shader_parameter("grid_cols", float(COLS[0]))
+	mat.set_shader_parameter("grid_rows", float(ROWS[0]))
+	mmi.material = mat
+	var buf := PackedFloat32Array()
+	buf.resize(CAPS[0] * 12)
+	RenderingServer.multimesh_set_buffer(mm.get_rid(), buf)
+	RenderingServer.multimesh_set_custom_aabb(mm.get_rid(), FIELD_AABB)
+	mm.visible_instance_count = 0
+	mmi.visible = false
+	return mmi
+
+## 観測开/关:关时顺带把可见数清零,免下次开启前一帧闪出旧影子。
+func set_ghost_visible(on: bool) -> void:
+	ghost.visible = on
+	if not on:
+		RenderingServer.multimesh_set_visible_instances(ghost.multimesh.get_rid(), 0)
+
 func _make_puppets() -> void:
 	puppet_root = Node2D.new()
 	puppet_root.name = "Puppets"
@@ -143,6 +179,10 @@ func setup(bridge: WorldBridge) -> bool:
 		if not bridge.register_layer(kind, mm.get_rid()):
 			push_error("[stg] register_layer(%d) 被拒(容量镜像漂移?)" % kind)
 			ok = false
+	if not bridge.register_ghost_layer(ghost.multimesh.get_rid()):
+		push_error("[stg] register_ghost_layer 被拒(弹池容量镜像漂移?)")
+		ok = false
+	set_ghost_visible(false)
 	reset_puppets()
 	return ok
 

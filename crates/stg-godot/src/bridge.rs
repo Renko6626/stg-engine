@@ -4,13 +4,16 @@
 use godot::classes::RenderingServer;
 use godot::prelude::*;
 
+use stg_core::step::World;
+
 use crate::boot::{self, Game};
-use crate::frame::{self, FLOATS_PER_INSTANCE, LAYER_COUNT};
+use crate::frame::{self, FLOATS_PER_INSTANCE, LAYER_BULLETS, LAYER_COUNT};
 
 /// 去重日志位(warned 位集)。
 const W_NO_GAME: u32 = 1 << 0;
 const W_BAD_LAYER: u32 = 1 << 1;
 const W_BAD_MM: u32 = 1 << 2;
+const W_NO_GHOST: u32 = 1 << 3;
 
 #[derive(GodotClass)]
 #[class(base=Node)]
@@ -21,6 +24,12 @@ pub struct WorldBridge {
     /// 每层一份定长实例缓冲(表现契约 v2 §4.8):编码器经 `as_mut_slice` 直接写入,
     /// 省掉 `Vec` → Packed 那次拷贝;`multimesh_set_buffer` 内部那次无法省。
     bufs: [PackedFloat32Array; LAYER_COUNT],
+    /// 影子层(観測,时间机制内核刀 spec §4):影子世界的弹层,布局同 `LAYER_BULLETS`。
+    ghost: Option<Rid>,
+    ghost_buf: PackedFloat32Array,
+    /// 视图世界:`None` = 权威世界;`Some(f)` = 环里第 f 帧(宿主倒放中,`view_ring` 置、
+    /// 下一次 `step_frame` 清)。所有通道 A 读口从视图世界取。
+    view_frame: Option<u32>,
     warned: u32,
 }
 
@@ -32,6 +41,9 @@ impl INode for WorldBridge {
             game: None,
             layers: [None; LAYER_COUNT],
             bufs: Default::default(),
+            ghost: None,
+            ghost_buf: Default::default(),
+            view_frame: None,
             warned: 0,
         }
     }
@@ -43,6 +55,43 @@ impl WorldBridge {
             self.warned |= bit;
             godot_error!("[stg] {msg}(同类后续不再报)");
         }
+    }
+
+    /// 通道 A 读口的数据源:倒放中是环里那一帧,否则是权威世界。未开局 → None。
+    fn view_world(&self) -> Option<&World> {
+        let g = self.game.as_ref()?;
+        match self.view_frame {
+            None => Some(g.world()),
+            Some(f) => g
+                .timeline
+                .ring_get(f)
+                .or_else(|| g.timeline.ring_get_discarded(f)),
+        }
+    }
+}
+
+/// 已注册层:从 `world` 原地编码 + 一次上传 + 可见数(step 后与倒放共用)。
+fn upload_layers(
+    layers: &[Option<Rid>; LAYER_COUNT],
+    bufs: &mut [PackedFloat32Array; LAYER_COUNT],
+    world: &World,
+    tables: &stg_core::tables::WorldTables,
+) {
+    let frame_no = world.frame();
+    let mut rs = RenderingServer::singleton();
+    for layer in 0..LAYER_COUNT {
+        let Some(rid) = layers[layer] else {
+            continue;
+        };
+        let n = frame::encode_layer(
+            world.view(),
+            tables,
+            frame_no,
+            layer,
+            bufs[layer].as_mut_slice(),
+        );
+        rs.multimesh_set_buffer(rid, &bufs[layer]);
+        rs.multimesh_set_visible_instances(rid, n as i32);
     }
 }
 
@@ -67,6 +116,22 @@ impl WorldBridge {
     const BTN_SLOW: i64 = stg_core::input::BTN_SLOW as i64;
     #[constant]
     const BTN_TIMESTOP: i64 = stg_core::input::BTN_TIMESTOP as i64;
+    // 时间机制内核刀(2026-09-07):跳躍/遡行两个沿触发位 + 缺席态 + 两个帧数常量。観測不进
+    // 世界——两次按键协议归壳,壳只在第二下把 BTN_JUMP 送进来一帧。
+    #[constant]
+    const BTN_JUMP: i64 = stg_core::input::BTN_JUMP as i64;
+    #[constant]
+    const BTN_REWIND: i64 = stg_core::input::BTN_REWIND as i64;
+    #[constant]
+    const LIFE_JUMPING: i64 = stg_core::player::LIFE_JUMPING as i64;
+    #[constant]
+    const LIFE_DEATHWINDOW: i64 = stg_core::player::LIFE_DEATHWINDOW as i64;
+    #[constant]
+    const JUMP_FRAMES: i64 = stg_core::player::JUMP_FRAMES as i64;
+    #[constant]
+    const REWIND_DEPTH: i64 = stg_core::timeline::REWIND_DEPTH as i64;
+    #[constant]
+    const EVT_REWIND_REQUESTED: i64 = stg_core::events::EVT_REWIND_REQUESTED as i64;
     #[constant]
     const LAYER_BULLETS: i64 = frame::LAYER_BULLETS as i64;
     #[constant]
@@ -142,6 +207,7 @@ impl WorldBridge {
         match boot::boot(&ecl_source.to_string(), seed as u64, rank) {
             Ok(g) => {
                 self.game = Some(g);
+                self.view_frame = None;
                 self.warned = 0;
                 true
             }
@@ -205,6 +271,7 @@ impl WorldBridge {
         match boot::boot_at(&units, seed as u64, rank, start, loadout) {
             Ok(g) => {
                 self.game = Some(g);
+                self.view_frame = None;
                 self.warned = 0;
                 true
             }
@@ -215,37 +282,109 @@ impl WorldBridge {
         }
     }
 
+    /// 推进一帧(`Timeline::advance`)。返回 **-1** = 正常;**≥0** = 本帧发生了遡行,值是落点帧 F
+    /// (世界已恢复到 F 并落地,壳侧据此进入倒放表现态:`view_ring` 从 G−1 倒着读到 F,
+    /// 分发器水位重置到 F、fx 池清空、`_sync_anchors`)。
+    ///
+    /// **跳躍的快进不在这里**:壳看到 `hud_player().life_state == LIFE_JUMPING` 就在同一 tick
+    /// 里继续调本函数(喂 0),最多 `JUMP_FRAMES + 1` 次;桥永远一帧一帧(spec §3.2)。
+    /// 任何视图态(`view_ring`)在本函数开头解除。
     #[func]
-    fn step_frame(&mut self, buttons: i64) {
+    fn step_frame(&mut self, buttons: i64) -> i64 {
         let Some(game) = self.game.as_mut() else {
             self.warn_once(W_NO_GAME, "step_frame:尚未 new_game,no-op");
-            return;
+            return -1;
         };
-        let mut input = stg_core::input::InputFrame::empty(game.world.frame());
+        self.view_frame = None;
+        let mut input = stg_core::input::InputFrame::empty(game.timeline.frame());
         input.actions[0].buttons = buttons as u32;
-        stg_core::step::step_with_director(
-            &mut game.world,
+        let adv = game.timeline.advance(&input);
+        upload_layers(&self.layers, &mut self.bufs, game.world(), game.tables);
+        adv.rewound.map_or(-1, |c| c.to as i64)
+    }
+
+    /// 倒放读口(spec §4):把环里第 `frame` 帧(含刚被遡行丢弃的分支,下一次 `step_frame`
+    /// 前仍可读)编码上传到三层,并把所有通道 A 读口切到那一帧,直到下一次 `step_frame`。
+    /// 不在环里 → false(视图态不变)。
+    #[func]
+    fn view_ring(&mut self, frame: i64) -> bool {
+        let Some(game) = self.game.as_ref() else {
+            self.warn_once(W_NO_GAME, "view_ring:尚未 new_game,no-op");
+            return false;
+        };
+        let Ok(f) = u32::try_from(frame) else {
+            return false;
+        };
+        let Some(w) = game
+            .timeline
+            .ring_get(f)
+            .or_else(|| game.timeline.ring_get_discarded(f))
+        else {
+            return false;
+        };
+        upload_layers(&self.layers, &mut self.bufs, w, game.tables);
+        self.view_frame = Some(f);
+        true
+    }
+
+    /// 影子读口(観測,spec §4):影子世界跑 `n` 步(起跳 + 跳过 n 帧,`n == JUMP_FRAMES` 时
+    /// 影子就是落地那一帧),把影子的**弹层**编码上传到 `register_ghost_layer` 注册的
+    /// MultiMesh。不碰权威世界/环/log。未注册影子层 → false。
+    #[func]
+    fn preview(&mut self, n: i64) -> bool {
+        let Some(game) = self.game.as_mut() else {
+            self.warn_once(W_NO_GAME, "preview:尚未 new_game,no-op");
+            return false;
+        };
+        let Some(rid) = self.ghost else {
+            self.warn_once(W_NO_GHOST, "preview:未 register_ghost_layer,no-op");
+            return false;
+        };
+        let n = n.clamp(0, u16::MAX as i64) as u32;
+        let shadow = game.timeline.preview(n);
+        let cnt = frame::encode_layer(
+            shadow.view(),
             game.tables,
-            &game.image,
-            &input,
-            |_| {},
+            shadow.frame(),
+            LAYER_BULLETS,
+            self.ghost_buf.as_mut_slice(),
         );
-        // 已注册层:原地编码 + 一次上传 + 可见数
-        let frame_no = game.world.frame();
         let mut rs = RenderingServer::singleton();
-        for layer in 0..LAYER_COUNT {
-            let Some(rid) = self.layers[layer] else {
-                continue;
-            };
-            let n = frame::encode_layer(
-                game.world.view(),
-                game.tables,
-                frame_no,
-                layer,
-                self.bufs[layer].as_mut_slice(),
+        rs.multimesh_set_buffer(rid, &self.ghost_buf);
+        rs.multimesh_set_visible_instances(rid, cnt as i32);
+        true
+    }
+
+    /// 影子层注册:判据同 `register_layer`(缓冲长度 == 弹池 cap × 12)。
+    #[func]
+    fn register_ghost_layer(&mut self, multimesh_rid: Rid) -> bool {
+        let cap = frame::layer_cap(LAYER_BULLETS);
+        let rs = RenderingServer::singleton();
+        let got = rs.multimesh_get_buffer(multimesh_rid).len();
+        if got != cap * FLOATS_PER_INSTANCE {
+            self.warn_once(
+                W_BAD_MM,
+                "register_ghost_layer:multimesh 缓冲尺寸不符(需弹池 cap×12;headless 下须先 set_buffer 播种),no-op",
             );
-            rs.multimesh_set_buffer(rid, &self.bufs[layer]);
-            rs.multimesh_set_visible_instances(rid, n as i32);
+            return false;
+        }
+        let mut buf = PackedFloat32Array::new();
+        buf.resize(cap * FLOATS_PER_INSTANCE);
+        self.ghost_buf = buf;
+        self.ghost = Some(multimesh_rid);
+        true
+    }
+
+    /// 输入日志字节(`InputLog` v1,`stg-harness replay <file> --ecl <脚本>` 可重放)。
+    /// 读档出身的 log 只能落盘不能从头重放(头里 boot tag=1)。未开局 → 空。
+    #[func]
+    fn replay_bytes(&mut self) -> PackedByteArray {
+        match self.game.as_ref() {
+            Some(g) => PackedByteArray::from(g.timeline.log_bytes().as_slice()),
+            None => {
+                self.warn_once(W_NO_GAME, "replay_bytes:尚未 new_game,返回空");
+                PackedByteArray::new()
+            }
         }
     }
 
@@ -287,8 +426,8 @@ impl WorldBridge {
         let Some(game) = self.game.as_ref() else {
             return arr;
         };
-        let f = game.world.frame() as i64;
-        for r in game.world.take_requests() {
+        let f = game.world().frame() as i64;
+        for r in game.world().take_requests() {
             let mut d = VarDictionary::new();
             d.set("id", r.id as i64);
             d.set("seq", r.seq as i64);
@@ -321,7 +460,10 @@ impl WorldBridge {
             return false;
         };
         match crate::save::load_into(game, bytes.as_slice()) {
-            Ok(()) => true,
+            Ok(()) => {
+                self.view_frame = None;
+                true
+            }
             Err(e) => {
                 godot_error!("[stg] load_state 失败:{e}(世界原状不动)");
                 false
@@ -331,21 +473,23 @@ impl WorldBridge {
 
     #[func]
     fn frame(&self) -> i64 {
-        self.game.as_ref().map_or(-1, |g| g.world.frame() as i64)
+        self.game.as_ref().map_or(-1, |g| g.world().frame() as i64)
     }
 
     #[func]
     fn checksum(&self) -> i64 {
-        self.game.as_ref().map_or(0, |g| g.world.checksum() as i64)
+        self.game
+            .as_ref()
+            .map_or(0, |g| g.world().checksum() as i64)
     }
 
     #[func]
     fn hud_player(&self) -> VarDictionary {
         let mut d = VarDictionary::new();
-        let Some(g) = self.game.as_ref() else {
+        let Some(w) = self.view_world() else {
             return d;
         };
-        let p = &g.world.view().players()[0];
+        let p = &w.view().players()[0];
         d.set("x", p.x.raw() as f64 / 65536.0);
         d.set("y", p.y.raw() as f64 / 65536.0);
         d.set("lives", p.lives as i64);
@@ -358,6 +502,7 @@ impl WorldBridge {
         d.set("life_state", p.life_state as i64);
         d.set("invuln", p.invuln as i64);
         d.set("facing", p.facing as i64);
+        d.set("hit_frame", p.hit_frame as i64);
         d
     }
 
@@ -368,10 +513,10 @@ impl WorldBridge {
     #[func]
     fn puppets(&self) -> VarDictionary {
         let mut d = VarDictionary::new();
-        let Some(g) = self.game.as_ref() else {
+        let Some(w) = self.view_world() else {
             return d;
         };
-        let c = crate::puppets::encode_puppets(g.world.view(), g.world.frame());
+        let c = crate::puppets::encode_puppets(w.view(), w.frame());
         d.set("index", &PackedInt32Array::from(c.index.as_slice()));
         d.set("gen", &PackedInt32Array::from(c.generation.as_slice()));
         d.set("x", &PackedFloat32Array::from(c.x.as_slice()));
@@ -393,7 +538,10 @@ impl WorldBridge {
         let Some(g) = self.game.as_ref() else {
             return d;
         };
-        let v = g.world.vanished();
+        if self.view_frame.is_some() {
+            return d; // 倒放中无"本帧离开池"这回事(spec §4)
+        }
+        let v = g.world().vanished();
         let xs: Vec<f32> = v.iter().map(|r| r.x.raw() as f32 / 65536.0).collect();
         let ys: Vec<f32> = v.iter().map(|r| r.y.raw() as f32 / 65536.0).collect();
         let sprites: Vec<i32> = v.iter().map(|r| r.sprite as i32).collect();
@@ -418,7 +566,7 @@ impl WorldBridge {
         let (Ok(index), Ok(generation)) = (u16::try_from(index), u16::try_from(generation)) else {
             return Variant::nil();
         };
-        let p = g.world.view().enemies();
+        let p = g.world().view().enemies();
         let h = stg_core::enemy::EnemyHandle { index, generation };
         match p.get(h) {
             Some(i) => Vector2::new(
@@ -433,10 +581,10 @@ impl WorldBridge {
     #[func]
     fn hud_boss(&self, i: i64) -> VarDictionary {
         let mut d = VarDictionary::new();
-        let Some(g) = self.game.as_ref() else {
+        let Some(w) = self.view_world() else {
             return d;
         };
-        let Some(s) = g.world.view().boss_ui().get(i as usize) else {
+        let Some(s) = w.view().boss_ui().get(i as usize) else {
             return d;
         };
         d.set("active", s.active as i64);
@@ -450,10 +598,10 @@ impl WorldBridge {
     #[func]
     fn hud_spell(&self, i: i64) -> VarDictionary {
         let mut d = VarDictionary::new();
-        let Some(g) = self.game.as_ref() else {
+        let Some(w) = self.view_world() else {
             return d;
         };
-        let Some(s) = g.world.view().spells().get(i as usize) else {
+        let Some(s) = w.view().spells().get(i as usize) else {
             return d;
         };
         d.set("active", s.active as i64);
@@ -471,10 +619,10 @@ impl WorldBridge {
     #[func]
     fn anchors(&self) -> VarDictionary {
         let mut d = VarDictionary::new();
-        let Some(g) = self.game.as_ref() else {
+        let Some(w) = self.view_world() else {
             return d;
         };
-        let v = g.world.view();
+        let v = w.view();
         d.set("bgm", v.bgm_id() as i64);
         d.set("bg", v.bg_id() as i64);
         d.set("bg_phase", v.bg_phase() as i64);
@@ -484,20 +632,20 @@ impl WorldBridge {
 
     #[func]
     fn player_pos(&self) -> Vector2 {
-        let Some(g) = self.game.as_ref() else {
+        let Some(w) = self.view_world() else {
             return Vector2::ZERO;
         };
-        let p = &g.world.view().players()[0];
+        let p = &w.view().players()[0];
         Vector2::new(p.x.raw() as f32 / 65536.0, p.y.raw() as f32 / 65536.0)
     }
 
     #[func]
     fn fields_info(&self) -> Array<VarDictionary> {
         let mut arr = Array::new();
-        let Some(g) = self.game.as_ref() else {
+        let Some(w) = self.view_world() else {
             return arr;
         };
-        let view = g.world.view();
+        let view = w.view();
         let p = view.fields();
         let (xs, ys, rads, lives) = (p.x(), p.y(), p.radius(), p.life());
         for i in p.iter_alive() {
@@ -526,7 +674,7 @@ impl WorldBridge {
         let Some(g) = self.game.as_ref() else {
             return arr;
         };
-        for ev in g.world.frame_events() {
+        for ev in g.world().frame_events() {
             let mut d = VarDictionary::new();
             d.set("kind", ev.kind as i64);
             d.set("x", ev.x.raw() as f64 / 65536.0);

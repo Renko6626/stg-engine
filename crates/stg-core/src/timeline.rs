@@ -51,9 +51,9 @@ pub enum Boot {
         start: i32,
         loadout: Loadout,
     },
-    /// 从一份存档载入（`load_state` 之后）；只记存档载荷 FNV。**不可从头重放**
+    /// 从一份存档载入（`load_state` 之后）；只记载入那一刻世界的校验和。**不可从头重放**
     /// （`Timeline::replay` 返 `BootNotReplayable`）——练习模式要把快照嵌进 log（follow-ups）。
-    Snapshot { save_hash: u64 },
+    Snapshot { world_checksum: u64 },
 }
 
 /// 输入日志 = 线性帧数组 + 剪切表。被遡行丢弃的分支**不保留**：它对未来的唯一影响是
@@ -159,9 +159,15 @@ impl SnapshotRing {
         self.newest = Some(f);
     }
 
-    /// 环里最老的一帧（空环 → None）。
+    /// 环里最老的一帧（空环 → None）。只数 `≤ newest` 的槽——遡行作废的槽不算。
     pub fn oldest(&self) -> Option<u32> {
-        self.frames.iter().flatten().copied().min()
+        let newest = self.newest?;
+        self.frames
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|f| *f <= newest)
+            .min()
     }
 
     pub fn newest(&self) -> Option<u32> {
@@ -175,13 +181,17 @@ impl SnapshotRing {
             .then(|| &*self.slots[i])
     }
 
-    /// 遡行后把比 `frame` 新的槽作废，`newest = frame`。
+    /// 遡行被丢弃分支上的快照（`frame > newest`，槽尚未被新帧覆写）。**只给宿主倒放用**：
+    /// 遡行发生后、下一次 `advance` 之前，这些槽原封不动，宿主可以从请求帧倒着读到落点、
+    /// 画"逐帧倒退"；一旦时间线继续推进，它们会被同槽新帧逐个覆写。不在环里 → None。
+    pub fn get_discarded(&self, frame: u32) -> Option<&World> {
+        let i = Self::idx(frame);
+        (self.frames[i] == Some(frame) && self.newest.is_some_and(|n| frame > n))
+            .then(|| &*self.slots[i])
+    }
+
+    /// 遡行后把比 `frame` 新的槽作废（只动 `newest`，槽内容留给 `get_discarded`）。
     fn truncate_to(&mut self, frame: u32) {
-        for slot in self.frames.iter_mut() {
-            if slot.is_some_and(|f| f > frame) {
-                *slot = None;
-            }
-        }
         self.newest = Some(frame);
     }
 }
@@ -248,6 +258,11 @@ impl Timeline {
     pub fn world(&self) -> &World {
         &self.world
     }
+    /// **带外**可变访问：改了权威世界而 log 不知情 ⇒ 这条时间线的 log 不再能重放出同样的
+    /// 状态。只给调试/测试/练习模式（手摆场景、作弊菜单）用；正常玩法一切改动走 `advance`。
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
     pub fn frame(&self) -> u32 {
         self.world.frame()
     }
@@ -260,9 +275,13 @@ impl Timeline {
     pub fn log(&self) -> &InputLog {
         &self.log
     }
-    /// 环里某帧的快照（宿主倒放用）。
+    /// 环里某帧的快照（历史 = 现在这条时间线上的帧）。
     pub fn ring_get(&self, frame: u32) -> Option<&World> {
         self.ring.get(frame)
+    }
+    /// 刚被遡行丢弃的分支上的快照（宿主倒放动画用，见 `SnapshotRing::get_discarded`）。
+    pub fn ring_get_discarded(&self, frame: u32) -> Option<&World> {
+        self.ring.get_discarded(frame)
     }
     pub fn ring(&self) -> &SnapshotRing {
         &self.ring
@@ -439,7 +458,7 @@ impl Timeline {
 //
 // magic "STGR" | file_ver u8 | ENGINE_VER u32 | tables_hash u64 | image_hash u64 | vocab_hash u64
 // | boot: tag u8 (+ 0: seed u64, rank i32, start i32, loadout{character u8, power u16, lives u8,
-//   bombs u8, time_stops u8} / 1: save_hash u64)
+//   bombs u8, time_stops u8} / 1: world_checksum u64)
 // | n_frames u32 | frames[n]: frame u32, (buttons u32, _pad u32) × MAX_PLAYERS
 // | n_cuts u32 | cuts[n]: at u32, to u32, player u8
 // | fnv u64（对以上全部字节的 FNV-1a 64）
@@ -474,9 +493,9 @@ impl InputLog {
                 out.push(loadout.bombs);
                 out.push(loadout.time_stops);
             }
-            Boot::Snapshot { save_hash } => {
+            Boot::Snapshot { world_checksum } => {
                 out.push(1);
-                out.extend_from_slice(&save_hash.to_le_bytes());
+                out.extend_from_slice(&world_checksum.to_le_bytes());
             }
         }
         out.extend_from_slice(&(self.frames.len() as u32).to_le_bytes());
@@ -589,7 +608,7 @@ impl InputLog {
                 }
             }
             1 => Boot::Snapshot {
-                save_hash: u64_of(&mut r)?,
+                world_checksum: u64_of(&mut r)?,
             },
             got => return Err(ReplayError::BadBootTag { got }),
         };
@@ -852,6 +871,15 @@ mod tests {
         assert_eq!(probe.checksum(), snap_sum, "恢复的是环里那一帧");
         assert_eq!(t.ring.newest(), Some(expect_to));
         assert!(t.ring_get(expect_to + 1).is_none(), "比落点新的槽作废");
+        assert_eq!(t.ring.oldest(), Some(0), "最老一帧不受作废槽影响");
+        let g = t
+            .ring_get_discarded(at - 1)
+            .expect("被丢弃分支在下一次 advance 前仍可倒放");
+        assert_eq!(g.frame(), at - 1);
+        assert!(
+            t.ring_get_discarded(expect_to).is_none(),
+            "落点本身不算丢弃"
+        );
         assert_eq!(
             t.ring_get(expect_to).unwrap().checksum(),
             t.world().checksum(),
@@ -862,6 +890,11 @@ mod tests {
         assert!(
             t.world().frame_events().is_empty(),
             "恢复出的世界无陈旧事件"
+        );
+        t.advance(&InputFrame::empty(0));
+        assert!(
+            t.ring_get_discarded(expect_to + 1).is_none(),
+            "推进后同槽被新帧覆写，丢弃帧消失"
         );
     }
 
@@ -1010,7 +1043,7 @@ mod tests {
         ));
         // Snapshot 出身拒重放
         let snap_log = InputLog {
-            boot: Boot::Snapshot { save_hash: 1 },
+            boot: Boot::Snapshot { world_checksum: 1 },
             frames: vec![],
             cuts: vec![],
         };
