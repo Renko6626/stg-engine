@@ -107,6 +107,7 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `pulse_signal(channel: int)` — 脉冲一条信号通道(边沿语义,仅当帧有效);放行处于弹变换 WAIT_SIGNAL 停驻态的弹(非 ECL 任务)
 - `emit_req(id: int, a0: int|fx|angle, a1: int|fx|angle, a2: int|fx|angle, a3: int|fx|angle, a4: int|fx|angle, a5: int|fx|angle)` — 通道 B 渲染请求;void 只能裸语句;args 裸载荷(fx 过 raw/angle 过 BAM/int 原样)
 - `fx_at(x: fx, y: fx, kind: int, param: int)` — 在 (x,y) 起一次性演出:发 REQ_FX_AT [x raw,y raw,kind,param,0,0](对应 ZUN anmPlayPos);kind/param 引擎不解释,归内容包与壳侧约定;owner 无限制;即发即忘
+- `stage_clear(stage: int)` — 本关结束:发 EVT_STAGE_CLEARED{stage} 事实事件并**让出一帧**(降低成 SYS 723 + wait(1))——宿主停拍画结算页,下一条语句在放行后的第一帧才执行;先 add_score 再调它
 - `fx_on(kind: int, param: int)` — 在敌自身上起依附演出(self owner 非 ENEMY → Fault):发 REQ_FX_ATTACHED [index,gen,kind,param,0,0](对应 ZUN anmPlay);壳侧按句柄每帧跟随、句柄失效即自毁;即发即忘
 - `rand(n: int) -> int` — 模拟 RNG 均匀 [0,n);确定性,随快照回卷
 - `global(slot: int) -> int` — 读 globals 槽(GVAR_RANK=0 为难度)

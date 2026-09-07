@@ -180,7 +180,12 @@ extern crate self as stg_core;
 /// `BTN_REWIND = 9`（位=0 等价旧行为，`actions_vocab_hash` 变）；③ 生命态新增
 /// `LIFE_JUMPING = 5`、事件新增 `EVT_REWIND_REQUESTED = 10`。**金向量预期改变**（新字段
 /// 进哈希，自帧 0 起）；风铃卡不按新键，行为零改动。
-pub const ENGINE_VER: u32 = 17;
+///
+/// **17 → 18**（壳子刀·转场协议修正，2026-09-07）：**号表 + 事件号**。syscall 新增
+/// `723 stage_clear`（发 `EVT_STAGE_CLEARED = 11` 事实事件，表层 codegen 追发 `WAIT 1`
+/// 让出一帧——修掉「`emit_req(REQ_STAGE_CLEAR)` 不让出帧、下一关开头会在挂牌同一帧跑掉」
+/// 的缝）。布局未动，金向量逐字节不变（风铃卡不调它）。
+pub const ENGINE_VER: u32 = 18;
 
 pub use stg_derive::define_pool;
 

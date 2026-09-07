@@ -99,7 +99,6 @@ func _wire_requests() -> void:
 		hud.show_banner(ContentTables.SPELL_NAMES.get(int(a[0]), "Spell #%d" % int(a[0])), 2.5))
 	dispatcher.register(WorldBridge.REQ_SPELL_RESULT, func(a):
 		hud.show_banner("取得!" if int(a[1]) == 1 else "失敗…", 2.0))
-	dispatcher.register(WorldBridge.REQ_STAGE_CLEAR, func(_a): _on_stage_clear())
 	dispatcher.register(WorldBridge.REQ_BGM, func(a):
 		hud.set_bgm_label(ContentTables.BGM_NAMES.get(int(a[0]), "BGM #%d" % int(a[0]))))
 	dispatcher.register(WorldBridge.REQ_BG, func(a): playfield.bg.set_bg(int(a[0])))
@@ -288,6 +287,10 @@ func _drain_events() -> void:
 		match int(ev.get("kind", 0)):
 			WorldBridge.EVT_SHOT_HIT_ENEMY:
 				effects.hit_spark(Vector2(ev.get("x", 0.0), ev.get("y", 0.0)), frame)
+			WorldBridge.EVT_STAGE_CLEARED:
+				# 流程信号走通道 A 事实流(壳子刀 2026-09-07):脚本 stage_clear(n) 发事件并让出一帧,
+				# 宿主停拍;下一关第一帧要等玩家确认(现在 = Z 重开,结算页是壳子刀正文)。
+				_on_stage_clear(int(ev.get("data0", 0)))
 
 ## 目验模式的脚本化输入:常按射击;第 SHOT_BOMB_FRAME 帧按一帧 bomb(沿检测,按一帧即触发)。
 func _scripted_mask(frame: int) -> int:
@@ -323,8 +326,9 @@ func _capture(name: String) -> void:
 	if _shots_left <= 0:
 		get_tree().quit(0)
 
-func _on_stage_clear() -> void:
+func _on_stage_clear(_stage: int) -> void:
 	state = S.STAGE_CLEAR
+	bridge.seal_history() # 关底 = 遡行硬边界:恢复后被弹不能退回上一关
 	var p := bridge.hud_player()
 	hud.show_banner("STAGE CLEAR  Score %d  (Z restart)" % int(p.get("score", 0)), 3600.0)
 

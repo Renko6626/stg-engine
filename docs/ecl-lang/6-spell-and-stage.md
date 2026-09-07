@@ -337,7 +337,7 @@ sub 需要判它。开机时 `rank` 越 `0..=4` 一律被拒（宿主 `new_game_
   描述——换角色即换表，不是换代码。
 
 典型用法是关底转场：`clear_bullets();` 把残留弹幕抹掉，再 `add_score(bonus);` 记完账，
-最后 `emit_req(REQ_STAGE_CLEAR, …);` 挂牌（见「关卡结算转场协议」）。
+最后 `stage_clear(N);`（见「关卡结算转场协议」）。
 
 作用区池（cap 16）满时走 `create_field` 自身的降级——这一帧的清弹**静默失效**（计
 `diag.pool_full[POOL_FIELD]`），不 Fault、不报错。正常脚本碰不到，写"每帧清弹"这种就会。
@@ -407,27 +407,28 @@ id 命名空间：`0` 保留无效 · `1..=63` 引擎保留（如 `REQ_ENEMY_DEA
 
 | id | args[0] | args[1..] |
 |---|---|---|
-| `REQ_STAGE_CLEAR`（4） | 脚本自定（挂牌用；见下方转场协议） | 0 |
+| `REQ_STAGE_CLEAR`（4） | **退役**（流程改走 `stage_clear()` → `EVT_STAGE_CLEARED` 事件；号保留作兼容） | 0 |
 | `REQ_BGM`（5） | `id`（int，同写入的 `bgm_id`） | 0 |
 | `REQ_BG`（6） | `id`（int，同写入的 `bg_id`） | 0 |
 | `REQ_BG_PHASE`（7） | `phase`（int，同写入的 `bg_phase`） | 0 |
 
 `REQ_BGM`/`REQ_BG`/`REQ_BG_PHASE` 由 `bgm`/`bg`/`bg_phase` 三个 builtin 内部经对应的 5xx
 syscall 自动发出——脚本不需要、也不应该自己再手写一次 `emit_req` 发这三个 id。
-`REQ_STAGE_CLEAR` 没有专属 syscall/builtin，是纯粹的挂牌协议常量：脚本用通用的
-`emit_req(REQ_STAGE_CLEAR, ...)` 自己发。
+`REQ_STAGE_CLEAR` 已**退役**（壳子刀 2026-09-07）：关卡结束改用内建 **`stage_clear(stage)`**——
+它发的是**事实事件** `EVT_STAGE_CLEARED`（通道 A），不是渲染请求，并且**让出一帧**。
 
-<details><summary>关卡结算转场协议（宿主怎么接这块挂牌）</summary>
+<details><summary>关卡结算转场协议（宿主怎么接）</summary>
 
-spec §6 摘编；纯宿主约定，引擎侧零改动——`World` 是纯被动状态机，宿主不调 `step` 就是完美
-冻结。
+纯宿主约定，`World` 是纯被动状态机，宿主不调 `step` 就是完美冻结。
 
-1. 脚本关底先把账在世界内记完（`add_score(bonus);`），再 `emit_req(REQ_STAGE_CLEAR, …);`
-   挂牌，随后**直接续行**（比如接着调用 `stage2();`）——世界对"暂停"这件事零感知。
-2. 宿主每帧 `step` 后经 `take_requests()` 看见 `REQ_STAGE_CLEAR` 挂牌，就此**停手不再
-   `step`**，用读口数据画结算/菜单页（原生 UI，`World` 冻结不动，不进这条时间线）。
-3. 玩家确认后宿主恢复 `step`——世界里 `stage2` 的第一帧才真正发生。回放文件里没有"结算页"
-   这个概念（暂停期贡献零帧），重播时直接穿过，行为与真实机台一致。
+1. 脚本关底先把账在世界内记完（`add_score(bonus);`），再 `stage_clear(N);`。它降低成
+   `SYS 723 + wait(1)`：事件在这一帧发出，**下一条语句要到宿主放行后的第一帧才执行**。
+   （旧写法 `emit_req(REQ_STAGE_CLEAR, …)` 不让出帧——紧接着的 `stage2()` 开头在第一个
+   `wait` 之前的语句会在挂牌同一帧跑掉，宿主停拍时它们已经发生了。这就是换内建的理由。）
+2. 宿主每帧 `step` 后经 `frame_events()` 看见 `EVT_STAGE_CLEARED`，就此**停手不再 `step`**，
+   调 `seal_history()`（关底是遡行的硬边界），用读口数据画结算页（原生 UI，`World` 冻结不动）。
+3. 玩家确认后宿主恢复 `step`——世界里 `stage2` 的第一帧才真正发生。回放里没有"结算页"
+   （暂停期贡献零帧），重播直接穿过，与真实机台一致。
 
 </details>
 

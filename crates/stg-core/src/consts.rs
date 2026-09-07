@@ -59,6 +59,9 @@ engine_consts! {
         REQ_SPELL_DECLARE:   u16 as int = 2;
         REQ_SPELL_RESULT:    u16 as int = 3;
         //  整局流程刀（spec §4）：关卡结算边沿 + 表现锚点三族（5xx syscall 写口专用）
+        //  **已退役为兼容位**（壳子刀 2026-09-07）：关卡结束改走 `stage_clear(stage)` 内建 →
+        //  `EVT_STAGE_CLEARED` 事实事件（通道 A）。号保留（引擎段 1..=63 冻结），内容包若还
+        //  用 `emit_req(REQ_STAGE_CLEAR, …)` 只是一条无人认领的演出请求，不再驱动宿主流程。
         REQ_STAGE_CLEAR:     u16 as int = 4;
         REQ_BGM:             u16 as int = 5;
         REQ_BG:              u16 as int = 6;

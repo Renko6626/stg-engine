@@ -133,6 +133,8 @@ impl WorldBridge {
     #[constant]
     const EVT_REWIND_REQUESTED: i64 = stg_core::events::EVT_REWIND_REQUESTED as i64;
     #[constant]
+    const EVT_STAGE_CLEARED: i64 = stg_core::events::EVT_STAGE_CLEARED as i64;
+    #[constant]
     const LAYER_BULLETS: i64 = frame::LAYER_BULLETS as i64;
     #[constant]
     const LAYER_SHOTS: i64 = frame::LAYER_SHOTS as i64;
@@ -373,6 +375,17 @@ impl WorldBridge {
         self.ghost_buf = buf;
         self.ghost = Some(multimesh_rid);
         true
+    }
+
+    /// 封印历史(关底):快照环只留当前帧,遡行最远退到这里——关卡结算是遡行的硬边界。
+    /// 宿主在结算页确认(恢复 step 之前)调它。回放 log 不受影响。
+    #[func]
+    fn seal_history(&mut self) {
+        let Some(game) = self.game.as_mut() else {
+            self.warn_once(W_NO_GAME, "seal_history:尚未 new_game,no-op");
+            return;
+        };
+        game.timeline.seal_history();
     }
 
     /// 输入日志字节(`InputLog` v1,`stg-harness replay <file> --ecl <脚本>` 可重放)。
