@@ -55,6 +55,7 @@
 | `clear_bullets` 时作用区池满 | 这一帧的清弹静默失效 | [6 · 符卡与整局编排](6-spell-and-stage.md) |
 | 一次消掉的弹多于道具池余量 | 弹照消，**多出的星星生不出来**（逐颗计 `pool_full`）——已知设计边界 | [6 · 符卡与整局编排](6-spell-and-stage.md) |
 | `emit_req` 时请求缓冲满 | 确定性丢弃，不 Fault | [6 · 符卡与整局编排](6-spell-and-stage.md) |
+| 时停期间的相位跳过 | 冻 C 时相位 6/7/9 不跑 ⇒ 不判定、不结算、不回收（bomb 不冻 C，判定/结算/回收照跑，与时停不同） | spec §4 |
 
 字节码层的完整口径（fault 码表、每个 syscall 的越界处置）见 [`ecl-ops.md`](../ecl-ops.md)。
 

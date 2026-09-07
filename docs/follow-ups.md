@@ -7,7 +7,9 @@
 > **维护规矩**：解决一条就删一条（别留"已完成"的墓碑，git log 才是历史）。新增的复审 follow-up
 > 往这里写，别只写账本。**写之前先核实**——本清单每条都经过代码核对，不是复述当年的复审原文。
 >
-> 最后核实：2026-07-26（Godot 场景刀收口：A5 整条销——乙案 `spawn_enemy` task 参/`enemy_hp`
+> 最后核实：2026-09-07（表现契约 v2 刀收口：B18/B26 随首次有头目验整条销——`visible_instances`
+> 有真值、可玩性四件人眼确认；A9 ⑤ 销；F4 部分销改余项；新记 F14）。
+> 上一次：2026-07-26（Godot 场景刀收口：A5 整条销——乙案 `spawn_enemy` task 参/`enemy_hp`
 > 已落地，练习模式定式移一句进 `docs/ecl-lang.md`；B18 收窄为独苗（`visible_instances`）；
 > B22 销（两处 smoke 脚本已对称修复）；B23 补全另两对实测 UV 配对；B16①③④ 复核触发点仍未到，
 > 措辞刷新；新记 A6-A9/B24-B25/D9/F4——场景刀本刀发现的债：`.ecl` 导出 PCK 过滤坑/宿主读档口
@@ -116,6 +118,19 @@
 > 逐字节不变（两段场景压不到这条新路径）。两条变异实证：改回裸截断 / 拒收改成钳位，
 > 各自转红。
 
+> **自机能力刀（2026-09-03）销账**：整节删除 **E. bomb 那一刀开工前**——三条逐条核实
+> 已兑现（`try_bomb` 已接 deathbomb 救人路径 / graze 与消弹的口径注释原样保留、未被本刀
+> 触碰 / bomb 已成为 `FieldPool` 的首个真租户，铺 `FIELD_CLEAR_BULLETS | FIELD_DAMAGE`
+> 两条 field）。本刀新记 **D20**——`world_size_sentinel_guards_copy_into_field_list`
+> 这条尺寸哨兵本刀又被对齐 padding 吃掉三次真实字段新增（`freeze_left`/`time_stops`/
+> `prev_input`）而未响，`PlayerState` 复审实测只剩 1 字节空档，下一个 `u8` 还会重演；
+> 真正逮住这三次改动的全程是金向量而非这条哨兵，候选修法（押字段数 / 押存档 payload
+> 长度）记在条目里，留人裁定。道具池第二压力入口（bomb 消弹×120帧 1:1 转星星 + 全屏
+> 吸取）已实测：灌到 rank-3 峰值量级（约 814 颗弹）、真起一发 bomb、跑满整段效果时长，
+> `diag.pool_full[POOL_ITEM]` 全程为 0（`bomb_at_rank3_peak_bullet_count_does_not_overflow_item_pool`，
+> `crates/stg-core/src/world/player.rs`）——1024 的道具池对当前内容仍有约 210 格
+> （~20%）余量，**未触发**需要人类裁定 cap 的场景。
+
 ---
 
 ## A. 有触发条件的（动到对应模块前先做）
@@ -191,12 +206,9 @@ account 差异）。**触发点 = 已部分兑现**（假胜利已拦，本条�
 `return`，不清空 `boss_bar`/`spell_l`——若某帧 `hud_player()` 返回空（如未开局态被意外调用），
 boss 条/符卡行会残留上一次刷新的陈旧值而非归零；④ `hud.gd` 的 `banner`（横幅，位于
 `Vector2(120, 200)`，无 `word_wrap`/宽度限制）与右栏 HUD 面板（`x≥424`）之间没有互斥/换行
-处理，长文案（比如更长的符卡名/中文结算文案）视觉上可能压到右栏；⑤ `effects.gd`——
-`_Ring._process` 里 `queue_free()` 之后同一帧仍跑到 `queue_redraw()`（该次重绘是 no-op 但
-语义上有点怪）、`dispatcher.gd::drain(arr)` 的 `arr` 参数无类型标注、且 `main.gd` 的 Z 重开
-路径（`_boot(0)`）不清空 `effects` 节点下遗留子节点（重开瞬间前一局还没播完的爆炸环/飘字
-会带着旧世界坐标残留，直到自身计时器跑完才消失）。五条都不阻塞可玩性，**触发点 = 内容与
-美术期**顺手一并做。
+处理，长文案（比如更长的符卡名/中文结算文案）视觉上可能压到右栏。（原 ⑤ `effects.gd` 三件——`_Ring` 的 free 后重绘、`drain(arr)` 无类型、
+重开不清特效——已随表现契约 v2 刀 2026-09-07 重写 `effects.gd`/`dispatcher.gd` 整体销掉。）
+余下四条都不阻塞可玩性，**触发点 = 内容与美术期**顺手一并做。
 
 ## B. 测试覆盖缺口
 
@@ -250,20 +262,6 @@ threshold<0（world API 白盒可达）承重——保留作"非 damage_enemy �
 
 ---
 
-### B18. `visible_instances`（`MultiMesh` 可见实例数）不可 headless 断言，须真渲染器（桥刀终审分诊，2026-07-24；场景刀收窄为独苗，2026-07-26）
-
-`hud_spell`/`fields_info` 两项判别断言已由场景刀 T6（`crates/stg-godot/smoke/smoke.gd`/
-`godot_smoke.ecl` 新增的 `smoke_spell_pattern`/`smoke_boss`）补齐，`register_layer`/编码
-上传链回读/`LAYER_SHOTS` 判别已于 2026-07-25 前置债务刀清账——本条收窄为独苗。**两层都
-不可断言**：①`MultiMesh` 资源对象自身的 `visible_instance_count` 字段是客户端本地缓存，
-桥面走 `RenderingServer.multimesh_set_visible_instances` 直写服务端从不经资源 setter，
-该字段永远停在 `playfield.gd::_make_layer` 播种的初值（0），读它必错；②退一步走服务端
-真值 `RenderingServer.multimesh_get_visible_instances`，headless dummy renderer 下同样
-实测恒 0（`smoke.gd` 注释"已实验判决，不可测"，现有冒烟改走 `multimesh_get_buffer` 回读
-实数据判别绕开，不断言可见数）。**触发点 = 首个有 GPU/真渲染器的环境**，与 B23 的 UV
-判决同批可做（同样卡在"本机无 GPU/无 X"）——合并单见 **B26**（与 B23、DoD 可玩目验三件
-一次做完，别单做一件就散场）。
-
 ### B21. mark 自动补偿的 `visited` 防环在"同一 sub 被同步调用两次"场景下与纯线性执行序背离（整局流程刀批审 Minor-1，2026-07-25）
 
 `scan_mark_compensation`/`walk_mark_scan`（`crates/stg-ecl-compiler/src/lang/codegen.rs`）
@@ -298,7 +296,7 @@ mark(2);`（`sub common() { bgm(9); }`）。`visited` 在第一次遇到 `common
 
 ### B24. 冒烟①`enemy_seen` 判别不辨 boss/杂兵——负控实证（demo 局刀 T6 复审残余缝隙，2026-07-26）
 
-`main.gd::_run_smoke` 的 `enemy_seen` 断言（逐帧扫 `LAYER_ENEMIES` 缓冲找非默认实例位置）
+`main.gd::_run_smoke` 的 `enemy_seen` 断言（逐帧扫 `puppets()` 木偶喂料找非默认位置；表现契约 v2 起敌层退役，此前扫 `LAYER_ENEMIES` 缓冲）
 证明"敌真的在动"，但不区分动的是 `stage1` 杂兵还是 boss——**负控制实测**：临时把
 `main.ecl` 整段替换成 `sub main() { bgm(1); loop { wait(600); } }`（不调 `stage1()`/
 `boss_battle()`，即"main 只剩 bgm+loop"）会被真实抓到（`SMOKE FAIL`）；但若只清空
@@ -310,33 +308,6 @@ mark(2);`（`sub common() { bgm(9); }`）。`visited` 在第一次遇到 `common
 敌实例数量（杂兵波次期望瞬时敌数 >1，boss 单敌）判别。**触发点 = 下次真要收紧这条冒烟
 断言，或者杂兵/boss 内容有实质变化时**（权衡：复杂度 vs 真实手误极少"连节奏一起清空"，
 当前不算阻塞）。
-
-### B26. 首个有 GPU/X 环境的三件套合并单（2026-07-26；**2026-07-27 部分兑现，余 ① 一条**）
-
-三条独立记档的债都卡在同一个前提——**本机全程无 GPU/无 X**（`xdpyinfo` 探测失败），
-且**全刀无一次有头运行**（画面从未被人眼看过，含本条判决程序涉及的自机 `Sprite2D`/
-弹幕图元/HUD 排版）——各自记在各自条目里容易各等各忘，合并列一次防止漏项：
-
-① ~~**B23** UV 垂直朝向~~ —— **已销（2026-07-27）**：真美术上屏画面正常，判定不镜像，
-shader 不改。详见上方 B23 条。**追注（颜色轴刀，2026-07-26）**：占位图集本身已经上下不对称
-（`_disc_shaded`，颜色轴刀 T5），首个有头启动即可直接肉眼判别、不必再临时加测试格；
-判决程序其余步骤（对照 `layer.gdshader` 候选改法）不变。
-
-② **B18** `visible_instances`（`MultiMesh` 可见实例数）不可 headless 断言——判决程序：
-有 GPU/真渲染器后重跑 `godot/smoke`，把当前绕开用的 `multimesh_get_buffer` 判据换回
-`RenderingServer.multimesh_get_visible_instances` 直接断言，确认非 0（详见 B18 条内
-两层不可断言的具体原因）。
-
-③ **DoD 可玩目验（部分兑现 2026-07-27：画面已经人眼看过、无异常；
-是否完整打到风铃卡结算、输入手感与 boss 战节奏是否可接受，仍未确认）**——`CLAUDE.md` Phase 1 之外，本刀（Godot 场景刀 + 本次终审修复波）
-的隐性 DoD 是"可玩 + 可验证"，但**验证目前全靠 headless 冒烟断言，没有一帧被人眼看过**：
-demo 局的图集贴图是否如预期摆放、HUD 排版是否重叠、boss 战节奏是否真的可打（900hp 是
-仓外探针实测数据，见 `godot/ecl/demo/boss_windchime.ecl` 注释，不是本机有头试玩验证的）、
-输入手感是否正常——一概未经目验。判决程序：有 GPU/X 环境后 `godot --path godot`（非
-`--headless`）跑一局 demo，键盘操作到风铃卡结算，肉眼确认贴图/HUD/节奏均正常。
-
-**剩余**：② `visible_instances` 断言要改冒烟脚本后在有头环境重跑；③ 的可玩性部分需要
-真打一局到结算。两件仍共享同一次有头启动成本，凑一起做。
 
 ### B28. 擦弹特效未接——事件化须先定聚合口径（命中事件刀记档，2026-07-27）
 
@@ -697,16 +668,30 @@ appearance** 时，`batch` 会 **Fault**（先撞 appearance），`sh_fire` 只 
 口径"**——现在不是。改哪一边都会动金向量（Fault 与 no-op 的世界演化不同），同样要
 bump `ENGINE_VER`。
 
----
+### D20. `world_size_sentinel_guards_copy_into_field_list` 对齐 padding 是盲区——三次真实字段新增全被吃掉未响（自机能力刀 Task 9 记档，2026-09-03）
 
-## E. bomb 那一刀开工前
+这条哨兵（`step.rs`）押的是"改 `WorldBody`/`World` 的 `size_of` 就逼你走一遍四件套清单
+（`copy_into`/checksum/D10 容量预算/存档格式）"。本刀**恰好三次**给它出题，**三次都绿**：
+`WorldBody.freeze_left`（`[u16; 2]`，4 B）、`PlayerState.time_stops`（`u8`，1 B）、
+`PlayerState.prev_input`（`u32`，4 B）——三处新增分别落进了既有的对齐空隙，`size_of`
+前后一字节不差，测试本该报警的时刻，它睡得很沉。
 
-- **`world/player.rs` 的 `update_players`** 里，`LIFE_DEATHWINDOW` 臂有一句
-  `// bomb 救人 stub：本切片无 bomb 输入 → 窗口必耗尽。` —— 那是 M0-7 留的挂点。
-- **「被消弹区清掉的弹还算不算 graze？」已答：算**（擦在相位 6 已发生、清弹是相位 7 的事；
-  设计明写 graze 独立于中弹）。理由与推导记在 `world/settle.rs` 趟三的注释里 + M0-8 spec。
-- bomb 是 `FieldPool` 的**首个真租户**（消弹区已就位，bomb 只需铺一个 `FIELD_CLEAR_BULLETS |
-  FIELD_DAMAGE` 的 field）。
+复审手工摊开 `PlayerState` 布局：64 字节里排到第一个 `u64` 成员前有 6 字节空档，本刀
+先后插 `time_stops`（吃 1，剩 5）、`prev_input`（吃 4，剩 1）——**只剩 1 字节了，
+下一个 `u8` 还是会被吃掉、`size_of` 还是不会动**。`step.rs` 自己的哨兵注释已经在
+`ShooterSlot`（44 B、留 2 字节尾部 padding）那道题上记过同一个盲区——这是**第二次**
+在同一份文件里踩到它，不是孤例。
+
+真正逮住这三次改动的，全程是**金向量**：checksum derive 按字段全量入、不看对齐，
+新字段进哈希与 padding 是否被吃光无关——`size_of` 测的是布局的副作用，金向量测的是
+字段本身，二者不是同一件事，这条哨兵能守住的只是"布局意外变宽"这个真子集。
+
+**候选修法**（本条只记录、不实现，由人裁定）：①把 `assert_eq!` 的对象从
+`size_of::<WorldBody>()`/`size_of::<World>()` 换成**字段数**（如 derive 宏生成的
+`FIELD_COUNT` 常量，或手数一份清单常量）——加字段必挂，不看是否被 padding 吃掉；
+②改押**存档 payload 长度**（`SaveBytes` 序列化后的字节数，逐字段写出、天然不含
+padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那一项同源，更贴近哨兵
+真正想守的东西。两案都要连带更新测试里长年累积的"逐刀追记"注释风格。
 
 ---
 
@@ -755,20 +740,18 @@ v1 只跑彩虹风铃卡固定场景。两个自然延伸，各随触发点：`-
 （触发 = M3 回放调试，线格式 v1 直接可复用为 dump 格式）。多客户端/TLS/断线续联不做
 （测试工具本分）。
 
-### F4. 逐帧全缓冲上传账未记（场景刀 T7 记档，2026-07-26）
+### F4. 逐帧全缓冲上传账——余"前缀上传"一件（场景刀 T7 记档，2026-07-26；表现契约 v2 刀 2026-09-07 部分销）
 
-`bridge.rs::step_frame` 对每个已注册层无条件 `multimesh_set_buffer` 整块上传（不做脏
-检测/增量），四层容量 `bullets=8192, shots=1024, enemies=256, items=512`（`playfield.gd`
-`CAPS`）× `FLOATS_PER_INSTANCE=12` × 4B/float = 9984×12×4 = **479232 B = 468 KB 整/帧**，
-60Hz 下 ≈ **27.4 MiB/s** 恒定上传带宽（与场上实际实体数无关，哪怕场上空场也全量推满 cap
-大小的零缓冲）。`docs/bench-baseline.md` 目前完全没有这条账——它记的是 step/快照/校验和曲线，
-不含 M2 渲染链的桥面开销。**触发点 = M2 收口后**（本刀 DoD 是"可玩+可验证"，不含性能
-调优）：`encode_layer`（`frame.rs`）本身已把活槽压到缓冲**前缀**（`iter_alive()` 只推进
-`n`，尾部留空），`multimesh_set_visible_instances(rid, n)` 也已按实际活数设——但
-`multimesh_set_buffer` 上传的仍是**整个 `cap` 长度**的 `Vec`（含 `n` 之后全是零/陈旧的
-尾部），带宽账按 `cap` 算而非按 `n` 算。真到了要优化的时候，方向是按 `n*FLOATS_PER_INSTANCE`
-切片上传（只送前缀）或脏检测（层内容与上一帧逐位相同则跳过 `set_buffer`）。
+已落地两件：① 壳侧 `multimesh_set_custom_aabb` 钉成场界矩形，绕过 Godot 对全部实例重算
+AABB（godot-proposals #957 指认的最大 CPU 坑）；② 桥持 `PackedFloat32Array` 经 `as_mut_slice`
+原地编码，省掉 `Vec` → Packed 那次拷贝（`multimesh_set_buffer` 内部那次无法省）。
+弹层旋转同刀改查核内 `sincos` 表，不再每弹调 libm。
 
+**余项**：`bridge.rs::step_frame` 仍对每个已注册层无条件整块上传 `cap × 12 × 4 B`（三层
+bullets 8192 / shots 1024 / items 1024 ⇒ 10240 × 48 B ≈ **480 KB/帧**，60 Hz ≈ 28 MiB/s，
+与场上实体数无关），`docs/bench-baseline.md` 仍无这条账。方向：按 `n × FLOATS_PER_INSTANCE`
+前缀上传（**Godot 尚不接受 undersized buffer**，proposal #957 未落地；且 `register_layer`
+的长度判据要一起改）或脏检测。**触发点 = profiler 指认时**；目前 llvmpipe 有头跑 demo 无感。
 ### F5. `bench` 的场景**全部**传 `EclImage::empty()`——量不了任何 VM/syscall 改动（**已还，2026-08-01**）
 
 **已还**（bench 饱和档刀，2026-08-01）：`bench` 尾部追加了**四个饱和档**，其中三个跑真脚本
@@ -836,6 +819,30 @@ PC 推进，操作数永远不会被当成 opcode 解码，**运行期不存在�
 
 **触发点**：若将来撞到**第三处**由这个重叠引发的真实麻烦，再把 `0xx` 整族挪到 `8xx`（届时
 又是一次冻结面变更 + `ENGINE_VER` bump，且两条守卫测试仍然有效、与号无关）。撞到了往这条底下追加。
+
+### F13. `checksum_report()`（D11 承诺的逐字段哈希清单）从未实现——desync 只能定位到"有东西变了"（时停设计刀记档，2026-09-03）
+
+`stg-world-design.md:631`（D11）承诺 `#[derive(Checksum)]` 有**两种输出**：合并的
+`checksum()` 与 debug 的 **`checksum_report()` —— 逐字段哈希清单 `[(字段路径, u64)]`**，
+原文称它是"字段级方案相对整块哈希的杀手级红利"（desync 时 CI 自动改跑 report 模式，直接
+定位"`bullets.vx` 在第 N 帧分歧"）。**只有前者实现了**：全仓 grep 无 `fn checksum_report`，
+`docs/superpowers/plans/2026-07-14-m0-2-checksum-derive.md:273` 当年就把它列进"未覆盖
+（明确留后）"，但**此后没进过任何待办清单**，于是对后来者不可见——本条就是把它入库。
+
+**后果不是"少个功能"，是排障成本**：现在任何"整块校验和不相等"的测试（跨平台闸门、
+恢复重演风暴闸、以及时停设计里那条"全场静止下除恒跑字段外不得有任何变化"的主测）红了
+之后，都只能告诉你**有东西变了**，说不出是哪个字段——只能靠人二分。字段数越多越贵。
+
+**触发点**：① 第一次真的撞上跨平台 desync（M3/M4 那条线，届时它从"方便"变成"刚需"）；
+② 或者谁写了第二条依赖整块校验和相等的测试，被排障成本咬到。在那之前它只是一笔记账。
+**不是时停那一刀的前置**——那条主测不依赖它，只是有它会红得更好看。
+
+### F14. `puppets()`/`vanished()` 每帧构造 Dictionary-of-PackedArrays（表现契约 v2 刀记档，2026-09-07）
+
+桥面 `puppets()` 每帧新建 8 条 Packed 数组 + 1 个 Dictionary，`vanished()` 4 条；壳侧
+`_update_puppets` 再逐列取用。常态 <50 敌、bomb 帧 ~800 行 vanished，实测 llvmpipe 有头无感。
+若 profiler 指认，方向是桥持复用的 Packed 数组按 `resize` 写前缀、或改成一条交错的
+`PackedFloat32Array`（同三层缓冲的 stride 思路）。**触发点 = profiler 指认时**。
 
 ### F11. xformdef 的 `@N` 记号读法与语义相反——本刀已补文档，语义/记号本身要不要改留待评审（docs 刀，2026-08-02）
 

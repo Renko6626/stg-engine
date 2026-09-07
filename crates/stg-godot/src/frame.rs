@@ -1,27 +1,28 @@
-//! 纯 Rust:四渲染层 → f32 实例缓冲编码器。**定点→浮点唯一转换点**(I1 边界)。
+//! 纯 Rust:三渲染层 → f32 实例缓冲编码器。**定点→浮点唯一转换点**(I1 边界)。
 //! 布局(spec §11.2,GLES3 源码+headless 实测双源):
-//! 12 float/实例 = [xx, yx, 0, ox, xy, yy, 0, oy] + custom[sprite, 0, 0, 0]。
+//! 12 float/实例 = [xx, yx, 0, ox, xy, yy, 0, oy] + custom[age, 0, 0, 0]。
+//!
+//! **敌层已退役**(表现契约 v2,2026-09-07,拍板 ④甲案):敌人走节点木偶,喂料见
+//! `crate::puppets`。三层保留:bullets / shots / items。custom.y 只在弹层有语义(弹龄),
+//! 其余层恒 0;custom.z/w 预留,stride 12 冻结。
 
 use stg_core::bullets::BulletPool;
-use stg_core::enemy::EnemyPool;
 use stg_core::items::ItemPool;
-use stg_core::math::{Angle, Fx};
+use stg_core::math::{Angle, Fx, sincos};
 use stg_core::shots::ShotPool;
 use stg_core::tables::WorldTables;
 use stg_core::world::WorldView;
 
 pub const LAYER_BULLETS: usize = 0;
 pub const LAYER_SHOTS: usize = 1;
-pub const LAYER_ENEMIES: usize = 2;
-pub const LAYER_ITEMS: usize = 3;
-pub const LAYER_COUNT: usize = 4;
+pub const LAYER_ITEMS: usize = 2;
+pub const LAYER_COUNT: usize = 3;
 pub const FLOATS_PER_INSTANCE: usize = 12;
 
 pub fn layer_cap(layer: usize) -> usize {
     match layer {
         LAYER_BULLETS => BulletPool::CAP,
         LAYER_SHOTS => ShotPool::CAP,
-        LAYER_ENEMIES => EnemyPool::CAP,
         LAYER_ITEMS => ItemPool::CAP,
         _ => 0,
     }
@@ -33,7 +34,17 @@ fn fx_f32(v: Fx) -> f32 {
 }
 
 #[inline]
-fn write_instance(out: &mut [f32], slot: usize, x: f32, y: f32, cos: f32, sin: f32, sprite: u16) {
+#[allow(clippy::too_many_arguments)] // 编码器内部展开,调用点只有三处、参数序即缓冲布局序
+fn write_instance(
+    out: &mut [f32],
+    slot: usize,
+    x: f32,
+    y: f32,
+    cos: f32,
+    sin: f32,
+    sprite: u16,
+    custom_y: f32,
+) {
     let o = slot * FLOATS_PER_INSTANCE;
     out[o..o + FLOATS_PER_INSTANCE].copy_from_slice(&[
         cos,
@@ -45,7 +56,7 @@ fn write_instance(out: &mut [f32], slot: usize, x: f32, y: f32, cos: f32, sin: f
         0.0,
         y,
         sprite as f32,
-        0.0,
+        custom_y,
         0.0,
         0.0,
     ]);
@@ -61,19 +72,31 @@ fn write_instance(out: &mut [f32], slot: usize, x: f32, y: f32, cos: f32, sin: f
 /// 补 +16384（90°）之后：`49152 + 16384 ≡ 0` → **朝上飞的弹不旋转**，正好头朝上；
 /// BAM 0（朝右飞）转 90°（屏幕 y 向下，正角即顺时针）→ 头朝右。
 ///
-/// **只有弹层需要这个补偿**：自机弹层不旋转（sprite 本就朝上、也只朝上飞），敌 / 道具
-/// 层同理走单位基。见 `docs/render-contract.md` §2。
+/// **查核内烘焙表，不调 libm**（表现契约 v2 §4.3）：满弹 8192 颗 = 每帧 1.6 万次
+/// `sin`/`cos` 浮点调用，而 `stg_core::math::sincos` 是同一颗弹在积分相位已经查过的
+/// 那张表；Q16.16 → f32 无损（`raw / 65536`，2 的幂除法精确）。
+///
+/// **只有弹层需要这个补偿**：自机弹层不旋转（sprite 本就朝上、也只朝上飞），道具层同理
+/// 走单位基。见 `docs/render-contract.md` §2。
 fn bullet_basis(a: Angle) -> (f32, f32) {
-    const SPRITE_UP_QUARTER_TURN: f32 = 16384.0;
-    let rad = (a.raw() as f32 + SPRITE_UP_QUARTER_TURN) * (core::f32::consts::TAU / 65536.0);
-    (rad.cos(), rad.sin())
+    const SPRITE_UP_QUARTER_TURN: u16 = 16384;
+    let (s, c) = sincos(Angle(a.raw().wrapping_add(SPRITE_UP_QUARTER_TURN)));
+    (fx_f32(c), fx_f32(s))
+}
+
+/// 弹龄（表现契约 v2 §2.4）：`frame` 是 **step 结束后**的帧号，故首次可见 = 1。
+/// 饱和到 u16 域后转 f32（shader 侧只用小 t）。
+#[inline]
+fn bullet_age(frame: u32, born: u32) -> f32 {
+    frame.wrapping_sub(born).min(u16::MAX as u32) as f32
 }
 
 /// 活槽压实(池索引升序)写 `out` 前缀,返活数。`out.len() == layer_cap(layer)*12`。
-/// 未知 layer → 0(P4-b no-op)。
+/// `frame` = step 结束后的 `world.frame()`(弹龄用)。未知 layer → 0(P4-b no-op)。
 pub fn encode_layer(
     view: WorldView<'_>,
     tables: &WorldTables,
+    frame: u32,
     layer: usize,
     out: &mut [f32],
 ) -> u32 {
@@ -81,10 +104,20 @@ pub fn encode_layer(
     match layer {
         LAYER_BULLETS => {
             let p = view.bullets();
-            let (xs, ys, angles, sprites) = (p.x(), p.y(), p.angle(), p.sprite());
+            let (xs, ys, angles, sprites, born) =
+                (p.x(), p.y(), p.angle(), p.sprite(), p.born_frame());
             for i in p.iter_alive() {
                 let (cos, sin) = bullet_basis(angles[i]);
-                write_instance(out, n, fx_f32(xs[i]), fx_f32(ys[i]), cos, sin, sprites[i]);
+                write_instance(
+                    out,
+                    n,
+                    fx_f32(xs[i]),
+                    fx_f32(ys[i]),
+                    cos,
+                    sin,
+                    sprites[i],
+                    bullet_age(frame, born[i]),
+                );
                 n += 1;
             }
         }
@@ -92,15 +125,16 @@ pub fn encode_layer(
             let p = view.shots();
             let (xs, ys, sprites) = (p.x(), p.y(), p.sprite());
             for i in p.iter_alive() {
-                write_instance(out, n, fx_f32(xs[i]), fx_f32(ys[i]), 1.0, 0.0, sprites[i]);
-                n += 1;
-            }
-        }
-        LAYER_ENEMIES => {
-            let p = view.enemies();
-            let (xs, ys, sprites) = (p.x(), p.y(), p.sprite());
-            for i in p.iter_alive() {
-                write_instance(out, n, fx_f32(xs[i]), fx_f32(ys[i]), 1.0, 0.0, sprites[i]);
+                write_instance(
+                    out,
+                    n,
+                    fx_f32(xs[i]),
+                    fx_f32(ys[i]),
+                    1.0,
+                    0.0,
+                    sprites[i],
+                    0.0,
+                );
                 n += 1;
             }
         }
@@ -112,7 +146,7 @@ pub fn encode_layer(
                 core::array::from_fn(|t| tables.item_cfg[t].sprite);
             for i in p.iter_alive() {
                 let s = lut[types[i] as usize];
-                write_instance(out, n, fx_f32(xs[i]), fx_f32(ys[i]), 1.0, 0.0, s);
+                write_instance(out, n, fx_f32(xs[i]), fx_f32(ys[i]), 1.0, 0.0, s, 0.0);
                 n += 1;
             }
         }
@@ -147,6 +181,11 @@ sub main() {
 }
 "#;
 
+    fn step_once(g: &mut crate::boot::Game) {
+        let input = stg_core::input::InputFrame::empty(0);
+        stg_core::step::step_with_director(&mut g.world, g.tables, &g.image, &input, |_| {});
+    }
+
     fn stepped_game() -> crate::boot::Game {
         let mut g = crate::boot::boot(SRC, 7, 2).expect("boot");
         // 两帧:root task 的 `born_frame` 记于 `start_main`(彼时 `body.frame==0`);
@@ -155,23 +194,28 @@ sub main() {
         // `run_tasks` 跑时 frame 仍是 0 == born_frame,整条 main 主体(spawn_enemy/
         // drop_item/fire ×2)被跳过不执行;第 2 次 step 时 frame==1 != born_frame(0),
         // 门禁放行,main 才真正从头跑到 `wait(60)` 挂起。两帧后实体才存在。
-        let input = stg_core::input::InputFrame::empty(0);
-        stg_core::step::step_with_director(&mut g.world, g.tables, &g.image, &input, |_| {});
-        stg_core::step::step_with_director(&mut g.world, g.tables, &g.image, &input, |_| {});
+        step_once(&mut g);
+        step_once(&mut g);
         g
+    }
+
+    fn encode(g: &crate::boot::Game, layer: usize) -> (u32, Vec<f32>) {
+        let mut out = vec![0.0f32; layer_cap(layer) * FLOATS_PER_INSTANCE];
+        let n = encode_layer(g.world.view(), g.tables, g.world.frame(), layer, &mut out);
+        (n, out)
     }
 
     #[test]
     fn bullets_layer_transform_and_custom() {
         let g = stepped_game();
-        let mut out = vec![0.0f32; layer_cap(LAYER_BULLETS) * FLOATS_PER_INSTANCE];
-        let n = encode_layer(g.world.view(), g.tables, LAYER_BULLETS, &mut out);
+        let (n, out) = encode(&g, LAYER_BULLETS);
         assert_eq!(n, 2);
         // 位置与 sprite：压实序 = 池索引升序
         assert_eq!((out[3], out[7]), (10.0, 20.0)); // 弹0 pos=(10,20)，速度 0 不动
         let expect_sprite = stg_core::tables::TABLES_V0.appearances[1].sprite as f32;
         assert_eq!(out[8], expect_sprite);
-        assert_eq!(&out[9..12], &[0.0, 0.0, 0.0]);
+        // custom.y = 弹龄：弹在 frame==1 时出生,step 后 frame==2 → 首次可见 age 1(§0 口径)
+        assert_eq!(&out[9..12], &[1.0, 0.0, 0.0]);
         assert_eq!((out[15], out[19]), (11.0, 21.0)); // 弹1 pos=(11,21)
 
         // 招牌不变量：**贴图的"上"经实例变换后 == 速度方向**（贴图默认头朝上）。
@@ -195,6 +239,7 @@ sub main() {
 
     /// 判别腿：朝**正上方**飞的弹（BAM 49152，`polar_to_vec` 得 (0,-1)）必须**不旋转**
     /// ——贴图本就头朝上。这一格是"补偿量恰好是 +90° 而不是 -90°/180°"的锚。
+    /// 查表版:表在 BAM 0 处 sin=0/cos=1 **精确**(烘焙表端点),故容差可收到 1e-6。
     #[test]
     fn bullet_flying_up_renders_unrotated() {
         let (cos, sin) = bullet_basis(Angle(49152));
@@ -207,24 +252,41 @@ sub main() {
         assert!(cos0.abs() < 1e-6 && (sin0 - 1.0).abs() < 1e-6);
     }
 
+    /// 弹龄逐帧 +1（表现契约 v2 §4.2）：再走 5 步 → age 6。判别腿:两颗弹同龄,任一错位即红。
     #[test]
-    fn enemies_layer_exact() {
+    fn bullet_age_counts_frames_since_birth() {
+        let mut g = stepped_game();
+        for _ in 0..5 {
+            step_once(&mut g);
+        }
+        let (n, out) = encode(&g, LAYER_BULLETS);
+        assert_eq!(n, 2);
+        assert_eq!(out[9], 6.0);
+        assert_eq!(out[FLOATS_PER_INSTANCE + 9], 6.0);
+        // 非弹层 custom.y 恒 0
+        let (_, items) = encode(&g, LAYER_ITEMS);
+        assert_eq!(items[9], 0.0);
+    }
+
+    /// 敌层退役:层号 3(旧 LAYER_ENEMIES 的位置早已被 items 顶上)与任何 ≥ LAYER_COUNT 的
+    /// 层号都是 P4-b no-op——cap 0、编码返 0。敌人走 `crate::puppets`。
+    #[test]
+    fn enemies_layer_is_retired() {
+        assert_eq!(LAYER_COUNT, 3);
+        assert_eq!(layer_cap(3), 0);
         let g = stepped_game();
-        let mut out = vec![0.0f32; layer_cap(LAYER_ENEMIES) * FLOATS_PER_INSTANCE];
-        let n = encode_layer(g.world.view(), g.tables, LAYER_ENEMIES, &mut out);
-        assert_eq!(n, 1);
-        assert_eq!(&out[0..8], &[1.0, -0.0, 0.0, -96.0, 0.0, 1.0, 0.0, -64.0]);
         assert_eq!(
-            out[8], 0.0,
-            "本调用 spawn_enemy 的 sprite 参传 0（A5 后 sprite 可传参，非恒 0）"
+            encode_layer(g.world.view(), g.tables, g.world.frame(), 3, &mut []),
+            0
         );
+        let c = crate::puppets::encode_puppets(g.world.view(), g.world.frame());
+        assert_eq!((c.x[0], c.y[0]), (-96.0, -64.0), "敌人从木偶喂料读");
     }
 
     #[test]
     fn items_layer_sprite_join() {
         let g = stepped_game();
-        let mut out = vec![0.0f32; layer_cap(LAYER_ITEMS) * FLOATS_PER_INSTANCE];
-        let n = encode_layer(g.world.view(), g.tables, LAYER_ITEMS, &mut out);
+        let (n, out) = encode(&g, LAYER_ITEMS);
         assert_eq!(n, 1);
         // 期望值推导(场景假设纠偏——原简报断言"x 不受弹射影响"==32.0 不成立):
         // `drop_item` 底层 `spawn_drop`(world.rs)给道具一个 PCG32 派生的随机喷发速度
@@ -250,11 +312,7 @@ sub main() {
     #[test]
     fn empty_layer_returns_zero() {
         let g = stepped_game();
-        let mut out = vec![0.0f32; layer_cap(LAYER_SHOTS) * FLOATS_PER_INSTANCE];
-        assert_eq!(
-            encode_layer(g.world.view(), g.tables, LAYER_SHOTS, &mut out),
-            0
-        );
+        assert_eq!(encode(&g, LAYER_SHOTS).0, 0);
     }
 
     // 圆心重合纪律缺口补位(task-3-brief.md Step 3;CLAUDE.md M0-7 教训的同类变种——
@@ -281,8 +339,7 @@ sub main() {
         let (xs, ys) = (p.x(), p.y());
         let (expect_x, expect_y) = (fx_f32(xs[first]), fx_f32(ys[first]));
 
-        let mut out = vec![0.0f32; layer_cap(LAYER_SHOTS) * FLOATS_PER_INSTANCE];
-        let n = encode_layer(g.world.view(), g.tables, LAYER_SHOTS, &mut out);
+        let (n, out) = encode(&g, LAYER_SHOTS);
         assert!(n > 0, "shots 层应非空");
         assert_eq!(
             out[0], 1.0,

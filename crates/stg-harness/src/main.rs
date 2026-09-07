@@ -162,6 +162,7 @@ fn bench_ladder(name: &str, target: usize, with_xform: bool, frames: u32, print:
         transform_head: 0xFFFF,
         xform_wait: 0,
         xform_next: 0,
+        born_frame: 0,
     };
     let seq = [XformSlot {
         wait: 0,
@@ -238,6 +239,7 @@ fn bench_mix(frames: u32) {
         transform_head: 0xFFFF,
         xform_wait: 0,
         xform_next: 0,
+        born_frame: 0,
     };
     let enemy = |x: i32| EnemyInit {
         x: Fx::from_int(x),
@@ -273,6 +275,7 @@ fn bench_mix(frames: u32) {
         flags: 0,
         sprite: 0,
         anm_state: 0,
+        anm_state_frame: 0,
         main_task: 0,
         death_script: 0,
         drop_count: stg_core::tables::drop_counts(&stg_core::tables::TABLES_V0, 1).0,
@@ -495,6 +498,7 @@ fn bench_fill_enemy_grid(w: &mut stg_core::step::World) -> Vec<stg_core::enemy::
                 flags: 0,
                 sprite: 0,
                 anm_state: 0,
+                anm_state_frame: 0,
                 main_task: 0,
                 death_script: 0,
                 drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],
@@ -715,6 +719,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
         flags: 0,
         sprite: 0,
         anm_state: 0,
+        anm_state_frame: 0,
         main_task: 0,
         death_script: 0,
         drop_count: stg_core::tables::drop_counts(&stg_core::tables::TABLES_V0, 1).0,
@@ -742,6 +747,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
         transform_head: 0xFFFF,
         xform_wait: 0,
         xform_next: 0,
+        born_frame: 0,
     };
 
     for frame in 0..FRAMES {
@@ -816,6 +822,7 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
                             transform_head: 0xFFFF,
                             xform_wait: 0,
                             xform_next: 0,
+                            born_frame: b.frame(),
                         });
                     }
                 }
@@ -1227,6 +1234,7 @@ fn build_rainbow_world(
         flags: 0,
         sprite: 0,
         anm_state: 0,
+        anm_state_frame: 0,
         main_task: 0,
         death_script: 0,
         drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],
@@ -1362,6 +1370,7 @@ mod ecl_rainbow_tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],

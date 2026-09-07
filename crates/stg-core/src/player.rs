@@ -11,6 +11,11 @@ pub const LIFE_GAMEOVER: u8 = 4; // 命尽、不再重生
 pub const DEATHBOMB_WINDOW: u16 = 8; // 决死窗口帧
 pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
 
+/// 时间停止的固定时长（帧）。**引擎常量而非表数据**——它不在任何表里；bomb 的数字
+/// 相反，全部住 `CharacterCfg.bomb`（避免第二真相源）。若将来"每个自机时停时长不同"
+/// 成为内容需求，迁进 `CharacterCfg` 的路径与 `BombCfg` 完全同构（spec §14）。
+pub const TIMESTOP_FRAMES: u16 = 180;
+
 // ── 角色配置：M0-17 T3 起移速/半径五常量已迁 `crate::tables::CharacterCfg`
 // （`TABLES_V0.characters[..]`）；`PlayerState::spawn` 从表取值，`update_players` 移动逻辑
 // 读 `tables.characters[character_id]`。行 1/2/3（弹×自机中弹、弹×自机擦弹、敌体×自机中弹）
@@ -29,6 +34,12 @@ pub struct PlayerState {
     pub hit_radius: Fx,
     pub graze_radius: Fx,
     pub input: u32,
+    /// 上一帧的原始动作位（相位 1 `decode_input` 滚存）。**沿检测的唯一原料**：
+    /// `EDGE_MASK` 声明了哪些位是"沿"语义，但词表本身不做译码期沿处理（当帧原始电平
+    /// 直接搬进 `input`）——真正的"按下瞬间"要靠对比 `input` 与 `prev_input` 求出，
+    /// 见 `world/player.rs::WorldBody::pressed_edge`。随快照/回滚（P6 全量入校验和，
+    /// 无例外）——rollback 后重放沿检测必须逐位一致，否则重演会在错误的帧上补触发。
+    pub prev_input: u32,
     pub life_state: u8,
     pub state_timer: u16,
     pub invuln: u16,
@@ -43,6 +54,8 @@ pub struct PlayerState {
     pub power: u16,
     pub lives: u8,
     pub bombs: u8,
+    /// 时间停止的剩余次数（自机能力刀）。
+    pub time_stops: u8,
     pub life_pieces: u8,
     pub bomb_pieces: u8,
     pub score: u64,
@@ -59,16 +72,18 @@ pub struct Loadout {
     pub power: u16,
     pub lives: u8,
     pub bombs: u8,
+    pub time_stops: u8,
 }
 
 impl Default for Loadout {
-    /// 正典默认 = 机体0/0火力/3残/3雷——`PlayerState::spawn` 的硬编码收编为此单一来源。
+    /// 正典默认 = 机体0/0火力/3残/3雷/1时停——`PlayerState::spawn` 的硬编码收编为此单一来源。
     fn default() -> Self {
         Loadout {
             character: 0,
             power: 0,
             lives: 3,
             bombs: 3,
+            time_stops: 1,
         }
     }
 }
@@ -87,6 +102,7 @@ impl PlayerState {
             hit_radius: cfg.hit_radius,
             graze_radius: cfg.graze_radius,
             input: 0,
+            prev_input: 0,
             life_state: LIFE_ALIVE,
             state_timer: 0,
             invuln: 0,
@@ -96,6 +112,7 @@ impl PlayerState {
             power: ld.power,
             lives: ld.lives,
             bombs: ld.bombs,
+            time_stops: ld.time_stops,
             life_pieces: 0,
             bomb_pieces: 0,
             score: 0,

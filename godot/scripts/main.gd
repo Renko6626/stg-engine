@@ -1,5 +1,7 @@
 extends Node
 ## 状态机 + 每帧回路(spec §6)。宿主暂停 = 不调 step_frame(世界时间线零帧)。
+## 表现契约 v2(2026-09-07):`_after_step` 顺序 = 请求 → 事件 → vanished → 特效 tick →
+## HUD → 自机/木偶;请求 id 与事件 kind 一律取 WorldBridge.REQ_*/EVT_* 常量(不手抄)。
 
 enum S { PLAYING, PAUSED, STAGE_CLEAR }
 
@@ -25,9 +27,24 @@ var hud: Hud
 var effects: Effects
 var smoke := false
 var _smoke_saw_bgm := false # 冒烟②侦听 REQ_BGM 用(成员变量,lambda 捕获值类型局部不回写)
+## `--shots` 有头目验模式(表现契约 v2 DoD §7.2 第 6 条):脚本化输入(常按射击,第 200 帧放
+## bomb)跑 demo,在 SHOT_FRAMES 各帧把 SubViewport 存成 PNG 到 $STG_SHOTS_DIR,最后一张后退出。
+## 需要真渲染器(本机走 VNC 桌面 + llvmpipe:`DISPLAY=:2 LIBGL_ALWAYS_SOFTWARE=1 godot
+## --rendering-driver opengl3 --path godot -- --shots`)。顺带打印各层 visible_instances
+## (B26 ②:headless 恒 0,有头才有真值)。
+var shots_mode := false
+## 帧 60..75 向左走到 x≈-48 的杂兵正下方(自机每帧约 3px),之后自机弹持续命中:受击闪白/火花
+## 可在 95/100 帧看到,杂兵 hp=40 打死后有爆炸环(REQ_ENEMY_DEATH)。第 200 帧放 bomb。
+const SHOT_FRAMES := { 95: "hit_a", 100: "hit_b", 130: "zako", 201: "bomb_t1", 206: "bomb_t6", 214: "bomb_t14", 620: "boss" }
+const SHOT_BOMB_FRAME := 200
+const SHOT_LEFT_FRAMES := [60, 76]
+var _shots_left := 0
+var _death_shot_at := -1 # 首次 REQ_ENEMY_DEATH 后第 4 帧补一张(爆炸环 20 帧寿命的前四分之一)
 
 func _ready() -> void:
 	smoke = "--smoke" in OS.get_cmdline_user_args()
+	shots_mode = "--shots" in OS.get_cmdline_user_args()
+	_shots_left = SHOT_FRAMES.size()
 	bridge = WorldBridge.new()
 	add_child(bridge)
 	stg_input = StgInput.new()
@@ -48,18 +65,26 @@ func _ready() -> void:
 			push_error("[stg] 开局失败")
 			get_tree().quit(1)
 
+## 分类见 dispatcher.gd(即发即忘 / 须确认 / 电平镜像);这里只接处理器。
+## 坐标载荷是 Q16.16 raw,`/ 65536.0` 换回浮点世界坐标(render-contract §6 第五处)。
 func _wire_requests() -> void:
-	dispatcher.register(Dispatcher.REQ_ENEMY_DEATH, func(a):
-		effects.explosion(Vector2(a[0] / 65536.0, a[1] / 65536.0), int(a[3])))
-	dispatcher.register(Dispatcher.REQ_SPELL_DECLARE, func(a):
+	dispatcher.register(WorldBridge.REQ_ENEMY_DEATH, func(a):
+		effects.explosion(Vector2(a[0] / 65536.0, a[1] / 65536.0), int(a[3]), bridge.frame())
+		if shots_mode and _death_shot_at < 0:
+			_death_shot_at = bridge.frame() + 4)
+	dispatcher.register(WorldBridge.REQ_FX_AT, func(a):
+		effects.spawn(int(a[2]), a[0] / 65536.0, a[1] / 65536.0, bridge.frame(), int(a[3])))
+	dispatcher.register(WorldBridge.REQ_FX_ATTACHED, func(a):
+		effects.spawn_attached(bridge, int(a[2]), int(a[0]), int(a[1]), int(a[3])))
+	dispatcher.register(WorldBridge.REQ_SPELL_DECLARE, func(a):
 		hud.show_banner(ContentTables.SPELL_NAMES.get(int(a[0]), "Spell #%d" % int(a[0])), 2.5))
-	dispatcher.register(Dispatcher.REQ_SPELL_RESULT, func(a):
+	dispatcher.register(WorldBridge.REQ_SPELL_RESULT, func(a):
 		hud.show_banner("取得!" if int(a[1]) == 1 else "失敗…", 2.0))
-	dispatcher.register(Dispatcher.REQ_STAGE_CLEAR, func(_a): _on_stage_clear())
-	dispatcher.register(Dispatcher.REQ_BGM, func(a):
+	dispatcher.register(WorldBridge.REQ_STAGE_CLEAR, func(_a): _on_stage_clear())
+	dispatcher.register(WorldBridge.REQ_BGM, func(a):
 		hud.set_bgm_label(ContentTables.BGM_NAMES.get(int(a[0]), "BGM #%d" % int(a[0]))))
-	dispatcher.register(Dispatcher.REQ_BG, func(a): playfield.bg.set_bg(int(a[0])))
-	dispatcher.register(Dispatcher.REQ_BG_PHASE, func(a): playfield.bg.set_phase(int(a[0])))
+	dispatcher.register(WorldBridge.REQ_BG, func(a): playfield.bg.set_bg(int(a[0])))
+	dispatcher.register(WorldBridge.REQ_BG_PHASE, func(a): playfield.bg.set_phase(int(a[0])))
 
 ## 读 res://ecl/demo/*.ecl(按名排序)开局;demo 目录已实存(T6),读不到是真错——硬失败。
 func _boot(start: int) -> bool:
@@ -81,6 +106,9 @@ func _boot(start: int) -> bool:
 	var ok := bridge.new_game_at(names, sources, BOOT_SEED, BOOT_RANK, start,
 		BOOT_CHARACTER, BOOT_POWER, BOOT_LIVES, BOOT_BOMBS)
 	if ok:
+		# 新世界 = 帧号从 0 起:水位、特效行、木偶记忆全部归零(表现契约 v2 §5.2/§5.4)
+		dispatcher.reset()
+		effects.clear_all()
 		_sync_anchors() # 双表示规矩:开机后一次性对电平(T5 实装演出)
 		if not playfield.setup(bridge):
 			return false
@@ -112,13 +140,21 @@ func _physics_process(_dt: float) -> void:
 		return
 	if state != S.PLAYING:
 		return
-	var buttons := stg_input.mask() # 算一次,step_frame/update_view 共用(避免帧内读两次输入分叉)
+	var buttons := _scripted_mask(bridge.frame()) if shots_mode else stg_input.mask() # 算一次,step_frame/update_view 共用(避免帧内读两次输入分叉)
 	bridge.step_frame(buttons)
 	_after_step(buttons)
+	if shots_mode and SHOT_FRAMES.has(bridge.frame()):
+		_capture(SHOT_FRAMES[bridge.frame()])
+	if shots_mode and _death_shot_at == bridge.frame():
+		_shots_left += 1
+		_capture("death")
 
 func _after_step(buttons: int) -> void:
-	dispatcher.drain(bridge.take_requests())
+	# M3 前确认地平线 = 当前帧(须确认类立即播);接回滚时只改这个实参
+	dispatcher.drain(bridge.take_requests(), bridge.frame())
 	_drain_events()
+	effects.fade_batch(bridge.vanished(), bridge.frame())
+	effects.tick(bridge)
 	hud.refresh(bridge)
 	playfield.update_view(bridge, buttons)
 	# I-1(终审裁定):残机耗尽的最小处置——拦假胜利。life_state==4 = LIFE_GAMEOVER
@@ -131,12 +167,45 @@ func _after_step(buttons: int) -> void:
 ## 通道 A 的批量事实流(每帧,下次 step 前必须取走)。与 `take_requests` 的分工:
 ## 请求 = 脚本/引擎主动发的离散演出指令;事件 = 世界产出的事实,表现层跟着做反应。
 ## 目前只消费命中火花;敌死/拾取/符卡等其余 kind 仍走各自的请求或 HUD 路径。
-const EVT_SHOT_HIT_ENEMY := 9
 func _drain_events() -> void:
+	var frame := bridge.frame()
 	for ev in bridge.frame_events():
 		match int(ev.get("kind", 0)):
-			EVT_SHOT_HIT_ENEMY:
-				effects.hit_spark(Vector2(ev.get("x", 0.0), ev.get("y", 0.0)))
+			WorldBridge.EVT_SHOT_HIT_ENEMY:
+				effects.hit_spark(Vector2(ev.get("x", 0.0), ev.get("y", 0.0)), frame)
+
+## 目验模式的脚本化输入:常按射击;第 SHOT_BOMB_FRAME 帧按一帧 bomb(沿检测,按一帧即触发)。
+func _scripted_mask(frame: int) -> int:
+	var m := WorldBridge.BTN_SHOT
+	if frame == SHOT_BOMB_FRAME:
+		m |= WorldBridge.BTN_BOMB
+	if frame >= SHOT_LEFT_FRAMES[0] and frame < SHOT_LEFT_FRAMES[1]:
+		m |= WorldBridge.BTN_LEFT
+	return m
+
+func _capture(name: String) -> void:
+	var dir := OS.get_environment("STG_SHOTS_DIR")
+	if dir.is_empty():
+		dir = "user://shots"
+	await RenderingServer.frame_post_draw
+	var img := playfield.viewport.get_texture().get_image()
+	if _shots_left == SHOT_FRAMES.size():
+		# 首张顺带 dump 引擎内实际加载的弹图集(核对导入缓存是否与磁盘 PNG 一致)
+		var atlas: Texture2D = load(Playfield.TEXTURES[0])
+		var aimg := atlas.get_image()
+		if aimg != null:
+			aimg.save_png(dir.path_join("atlas_as_loaded.png"))
+			print("[shots] atlas as loaded: %dx%d fmt=%d mip=%s" % [aimg.get_width(), aimg.get_height(), aimg.get_format(), str(aimg.has_mipmaps())])
+	var path := dir.path_join("%s_f%d.png" % [name, bridge.frame()])
+	DirAccess.make_dir_recursive_absolute(dir)
+	var err := img.save_png(path)
+	var vis := []
+	for kind in playfield.layer_nodes:
+		vis.append([kind, RenderingServer.multimesh_get_visible_instances(playfield.layer_nodes[kind].multimesh.get_rid())])
+	print("[shots] %s → %s (err %d) visible_instances=%s fx_rows=%d" % [name, path, err, str(vis), effects.n])
+	_shots_left -= 1
+	if _shots_left <= 0:
+		get_tree().quit(0)
 
 func _on_stage_clear() -> void:
 	state = S.STAGE_CLEAR
@@ -172,35 +241,40 @@ func _run_smoke() -> void:
 	_smoke_saw_bgm = false
 	# 覆盖注册以侦听,链式调回 `_wire_requests` 注册的原 hud 处理器——冒烟不该绕开
 	# `hud.set_bgm_label` 那条真实路径(纯加侦听,不替换行为)。
-	var orig_bgm_handler: Callable = dispatcher.handlers.get(Dispatcher.REQ_BGM, Callable())
-	dispatcher.register(Dispatcher.REQ_BGM, func(a):
+	var orig_bgm_handler: Callable = dispatcher.handlers.get(WorldBridge.REQ_BGM, Callable())
+	dispatcher.register(WorldBridge.REQ_BGM, func(a):
 		_smoke_saw_bgm = true
 		if orig_bgm_handler.is_valid():
 			orig_bgm_handler.call(a))
 	# I-1(复审裁定):原四断言(frame/checksum/REQ_BGM/player 在场界)对 demo 内容零判别——
-	# 即使 stage1 被清空、main 只剩 `bgm(1); loop { wait(600); }`,四条也照绿。逐帧扫
-	# LAYER_ENEMIES 缓冲,断言窗口内出现过非默认(非 (0,0))实例位置,证明 stage1 真出过
-	# 杂兵、真的在动。选这条而不是侦听 `REQ_ENEMY_DEATH`(复审给的备选②)——headless 下
+	# 即使 stage1 被清空、main 只剩 `bgm(1); loop { wait(600); }`,四条也照绿。表现契约 v2
+	# 起敌层退役,改逐帧扫 puppets() 木偶喂料:窗口内出现过非 (0,0) 位置的敌人,证明 stage1
+	# 真出过杂兵、真的在动;同时要求对应木偶节点真的可见(壳侧喂料链真接上了)。
+	# 选这条而不是侦听 `REQ_ENEMY_DEATH`(复审给的备选②)——headless 下
 	# `Input.is_action_pressed` 恒 false,`stg_input.mask()` 每帧恒 0,冒烟一个键都不按
 	# (`BTN_LEFT` 是桥级 `crates/stg-godot/smoke/smoke.gd` 自己在 `step_frame` 调用点
 	# 显式传的常量,不是这里),`char0_update_shot` 要 `BTN_SHOT` 才发弹,240 帧窗口内
 	# 自机打不死杂兵,②在当前冒烟输入下不可达。
 	var enemy_seen := false
-	var mm_enemies: MultiMesh = playfield.layer_nodes[WorldBridge.LAYER_ENEMIES].multimesh
+	var puppet_visible_seen := false
 	var waited := 0
 	while bridge.frame() < 240 and waited < 480:
 		await get_tree().physics_frame
 		waited += 1
-		var buf := RenderingServer.multimesh_get_buffer(mm_enemies.get_rid())
-		if buf.size() >= 8 and (absf(buf[3]) > 0.01 or absf(buf[7]) > 0.01): # [ox]=idx3,[oy]=idx7(frame.rs write_instance 布局)
-			enemy_seen = true
+		var pp: Dictionary = bridge.puppets()
+		if not pp.is_empty() and pp["index"].size() > 0:
+			if absf(pp["x"][0]) > 0.01 or absf(pp["y"][0]) > 0.01:
+				enemy_seen = true
+			if playfield.puppets[pp["index"][0]].visible:
+				puppet_visible_seen = true
 	fails += _chk(bridge.frame() >= 240, "frame>=240, got %d" % bridge.frame())
 	fails += _chk(waited <= 241, "轮次<=目标+1(防每两 tick 一 step 回归),got %d" % waited)
-	fails += _chk(enemy_seen, "LAYER_ENEMIES 缓冲窗口内出现非默认实例(demo 杂兵真的在动)")
+	fails += _chk(enemy_seen, "puppets() 窗口内出现非默认位置的敌人(demo 杂兵真的在动)")
+	fails += _chk(puppet_visible_seen, "木偶节点随 puppets() 变为可见(壳侧喂料链接上)")
 	fails += _chk(bridge.checksum() != 0, "checksum!=0")
 	fails += _chk(_smoke_saw_bgm, "REQ_BGM 应到达分发器")
-	var pp := bridge.player_pos()
-	fails += _chk(pp.x >= -192.0 and pp.x <= 192.0 and pp.y >= 0.0 and pp.y <= 448.0, "player 在场界")
+	var pp0: Vector2 = bridge.player_pos()
+	fails += _chk(pp0.x >= -192.0 and pp0.x <= 192.0 and pp0.y >= 0.0 and pp0.y <= 448.0, "player 在场界")
 	# ② start=2 中段开机:垫片补偿电平追平(bgm 块内手写 2/bg 注入 1/bg_phase 手写 1)
 	if not _boot(2):
 		print("SMOKE FAIL: boot(start=2)")
@@ -215,8 +289,10 @@ func _run_smoke() -> void:
 	# I-2(终审裁定):补招牌断言——boss_main 是 enemy-owned 任务(A5 乙案),中段开机直跳
 	# boss_battle() 后应立刻喂到 hud_boss/落池,不是只对表锚点四字段。
 	fails += _chk(int(bridge.hud_boss(0).get("active", 0)) == 1, "boss_main 的 boss_set 应已喂到 hud_boss")
-	var eb := RenderingServer.multimesh_get_buffer(playfield.layer_nodes[WorldBridge.LAYER_ENEMIES].multimesh.get_rid())
-	fails += _chk(eb.size() >= 12 and int(eb[8]) == 1, "LAYER_ENEMIES 首实例 custom.x==1(boss sprite,A5 task/sprite 两位真落池)")
+	var pb: Dictionary = bridge.puppets()
+	var boss_row_ok: bool = not pb.is_empty() and pb["sprite"].size() >= 1 and int(pb["sprite"][0]) == 1 \
+		and int(pb["state_age"][0]) >= 1
+	fails += _chk(boss_row_ok, "puppets() 首行 sprite==1 且 state_age>=1(boss sprite/anm 两位真落池)")
 	if fails == 0:
 		print("SMOKE OK")
 	get_tree().quit(0 if fails == 0 else 1)

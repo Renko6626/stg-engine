@@ -610,14 +610,14 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | 变换段池 | 2048 段 × 16 槽 | 12 B/槽 | 384 KB |
 | 自机弹池 | 1024 | ~28 B | 29 KB |
 | 敌人池 | 256 | **105 B**（实测，非估值——旧账 `~64 B` 起就偏低，C21 已还；敌人运动动词族刀 2026-07-31 T1 的 +30 B/敌〔speed/angle 双表示 + 速度插值器十件，World 哨兵增量 7680 B ÷ 256〕在内） | 26.8 KB（含 gen/alive） |
-| 道具池 | **1024**（F12，2026-09-03：512→1024——消弹转星星 1:1 而弹池 8192，demo 收卡一帧 626 颗弹让四个难度档全溢出；`ENGINE_VER` 13→14） | 22 B（实测） | 22.1 KB（含 gen/alive） |
-| FieldPool（通用作用区，M0-8） | 16 | ~18 B（x/y/radius 3×4B + dmg_per_frame 2B + life 2B + owner 1B + flags 1B） | ≈320 B（+ generation/alive） |
+| 道具池 | **1024**（F12，2026-09-03：512→1024——消弹转星星 1:1 而弹池 8192，demo 收卡一帧 626 颗弹让四个难度档全溢出；`ENGINE_VER` 13→14。**自机能力刀复核（2026-09-03）**：bomb 是这条压力的第二个入口——消弹区持续 120 帧×1:1 转星星、起爆当帧再叠加全屏吸取；实测把弹池灌到 rank-3 峰值量级〔约 814〕、真起一发 bomb 跑满整段效果时长，`diag.pool_full[POOL_ITEM]` 全程为 0（回归测试 `bomb_at_rank3_peak_bullet_count_does_not_overflow_item_pool`，`crates/stg-core/src/world/player.rs`），1024 对当前内容仍有约 210 格余量，本刀未触发再抬 cap 的裁决） | 22 B（实测） | 22.1 KB（含 gen/alive） |
+| FieldPool（通用作用区，M0-8） | 16 | ~18 B（x/y/radius 3×4B + dmg_per_frame 2B + life 2B + owner 1B + flags 1B） | ≈320 B（+ generation/alive）。**自机能力刀（2026-09-03）**：bomb 成为它的首个真租户——每次起爆按 `BombCfg.fields`（角色表驱动，v0 两条：全屏消弹 + 起爆点伤害圆）声明序铺 field，单次起爆占用 cap 的一小部分，未改容量常数。 |
 | 任务池（ECL 类型，住组装层 World） | 512 | ~600 B | 307 KB |
 | globals | 1024 × i32 | | 4 KB |
 | hits | 8192 × 6 B | | 48 KB |
 | frame_events | 512 × 24 B | | 12 KB |
 | reqs | 256 × 28 B | | 7 KB |
-| 自机×2 / boss_ui×2 / spells×2（符卡计器槽，36 B/槽，2026-07-24；含刀 2 加的 epoch 代际戳）/ spell_seq×2 / signals×8 / 表现锚点四字段（bgm_id/bg_id/bg_phase u16 + bg_phase_frame u32，10 B，2026-07-25 整局流程刀）/ RNG / 帧计数 / 诊断计数器 | | | <1 KB |
+| 自机×2 / boss_ui×2 / spells×2（符卡计器槽，36 B/槽，2026-07-24；含刀 2 加的 epoch 代际戳）/ spell_seq×2 / signals×8 / 表现锚点四字段（bgm_id/bg_id/bg_phase u16 + bg_phase_frame u32，10 B，2026-07-25 整局流程刀）/ freeze_left（时停倒计时 [u16;2]，4 B，2026-09-03 自机能力刀）/ RNG / 帧计数 / 诊断计数器 | | | <1 KB |
 | **World 总计** | | | **≈ 1.3 MB** |
 
 16 帧快照环 ≈ 21 MB（环归回滚调度器所有，非 stg-world 财产）。

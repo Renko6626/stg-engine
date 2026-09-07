@@ -48,6 +48,7 @@
 | `REQ_*` | 见 `consts.rs` | 通道 B 引擎保留请求 id（`REQ_STAGE_CLEAR`/`REQ_BGM`/…） |
 | `ITEM_POWER` / `ITEM_POINT` / `ITEM_LIFE_PIECE` / `ITEM_BOMB_PIECE` / `ITEM_STAR` | `0`/`1`/`2`/`3`/`4` | 道具类型号（编号**冻结**，非表驱动），`drop_add(type, n)` 的第一参 |
 | `SHOOTERS_PER_TASK` | `4` | 每任务的发射器槽数——`sh_*` 族槽号 `id` 的**上界**（合法 `0 ..= SHOOTERS_PER_TASK - 1`）|
+| `TIMESTOP_FRAMES` | `180` | 玩家技能"时间停止"的固定时长（帧，3 秒 @60Hz）——自机能力刀 spec §9.1，数值单一来源 = `crate::player::TIMESTOP_FRAMES` |
 | `BULLET_COLOR_STRIDE` | 内建 `16` | **表派生**：当前绑定表的每种弹型色数 |
 
 脚本**不得**重新声明同名 `const`，无论写的值是否一致——会在类型检查阶段报错
@@ -99,9 +100,12 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `move_vel_xy(dur: int, vx: fx, vy: fx, easing: int)` — 同 move_vel 但收笛卡尔分量,且 dur>0 时**在笛卡尔空间插值**(两分量各自线性插,中途速率会掉——线性缓动即恒定加速度);要匀速转向用 move_vel。保住一轴的写法:move_vel_xy(30, $self_vx, 4.0fx, 2)
 - `move_angle(dur: int, angle: angle, easing: int)` — 只转向、速率一字不动;dur>0 走**最短弧**(350deg→10deg 走 +20deg 不走 -340deg)。相对转向:move_angle(60, $self_angle + 15deg, 3)
 - `move_speed(dur: int, speed: fx, easing: int)` — 只调速、方向一字不动。相对加速:move_speed(30, $self_speed * 2.0fx, 2)
+- `set_anm_state(state: int)` — 敌自身(self owner 非 ENEMY → Fault)写表现状态号 anm_state 并无条件盖 anm_state_frame=当前帧(同状态重设=重播,即 ZUN anmInterrupt 的电平版);世界不解释状态号,表现层按 (sprite,anm_state,state_age) 选帧
 - `boss_set(slot: int, hp_ratio: fx, spell_id: int, timer_frames: int, phase_left: int, active: int)` — 整槽写 boss_ui 公告板(脚本写/UI 读);enemy 字段取自 self owner(非 ENEMY → NULL,不 Fault);符卡 active 期 enemy/spell_id/timer_frames/hp_ratio 由引擎逐帧自动覆写,phase_left 不受影响仍归脚本
 - `pulse_signal(channel: int)` — 脉冲一条信号通道(边沿语义,仅当帧有效);放行处于弹变换 WAIT_SIGNAL 停驻态的弹(非 ECL 任务)
 - `emit_req(id: int, a0: int|fx|angle, a1: int|fx|angle, a2: int|fx|angle, a3: int|fx|angle, a4: int|fx|angle, a5: int|fx|angle)` — 通道 B 渲染请求;void 只能裸语句;args 裸载荷(fx 过 raw/angle 过 BAM/int 原样)
+- `fx_at(x: fx, y: fx, kind: int, param: int)` — 在 (x,y) 起一次性演出:发 REQ_FX_AT [x raw,y raw,kind,param,0,0](对应 ZUN anmPlayPos);kind/param 引擎不解释,归内容包与壳侧约定;owner 无限制;即发即忘
+- `fx_on(kind: int, param: int)` — 在敌自身上起依附演出(self owner 非 ENEMY → Fault):发 REQ_FX_ATTACHED [index,gen,kind,param,0,0](对应 ZUN anmPlay);壳侧按句柄每帧跟随、句柄失效即自毁;即发即忘
 - `rand(n: int) -> int` — 模拟 RNG 均匀 [0,n);确定性,随快照回卷
 - `global(slot: int) -> int` — 读 globals 槽(GVAR_RANK=0 为难度)
 - `set_global(slot: int, value: int)` — 写 globals 槽;系统段(slot<16)脚本写为 no-op+计数,不 Fault(GVAR_RANK=0 建议脚本只读)
@@ -130,10 +134,12 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `bgm(id: int)` — 声明当前 BGM:写世界锚点字段 bgm_id 并发 REQ_BGM;mark 跳入自动补偿最近声明(常量参)
 - `bg(id: int)` — 声明当前背景:写锚点 bg_id 并发 REQ_BG;换背景隐含新的 phase 纪元(补偿细则见 ecl-lang)
 - `bg_phase(phase: int)` — 声明背景演出段号:写 bg_phase 并自动盖 bg_phase_frame=当前帧,发 REQ_BG_PHASE;表现层按段内局部时间 seek
+- `time_stop_player(frames: int)` — 停住自机的时间 frames 帧(自机不能动/不能发新弹,自机弹也冻住;敌方照跑);0 = 立即解除;重入覆盖;越界 no-op+计数
 - `clear_bullets()` — 全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧
 - `add_lives(delta: int)` — 增减残机:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
 - `add_bombs(delta: int)` — 增减 bomb 数:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
 - `add_power(delta: int)` — 增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout
+- `add_time_stops(delta: int)` — 时停次数增量;同 add_lives 语义(允许负、饱和加、钳 [0,255])
 - `drop_clear()` — 清空自身待掉落计数;self 必须是敌
 - `drop_add(type: int, n: int)` — 自身待掉落计数增量加 n 颗 type(只增不减,要清空用 drop_clear);计数上限 255 饱和
 - `drop_items()` — 立刻撒出自身待掉落计数;**吐完不清空**(故 drop_items();die(); 掉双份);不加分不发死亡事件

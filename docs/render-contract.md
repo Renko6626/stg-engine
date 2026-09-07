@@ -1,15 +1,45 @@
 # 渲染契约（表现层权威；首要读者：美术 + Godot 壳作者）
 
+## 0. 总规则（表现契约 v2，2026-09-07；spec `docs/superpowers/specs/2026-09-07-presentation-contract-v2-design.md`）
+
+1. **电平走通道 A，边沿走通道 B。** 边沿可丢（cap 满确定性丢弃）可重放（回滚重演），
+   **电平不可丢**。持续超过一帧、且真值在核里的表现状态，一律每帧从 `WorldView`/桥面读口
+   拉电平（自机无敌闪烁读 `hud_player().invuln`、受击闪白读 `puppets().hit_flash`、
+   时停滤镜读 `freeze_left()`），绝不用边沿事件在壳侧"记住"它。
+2. **边沿只有三类用途**（分发器按类处置，§4）：即发即忘 / 须确认 / 电平镜像。
+3. **表现层唯一时间源是 step 结束后的 `frame`。** 木偶动画位置、shader 里的 t、特效寿命全部由
+   帧号推导；壁钟只允许飘字这种即发即忘的小件用。宿主暂停 = 帧不走 = 一切特效原地停。
+4. **弹龄与 `state_age` 口径**：`age = frame_after_step − born_frame`。`advance`（相位 10）在
+   step 末尾 `+1`，故实体**第一次被画出来时 age = 1，不是 0**。
+5. **高数量短寿命走实例缓冲 + shader，低数量长寿命走节点。** 弹 / 自机弹 / 道具 / 特效走
+   MultiMesh；敌人（cap 256、常态几十）与自机走节点。
+
 ## 1. 两条通道（定位）
 
-通道 A 状态视图 → 四层实例缓冲（本文 §2-3）；通道 B 离散请求 → 分发器（§4）。
-权威上游：`crates/stg-godot/src/frame.rs`（编码器）/ `crates/stg-core/src/reqs.rs`（请求 id）。
+通道 A 状态视图 → 三层实例缓冲（本文 §2-3）+ 敌人木偶喂料（§3.7）+ 事件流（§3.5）+
+`vanished`（§3.6）；通道 B 离散请求 → 分发器（§4）。
+权威上游：`crates/stg-godot/src/frame.rs`（编码器）/ `crates/stg-godot/src/puppets.rs`（木偶）
+/ `crates/stg-core/src/reqs.rs`（请求 id 与类别）/ `crates/stg-core/src/events.rs`（事件与聚合口径）。
 
 ## 2. 实例缓冲布局（冻结，stride 12）
 
-`[cos,-sin,0,x, sin,cos,0,y, sprite,0,0,0]` —— 前 8 = `MULTIMESH_TRANSFORM_2D`，
-后 4 = `INSTANCE_CUSTOM`；`custom.x=sprite` 号，`y/z/w` 保留（将来 scale/alpha/调色，stride 不变）。
+`[cos,-sin,0,x, sin,cos,0,y, sprite,age,0,0]` —— 前 8 = `MULTIMESH_TRANSFORM_2D`，
+后 4 = `INSTANCE_CUSTOM`；`custom.x=sprite` 号，**`custom.y = 弹龄`（只在弹层有语义，其余层恒 0；
+§0 口径，首帧 1）**，`z/w` 保留（将来 scale/alpha/调色，stride 不变）。
 bullets 层带旋转，其余层单位 basis。压实前缀 + `set_visible_instances`。
+层号：`LAYER_BULLETS=0 / LAYER_SHOTS=1 / LAYER_ITEMS=2`（**敌层已退役**，敌人走 §3.7 木偶）。
+
+**shader 不得乘片元 `COLOR`（有头目验判决，2026-09-07）**：MultiMesh 未开 `use_colors` 时
+片元 `COLOR` 输入是未定义的逐像素垃圾（GL/Vulkan 两后端一致的彩色噪点），乘上去弹就成了
+碎彩点。这是场景刀以来一直存在的 bug，16px 的弹看着像"彩色小球"，B23 那次目验没辨出来。
+`layer.gdshader`/`fx.gdshader` 现都是 `COLOR = tex`；整层调色/淡出走 uniform 或 custom.z/w。
+
+**弹层出现闪光**：`layer.gdshader` 的 `spawn_flash_frames` uniform（弹层设 6，其余层 0 = 关）
+按 `custom.y` 在前几帧放大 + 提亮，纯 shader、CPU 零成本。
+
+**上传路径**：桥持每层一个 `PackedFloat32Array`，编码器 `as_mut_slice` 原地写；壳侧
+`multimesh_set_custom_aabb` 钉成场界矩形，绕过 Godot 对全部实例重算 AABB（godot-proposals
+#957）。前缀（undersized）上传未做（Godot 未支持），账见 follow-ups F4。
 
 **弹的朝向约定（硬规矩）**：渲染旋转 = **速度方向 + 四分之一圈**（`frame.rs::bullet_basis`）。
 两个基准差 90°：世界侧 `polar_to_vec = (speed·cos, speed·sin)` 所以 **BAM 0 指 +x（右）**，
@@ -24,8 +54,8 @@ bullets 层带旋转，其余层单位 basis。压实前缀 + `set_visible_insta
 |---|---|---|---|---|
 | bullets | assets/bullets.png | 16×16 | 16×12 | tables appearances[].sprite（identity：id 即格号） |
 | shots   | assets/shots.png   | 32×32 | 4×1 | shottype 表 sprite |
-| enemies | assets/enemies.png | 64×64 | 4×1 | spawn_enemy sprite 参（A5 起脚本自给） |
 | items   | assets/items.png   | 32×32 | 8×1 | tables item_cfg[].sprite |
+| （木偶）enemies | assets/enemies.png | 64×64 | 4×1 | spawn_enemy sprite 参（A5 起脚本自给）——**不是 MultiMesh 层**，Sprite2D `hframes=4` 选格，见 §3.7 |
 
 sprite 号 = 格号（行优先）；越界号 mod 回卷。QuadMesh 尺寸 = cell 尺寸（1px=1unit）。
 自机 assets/player.png（32×32 单图）/判定点 assets/hitbox.png（16×16）。
@@ -83,10 +113,48 @@ step 之间取走。**
 够用）；对照 `EVT_FIELD_CLEARED` 必须聚合（弹池 8192 远超 events 512）。
 **擦弹若将来也要发事件，频率高一个量级，须单独评估聚合口径。**
 
-## 4. 请求分发（引擎保留段 1..=63，现分配 1..=7）
+## 3.6 `vanished`（本帧离开池的敌弹；表现契约 v2）
 
-表：`reqs.rs` 模块文档为准（id/args 逐位）；GDScript 侧 `dispatcher.gd` 本地常量镜像。
-64+ 脚本段：内容包经 `dispatcher.register(id, callable)` 自注册。
+核内第四条纯输出缓冲（与 `reqs`/`hits`/`frame_events` 同族：帧内私有、checksum-skip、`begin`
+清空、回滚重演确定性再生）。桥面 `vanished()` 返 Dictionary：`x,y`（浮点世界坐标）、`sprite`
+（弹图集格号）、`reason`（`VANISH_LIFE=1` 寿尽 / `VANISH_CLEARED=2` 被作用区清除，含 bomb、
+deathbomb、`clear_bullets`）。**只记场内、越界不记**（屏外没有淡出可画）；同帧既越界又被清按
+越界处置；被清优先于寿尽。cap 1024（bomb 峰值实测约 814），超限丢弃 + `diag.vanished_overflow`。
+**必须在两次 step 之间取走。** 消费者：`effects.gd::fade_batch` 在原位用同一格弹贴图淡出。
+
+## 3.7 敌人木偶喂料 `puppets()`（表现契约 v2）
+
+敌层退役后通道 A 对敌人的唯一出口。返回 Dictionary，每键一条压缩列（按池索引升序）：
+`index, gen, sprite, anm_state, state_age, hit_flash`（`PackedInt32Array`）、`x, y`
+（`PackedFloat32Array`）。**无 `dying` 列**（敌人 dying 位在 settle 置、同一 step 的 cleanup
+回收，step 后读不到；死亡动画走 `REQ_ENEMY_DEATH`）。壳侧（`playfield.gd`）按池索引预分配
+256 个 Sprite2D，`gen` 变了 = 新生重置；`(sprite, anm_state, state_age)` 查
+`content_tables.gd::ENEMY_ANIM` 手动选格（**永远不用自动播放**，§0 第 3 条）；约定状态号
+`ANM_HIDDEN=255` = 隐藏；`hit_flash` 经 `puppet.gdshader` 的 `flash` uniform 叠白。
+ECL 侧 `set_anm_state(n)` 写状态并盖帧（同状态重设 = 重播，即 ZUN `anmInterrupt` 的电平版）。
+按句柄跟随（依附特效）走 `entity_pos(kind, index, gen)`：句柄失效返 `null`。
+
+## 4. 请求分发（引擎保留段 1..=63，现分配 1..=9）
+
+表：`reqs.rs` 模块文档为准（id/args 逐位 + **类别**）；GDScript 侧常量取 `WorldBridge.REQ_*`
+（桥面导出，不手抄）。64+ 脚本段：内容包经 `dispatcher.register(id, callable)` 自注册，默认
+即发即忘，可 `set_class` 改类。
+
+**三类与水位（`dispatcher.gd`）**：
+
+| 类别 | id | 处置 |
+|---|---|---|
+| 即发即忘 | `REQ_ENEMY_DEATH` / `REQ_FX_AT` / `REQ_FX_ATTACHED` | 收到即播；回滚误播接受为鬼影 |
+| 须确认 | `REQ_SPELL_DECLARE` / `REQ_SPELL_RESULT` / `REQ_STAGE_CLEAR` | 缓冲到 `frame ≤ confirmed_frame` 才播（M3 前 `confirmed_frame` = 当前帧，行为与从前一致） |
+| 电平镜像 | `REQ_BGM` / `REQ_BG` / `REQ_BG_PHASE` | 边沿通知；真值在 `anchors()`，开机/读档后先对表（§5） |
+
+水位：`frame ≤ watermark` 的请求丢弃（回滚重演已呈现过的帧）；重开/读档 `dispatcher.reset()`。
+
+**一次性演出两条**（ECL `fx_at(x, y, kind, param)` / `fx_on(kind, param)`，对应 ZUN
+`anmPlayPos` / `anmPlay`）：`kind`/`param` 引擎不解释，壳侧 `content_tables.gd` 的 `FX_*`
+段定义；`fx_on` 的载荷是裸 `index, gen` 两位，壳侧起跟随行、每帧 `entity_pos`，失效即回收。
+
+**事件聚合口径**见 `events.rs` 模块文档表；擦弹若将来事件化须先定口径（follow-ups B28）。
 
 ## 5. 锚点双表示规矩（硬规矩）
 
@@ -94,11 +162,67 @@ step 之间取走。**
 `load_state` 成功后必须一次性读 `anchors()` 对表；游玩期只走请求增量。
 bg 段内局部时间 = `frame - bg_phase_frame`（A4 mini-VM 的 seek 契约，本刀 phase 硬编码）。
 
+## 5.5 时停的表现层读口（`freeze_left`）
+
+`WorldView::freeze_left()`（`world/view.rs`）暴露 `[u16; 2]`——`[0]` 是自机能力档（自机
+按键触发的时停技能写它），`[1]` 是 ECL 演出档 `time_stop_player()`。两个槽都非零即代表
+对应冻结组当前生效，数值是剩余帧数；表现层可以直接拿它画停时特效（比如给场景整体叠
+一层滤镜、把 HUD 边框变色）而不需要另外猜测"现在是不是冻着"。
+
+**bomb 不写这两个槽**——它的无敌走独立的 `invuln` 帧计时（`PlayerState.invuln`，
+`hud_player()` 的 `invuln` 字段），`freeze_left` 全程不动。这正是 spec §8 要求的：bomb
+期间相位 6/7 照常运行（判定与结算不停），只是自机有无敌帧、场上弹被消弹区清空——与
+时停"相位 6/7 一起冻住"是两回事。把停时画面滤镜键到 bomb 上会什么都看不到。
+
+**背景相位锚点在冻 C 时同步推进，表现层不需要自己特判**：`bg_phase_frame` 不是独立计时器，
+是背景 mini-VM 的锚点——冻结期间它跟 `frame` 一起走，`frame − bg_phase_frame`（背景段内
+局部时间）因此在时停全程保持不变，效果是"背景画面看起来也停住了"（bomb 期间背景照常
+推进，因为 `freeze_left` 未变、这条豁免根本没生效）。这层豁免逻辑在核内，表现层只管
+照常按 `anchors()`/请求增量算 `frame − bg_phase_frame`，不用为冻结状态另写一套背景
+寻位分支。
+
 ## 6. 坐标与画面
 
 场界 x∈[-192,192], y∈[0,448]（中轴原点）；SubViewport 384×448 @容器(32,16)，
 世界根 Node2D@(192,0)；640×480 窗口，canvas_items 拉伸。定点→浮点只发生在消费端边界，
 公式统一 `raw/65536`（编码器 `frame.rs::fx_f32`；`bridge.rs` 各读口如 `hud_player`/
-`hud_boss` 的 `hp_ratio`/`player_pos`/`fields_info` 内联同式；第五处见 `main.gd`
-`REQ_ENEMY_DEATH` 处理器——`_wire_requests` 里 `a[0] / 65536.0, a[1] / 65536.0` 把请求
-携带的原始定点坐标换回浮点世界坐标喂 `effects.explosion`，同式内联在 GDScript 侧）。
+`hud_boss` 的 `hp_ratio`/`player_pos`/`fields_info`/`puppets`/`vanished`/`entity_pos` 内联同式；
+第五处见 `main.gd` `_wire_requests`——`REQ_ENEMY_DEATH`/`REQ_FX_AT` 处理器里
+`a[0] / 65536.0, a[1] / 65536.0` 把请求携带的原始定点坐标换回浮点世界坐标，同式内联在 GDScript 侧）。
+
+## 7. 必须渲染项清单（换渲染器的抄写清单，也是有头目验的检查单）
+
+| 项 | 数据源 | 触发 | 大概样子 | 可省略 |
+|---|---|---|---|---|
+| 弹层 | `LAYER_BULLETS` 缓冲 | 每帧 | 图集格 + 速度朝向旋转（§2） | 否 |
+| 自机弹层 | `LAYER_SHOTS` | 每帧 | 图集格，不旋转 | 否 |
+| 道具层 | `LAYER_ITEMS` | 每帧 | 图集格 | 否 |
+| 敌人木偶 | `puppets()` | 每帧 | 按 `(sprite, anm_state, state_age)` 选帧（§3.7） | 否 |
+| 自机 + 判定点 | `player_pos()`/`hud_player()` | 每帧 | 单图；`BTN_SLOW` 显判定点；`invuln` 按帧号奇偶闪 | 判定点否 |
+| 弹出现闪光 | `custom.y`（弹龄） | shader | age 小时放大 + 提亮，6 帧内收敛 | 是 |
+| 消弹淡出 | `vanished()` | 每帧 | 同格弹贴图原地淡出（`fx` kind 0） | 是 |
+| 受击闪白 | `puppets().hit_flash` | 每帧 | 木偶叠白 | 是 |
+| 敌死爆炸 | `REQ_ENEMY_DEATH` | 边沿（即发即忘） | 橙色扩张环 + 分数飘字 | 是 |
+| 命中火花 | `EVT_SHOT_HIT_ENEMY` | 边沿 | 小圆盘 7 帧 | 是 |
+| 脚本演出 | `REQ_FX_AT` / `REQ_FX_ATTACHED` | 边沿 | 按 kind：闪点 / 依附光环 / 内容包自定 | 是 |
+| 时停滤镜 | `freeze_left()` | 每帧 | 全屏色调 | 是（未接） |
+| HUD | `hud_*` | 每帧 | 数字 + boss 条 + 符卡行 | 否 |
+| 横幅 | `REQ_SPELL_*`/`REQ_STAGE_CLEAR` | 边沿（须确认） | 文本 | 是 |
+| 背景 | `anchors()` + `REQ_BG*` | 电平镜像 | 见 follow-ups A4 | 是 |
+
+## 8. 有头目验（`--shots` 模式）
+
+本机无 GPU 但有 VNC 桌面 + llvmpipe（全局 CLAUDE.md）。`main.gd` 的 `--shots` 模式用脚本化
+输入（常按射击、60–75 帧向左、200 帧放 bomb）跑 demo，在若干帧把 SubViewport 存 PNG，并在首次
+敌死后第 4 帧补一张；同时打印各层 `visible_instances` 真值。
+
+```bash
+cargo build -p stg-godot
+DISPLAY=:2 LIBGL_ALWAYS_SOFTWARE=1 MESA_LOADER_DRIVER_OVERRIDE=llvmpipe STG_SHOTS_DIR=/tmp/shots \
+  godot --rendering-driver opengl3 --path godot -- --shots
+```
+
+2026-09-07 判读（截图逐张放大核对）：弹为干净的图集格；受击敌人叠白 + 命中火花；bomb 后弹层
+归零、`fx` 层用同格贴图淡出（淡出下面那块品红方块是星星道具的占位图，不是 bug）；敌死有
+橙色爆炸环与飘字；`visible_instances` 弹层 4–15、自机弹层 9–10 为真值。存档帧号比目标帧
+晚 1–4 帧（`await frame_post_draw` 之后才读 `frame()`），只影响文件名。

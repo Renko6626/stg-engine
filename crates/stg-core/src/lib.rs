@@ -155,7 +155,25 @@ extern crate self as stg_core;
 /// 溢出。溢出时走 P4-a 确定性降级（该颗不生成 + 逐颗计数、循环不短路，判别腿
 /// `star_pool_full_counts_every_missing_star`）——**这是已知设计边界，不是待修的债**，
 /// 口径写在 `docs/ecl-ops.md` 的 54 号与 `WorldBody::spawn_star_at` 的文档里。
-pub const ENGINE_VER: u32 = 14;
+///
+/// **14 → 15**（自机能力刀：时间停止 + bomb，2026-09-03）：**布局 + 号表 + 输入词表
+/// 三重变更**，任一即足以 bump。① `World` 变宽（`WorldBody.freeze_left` 4 B +
+/// `PlayerState.time_stops` 1 B×2）⇒ 快照与存档 wire format 变，旧存档尺寸对不上，
+/// 是响亮失败；② syscall 号表新增 `513 add_time_stops` / `560 time_stop_player`；
+/// ③ 输入动作词表新增 `BTN_TIMESTOP = 7`（位=0 等价旧行为，故非回放破坏性变更，
+/// 但 `actions_vocab_hash` 变）；④ `WorldTables` 新增 `CharacterCfg.bomb`
+/// ⇒ 表 `content_hash` 变 ⇒ 身份三元组变。
+///
+/// **金向量预期改变**（新字段进哈希，同道具池刀的道理）：形态可解释，不是行为回归。
+///
+/// **15 → 16**（表现契约 v2，2026-09-07）：**布局 + 号表两重变更**。① `World` 变宽：弹池
+/// `born_frame: u32`（×8192）+ 敌池 `anm_state_frame: u32`（×256）进校验和与存档；
+/// `WorldBody` 新增第四条纯输出缓冲 `vanished`（1024 × 12 B + len，checksum/存档皆 skip，
+/// 但结构尺寸变）+ `diag.vanished_overflow`（进校验和）。② syscall 号表新增
+/// `430 set_anm_state` / `721 fx_at` / `722 fx_on`；通道 B 引擎段新增 `REQ_FX_AT = 8` /
+/// `REQ_FX_ATTACHED = 9`。**金向量预期改变**（两个新字段进哈希，自帧 0 起），行为零改动：
+/// `vanished` 不改任何相位决策，两个帧号字段在核内无消费者。
+pub const ENGINE_VER: u32 = 16;
 
 pub use stg_derive::define_pool;
 

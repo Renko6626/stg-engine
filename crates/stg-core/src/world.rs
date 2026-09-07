@@ -21,7 +21,7 @@
 
 use crate::bullets::{BulletHandle, BulletInit, BulletPool};
 use crate::enemy::{EnemyHandle, EnemyInit, EnemyPool};
-use crate::events::{EVENTS_CAP, Event, HITS_CAP, Hit};
+use crate::events::{EVENTS_CAP, Event, HITS_CAP, Hit, VANISHED_CAP, Vanished};
 use crate::field::{FieldHandle, FieldInit, FieldPool};
 use crate::math::{Angle, Fx};
 use crate::player::PlayerState;
@@ -139,6 +139,9 @@ pub struct DiagCounters {
     pub contract_viol: u32,
     pub hits_overflow: u32,   // hits 满丢弃计数（P4-a）
     pub events_overflow: u32, // events 满丢弃计数（P4-a）
+    /// `vanished` 满丢弃计数（表现契约 v2，P4-a）——同 `events_overflow`，两机必须丢得一样多，
+    /// **入校验和**。
+    pub vanished_overflow: u32,
     /// ECL 任务确定性报错被杀的累计计数（M1 T2；`derive(Checksum)` 自动入校验和，
     /// 与 owner 死亡的静默回收物理区分——owner 死不计这里）。
     pub task_faults: u32,
@@ -195,10 +198,25 @@ pub struct WorldBody {
     pub(crate) bg_id: u16,
     pub(crate) bg_phase: u16,
     pub(crate) bg_phase_frame: u32,
+    /// 时停剩余帧（自机能力刀，2026-09-03）：`[0]` = 玩家技能（冻 B+C）、
+    /// `[1]` = ECL 演出（冻 A+B）。**冻结掩码是推导的、不存**——见
+    /// [`Self::actor_frozen`]/[`Self::scene_frozen`]/[`Self::shots_frozen`]；
+    /// 存一份掩码只会多一个与倒计时不同步的机会。
+    ///
+    /// **两个都在相位 0 `begin` 无条件递减**，不属于任何冻结组：若各自跟组走，
+    /// 两边同时开启时 A 被演出冻住 ⇒ 技能倒计时不走、C 被技能冻住 ⇒ 演出倒计时
+    /// 不走，**世界永远解不开**（spec §5）。
+    pub(crate) freeze_left: [u16; 2],
     #[checksum(skip = "纯输出缓冲，回滚重演确定性再生（P6/§6.2 通道 B）")]
     pub(crate) reqs: [RenderReq; REQS_CAP],
     #[checksum(skip = "纯输出缓冲，len 随 reqs 一并 skip（通道 B）")]
     pub(crate) reqs_len: u16,
+    /// 本帧离开池的敌弹（表现契约 v2 spec §3.4）：相位 9 弹回收分支写、表现层读做消弹淡出。
+    /// 第四条纯输出缓冲，与 `hits`/`frame_events`/`reqs` 同族。
+    #[checksum(skip = "纯输出缓冲，帧首清空，与 reqs/hits/frame_events 同族（表现契约 v2）")]
+    pub(crate) vanished: [Vanished; VANISHED_CAP],
+    #[checksum(skip = "纯输出缓冲，len 随 vanished 一并 skip（表现契约 v2）")]
+    pub(crate) vanished_len: u16,
     /// 诊断计数器。断层线以上只读走 `view().diag()`（D6，2026-07-25：收 `pub(crate)`，
     /// `Copy` 按值出）。
     pub(crate) diag: DiagCounters,
@@ -477,6 +495,21 @@ impl WorldBody {
                 EnemyHandle::NULL
             }
         }
+    }
+
+    /// 敌人表现状态号（表现契约 v2 spec §3.2）：写 `anm_state` 并**无条件**盖
+    /// `anm_state_frame = frame`——同状态重设也盖（= 重播，对应 ZUN interrupt 重触发语义）。
+    /// 世界自身不解释 `anm_state`；表现层按 `(sprite, anm_state, frame − anm_state_frame)`
+    /// 选帧。P4-b：悬垂句柄 → no-op + `contract_viol` + `STALE_HANDLE`。
+    pub fn set_anm_state(&mut self, h: EnemyHandle, state: u16) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        self.enemies.anm_state[i] = state;
+        self.enemies.anm_state_frame[i] = self.frame;
+        self.last_status = STATUS_OK;
     }
 
     /// 敌人限时缓动位移（D5；杂鱼"飘入-停-飘出"的世界侧状态机，将来 ECL syscall 直通）。
@@ -1004,6 +1037,23 @@ impl WorldBody {
         }
     }
 
+    /// `vanished` 推送（表现契约 v2）：相位 9 弹回收分支专用。满 → 丢弃 + `vanished_overflow`
+    /// （P4-a，同 `push_event`）。
+    pub(crate) fn push_vanished(&mut self, x: Fx, y: Fx, sprite: u16, reason: u8) {
+        if (self.vanished_len as usize) < VANISHED_CAP {
+            self.vanished[self.vanished_len as usize] = Vanished {
+                x,
+                y,
+                sprite,
+                reason,
+                _pad: 0,
+            };
+            self.vanished_len += 1;
+        } else {
+            self.diag.vanished_overflow = self.diag.vanished_overflow.wrapping_add(1);
+        }
+    }
+
     /// 世界 RNG 唯一外部触点（本刀迁移面探测漏收：`rng` 封 `pub(crate)` 前，
     /// `stg-harness` 场景搭建代码经 `WorldBody.rng` 直取随机弹幕扩散角——发现于 Task 2
     /// 实现期编译红，非 brief 原定产物，机械补齐见 task-2-report.md）。转发
@@ -1079,15 +1129,51 @@ impl WorldBody {
         &self.frame_events[..self.frame_events_len as usize]
     }
 
+    /// 本帧离开池的敌弹（表现契约 v2 §3.4）。幂等只读，`begin` 清 len——**必须在两次 step
+    /// 之间取走**。消费者：消弹淡出。
+    pub fn vanished(&self) -> &[Vanished] {
+        &self.vanished[..self.vanished_len as usize]
+    }
+
+    // 三个读口的生产消费者是各相位函数体内的门禁（Task 3 已接线，见 `world/player.rs`
+    // 相位 3、`world/integrate.rs` 相位 5、`transform`/`collide`/`settle`/`cleanup` 的早退
+    // 与 `step.rs` 相位 2）——`#[cfg_attr(not(test), allow(dead_code))]` 随之撤掉：本仓
+    // 不用 allow 盖住"其实有人用"的事实。
+    /// A 组（自机主动行为：移动/发弹/用能力）是否冻结 —— ECL 演出（`freeze_left[1]`）。
+    pub(crate) fn actor_frozen(&self) -> bool {
+        self.freeze_left[1] > 0
+    }
+    /// C 组（世界演化与裁决：敌/弹/ECL/道具/作用区/背景/自机被动计时/相位 6·7）
+    /// 是否冻结 —— 玩家技能（`freeze_left[0]`）。
+    pub(crate) fn scene_frozen(&self) -> bool {
+        self.freeze_left[0] > 0
+    }
+    /// B 组（自机弹的飞行）是否冻结 —— **任一方向的时停都冻它**。这不是巧合：
+    /// 弹一旦离开枪口就不再属于自机（spec §3）。
+    pub(crate) fn shots_frozen(&self) -> bool {
+        self.freeze_left[0] > 0 || self.freeze_left[1] > 0
+    }
+
     // ── 相位函数（pub(crate)，每个先 phase_enter 保序）────────────────────
     pub(crate) fn begin(&mut self) {
         self.phase_enter(PH_BEGIN);
         self.hits_len = 0;
         self.frame_events_len = 0;
         self.reqs_len = 0;
+        self.vanished_len = 0;
+        // 时停倒计时挂**真实帧**、不属于任何冻结组（spec §5 的死锁解）。
+        self.freeze_left[0] = self.freeze_left[0].saturating_sub(1);
+        self.freeze_left[1] = self.freeze_left[1].saturating_sub(1);
     }
     pub(crate) fn advance(&mut self) {
         self.phase_enter(PH_ADVANCE);
+        // 背景停滞**不是"什么都不做"就有的**：背景动画由 `frame − bg_phase_frame` 驱动，
+        // 而 `frame` 恒增（时停不是"帧不走"，是"世界不演化"）⇒ 只冻别的会让背景照样走。
+        // 冻 C 时把锚点同步推进，让"背景经过的时间"这个差值不增长（spec §5）。
+        // wrapping：锚点与 frame 同为 u32 且只做差值比较，回绕语义一致。
+        if self.scene_frozen() {
+            self.bg_phase_frame = self.bg_phase_frame.wrapping_add(1);
+        }
         self.frame += 1;
     }
 }
@@ -1133,6 +1219,7 @@ pub(crate) mod test_support {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: w.body.frame,
         })
     }
 
@@ -1176,6 +1263,7 @@ pub(crate) mod test_support {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: w.body.frame,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
@@ -1230,6 +1318,7 @@ mod tests {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         }
     }
 
@@ -1284,6 +1373,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
@@ -1402,6 +1492,32 @@ mod tests {
         assert_eq!(w.body.frame_events[0].kind, EVT_PLAYER_DIED);
     }
 
+    /// P4-a：`push_vanished` 溢出 → 停收 + 计数（进校验和）；`begin` 清空（表现契约 v2）。
+    #[test]
+    fn vanished_push_overflow_counts_and_begin_clears() {
+        use crate::events::{VANISH_LIFE, VANISHED_CAP};
+        let mut w = crate::step::World::new(1);
+        for k in 0..VANISHED_CAP {
+            w.body
+                .push_vanished(Fx::from_int(k as i32), Fx::ZERO, k as u16, VANISH_LIFE);
+        }
+        assert_eq!(w.body.vanished().len(), VANISHED_CAP);
+        assert_eq!(w.body.diag.vanished_overflow, 0);
+        w.body.push_vanished(Fx::ZERO, Fx::ZERO, 0, VANISH_LIFE);
+        assert_eq!(w.body.vanished().len(), VANISHED_CAP, "满后不再收");
+        assert_eq!(w.body.diag.vanished_overflow, 1, "计一次溢出");
+        assert_eq!(
+            w.body.vanished()[VANISHED_CAP - 1].sprite,
+            (VANISHED_CAP - 1) as u16
+        );
+        w.body.begin();
+        assert!(w.body.vanished().is_empty(), "begin 清空第四条缓冲");
+        assert_eq!(
+            w.body.diag.vanished_overflow, 1,
+            "计数不随 begin 清（它是状态）"
+        );
+    }
+
     /// P4-a：`push_event` 溢出 → 停收 + 计数，不 panic（`push_hit` 的同构缺口，B2）。
     #[test]
     fn events_push_overflow_counts_and_drops() {
@@ -1501,6 +1617,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
@@ -1576,6 +1693,7 @@ mod tests {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         })
     }
 
@@ -1634,6 +1752,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
@@ -1971,5 +2090,57 @@ mod tests {
             "批量入口的验证序是 xform 先拒、短路返回——半径那次根本没走到，故只 +1。\
              这条不对称是既定语义（见 create_bullets_batch 的实现注释），不是待修的 bug"
         );
+    }
+
+    /// 倒计时挂**真实帧**、不属于任何冻结组——两边同时开时若各自跟组走会互相冻死
+    /// （spec §5「死锁与它的解」）。本条守的就是"它在相位 0 无条件递减"。
+    #[test]
+    fn freeze_countdowns_tick_in_begin_unconditionally() {
+        let mut w = crate::step::World::new(1);
+        w.body.freeze_left = [2, 3];
+        // ⚠️ `begin()` 头一句是 `phase_enter(PH_BEGIN)`，它在 debug 下断言
+        // `phase_guard == 0` 并推进。连调多次必须每次把护栏拨回相位 0——本模块其余
+        // 直调相位函数的测试是同款写法。
+        let tick = |w: &mut crate::step::World| {
+            #[cfg(debug_assertions)]
+            {
+                w.body.phase_guard = PH_BEGIN;
+            }
+            w.body.begin();
+        };
+        tick(&mut w);
+        assert_eq!(w.body.freeze_left, [1, 2], "两个倒计时都必须在相位 0 递减");
+        tick(&mut w);
+        assert_eq!(w.body.freeze_left, [0, 1]);
+        tick(&mut w);
+        assert_eq!(w.body.freeze_left, [0, 0], "到 0 后饱和，不回绕");
+    }
+
+    /// 掩码是**推导**的：A 冻 ⇔ left[1]>0、C 冻 ⇔ left[0]>0、B 冻 ⇔ 任一 >0。
+    /// 判别力：四种组合逐个断言——只测"全零"与"全非零"的话，把 A/C 写反照样绿。
+    #[test]
+    fn freeze_mask_is_derived_from_the_two_countdowns() {
+        let mut w = crate::step::World::new(1);
+        let cases = [
+            ([0u16, 0u16], (false, false, false)),
+            ([5, 0], (false, true, true)), // 玩家技能：冻 B+C，A 跑
+            ([0, 5], (true, false, true)), // ECL 演出：冻 A+B，C 跑
+            ([5, 5], (true, true, true)),  // 全场静止
+        ];
+        for (left, (a, c, b)) in cases {
+            w.body.freeze_left = left;
+            assert_eq!(w.body.actor_frozen(), a, "actor @ {left:?}");
+            assert_eq!(w.body.scene_frozen(), c, "scene @ {left:?}");
+            assert_eq!(w.body.shots_frozen(), b, "shots @ {left:?}");
+        }
+    }
+
+    /// P6：新字段必须进校验和（derive 默认全量入，本条是它的可观测面）。
+    #[test]
+    fn freeze_left_enters_the_checksum() {
+        let mut w = crate::step::World::new(1);
+        let base = w.checksum();
+        w.body.freeze_left[0] = 1;
+        assert_ne!(w.checksum(), base, "freeze_left 必须入校验和");
     }
 }

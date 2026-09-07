@@ -124,6 +124,7 @@ impl World {
         p.power = loadout.power.min(crate::items::POWER_MAX);
         p.lives = loadout.lives;
         p.bombs = loadout.bombs;
+        p.time_stops = loadout.time_stops;
         w.body.set_var(crate::consts::GVAR_RANK, rank);
         let root_idx = w.start_main(image)?;
         if let Some(ip) = landing {
@@ -165,6 +166,7 @@ impl World {
         d.bg_id = s.bg_id;
         d.bg_phase = s.bg_phase;
         d.bg_phase_frame = s.bg_phase_frame;
+        d.freeze_left = s.freeze_left;
         s.shots.copy_into(&mut d.shots);
         s.enemies.copy_into(&mut d.enemies);
         s.fields.copy_into(&mut d.fields);
@@ -181,6 +183,7 @@ impl World {
         d.hits_len = 0;
         d.frame_events_len = 0;
         d.reqs_len = 0;
+        d.vanished_len = 0;
         #[cfg(debug_assertions)]
         {
             d.phase_guard = s.phase_guard;
@@ -308,6 +311,10 @@ impl World {
     pub fn frame_events(&self) -> &[crate::events::Event] {
         self.body.frame_events()
     }
+    /// 转发 [`crate::world::WorldBody::vanished`]（表现契约 v2）。
+    pub fn vanished(&self) -> &[crate::events::Vanished] {
+        self.body.vanished()
+    }
 
     /// 任务池只读口:mutator 全 `pub(crate)`,`&TaskPool` 交出去只能读——同 `&Pool`
     /// 之于通道 A 的论证(刀 A/通道 A);整池重赋值(D6 事故面)从此路封死。
@@ -387,7 +394,15 @@ pub fn step_with_director<F: FnMut(&mut WorldBody)>(
     b.begin(); // 0
     b.decode_input(input); // 1
     b.phase_enter(PH_DIRECTOR); // 2：导演槽（护栏在组装层押）
-    crate::ecl::vm::run_tasks(&mut world.tasks, b, ecl, tables); // 默认租户：ECL 任务运行器先跑
+    // C 组门禁。**step.rs 唯一的一处**——其余相位的门禁都写在相位函数体内（§3.5 宪法
+    // 顺序归组装层，P2；且跳过相位函数会让下一相的 PhaseGuard 断言当场失败）。这里破例
+    // 是因为 `run_tasks` 不是 `WorldBody` 方法，`phase_enter(PH_DIRECTOR)` 由本层自己调，
+    // 包一层不动护栏。
+    // 全部 ECL 任务的 owner 只有 STAGE/ENEMY/BULLET（无 PLAYER）⇒ 冻 C 就是整条跳过，
+    // 不必逐任务筛 owner。导演闭包**照跑**——它是宿主的槽、不是世界的一部分。
+    if !b.scene_frozen() {
+        crate::ecl::vm::run_tasks(&mut world.tasks, b, ecl, tables); // 默认租户：ECL 任务运行器先跑
+    }
     director(b);
     b.update_players(tables); // 3
     b.run_transforms(); // 4
@@ -469,6 +484,7 @@ mod tests {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         }
     }
 
@@ -2221,11 +2237,63 @@ mod tests {
         // alive 掩码，多出来的 512 个空槽从帧 0 就进哈希；③ **D10 容量预算适用**（本刀就是
         // 池 cap 变更，`stg-world-design.md` 的 D10 表已同步）；④ SaveBytes 走 derive 自动
         // ⇒ 存档 wire format 变化，故 `ENGINE_VER` 13→14（见 lib.rs）。
+        // 2026-09-03（自机能力刀 Task 1）：`WorldBody` 新增 `freeze_left: [u16; 2]`
+        // （4 B，插在 `bg_phase_frame` 与 `reqs` 之间）。**本次是这张账目表第一次出现
+        // 对齐吸收**：`WorldBody`/`World` 整体对齐是 8（内部有 u64，如 `rng: Pcg32`），
+        // 插入前两者的裸字段和已比各自的 8 对齐边界少 4 B、靠编译器尾部 padding 补齐；
+        // 插入的 4 B 恰好填掉这份尾部 padding，两个 `size_of` 因此**实测不动**——不是漏改，
+        // 是量出来的真结果（本条注释头就是"别手算，按测试实测口径"的例证）。
+        // ① `copy_into` 手写清单**必须同步**加 `dst.freeze_left = self.freeze_left;`
+        //    ——它不是池、不走 `define_pool!` 生成，位于 struct 内部，参不参与尾部 padding
+        //    与要不要拷贝无关；② checksum 走 derive 默认全量入（未加 skip，判别面 =
+        //    `freeze_left_enters_the_checksum`）；③ D10 容量预算：非池 cap 变更，标量 4 B，
+        //    `stg-world-design.md` D10 表已加行；④ SaveBytes 走 derive **按字段序列化**
+        //    （非按 `size_of` 整块拷贝），故即便内存尺寸没变，序列化字节流仍多出这 4 B
+        //    ⇒ 存档 wire format 照样变化，故 `ENGINE_VER` 14→15（见 lib.rs）——尺寸哨兵
+        //    绿只说明"没漏 padding"，管不了"存档格式变没变"，两件事分开判。
+        // 2026-09-03（自机能力刀 Task 4）：`PlayerState` 在 `bombs` 后插 `time_stops: u8`
+        // （逐槽 +1 B，`[PlayerState; MAX_PLAYERS=2]` ⇒ 逻辑 +2 B）。**又一次对齐吸收**：
+        // `PlayerState` 内 `score: u64` 前本来就有尾随 padding 把 `bombs..bomb_pieces` 那串
+        // u8 垫到 8 对齐，新插的 1 B 只是把那份 padding 吃掉 1 B，`size_of::<PlayerState>()`
+        // 前后都是 64（实测，非手算）；`WorldBody`/`World` 因此两个 `size_of` **同样不动**
+        // ——不是本刀漏改，是量出来的真结果，`world_size_sentinel` 本条继续绿属预期。
+        // ① `players` 字段是 `[PlayerState; N]`（`Copy`），`copy_into` 走整块赋值
+        //    `d.players = s.players;`（step.rs 里已是这行，无需改）——不是池、不走
+        //    `define_pool!`，本就无手写清单要同步；② checksum 走 `PlayerState` 自身
+        //    `#[derive(Checksum)]` 默认全量入（未加 skip）；③ D10 容量预算不适用
+        //    （非池 cap 变更，MAX_PLAYERS 未变，只是每人宽了 1 B）；④ SaveBytes 同②走
+        //    derive 按字段序列化，存档 wire format 因此仍多出 2 B（1 B×2 名自机）——
+        //    `ENGINE_VER` 已在 Task 1 一并算进 14→15（lib.rs `engine_ver_anchored` 早已
+        //    把本刀 time_stops 计入同一次 bump，本 Task 不再二次 bump）。
+        // 2026-09-04（自机能力刀 Task 4 复审纠偏）：`PlayerState` 又在 `input` 后插
+        // `prev_input: u32`（逐槽 +4 B，×MAX_PLAYERS=2 ⇒ 逻辑 +8 B——沿检测的滚存位，
+        // 见 `world/player.rs::pressed_edge`）。**第三次对齐吸收**：插入点之后到
+        // `score: u64` 之间那串字段整体后移 4 B，但 `score` 前的对齐 padding 恰好从
+        // 5 B 缩到 1 B 抵消掉这次位移，`size_of::<PlayerState>()` 实测仍是 64（前一刀
+        // 插 `time_stops` 时已把 padding 从原本的 6 吃到 5，本刀再吃掉 4 到 1，两次插入
+        // 累计 5 B 恰好等于原始 padding 富余量，压线吸收干净）；`WorldBody`/`World` 两个
+        // `size_of` 因此同样不动——不是漏改，是量出来的真结果。
+        // ①`players`仍是`[PlayerState;N]`（Copy）整块赋值，无手写清单要同步；②checksum
+        // 走 derive 全量入（未 skip，`prev_input` 必须随快照回滚——rollback 后重放沿检测
+        // 要逐位一致，这正是本字段存在的理由）；③D10 不适用（非池cap变更）；④SaveBytes
+        // 同②走 derive，wire format 再多 8 B，`ENGINE_VER` 不二次 bump（同一炉 14→15）。
+        // 2026-09-07（表现契约 v2）：三处变宽，逐项对账 **+46088**（989152→1035240；
+        // `World` 同步 1148952→1195040，增量 1:1）：弹池 `born_frame: u32`×8192 = +32768、
+        // 敌池 `anm_state_frame: u32`×256 = +1024、`WorldBody` 新增 `vanished: [Vanished;
+        // 1024]`（12 B×1024 = +12288）+ `vanished_len: u16`（+2）+ `diag.vanished_overflow:
+        // u32`（+4），逐项相加 46086，余 2 B 是 `vanished_len` 后的对齐 padding。
+        // ① `copy_into`：两个池字段走 `define_pool!` 生成清单，自动；`vanished` 数组本体
+        //    与 hits/events/reqs 同款不复制、**显式 `d.vanished_len = 0`**（已加）；
+        //    `diag` 整块赋值自动带上新计数。② checksum：两个池字段 derive 全量入；
+        //    `vanished`/`vanished_len` 加了带理由的 skip；`vanished_overflow` 全量入（P4-a
+        //    两机必须丢得一样多）。③ D10：非池 cap 变更，每弹 +4 B、每敌 +4 B；`vanished`
+        //    是新输出缓冲 12 KB。④ SaveBytes：与 checksum 共享 skip 清单 ⇒ 两个池字段入档、
+        //    `vanished` 不入档，wire format 变 ⇒ `ENGINE_VER` 15→16。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (989152, 1148952);
+        const EXPECTED: (usize, usize) = (1035240, 1195040);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (989152, 1148952);
+        const EXPECTED: (usize, usize) = (1035240, 1195040);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2253,8 +2321,8 @@ mod tests {
         ];
         // cap: bullets 8192 / enemies 256 / shots 1024 / items 1024 / fields 16 / xform 4096
         let expected = [
-            ("bullets", 443_392), // 52 B/弹 ×8192 + gen 16384 + alive 1024  ≈ 433 KiB
-            ("enemies", 27_424),  // 105 B/敌 ×256 + gen 512 + alive 32      ≈ 26.8 KiB
+            ("bullets", 476_160), // 56 B/弹 ×8192 + gen 16384 + alive 1024  ≈ 465 KiB（v2：+born_frame u32）
+            ("enemies", 28_448), // 109 B/敌 ×256 + gen 512 + alive 32      ≈ 27.8 KiB（v2：+anm_state_frame u32）
             ("shots", 28_800),
             ("items", 22_656), // 22 B/道具 ×1024 + gen 2048 + alive 128（F12：512→1024）
             ("fields", 328),
@@ -2291,8 +2359,20 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            14,
-            "bump 必须是有意识决定(评审 + 改本测试)——13→14：道具池 cap 512→1024\
+            16,
+            "bump 必须是有意识决定(评审 + 改本测试)——15→16：表现契约 v2(2026-09-07)。\
+             **布局 + 号表两重变更**:弹池 born_frame u32×8192 + 敌池 anm_state_frame \
+             u32×256 进校验和与存档;WorldBody 新增第四条纯输出缓冲 vanished(1024×12B, \
+             checksum/存档皆 skip 但结构尺寸变)+ diag.vanished_overflow;号表新增 430 \
+             set_anm_state / 721 fx_at / 722 fx_on;通道 B 引擎段新增 REQ_FX_AT=8 / \
+             REQ_FX_ATTACHED=9。金向量预期改变(新字段自帧 0 进哈希),行为零改动。\
+             ——前一次 14→15：自机能力刀(时间停止 + bomb)。\
+             **布局 + 号表 + 输入词表三重变更**:World 变宽(freeze_left 4B + time_stops 1B×2 \
+             + prev_input 4B×2,后者是复审纠偏加的沿检测滚存位,见 try_time_stop 文档)\
+             ⇒ 旧存档尺寸对不上、响亮失败;号表新增 513 add_time_stops / 560 \
+             time_stop_player;输入词表新增 BTN_TIMESTOP=7(位=0 等价旧行为);WorldTables \
+             新增 CharacterCfg.bomb ⇒ 表 content_hash 变。金向量预期改变(新字段进哈希)。\
+             前一次 13→14：道具池 cap 512→1024\
              (F12 定案,人类裁定取'抬 cap + 写口径'两条、不给转换设上限)。**这条是布局变更**,\
              与前两次'含义变了'不同侧:World 真的变宽了(WorldBody 977824→989152、\
              World 1137624→1148952,+11328 B),快照与存档 wire format 随之改变,旧存档在新\
@@ -2384,6 +2464,7 @@ mod tests {
             flags: 0,
             sprite: 3,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
@@ -2558,6 +2639,7 @@ mod tests {
             power: 9999,
             lives: 8,
             bombs: 1,
+            ..crate::player::Loadout::default()
         };
         let w = World::new_game_at(7, 2, 0, loadout, &image).expect("new_game_at");
         let p = &w.body.players[0];
@@ -2677,5 +2759,442 @@ mod tests {
             w.tasks.slots[0].pc, 2,
             "根任务(tasks 池 0 号)pc 应搁到标记落点 L=2,而非 code_entry E=0"
         );
+    }
+
+    // ── 时停相位门禁（自机能力刀 Task 3）────────────────────────────────
+    use crate::tables::TABLES_V0;
+
+    /// 造一个"什么都在动"的世界：弹在飞、敌在动、道具在落、作用区在倒数、自机在移动。
+    /// 五类都要有，否则主测的观测面是空的、押不住任何东西。
+    /// 相位 2 门禁的判别负载：一个 STAGE 根任务，每个活跃帧记 1 分再等 1 帧、循环——
+    /// `players[0].score` 变没变就是这道门禁唯一直接的判别信号（复审 Important 1）。
+    fn busy_ecl_image() -> EclImage {
+        root_image(vec![
+            OP_PUSHI as u32,
+            1,
+            OP_SYS as u32,
+            crate::ecl::syscall::SYS_ADD_SCORE as u32,
+            OP_PUSHI as u32,
+            1,
+            OP_WAIT as u32,
+            OP_JMP as u32,
+            0,
+        ])
+    }
+
+    /// **复审 Important 1**：此前这个"忙"世界没有 ECL 任务、没有带 xform 段的弹、
+    /// 没有待回收的弹——相位 2/4/9 三道门禁即使被拆掉，本文件全部测试也照样绿
+    /// （三处都无事可做，门禁在与不在没有可观测差异）。三条新增负载把这三道门禁
+    /// 分别摆到"有东西可能被冻结期间偷跑"的处境：任务会不会记分、弹的变换游标
+    /// 会不会推进、已标记清除的弹会不会被提前收走。
+    fn busy_world() -> Box<World> {
+        use crate::field::FIELD_CLEAR_BULLETS;
+        let mut w = World::new(1);
+        // 弹（斜飞，两轴都动）
+        for k in 0..3 {
+            let h = crate::world::test_support::bullet_at(&mut w, 10 * k, 100);
+            let i = w.body.bullets.get(h).unwrap();
+            w.body.bullets.vx[i] = Fx::from_int(1);
+            w.body.bullets.vy[i] = Fx::from_int(2);
+        }
+        // 自机弹
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: Fx::ZERO,
+            y: Fx::from_int(300),
+            vx: Fx::ZERO,
+            vy: Fx::from_int(-8),
+            damage: 1,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        // 敌（有速度）
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 50, 100);
+        let ei = w.body.enemies.get(eh).unwrap();
+        w.body.enemies.vy[ei] = Fx::from_int(1);
+        // 道具（会下落）
+        w.body.spawn_drop(
+            Fx::ZERO,
+            Fx::from_int(60),
+            crate::items::ITEM_POINT,
+            &TABLES_V0,
+        );
+        // 作用区（life 会倒数）
+        w.body.create_field(crate::field::FieldInit {
+            x: Fx::ZERO,
+            y: Fx::from_int(224),
+            radius: Fx::from_int(10),
+            dmg_per_frame: 0,
+            life: 600,
+            owner: 0,
+            flags: FIELD_CLEAR_BULLETS,
+        });
+        // 相位 2 负载：STAGE 根任务。`start_main` 把 `born_frame` 戳成当前帧（次帧首跑
+        // 门禁），但本函数不想为了预热单独多跑一帧去扰动上面几件的初始状态——直接把
+        // 出生帧往回拨一格，越过那道无关的门禁，让它在调用方的第一个真实 `step` 里
+        // 就已经"随时可跑"。
+        let root_idx = w
+            .start_main(&busy_ecl_image())
+            .expect("busy_world 根任务必须能启动");
+        w.tasks.slots[root_idx as usize].born_frame = w.body.frame.wrapping_sub(1);
+        // 相位 4 负载：一颗挂了一步 `OP_SET_SPRITE` 的弹。初始 `xform_wait=0` ⇒ 它在
+        // 第一个真正跑到相位 4 的活跃帧就会立即发射并把 `xform_wait` 支到 5——冻 C 时
+        // 这一发必须完全不发生（sprite 停在初值、`xform_wait` 停在 0）。
+        w.body.create_bullet_with_xform(
+            crate::bullets::BulletInit {
+                x: Fx::from_int(200),
+                y: Fx::from_int(100),
+                vx: Fx::ZERO,
+                vy: Fx::ZERO,
+                speed: Fx::ZERO,
+                angle: Angle::ZERO,
+                ang_vel: 0,
+                accel: Fx::ZERO,
+                ax: Fx::ZERO,
+                ay: Fx::ZERO,
+                sprite: 0,
+                radius: Fx::from_int(2),
+                delay: 0,
+                life: 0xFFFF,
+                flags: 0,
+                grazed_by: 0,
+                transform_head: 0,
+                xform_wait: 0,
+                xform_next: 0,
+                born_frame: 0,
+            },
+            &[crate::xform::XformSlot {
+                wait: 5,
+                op: crate::xform::OP_SET_SPRITE,
+                _pad: 0,
+                args: [77, 0],
+            }],
+        );
+        // 相位 9 负载：一颗提前标好 `BULLET_CLEARED` 的弹——冻 C 时这一枪不该被收走，
+        // 解冻后应立刻被清掉。
+        let cleared_h = crate::world::test_support::bullet_at(&mut w, 300, 100);
+        let cleared_i = w.body.bullets.get(cleared_h).unwrap();
+        w.body.bullets.flags[cleared_i] |= crate::bullets::BULLET_CLEARED;
+        w
+    }
+
+    /// **复审 Important 1**：曾经喂 `EclImage::empty()`——`busy_world()` 现在真的挂了一个
+    /// 任务，喂空镜像会让它试图从空字节数组里取指令而 panic。换成 `busy_ecl_image()`：
+    /// 对没有任务的世界（本文件其余不经 `busy_world()` 的测试）无害——`run_tasks` 只遍历
+    /// 存活任务，池空则镜像内容从不被读。
+    fn step_empty(w: &mut World) {
+        crate::step::step(
+            w,
+            &TABLES_V0,
+            &busy_ecl_image(),
+            &InputFrame::empty(w.frame()),
+        );
+    }
+
+    /// **主测**：全场静止（两位都开）跑一帧，除 `frame`/`freeze_left`/`bg_phase_frame` 外
+    /// **整块 World 逐位不变**。抹掉那几个"恒跑"字段后比整块校验和。
+    ///
+    /// `bg_phase_frame` 也在豁免名单里，因为它**不是独立计时器**而是背景锚点：冻 C 时它
+    /// 跟着 `frame` 一起加 1，正是为了让 `frame − bg_phase_frame`（背景真正经过的时间）
+    /// 不增长（spec §5）。那条差值不变的性质由
+    /// `scene_freeze_keeps_the_background_elapsed_time_still` 单独押。
+    ///
+    /// 杀手级性质：**将来谁往 World 加新计时器而忘了裁定，本条自动照出来**——新字段由
+    /// `#[derive(Checksum)]` 自动进哈希（P6），不需要有人回来补断言。
+    #[test]
+    fn full_freeze_changes_nothing_but_the_always_running_fields() {
+        let mut w = busy_world();
+        let mut before = World::new(0);
+        w.copy_into(&mut before);
+
+        w.body.freeze_left = [10, 10];
+        step_empty(&mut w);
+
+        // Task 3 复审 carryover (c)：下面那句 `bg_phase_frame = before...` 是整块豁免拷贝，
+        // 一个错的值（比如背景锚点没跟 frame 走、卡在原地）会被这句拷贝照样盖掉，
+        // 让"整块不变"通过得毫无意义。先把"它确实是 +1"这条钉死，豁免才诚实。
+        assert_eq!(
+            w.body.bg_phase_frame,
+            before.body.bg_phase_frame + 1,
+            "全场静止一帧，bg_phase_frame 仍须跟 frame 一起 +1（它是背景锚点不是独立计时器）"
+        );
+        w.body.frame = before.body.frame;
+        w.body.freeze_left = before.body.freeze_left;
+        w.body.bg_phase_frame = before.body.bg_phase_frame;
+        assert_eq!(
+            w.checksum(),
+            before.checksum(),
+            "全场静止下除恒跑字段外不得有任何变化（有东西变了 = 某个计时器漏了裁定）"
+        );
+    }
+
+    /// 玩家技能（冻 B+C）：C 组停、A 组跑。判别力=两侧都断言，只断一侧的话
+    /// "门禁写成恒冻一切"或"恒不冻"各能骗过其中一条。
+    ///
+    /// **复审 Important 1 追加**：C 组冻的不只是弹/敌/自机弹——相位 2（ECL 任务）、
+    /// 相位 4（变换游标）、相位 9（回收）同样挂在 `scene_frozen()` 上。三条新断言
+    /// （分数/xform sprite/待回收弹）分别把这三道门禁单独摘出来逐个变异验证过：
+    /// 拆掉任一个都会让对应那条从绿翻红（见 `task-9-report.md` 的记录）。
+    #[test]
+    fn player_skill_freezes_scene_but_not_the_actor() {
+        let mut w = busy_world();
+        let bullet_y = w.body.bullets.y[0];
+        let enemy_i = w.body.enemies.iter_alive().next().unwrap();
+        let enemy_y = w.body.enemies.y[enemy_i];
+        let shot_y = w.body.shots.y[0];
+        let score0 = w.body.players[0].score;
+        let xform_i = w
+            .body
+            .bullets
+            .iter_alive()
+            .find(|&i| w.body.bullets.transform_head[i] != crate::xform::XFORM_NONE)
+            .unwrap();
+        let sprite0 = w.body.bullets.sprite[xform_i];
+        let wait0 = w.body.bullets.xform_wait[xform_i];
+        let cleared_i = w
+            .body
+            .bullets
+            .iter_alive()
+            .find(|&i| w.body.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0)
+            .unwrap();
+        w.body.players[0].x = Fx::ZERO;
+
+        w.body.freeze_left = [10, 0];
+        let mut input = InputFrame::empty(w.frame());
+        input.actions[0].buttons = crate::input::BTN_RIGHT;
+        crate::step::step(&mut w, &TABLES_V0, &busy_ecl_image(), &input);
+
+        assert_eq!(w.body.bullets.y[0], bullet_y, "C 组：敌弹必须冻住");
+        assert_eq!(w.body.enemies.y[enemy_i], enemy_y, "C 组：敌人必须冻住");
+        assert_eq!(w.body.shots.y[0], shot_y, "B 组：自机弹必须冻住");
+        assert_ne!(w.body.players[0].x, Fx::ZERO, "A 组：自机必须还能移动");
+        assert_eq!(
+            w.body.players[0].score, score0,
+            "相位 2 门禁：冻 C 时 ECL 任务不得记分"
+        );
+        assert_eq!(
+            w.body.bullets.sprite[xform_i], sprite0,
+            "相位 4 门禁：sprite 不得改写"
+        );
+        assert_eq!(
+            w.body.bullets.xform_wait[xform_i], wait0,
+            "相位 4 门禁：变换游标不得推进"
+        );
+        assert!(
+            w.body.bullets.is_alive(cleared_i),
+            "相位 9 门禁：已标记清除的弹冻结期间不得被回收"
+        );
+    }
+
+    /// ECL 演出（冻 A+B）：A 组停、C 组跑。与上一条互为镜像。
+    #[test]
+    fn ecl_cutscene_freezes_the_actor_but_not_the_scene() {
+        let mut w = busy_world();
+        let bullet_y = w.body.bullets.y[0];
+        let shot_y = w.body.shots.y[0];
+        let score0 = w.body.players[0].score;
+        let xform_i = w
+            .body
+            .bullets
+            .iter_alive()
+            .find(|&i| w.body.bullets.transform_head[i] != crate::xform::XFORM_NONE)
+            .unwrap();
+        let wait0 = w.body.bullets.xform_wait[xform_i];
+        let cleared_i = w
+            .body
+            .bullets
+            .iter_alive()
+            .find(|&i| w.body.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0)
+            .unwrap();
+        w.body.players[0].x = Fx::ZERO;
+
+        w.body.freeze_left = [0, 10];
+        let mut input = InputFrame::empty(w.frame());
+        input.actions[0].buttons = crate::input::BTN_RIGHT;
+        crate::step::step(&mut w, &TABLES_V0, &busy_ecl_image(), &input);
+
+        assert_ne!(w.body.bullets.y[0], bullet_y, "C 组：敌弹必须照飞");
+        assert_eq!(
+            w.body.shots.y[0], shot_y,
+            "B 组：自机弹仍要冻住（两个方向都冻 B）"
+        );
+        assert_eq!(w.body.players[0].x, Fx::ZERO, "A 组：自机必须被定住");
+        assert_eq!(
+            w.body.players[0].score,
+            score0 + 1,
+            "相位 2 门禁：C 组未冻，ECL 任务该照常记分（镜像上一条的判别）"
+        );
+        assert_ne!(
+            w.body.bullets.xform_wait[xform_i], wait0,
+            "相位 4 门禁：C 组未冻，变换游标该照常推进"
+        );
+        assert!(
+            !w.body.bullets.is_alive(cleared_i),
+            "相位 9 门禁：C 组未冻，已标记清除的弹该被回收"
+        );
+    }
+
+    /// **规则不能照搬**（spec §4）：门禁挂在 C 组、不是"是否冻结"。ECL 演出把自机定住时
+    /// 相位 6/7 照跑 ⇒ 自机**照样会被打死**。写成"冻结即免伤"这条当场红——它守的正是
+    /// 那条推导出来的门禁规则，没有它整个演出会变得毫无威胁。
+    #[test]
+    fn cutscene_freeze_still_lets_the_player_be_hit() {
+        let mut w = World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        crate::world::test_support::bullet_at(&mut w, 0, 384);
+        w.body.freeze_left = [0, 10]; // 冻 A+B，C 跑
+        step_empty(&mut w);
+        assert_eq!(
+            w.body.players[0].life_state,
+            crate::player::LIFE_DEATHWINDOW,
+            "定住玩家的演出期间碰撞照跑，自机该被打进决死窗口"
+        );
+    }
+
+    /// 玩家技能期间相位 6/7 不跑 ⇒ 撞进冻结的弹里也不死（绝对安全窗，裁定 #3）。
+    #[test]
+    fn player_skill_freeze_makes_the_player_untouchable() {
+        let mut w = World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        crate::world::test_support::bullet_at(&mut w, 0, 384);
+        w.body.freeze_left = [10, 0]; // 冻 B+C
+        step_empty(&mut w);
+        assert_eq!(
+            w.body.players[0].life_state,
+            crate::player::LIFE_ALIVE,
+            "冻 C 时相位 6/7 不跑，重合也不该判中弹"
+        );
+    }
+
+    /// 背景停滞不是"什么都不做"就有的：背景由 `frame − bg_phase_frame` 驱动而 frame 恒增，
+    /// 只冻别的会让背景照走。判别力=断言那个**差值**不变，而不是断言某个字段不变。
+    #[test]
+    fn scene_freeze_keeps_the_background_elapsed_time_still() {
+        let mut w = World::new(1);
+        step_empty(&mut w);
+        let elapsed = |w: &World| w.body.frame - w.body.bg_phase_frame;
+        let e0 = elapsed(&w);
+        w.body.freeze_left = [10, 0];
+        step_empty(&mut w);
+        assert_eq!(elapsed(&w), e0, "冻 C 时背景经过的时间不得增长");
+        w.body.freeze_left = [0, 0];
+        step_empty(&mut w);
+        assert_eq!(elapsed(&w), e0 + 1, "解除后背景恢复走时");
+    }
+
+    /// **死锁腿**（spec §5）：两边同时开必须都能解除。取 N=1 与 N=2 两点：只测 N=1 的话
+    /// "恒冻一帧"的错实现照样绿（ENGINE_VER 11→12 的 `wait` 差一帧就是这么被咬的）。
+    ///
+    /// **点火必须走帧内**（导演槽=相位 2），不能在 `step` 外直接赋值：倒计时在相位 0
+    /// `begin` **无条件递减**（spec§5 的死锁解，Task 1 已钉死），所以"帧外设 N 再跑"
+    /// 会被下一帧的 `begin` 先吃掉一格、只冻 N−1 帧。spec§「时序语义（必须钉死）」
+    /// 定义的是**帧内写 N ⇒ 世界恰好少走 N 帧**，本条按那个语义押。
+    #[test]
+    fn both_freezes_always_expire_and_last_exactly_n_frames() {
+        for n in [1u16, 2] {
+            let mut w = busy_world();
+            let y0 = w.body.bullets.y[0];
+            // 第 1 冻结帧：相位 2 点火，本帧相位 3 起即已冻。相位 2（导演槽）跑在
+            // `director` 闭包**之前**，故点火帧本身对 `run_tasks` 而言仍是"冻结前"的
+            // 旧状态——`busy_world()` 挂的任务这一帧会照常尝试跑一次，必须喂真镜像
+            // （空镜像 + 存活任务 = 从空字节数组取指令，越界 panic）。
+            crate::step::step_with_director(
+                &mut w,
+                &TABLES_V0,
+                &busy_ecl_image(),
+                &InputFrame::empty(0),
+                |b| b.freeze_left = [n, n],
+            );
+            assert_eq!(w.body.bullets.y[0], y0, "n={n}：点火当帧起即已冻");
+            for k in 1..n {
+                step_empty(&mut w);
+                assert_eq!(w.body.bullets.y[0], y0, "n={n}：第 {k} 帧仍在冻结中");
+            }
+            step_empty(&mut w);
+            assert_ne!(w.body.bullets.y[0], y0, "n={n}：第 n+1 帧必须已解除");
+            assert_eq!(w.body.freeze_left, [0, 0], "n={n}：两个倒计时都必须归零");
+        }
+    }
+
+    /// **符卡不白嫖**（spec §4 的白送后果）：符卡计时住相位 7 尾，冻 C ⇒ 相位 7 不跑 ⇒
+    /// 时停期间符卡**不倒计时**，没法用时停拖过 survival 卡。
+    /// 判别力=断言"恰好少走 N"而不是"变小了"：门禁若漏了相位 7，frames_left 会照常走。
+    #[test]
+    fn player_skill_freeze_does_not_burn_spell_time() {
+        let mut w = World::new(1);
+        let boss = crate::world::test_support::spawn_enemy(&mut w, 0, 100, 1000);
+        // 实际签名（spell.rs）：(slot, boss, spell_id, time_limit, bonus0, flags, hp_threshold)
+        assert!(w.body.spell_begin_internal(0, boss, 1, 300, 1000, 0, 100));
+        step_empty(&mut w);
+        let left0 = w.body.spells[0].frames_left;
+
+        const N: u16 = 5;
+        // 点火走帧内（同 both_freezes_* 的时序说明）：帧外赋值会被 begin 吃掉一格。
+        crate::step::step_with_director(
+            &mut w,
+            &TABLES_V0,
+            &crate::ecl::image::EclImage::empty(),
+            &InputFrame::empty(0),
+            |b| b.freeze_left = [N, 0],
+        );
+        for _ in 1..N {
+            step_empty(&mut w);
+        }
+        assert_eq!(
+            w.body.spells[0].frames_left, left0,
+            "冻 C 期间符卡不得倒计时"
+        );
+        step_empty(&mut w);
+        assert_eq!(w.body.spells[0].frames_left, left0 - 1, "解除后恢复走时");
+    }
+
+    /// **蓄水池**（本机制的核心效果）：时停中按住射击 ⇒ 自机弹**数量增长**（发弹在 A 组、
+    /// 照跑）而**每颗坐标逐位不变**（飞行在 B 组、冻住）。
+    /// 判别力=两件都断：只断数量的话"弹照飞"也绿；只断坐标的话"根本没发出来"也绿。
+    #[test]
+    fn time_stop_stockpiles_frozen_player_shots() {
+        let mut w = World::new(1);
+        w.body.freeze_left = [60, 0];
+        let fire = |w: &mut World| {
+            let mut input = InputFrame::empty(w.frame());
+            input.actions[0].buttons = crate::input::BTN_SHOT;
+            crate::step::step(w, &TABLES_V0, &crate::ecl::image::EclImage::empty(), &input);
+        };
+        fire(&mut w);
+        let n1 = w.body.shots.iter_alive().count();
+        assert!(n1 > 0, "发弹在 A 组，时停期间照常产出");
+        let snapshot: Vec<(Fx, Fx)> = w
+            .body
+            .shots
+            .iter_alive()
+            .map(|i| (w.body.shots.x[i], w.body.shots.y[i]))
+            .collect();
+
+        for _ in 0..20 {
+            fire(&mut w);
+        }
+        // Task 3 复审 carryover (b)：只断言"变多了"守不住这条性质——冻结世界里弹飞出场外、
+        // 相位 9 回收低位槽、同帧新弹又在同一出生坐标补位，坐标逐位不变的断言照样绿，
+        // 巧合地"看起来对了"。断数量才能把这条巧合路径掐掉：`shot_timer` 计时器持续
+        // 持住（先判后加，interval=4/delay=0，见 `char0_update_shot`），首帧 timer=0 已发
+        // 一发（n1），随后 20 帧 pre-increment 值依次为 1..=20，命中 `%4==0` 的恰好
+        // 4/8/12/16/20 共 5 次 ⇒ 应恰好新增 5 发，不多不少。
+        assert_eq!(
+            w.body.shots.iter_alive().count(),
+            n1 + 5,
+            "弹应恰好持续堆积 5 发（不是碰巧数量对得上）"
+        );
+        // 头 n1 颗（低索引，I4 分配序）必须一动没动
+        for (k, &(x, y)) in snapshot.iter().enumerate() {
+            let i = w.body.shots.iter_alive().nth(k).unwrap();
+            assert_eq!(
+                (w.body.shots.x[i], w.body.shots.y[i]),
+                (x, y),
+                "第 {k} 颗必须冻在出发点"
+            );
+        }
     }
 }

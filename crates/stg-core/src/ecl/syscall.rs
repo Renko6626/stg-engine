@@ -55,11 +55,11 @@ use crate::xform::XformSlot;
 
 // 0xx `$` 引擎变量（12；与 parse.rs::resolve_engine_var 白名单一一对应）／1xx 查询（10；
 // 函数形态读口 + 纯数学）／2xx 造物（4）／3xx 弹操作（9；self owner 必须是 BULLET；按
-// motion.rs 九连顺序编号）／4xx 敌运动（5；对齐 ZUN 4xx）／5xx 局面·记账·道具（12；
+// motion.rs 九连顺序编号）／4xx 敌运动（5；对齐 ZUN 4xx）／5xx 局面·记账·道具（14；
 // 对齐 ZUN 5xx 的 drops；owner 类别无限制，STAGE 任务常发）／6xx shooter（15；对齐 ZUN
 // 6xx 的 et*）／7xx 控制·事件·符卡·globals（7）。
 //
-// 下方 74 个常量的**物理顺序沿用历史累加顺序（append-order）**，不随本刀按族重排位置——
+// 下方 76 个常量的**物理顺序沿用历史累加顺序（append-order）**，不随本刀按族重排位置——
 // 每个常量的族由其**取值的百位**决定，不由物理位置决定；见文件头总纲。
 pub const SYS_FRAME: u16 = 0;
 pub const SYS_PLAYER_X: u16 = 10;
@@ -113,6 +113,14 @@ pub const SYS_PULSE_SIGNAL: u16 = 710;
 /// 通道 B 渲染请求推送（M2 前置刀；D12/spec §2.5）。无 owner 类别限制——宣言/音效/震屏
 /// 常由 STAGE 任务发。
 pub const SYS_EMIT_REQ: u16 = 720;
+/// 定位一次性演出（721；表现契约 v2；对应 ZUN `anmPlayPos`）：4 参 `x, y, kind, param`、
+/// 无返回、owner 无限制。= `emit_req(REQ_FX_AT, [x raw, y raw, kind, param, 0, 0])` 的钉死
+/// 布局版——`kind`/`param` 语义归内容包与壳侧约定，引擎不解释。即发即忘类。
+pub const SYS_FX_AT: u16 = 721;
+/// 依附一次性演出（722；对应 ZUN `anmPlay`）：2 参 `kind, param`、无返回、**self-only**
+/// （owner 非 ENEMY → Fault(0)）。发 `REQ_FX_ATTACHED, [index, gen, kind, param, 0, 0]`，
+/// 句柄取自 owner 敌；壳侧按 `(index, gen)` 每帧跟随、句柄失效即自毁。即发即忘类。
+pub const SYS_FX_ON: u16 = 722;
 /// 符卡宣言（符卡机构 spec 2026-07-24 §5）：owner 必须 ENEMY（misuse → Fault）；7 参
 /// 正序压栈 `slot, spell_id, pattern:SubRef, time_limit, bonus0, flags, hp_threshold`
 /// （`pattern` 同 `fire` task 参同款 `SubRef`，负值=none）。
@@ -145,6 +153,10 @@ pub const SYS_BGM: u16 = 550;
 pub const SYS_BG: u16 = 551;
 /// 1 参：`n`。写 `bg_phase` + 自动盖 `bg_phase_frame` = 当前帧 + 发 `REQ_BG_PHASE`。
 pub const SYS_BG_PHASE: u16 = 552;
+/// 停住**自机**的时间（自机能力刀，ECL 演出方向）：写 `freeze_left[1]` ⇒ 冻 A+B
+/// （自机不能移动/发新弹，已在场上的自机弹也冻住），敌方照常行动。
+/// `frames = 0` 即**立即解除**；重入取覆盖（后写为准）。
+pub const SYS_TIME_STOP_PLAYER: u16 = 560;
 /// 全场清弹（B19；0 参、无返回）。铺一个覆盖全场、`life=1` 的 `FIELD_CLEAR_BULLETS`
 /// 作用区——**复用现成的消弹区机制**，故"每颗被消的弹原位转一颗星星"（M0-15）与
 /// `EVT_FIELD_CLEARED` 都是白送的，引擎侧零新机制（同 `settle_one_spell` 的全屏清弹样板）。
@@ -168,6 +180,8 @@ pub const SYS_ADD_BOMBS: u16 = 511;
 /// = 显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 索引就 OOB（见
 /// `world::WorldBody::set_player_power` 文档）。增量形态同为人类裁定。
 pub const SYS_ADD_POWER: u16 = 512;
+/// 时停次数增量（自机能力刀）。语义同 [`SYS_ADD_LIVES`]，钳 `[0, u8::MAX]`。
+pub const SYS_ADD_TIME_STOPS: u16 = 513;
 /// 清空自身待掉落计数（520；0 参、无返回。敌人死亡效果刀，参照 ZUN ECL 的 `dropClear` 506）。
 /// self owner 必须是 ENEMY，否则 Fault（misuse 策略，同 `move_enemy_to`）。
 pub const SYS_DROP_CLEAR: u16 = 520;
@@ -314,6 +328,12 @@ pub const SYS_MOVE_VEL_XY: u16 = 411;
 pub const SYS_MOVE_ANGLE: u16 = 420;
 /// 只调速、保持方向（421；ZUN `444 moveSpeed`）：3 参正序 `dur, speed, easing`。
 pub const SYS_MOVE_SPEED: u16 = 421;
+/// 敌人表现状态号（430；表现契约 v2，2026-09-07；对应 ZUN `anmSelect`/`anmSetMain`/
+/// `anmInterrupt` 那族的**电平版**）。1 参 `state`、无返回；**self-only**（owner 非 ENEMY →
+/// Fault(0)，同 400 族）。写 `anm_state = state as u16` 并**无条件**盖 `anm_state_frame =
+/// 当前帧——同状态重设 = 重播。世界不解释状态号；表现层按 `(sprite, anm_state, state_age)`
+/// 选帧（`render-contract.md` §7）。`state` 截 u16（负数/超界折叠，同 sprite 号口径）。
+pub const SYS_SET_ANM_STATE: u16 = 430;
 
 // （原 "── $self_* 速度引擎变量（87-90）──" 族——本四条新表里落 0xx `$` 引擎变量族，
 // 见文件头总纲；T5；白名单 8→12）
@@ -336,13 +356,13 @@ pub const SYS_SELF_ANGLE: u16 = 25;
 /// （百分区制下号非连续，同 [`crate::ecl::ops::op_implemented`] 的纪律）。不在表内的号
 /// 由 `dispatch` 的兜底臂返 `FAULT_BAD_OP`。
 ///
-/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、74 条结构测试的表是 `cfg(test)`，
+/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、79 条结构测试的表是 `cfg(test)`，
 /// 编译器 crate 两个都够不着）：`stg-ecl-compiler` 的 `builtins::BUILTINS` 要能断言
 /// "`is_op == false` 的条目，其 `syscall` 字段装的确实是个会被派发的号"。见
 /// `builtins.rs::builtin_dispatch_kind_matches_what_the_field_holds`。
 ///
 /// **与 `dispatch` 的同步靠测试押运，不靠自律**：`syscall_whitelist_matches_the_frozen_table`
-/// 断言"全 `u16` 域里为真的号恰好是那 74 条"，漏一条/多一条即红。
+/// 断言"全 `u16` 域里为真的号恰好是那 79 条"，漏一条/多一条即红。
 pub const fn syscall_implemented(no: u16) -> bool {
     matches!(
         no,
@@ -391,11 +411,13 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_MOVE_VEL_XY
             | SYS_MOVE_ANGLE
             | SYS_MOVE_SPEED
+            | SYS_SET_ANM_STATE
             // 5xx 局面·记账·道具
             | SYS_ADD_SCORE
             | SYS_ADD_LIVES
             | SYS_ADD_BOMBS
             | SYS_ADD_POWER
+            | SYS_ADD_TIME_STOPS
             | SYS_DROP_CLEAR
             | SYS_DROP_ADD
             | SYS_DROP_ITEMS
@@ -404,6 +426,7 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_BGM
             | SYS_BG
             | SYS_BG_PHASE
+            | SYS_TIME_STOP_PLAYER
             // 6xx shooter
             | SYS_SH_RESET
             | SYS_SH_SPRITE
@@ -425,6 +448,8 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_SET_VAR
             | SYS_PULSE_SIGNAL
             | SYS_EMIT_REQ
+            | SYS_FX_AT
+            | SYS_FX_ON
             | SYS_BOSS_SET
             | SYS_SPELL_BEGIN
             | SYS_SPELL_END
@@ -807,6 +832,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_MOVE_VEL_XY => sys_move_vel_xy(task, ctx),
         SYS_MOVE_ANGLE => sys_move_angle(task, ctx),
         SYS_MOVE_SPEED => sys_move_speed(task, ctx),
+        SYS_SET_ANM_STATE => sys_set_anm_state(task, ctx),
 
         // ── 5xx 局面·记账·道具 ──────────────────────────────────────────────
         SYS_ADD_SCORE => {
@@ -843,6 +869,14 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
                 .clamp(0, crate::items::POWER_MAX as i32) as u16;
             Ok(())
         }
+        SYS_ADD_TIME_STOPS => {
+            let d = pop(task)?;
+            let p = &mut ctx.body.players[0];
+            p.time_stops = (p.time_stops as i32)
+                .saturating_add(d)
+                .clamp(0, u8::MAX as i32) as u8;
+            Ok(())
+        }
         // 敌人死亡效果四件（520-530）：一律经 `WorldBody` 的 handle 写 API（P1：调用方
         // 永不直接摸池内存），self owner 必须是敌（misuse → Fault，同 `move_enemy_to`）。
         SYS_DROP_CLEAR => {
@@ -876,6 +910,17 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_BGM => sys_anchor_u16(task, ctx, AnchorKind::Bgm),
         SYS_BG => sys_anchor_u16(task, ctx, AnchorKind::Bg),
         SYS_BG_PHASE => sys_anchor_u16(task, ctx, AnchorKind::BgPhase),
+        SYS_TIME_STOP_PLAYER => {
+            let n = pop(task)?;
+            // D19 判例：越界 → P4-b 整条 no-op + 计数 + BAD_ARGS，不钳位、不 Fault。
+            let Ok(frames) = u16::try_from(n) else {
+                ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+                ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+                return Ok(());
+            };
+            ctx.body.freeze_left[1] = frames;
+            Ok(())
+        }
 
         // ── 6xx shooter ──────────────────────────────────────────────────────
         // Shooter 配置面 600-652（参数**逆序弹出**，照 `sys_move_enemy_to`；`id` 是首参、
@@ -1067,6 +1112,8 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             Ok(())
         }
         SYS_EMIT_REQ => sys_emit_req(task, ctx),
+        SYS_FX_AT => sys_fx_at(task, ctx),
+        SYS_FX_ON => sys_fx_on(task, ctx),
         SYS_BOSS_SET => sys_boss_set(task, ctx),
         SYS_SPELL_BEGIN => sys_spell_begin(task, ctx),
         SYS_SPELL_END => sys_spell_end(task, ctx),
@@ -1254,6 +1301,7 @@ fn sys_sh_fire(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
                 transform_head: crate::xform::XFORM_NONE,
                 xform_wait: 0,
                 xform_next: 0,
+                born_frame: ctx.body.frame,
             };
             let handle = if xform_len == 0 {
                 ctx.body.create_bullet(init)
@@ -1446,6 +1494,7 @@ fn sys_create_bullet(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
         transform_head: crate::xform::XFORM_NONE,
         xform_wait: 0,
         xform_next: 0,
+        born_frame: ctx.body.frame,
     };
 
     let handle = if xform_len == 0 {
@@ -1524,6 +1573,7 @@ fn sys_create_bullets_batch(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> 
         transform_head: crate::xform::XFORM_NONE,
         xform_wait: 0,
         xform_next: 0,
+        born_frame: ctx.body.frame,
     };
 
     let n = ctx.body.create_bullets_batch(
@@ -1612,6 +1662,7 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
         flags: 0,
         sprite: sprite as u16,
         anm_state: 0,
+        anm_state_frame: ctx.body.frame,
         main_task: 0, // 任务 spawn 后回填（敌句柄先于任务存在）
         death_script: 0,
         drop_count,
@@ -1813,6 +1864,42 @@ fn sys_emit_req(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
         return Ok(());
     }
     ctx.body.emit_req(id as u16, [a0, a1, a2, a3, a4, a5]);
+    Ok(())
+}
+
+/// 敌人表现状态号（[`SYS_SET_ANM_STATE`]=430）：1 参逆序弹出；self-only（非敌 → Fault）。
+/// 悬垂 owner 句柄由世界层 `set_anm_state` 计 P4-b（no-op + `STALE_HANDLE`）。
+fn sys_set_anm_state(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    let state = pop(task)?;
+    ctx.body.set_anm_state(h, state as u16);
+    Ok(())
+}
+
+/// 定位一次性演出（[`SYS_FX_AT`]=721）：4 参逆序弹出，owner 无限制。布局钉死为
+/// `REQ_FX_AT, [x raw, y raw, kind, param, 0, 0]`；缓冲满走 D12（丢弃 + `reqs_dropped`）。
+fn sys_fx_at(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let param = pop(task)?;
+    let kind = pop(task)?;
+    let y_raw = pop(task)?;
+    let x_raw = pop(task)?;
+    ctx.body
+        .emit_req(crate::consts::REQ_FX_AT, [x_raw, y_raw, kind, param, 0, 0]);
+    Ok(())
+}
+
+/// 依附一次性演出（[`SYS_FX_ON`]=722）：2 参逆序弹出；self-only（非敌 → Fault）。
+/// 布局钉死为 `REQ_FX_ATTACHED, [index, gen, kind, param, 0, 0]`——**裸 index/gen 两位**，
+/// 不用 `pack_enemy_handle` 的打包形态（那是脚本值域内的敌号；请求载荷给壳侧，两位分开
+/// 免得壳侧再拆包）。
+fn sys_fx_on(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    let param = pop(task)?;
+    let kind = pop(task)?;
+    ctx.body.emit_req(
+        crate::consts::REQ_FX_ATTACHED,
+        [h.index as i32, h.generation as i32, kind, param, 0, 0],
+    );
     Ok(())
 }
 
@@ -2027,10 +2114,12 @@ mod tests {
             (SYS_MOVE_VEL_XY, "move_vel_xy", 4),
             (SYS_MOVE_ANGLE, "move_angle", 4),
             (SYS_MOVE_SPEED, "move_speed", 4),
+            (SYS_SET_ANM_STATE, "set_anm_state", 4),
             (SYS_ADD_SCORE, "add_score", 5),
             (SYS_ADD_LIVES, "add_lives", 5),
             (SYS_ADD_BOMBS, "add_bombs", 5),
             (SYS_ADD_POWER, "add_power", 5),
+            (SYS_ADD_TIME_STOPS, "add_time_stops", 5),
             (SYS_DROP_CLEAR, "drop_clear", 5),
             (SYS_DROP_ADD, "drop_add", 5),
             (SYS_DROP_ITEMS, "drop_items", 5),
@@ -2039,6 +2128,7 @@ mod tests {
             (SYS_BGM, "bgm", 5),
             (SYS_BG, "bg", 5),
             (SYS_BG_PHASE, "bg_phase", 5),
+            (SYS_TIME_STOP_PLAYER, "time_stop_player", 5),
             (SYS_SH_RESET, "sh_reset", 6),
             (SYS_SH_SPRITE, "sh_sprite", 6),
             (SYS_SH_OFFSET, "sh_offset", 6),
@@ -2058,13 +2148,16 @@ mod tests {
             (SYS_SET_VAR, "set_var", 7),
             (SYS_PULSE_SIGNAL, "pulse_signal", 7),
             (SYS_EMIT_REQ, "emit_req", 7),
+            (SYS_FX_AT, "fx_at", 7),
+            (SYS_FX_ON, "fx_on", 7),
             (SYS_BOSS_SET, "boss_set", 7),
             (SYS_SPELL_BEGIN, "spell_begin", 7),
             (SYS_SPELL_END, "spell_end", 7),
         ]
     }
 
-    /// 【本刀的主判据】号表族结构：74 条、无重号、每条落在其声明族的百位区间内。
+    /// 【本刀的主判据】号表族结构：79 条、无重号、每条落在其声明族的百位区间内
+    /// （原 74 条 + 自机能力刀 `513`/`560` = 76；表现契约 v2 再加 `430 set_anm_state`/`721 fx_at`/`722 fx_on` = 79）。
     ///
     /// 这一刀是大规模机械重排，判别力要求与常规刀不同——不是"新行为对不对"，而是
     /// "**有没有搬错、搬漏、搬重**"。故判据是号表自身的结构性质，不是某条 syscall 的行为。
@@ -2090,7 +2183,11 @@ mod tests {
     fn syscall_table_is_hundred_partitioned_and_unique() {
         let table = frozen_table();
 
-        assert_eq!(table.len(), 74, "74 进 74 出：本刀不增不减一条");
+        assert_eq!(
+            table.len(),
+            79,
+            "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）= 79：增改需同步这个数"
+        );
 
         // (a) 族归属：搬错族立刻红
         for &(num, name, fam) in table {
@@ -2102,7 +2199,7 @@ mod tests {
             );
         }
 
-        // (b) 两两不等：搬重立刻红（O(n²) 但 n=74，测试里无所谓）
+        // (b) 两两不等：搬重立刻红（O(n²) 但 n=76，测试里无所谓）
         for (i, &(a, na, _)) in table.iter().enumerate() {
             for &(b, nb, _) in &table[i + 1..] {
                 assert_ne!(a, b, "{na} 与 {nb} 撞号（都是 {a}）");
@@ -2255,7 +2352,7 @@ mod tests {
     ///
     /// 两个方向都断言（缺一个就只是半张网）：
     /// - **文档 → 常量**：文档里出现的每个 `(号, 名)` 对都得在 [`frozen_table`] 里；
-    /// - **常量 → 文档**：74 条常量每条都得在文档里出现，**漏记一条即红**。
+    /// - **常量 → 文档**：79 条常量每条都得在文档里出现，**漏记一条即红**。
     ///
     /// **它还有第二重职责，别只当它是"防文档漂移"**：本条是**全仓唯一**能抓到
     /// **族内互换**（号换了、族没换，如 `SYS_ATAN2` ↔ `SYS_DIST`）的测试。
@@ -2272,8 +2369,8 @@ mod tests {
         let (doc_pairs, loose) = parse_doc_number_table();
 
         assert!(
-            doc_pairs.len() >= 74,
-            "只从 ecl-ops.md 解析出 {} 个 (号,名) 对，远少于 74——解析器多半没跟上排版变更",
+            doc_pairs.len() >= 79,
+            "只从 ecl-ops.md 解析出 {} 个 (号,名) 对，远少于 79——解析器多半没跟上排版变更",
             doc_pairs.len()
         );
 
@@ -2506,6 +2603,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
@@ -2963,6 +3061,7 @@ mod tests {
                 transform_head: 0xFFFF,
                 xform_wait: 0,
                 xform_next: 0,
+                born_frame: 0,
             });
         }
         let mut task = Task::default();
@@ -4401,6 +4500,65 @@ mod tests {
         assert_eq!(w.body.players[0].score, u64::MAX, "上溢钳 u64::MAX");
     }
 
+    // ── SYS_TIME_STOP_PLAYER（560；自机能力刀 T6）───────────────────────────
+
+    /// 写 freeze_left[1]（冻 A+B），不碰 [0]。
+    #[test]
+    fn sys_time_stop_player_writes_the_cutscene_slot() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_TIME_STOP_PLAYER, &[90]).is_ok());
+        assert_eq!(w.body.freeze_left, [0, 90]);
+    }
+
+    /// 重入取**覆盖**（后写为准），不取最大、不叠加：脚本是权威，覆盖可预测。
+    /// 判别力：先写大值再写小值——取最大或叠加的实现在这里会给出 ≥ 90 的值。
+    #[test]
+    fn sys_time_stop_player_reentry_overwrites() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_TIME_STOP_PLAYER, &[90]).is_ok());
+        assert!(call(&mut w, &ecl, &mut task, SYS_TIME_STOP_PLAYER, &[10]).is_ok());
+        assert_eq!(w.body.freeze_left[1], 10, "后写为准");
+    }
+
+    /// `time_stop_player(0)` = **立即解除**，天然的取消 API（不另开 syscall）。
+    #[test]
+    fn sys_time_stop_player_zero_cancels() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        w.body.freeze_left[1] = 50;
+        assert!(call(&mut w, &ecl, &mut task, SYS_TIME_STOP_PLAYER, &[0]).is_ok());
+        assert_eq!(w.body.freeze_left[1], 0);
+    }
+
+    /// 参数收窄照 D19 判例：`u16::try_from` 失败 ⇒ P4-b **整条 no-op**、计 contract_viol
+    /// 与 BAD_ARGS，**不钳位、不 Fault**。判别力：负值与 65536 各一腿——钳位实现会给出
+    /// 0 或 65535 而非"原值不动"。
+    #[test]
+    fn sys_time_stop_player_rejects_out_of_range() {
+        for bad in [-1i32, 65536] {
+            let (mut w, ecl) = fresh();
+            let mut task = Task::default();
+            w.body.freeze_left[1] = 7;
+            let cv0 = w.body.diag.contract_viol;
+            assert!(
+                call(&mut w, &ecl, &mut task, SYS_TIME_STOP_PLAYER, &[bad]).is_ok(),
+                "P4-b 是安全结果不是 Fault"
+            );
+            assert_eq!(
+                w.body.freeze_left[1], 7,
+                "越界 {bad} 必须整条 no-op（不钳位）"
+            );
+            assert_eq!(
+                w.body.diag.contract_viol,
+                cv0 + 1,
+                "越界 {bad} 须计一次违约"
+            );
+            assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        }
+    }
+
     // ── SYS_CLEAR_BULLETS（B19；整局流程刀 Task 2）──────────────────────────
 
     /// B19：`clear_bullets()` 铺一个覆盖全场、存活 1 帧的消弹区。
@@ -4600,6 +4758,27 @@ mod tests {
         );
         assert!(call(&mut w, &ecl, &mut task, SYS_ADD_POWER, &[i32::MIN]).is_ok());
         assert_eq!(w.body.players[0].power, 0, "i32::MIN 应钳到 0");
+    }
+
+    // ── SYS_ADD_TIME_STOPS（513；自机能力刀 T5）─────────────────────────────
+
+    /// 语义照抄 510/511/512：允许负、饱和加、钳 [0, u8::MAX]。判别力=三点（正/负/溢出），
+    /// 只测正数的话裸 `+`（debug 下 255+i32::MAX 会 panic）也能过。
+    #[test]
+    fn sys_add_time_stops_saturates_like_its_siblings() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        w.body.players[0].time_stops = 1;
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_TIME_STOPS, &[2]).is_ok());
+        assert_eq!(w.body.players[0].time_stops, 3);
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_TIME_STOPS, &[-9]).is_ok());
+        assert_eq!(w.body.players[0].time_stops, 0, "扣穿停在 0，不回绕");
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_TIME_STOPS, &[i32::MAX]).is_ok());
+        assert_eq!(
+            w.body.players[0].time_stops,
+            u8::MAX,
+            "上钳 u8::MAX，不 panic"
+        );
     }
 
     // ── 敌人死亡效果四 syscall（520-530；敌人死亡效果刀 T3）────────────────────
@@ -5275,6 +5454,7 @@ mod tests {
             transform_head: crate::xform::XFORM_NONE,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         }
     }
 
@@ -6701,5 +6881,144 @@ mod tests {
         assert_eq!(read_enemy_port(&mut w, &ecl, SYS_ENEMY_X, ALIAS), 0);
         assert_eq!(read_enemy_port(&mut w, &ecl, SYS_ENEMY_Y, ALIAS), 0);
         assert_eq!(read_enemy_port(&mut w, &ecl, SYS_ENEMY_ALIVE, ALIAS), 0);
+    }
+
+    // ── 表现契约 v2（2026-09-07）：430 set_anm_state / 721 fx_at / 722 fx_on / born_frame ──
+
+    /// 430：写状态并盖帧；**同状态重设也盖**（= 重播，ZUN interrupt 重触发语义）。
+    #[test]
+    fn set_anm_state_restamps_frame_even_for_same_state() {
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let mut task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        let i = eh.index as usize;
+        w.body.frame = 10;
+        assert!(call(&mut w, &ecl, &mut task, SYS_SET_ANM_STATE, &[3]).is_ok());
+        assert_eq!(w.body.enemies.anm_state[i], 3);
+        assert_eq!(w.body.enemies.anm_state_frame[i], 10);
+        w.body.frame = 25;
+        assert!(call(&mut w, &ecl, &mut task, SYS_SET_ANM_STATE, &[3]).is_ok());
+        assert_eq!(w.body.enemies.anm_state[i], 3, "状态不变");
+        assert_eq!(w.body.enemies.anm_state_frame[i], 25, "帧号必须重盖");
+        assert_eq!(w.body.diag.contract_viol, 0);
+    }
+
+    /// 430 / 722 self-only：owner 非 ENEMY → Fault（同 400 族误用策略）；栈不留垃圾。
+    #[test]
+    fn set_anm_state_and_fx_on_fault_on_non_enemy_owner() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default(); // STAGE owner
+        assert_eq!(
+            call(&mut w, &ecl, &mut task, SYS_SET_ANM_STATE, &[1]),
+            Err(FAULT_BAD_OP)
+        );
+        let mut task = Task::default();
+        assert_eq!(
+            call(&mut w, &ecl, &mut task, SYS_FX_ON, &[1, 2]),
+            Err(FAULT_BAD_OP)
+        );
+        assert!(w.body.take_requests().is_empty(), "Fault 路径不得发请求");
+    }
+
+    /// 721：布局钉死 `REQ_FX_AT, [x raw, y raw, kind, param, 0, 0]`；owner 无限制。
+    #[test]
+    fn fx_at_emits_pinned_request_layout() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let args = [Fx::from_int(12).raw(), Fx::from_int(-34).raw(), 7, 99];
+        assert!(call(&mut w, &ecl, &mut task, SYS_FX_AT, &args).is_ok());
+        let r = w.body.take_requests();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].id, crate::consts::REQ_FX_AT);
+        assert_eq!(
+            r[0].args,
+            [Fx::from_int(12).raw(), Fx::from_int(-34).raw(), 7, 99, 0, 0]
+        );
+        assert_eq!(task.sp, 0, "无返回值，栈应回到空");
+    }
+
+    /// 722：布局钉死 `REQ_FX_ATTACHED, [index, gen, kind, param, 0, 0]`，句柄取自 owner。
+    #[test]
+    fn fx_on_emits_owner_handle_as_two_raw_slots() {
+        let (mut w, ecl) = fresh();
+        let eh = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
+        let mut task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: eh.index,
+            owner_gen: eh.generation,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut task, SYS_FX_ON, &[5, -8]).is_ok());
+        let r = w.body.take_requests();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].id, crate::consts::REQ_FX_ATTACHED);
+        assert_eq!(
+            r[0].args,
+            [eh.index as i32, eh.generation as i32, 5, -8, 0, 0]
+        );
+    }
+
+    /// 弹的三条创建路径都盖 `born_frame = 创建帧`（spec §3.1）：fire(200) / batch(201) /
+    /// sh_fire(660)。帧号取 42 而非 0——零初始化的槽也是 0，0 无判别力。
+    #[test]
+    fn all_three_bullet_creation_paths_stamp_born_frame() {
+        let (mut w, ecl) = fresh();
+        w.body.frame = 42;
+        // fire
+        let mut task = Task::default();
+        let args = [ROW_B, 0, 0, Fx::from_int(1).raw(), 0, 0, 0, -1];
+        assert!(call(&mut w, &ecl, &mut task, SYS_CREATE_BULLET, &args).is_ok());
+        let i = task.stack[0] as usize;
+        assert_eq!(w.body.bullets.born_frame[i], 42, "fire 路径");
+        // batch：3 颗
+        let mut task = Task::default();
+        let n0 = w.body.bullets.iter_alive().count();
+        // 正序：appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step
+        let args = [ROW_B, 0, 0, 3, 0, 1000, 1, Fx::from_int(1).raw(), 0];
+        assert!(call(&mut w, &ecl, &mut task, SYS_CREATE_BULLETS_BATCH, &args).is_ok());
+        assert!(w.body.bullets.iter_alive().count() > n0, "batch 至少造了弹");
+        for j in w.body.bullets.iter_alive() {
+            assert_eq!(w.body.bullets.born_frame[j], 42, "batch 路径槽 {j}");
+        }
+        // sh_fire：reset 槽 0 → sprite ROW_B → 开火
+        let mut task = Task::default();
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_RESET, &[0]).is_ok());
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_SPRITE, &[0, ROW_B]).is_ok());
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_COUNT, &[0, 2, 1]).is_ok());
+        let n1 = w.body.bullets.iter_alive().count();
+        assert!(call(&mut w, &ecl, &mut task, SYS_SH_FIRE, &[0]).is_ok());
+        assert!(
+            w.body.bullets.iter_alive().count() > n1,
+            "sh_fire 至少造了弹"
+        );
+        for j in w.body.bullets.iter_alive() {
+            assert_eq!(w.body.bullets.born_frame[j], 42, "sh_fire 路径槽 {j}");
+        }
+    }
+
+    /// `spawn_enemy`（210）盖 `anm_state_frame = 创建帧`、`anm_state = 0`。
+    #[test]
+    fn spawn_enemy_stamps_anm_state_frame() {
+        let (mut w, ecl) = fresh();
+        w.body.frame = 42;
+        let mut task = Task::default();
+        let args = [
+            Fx::from_int(5).raw(),
+            Fx::from_int(6).raw(),
+            42,
+            1,
+            100,
+            0,
+            -1,
+        ];
+        assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
+        let i = enemy_slot(task.stack[0]);
+        assert_eq!(w.body.enemies.anm_state[i], 0);
+        assert_eq!(w.body.enemies.anm_state_frame[i], 42);
     }
 }

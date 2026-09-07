@@ -121,6 +121,11 @@ impl WorldBody {
 
     pub(crate) fn settle(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_SETTLE);
+        // 同 collide，spec §4：门禁挂 C 组、不是"是否冻结"。顺手堵上一个漏洞——符卡
+        // 计时住本相位尾（`settle_spells`）⇒ 冻 C 时符卡不倒计时，没法用时停白嫖 survival 卡。
+        if self.scene_frozen() {
+            return;
+        }
         // ── 趟一 · 清除/防护：行 6 消弹 ──────────────────────────────────
         // **只标记不回收**（趟二/趟三随后按索引读这颗弹；回收在相位 9 cleanup）。
         // **先于趟二**——故同帧作用区能救下本会命中自机的弹（bomb 救命）。
@@ -505,6 +510,7 @@ mod tests {
             transform_head: 0xFFFF,
             xform_wait: 0,
             xform_next: 0,
+            born_frame: 0,
         });
         // 弹静止、贴着自机 → 连跑 3 帧，graze 只 +1（grazed_by 逐弹一次）
         for _ in 0..3 {
@@ -778,6 +784,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, 1).0,
@@ -1186,6 +1193,7 @@ mod tests {
             flags: 0,
             sprite: 0,
             anm_state: 0,
+            anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
             drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, table).0,

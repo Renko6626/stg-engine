@@ -43,7 +43,7 @@ godot --path godot                        # 无 X 环境见下面的 headless �
 godot --headless --path godot -- --smoke      # Windows 同样可用(PowerShell/CMD 直接跑)
 ```
 
-打出 `SMOKE OK` 且退出码 0 = 扩展加载成功 + 四层 MultiMesh 注册通过 + demo 局两次开机(正常/中段)
+打出 `SMOKE OK` 且退出码 0 = 扩展加载成功 + 三层 MultiMesh 注册通过 + 敌人木偶喂料接上 + demo 局两次开机(正常/中段)
 断言全绿。Linux 上另有一键脚本 `bash godot/smoke/run-smoke.sh`(自带 `cargo build`、首跑
 `--import`、Godot 版本闸与超时;Windows 上用 Git Bash/WSL 才有 bash,或者直接跑上面那条原始命令)。
 
@@ -86,9 +86,17 @@ cargo run -p stg-harness -- check godot/ecl/demo
 3. Godot 版本 ≥ 4.6;
 4. 删掉 `godot/.godot/` 让它重扫一遍。
 
-## 已知未验(截至 2026-07-26)
+## 有头目验:`--shots` 截图模式(2026-09-07 起)
 
-本工程整条链路是在**无 GPU / 无 X 的服务器**上写完并靠 headless 冒烟验收的,画面从没被人眼看过。
-首次在有显示器的机器上跑,请顺手判决 [`../docs/follow-ups.md`](../docs/follow-ups.md) **B26**
-列的三件事:图集 UV 垂直朝向(B23,占位图元上下对称所以 headless 判不出)、`visible_instances`
-可断言性(B18)、以及"可玩"本身的目验(手感/字体/演出)。
+没有显示器也能"看":`main.gd` 的 `--shots` 模式用脚本化输入跑 demo(常按射击、60–75 帧向左、
+200 帧放 bomb),在若干帧把弹幕域存成 PNG(目录 `$STG_SHOTS_DIR`,默认 `user://shots`),首次敌死
+后第 4 帧补一张,最后一张后自退;同时打印各层 `visible_instances` 真值。需要真渲染器——本开发机
+走 VNC 桌面 + llvmpipe:
+
+```bash
+DISPLAY=:2 LIBGL_ALWAYS_SOFTWARE=1 MESA_LOADER_DRIVER_OVERRIDE=llvmpipe STG_SHOTS_DIR=/tmp/shots \
+  godot --rendering-driver opengl3 --path godot -- --shots
+```
+
+有显示器的机器直接 `godot --path godot -- --shots` 即可。判读清单见
+[`../docs/render-contract.md`](../docs/render-contract.md) §7/§8。

@@ -16,6 +16,13 @@ use crate::tables::WorldTables;
 impl WorldBody {
     pub(crate) fn collide(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_COLLIDE);
+        // spec §4：相位 6/7 的门禁挂在 **C 组是否在跑**，不是"是否冻结"。伤害的来源是
+        // 敌方弹幕的运动 —— 玩家技能冻 C ⇒ 不跑（绝对安全窗）；ECL 演出 C 跑 ⇒ 照跑
+        // （定住你、弹幕照来，演出的威胁正在于此）。**别改成 `if frozen`**，那会让演出
+        // 附赠免伤、毫无威胁（判别式单测 `cutscene_freeze_still_lets_the_player_be_hit`）。
+        if self.scene_frozen() {
+            return;
+        }
         self.collide_bullets_player(); // 行 1/2：敌弹 × 自机
         self.collide_body_player(); // 行 3：敌体 × 自机
         self.collide_shot_enemy(); // 行 4：自机弹 × 敌人

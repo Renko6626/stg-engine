@@ -18,7 +18,9 @@ pub struct WorldBridge {
     base: Base<Node>,
     game: Option<Game>,
     layers: [Option<Rid>; LAYER_COUNT],
-    bufs: [Vec<f32>; LAYER_COUNT],
+    /// 每层一份定长实例缓冲(表现契约 v2 §4.8):编码器经 `as_mut_slice` 直接写入,
+    /// 省掉 `Vec` → Packed 那次拷贝;`multimesh_set_buffer` 内部那次无法省。
+    bufs: [PackedFloat32Array; LAYER_COUNT],
     warned: u32,
 }
 
@@ -64,13 +66,60 @@ impl WorldBridge {
     #[constant]
     const BTN_SLOW: i64 = stg_core::input::BTN_SLOW as i64;
     #[constant]
+    const BTN_TIMESTOP: i64 = stg_core::input::BTN_TIMESTOP as i64;
+    #[constant]
     const LAYER_BULLETS: i64 = frame::LAYER_BULLETS as i64;
     #[constant]
     const LAYER_SHOTS: i64 = frame::LAYER_SHOTS as i64;
     #[constant]
-    const LAYER_ENEMIES: i64 = frame::LAYER_ENEMIES as i64;
-    #[constant]
     const LAYER_ITEMS: i64 = frame::LAYER_ITEMS as i64;
+    #[constant]
+    const LAYER_COUNT: i64 = frame::LAYER_COUNT as i64;
+    // 通道 B 引擎保留请求 id 与事件 kind(表现契约 v2 §4.7):**转出来而非让 GDScript 手抄**,
+    // 理由同 RANK_*——手抄镜像与 core 之间没有编译期押运。类别(即发即忘/须确认/电平镜像)
+    // 见 `stg_core::reqs` 模块文档与 render-contract §4。
+    #[constant]
+    const REQ_ENEMY_DEATH: i64 = stg_core::consts::REQ_ENEMY_DEATH as i64;
+    #[constant]
+    const REQ_SPELL_DECLARE: i64 = stg_core::consts::REQ_SPELL_DECLARE as i64;
+    #[constant]
+    const REQ_SPELL_RESULT: i64 = stg_core::consts::REQ_SPELL_RESULT as i64;
+    #[constant]
+    const REQ_STAGE_CLEAR: i64 = stg_core::consts::REQ_STAGE_CLEAR as i64;
+    #[constant]
+    const REQ_BGM: i64 = stg_core::consts::REQ_BGM as i64;
+    #[constant]
+    const REQ_BG: i64 = stg_core::consts::REQ_BG as i64;
+    #[constant]
+    const REQ_BG_PHASE: i64 = stg_core::consts::REQ_BG_PHASE as i64;
+    #[constant]
+    const REQ_FX_AT: i64 = stg_core::consts::REQ_FX_AT as i64;
+    #[constant]
+    const REQ_FX_ATTACHED: i64 = stg_core::consts::REQ_FX_ATTACHED as i64;
+    #[constant]
+    const REQ_SCRIPT_BASE: i64 = stg_core::consts::REQ_SCRIPT_BASE as i64;
+    #[constant]
+    const EVT_ENEMY_DIED: i64 = stg_core::events::EVT_ENEMY_DIED as i64;
+    #[constant]
+    const EVT_PLAYER_DIED: i64 = stg_core::events::EVT_PLAYER_DIED as i64;
+    #[constant]
+    const EVT_FIELD_CLEARED: i64 = stg_core::events::EVT_FIELD_CLEARED as i64;
+    #[constant]
+    const EVT_ITEM_PICKED: i64 = stg_core::events::EVT_ITEM_PICKED as i64;
+    #[constant]
+    const EVT_TASK_FAULT: i64 = stg_core::events::EVT_TASK_FAULT as i64;
+    #[constant]
+    const EVT_SPELL_DECLARED: i64 = stg_core::events::EVT_SPELL_DECLARED as i64;
+    #[constant]
+    const EVT_SPELL_CAPTURED: i64 = stg_core::events::EVT_SPELL_CAPTURED as i64;
+    #[constant]
+    const EVT_SPELL_FAILED: i64 = stg_core::events::EVT_SPELL_FAILED as i64;
+    #[constant]
+    const EVT_SHOT_HIT_ENEMY: i64 = stg_core::events::EVT_SHOT_HIT_ENEMY as i64;
+    #[constant]
+    const VANISH_LIFE: i64 = stg_core::events::VANISH_LIFE as i64;
+    #[constant]
+    const VANISH_CLEARED: i64 = stg_core::events::VANISH_CLEARED as i64;
     // 难度档(`consts.rs` ①段冻结编号,值域 `0..=4`)。**转出来而非让 GDScript 手抄**:
     // 同 BTN_*/LAYER_* 的既有先例——手抄的镜像与 core 之间没有编译期押运,改了一边
     // 另一边照跑,而 `new_game_at` 的值域校验只认真实数字,抄错了它拦不住(抄成 5 才拦)。
@@ -147,6 +196,9 @@ impl WorldBridge {
             power: power.clamp(0, u16::MAX as i64) as u16,
             lives: lives.clamp(0, u8::MAX as i64) as u8,
             bombs: bombs.clamp(0, u8::MAX as i64) as u8,
+            // 时停刀（裁定 R-2）：不给桥面加 time_stops 入参——默认值 1 已够，
+            // 加参数是没人要的接口扩张。
+            ..Default::default()
         };
         let rank = rank.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let start = start.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
@@ -178,15 +230,21 @@ impl WorldBridge {
             &input,
             |_| {},
         );
-        // 已注册层:编码 + 一次上传 + 可见数
+        // 已注册层:原地编码 + 一次上传 + 可见数
+        let frame_no = game.world.frame();
         let mut rs = RenderingServer::singleton();
         for layer in 0..LAYER_COUNT {
             let Some(rid) = self.layers[layer] else {
                 continue;
             };
-            let n =
-                frame::encode_layer(game.world.view(), game.tables, layer, &mut self.bufs[layer]);
-            rs.multimesh_set_buffer(rid, &PackedFloat32Array::from(self.bufs[layer].as_slice()));
+            let n = frame::encode_layer(
+                game.world.view(),
+                game.tables,
+                frame_no,
+                layer,
+                self.bufs[layer].as_mut_slice(),
+            );
+            rs.multimesh_set_buffer(rid, &self.bufs[layer]);
             rs.multimesh_set_visible_instances(rid, n as i32);
         }
     }
@@ -216,7 +274,9 @@ impl WorldBridge {
             );
             return false;
         }
-        self.bufs[layer] = vec![0.0; cap * FLOATS_PER_INSTANCE];
+        let mut buf = PackedFloat32Array::new();
+        buf.resize(cap * FLOATS_PER_INSTANCE);
+        self.bufs[layer] = buf;
         self.layers[layer] = Some(multimesh_rid);
         true
     }
@@ -297,7 +357,77 @@ impl WorldBridge {
         d.set("graze", p.graze as i64);
         d.set("life_state", p.life_state as i64);
         d.set("invuln", p.invuln as i64);
+        d.set("facing", p.facing as i64);
         d
+    }
+
+    /// 敌人木偶喂料(表现契约 v2 §4.4;纯模块 `crate::puppets`)。返回 Dictionary,每键一条
+    /// 压缩列(按池索引升序):`index,gen,sprite,anm_state,state_age,hit_flash` →
+    /// `PackedInt32Array`;`x,y` → `PackedFloat32Array`。**无 `dying` 列**(step 后读不到)。
+    /// 未开局 → 空字典(同 hud_* 口径)。
+    #[func]
+    fn puppets(&self) -> VarDictionary {
+        let mut d = VarDictionary::new();
+        let Some(g) = self.game.as_ref() else {
+            return d;
+        };
+        let c = crate::puppets::encode_puppets(g.world.view(), g.world.frame());
+        d.set("index", &PackedInt32Array::from(c.index.as_slice()));
+        d.set("gen", &PackedInt32Array::from(c.generation.as_slice()));
+        d.set("x", &PackedFloat32Array::from(c.x.as_slice()));
+        d.set("y", &PackedFloat32Array::from(c.y.as_slice()));
+        d.set("sprite", &PackedInt32Array::from(c.sprite.as_slice()));
+        d.set("anm_state", &PackedInt32Array::from(c.anm_state.as_slice()));
+        d.set("state_age", &PackedInt32Array::from(c.state_age.as_slice()));
+        d.set("hit_flash", &PackedInt32Array::from(c.hit_flash.as_slice()));
+        d
+    }
+
+    /// 本帧离开池的敌弹(表现契约 v2 §4.5;核内第四条纯输出缓冲 `vanished`):
+    /// `x,y` → `PackedFloat32Array`,`sprite` → `PackedInt32Array`,`reason` →
+    /// `PackedByteArray`(`VANISH_LIFE`/`VANISH_CLEARED`)。只记场内、越界不记。
+    /// **帧内缓冲,下一次 step 的 begin 清空——必须在两次 step 之间取走。**
+    #[func]
+    fn vanished(&self) -> VarDictionary {
+        let mut d = VarDictionary::new();
+        let Some(g) = self.game.as_ref() else {
+            return d;
+        };
+        let v = g.world.vanished();
+        let xs: Vec<f32> = v.iter().map(|r| r.x.raw() as f32 / 65536.0).collect();
+        let ys: Vec<f32> = v.iter().map(|r| r.y.raw() as f32 / 65536.0).collect();
+        let sprites: Vec<i32> = v.iter().map(|r| r.sprite as i32).collect();
+        let reasons: Vec<u8> = v.iter().map(|r| r.reason).collect();
+        d.set("x", &PackedFloat32Array::from(xs.as_slice()));
+        d.set("y", &PackedFloat32Array::from(ys.as_slice()));
+        d.set("sprite", &PackedInt32Array::from(sprites.as_slice()));
+        d.set("reason", &PackedByteArray::from(reasons.as_slice()));
+        d
+    }
+
+    /// 按句柄读实体位置(表现契约 v2 §4.6):`fx_on` 依附特效的唯一跟随手段。`kind` 目前
+    /// 只认敌人(0);句柄有效返 `Vector2`,失效/越界/未开局返 `null`——壳侧据此回收跟随节点。
+    #[func]
+    fn entity_pos(&self, kind: i64, index: i64, generation: i64) -> Variant {
+        let Some(g) = self.game.as_ref() else {
+            return Variant::nil();
+        };
+        if kind != 0 {
+            return Variant::nil();
+        }
+        let (Ok(index), Ok(generation)) = (u16::try_from(index), u16::try_from(generation)) else {
+            return Variant::nil();
+        };
+        let p = g.world.view().enemies();
+        let h = stg_core::enemy::EnemyHandle { index, generation };
+        match p.get(h) {
+            Some(i) => Vector2::new(
+                p.x()[i].raw() as f32 / 65536.0,
+                p.y()[i].raw() as f32 / 65536.0,
+            )
+            .to_variant(),
+            None => Variant::nil(),
+        }
     }
 
     #[func]

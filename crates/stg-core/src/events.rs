@@ -1,11 +1,24 @@
 //! 碰撞命中缓冲 `Hit` 与世界大事记 `Event`（A5）。两者皆**纯输出**：帧内私有、
 //! checksum-skip、begin 清空、重演确定性再生。Hit 由相位 6 收集、相位 7 三趟消费；
 //! Event 由相位 7/相位 3 死亡结算产出，相位 8 ECL 挂钩 + 表现层只读消费。
+//!
+//! ## 事件聚合口径（表现契约 v2，2026-09-07；`render-contract.md` §4）
+//! `EVENTS_CAP = 512` 而弹池 8192——任何可能每帧成百上千的事实必须聚合，否则确定性丢弃
+//! 会让壳侧静默漏事件。逐 kind：
+//! | kind | 口径 |
+//! |---|---|
+//! | `EVT_ENEMY_DIED` / `EVT_PLAYER_DIED` / `EVT_ITEM_PICKED` / `EVT_TASK_FAULT` / `EVT_SPELL_*` | 逐条（低频） |
+//! | `EVT_FIELD_CLEARED` | **每 field 每帧一条**，`data[0]` = 本帧消了几颗（逐弹位置走 `vanished` 缓冲） |
+//! | `EVT_SHOT_HIT_ENEMY` | 逐命中（自机弹池 1024、现实 <50/帧） |
+//! | 擦弹（未发） | 事件化前须先定口径：每自机每帧一条带计数，或壳侧对 graze 计数做帧间差分（follow-ups B28） |
 
 use crate::math::Fx;
 
 pub(crate) const HITS_CAP: usize = 8192;
 pub(crate) const EVENTS_CAP: usize = 512;
+/// `vanished` 缓冲上限（表现契约 v2，2026-09-07）：bomb 峰值实测约 814 颗（自机能力刀），
+/// 1024 行够用；超限确定性丢弃 + `diag.vanished_overflow`（进校验和，P4-a）。
+pub(crate) const VANISHED_CAP: usize = 1024;
 
 // ── 碰撞矩阵行号（D8）─────────────────────────────────────────────
 pub(crate) const ROW_BULLET_PLAYER_HIT: u8 = 1;
@@ -46,6 +59,29 @@ pub const EVT_SPELL_FAILED: u8 = 8;
 /// 绰绰有余（对照 `EVT_FIELD_CLEARED` 那条——它必须聚合，因为弹池 8192 远超 events 512）。
 /// 擦弹另说：满屏擦弹频率高一个量级，真要发事件须单独评估聚合口径。
 pub const EVT_SHOT_HIT_ENEMY: u8 = 9;
+
+// ── `vanished`：本帧离开池的敌弹（表现契约 v2 spec §3.4）────────────────────
+/// 弹 `life` 归零。
+pub const VANISH_LIFE: u8 = 1;
+/// 弹被作用区清除（`BULLET_CLEARED`：bomb / deathbomb / 自机中弹清屏 / `clear_bullets`）。
+pub const VANISH_CLEARED: u8 = 2;
+
+/// 一行 `vanished`（12 B）：本帧在相位 9 被回收的一颗**敌弹**的最后位置与外观。
+///
+/// **只记弹、越界不记**：自机弹消失已有 `EVT_SHOT_HIT_ENEMY`、道具已有 `EVT_ITEM_PICKED`；
+/// 越界弹在屏外没有淡出可画，也免得白占行。第四条纯输出缓冲，与 `hits`/`frame_events`/
+/// `reqs` 同族：帧内私有、checksum-skip、`begin` 清空、回滚重演确定性再生——
+/// **必须在两次 step 之间取走**。消费者：表现层的消弹淡出（`render-contract.md` §3.6）。
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Vanished {
+    pub x: Fx,
+    pub y: Fx,
+    pub sprite: u16,
+    /// `VANISH_LIFE` / `VANISH_CLEARED`。
+    pub reason: u8,
+    pub _pad: u8,
+}
 
 /// 一条碰撞命中（6 B）：矩阵行 + 主动/被动池索引。收集序天然按收集循环嵌套，无需排序。
 #[repr(C)]
