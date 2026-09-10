@@ -251,7 +251,7 @@ pub fn build_tables_v0() -> WorldTables {
     // ── 内建内容包的弹型数据（**不是引擎结构常量**：mod 表自带自己的一份）──────
     // 12 形 × 16 色的整齐矩形，行序 = 图集行序，与三处同源：
     //   godot/assets/bullets.png（由 tools/slice_bullet_sheet.gd 从弹片切出）
-    //   godot/ecl/demo/bullets.ecl（内容包词表：LASER/ARROWHEAD/…/LASERHEAD）
+    //   godot/ecl/game/bullets.ecl（内容包词表：LASER/ARROWHEAD/…/LASERHEAD）
     //   docs/render-contract.md §3
     //
     // 半径是**世界判定半径**，与贴图占多少像素是两个独立的量：下表按切图工具实测的

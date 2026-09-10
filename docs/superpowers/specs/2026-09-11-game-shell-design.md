@@ -78,6 +78,13 @@ main.tscn (GameFlow: main.gd)     流程状态机：TITLE / DIFFICULTY / PRACTIC
 - `--shots`：结算页一张（根视口截图，覆盖层在 SubViewport 之外）。
 - 全套：fmt / clippy / test / storm / verify-tables / 两冒烟 / 金向量 md5。
 
-## 8. 实施偏差记录
+## 8. 实施偏差记录（2026-09-11 收口）
 
-（收口时补。）
+| # | spec 原文 | 实际 | 理由 |
+|---|---|---|---|
+| a | §3「`continues` 落进 1 B 空档，`size_of` 不变」 | `PlayerState` 64→72，`World` +16 B，尺寸哨兵响 | 上一刀 `hit_frame` 已把尾部 padding 吃光；哨兵这次工作了。金向量 md5 `978522fd…` |
+| b | §5 顺手做 F23 壳侧帧表 | **未做** | `player.png` 32×32 只有一格，没有帧可选；等美术 |
+| c | §7 `--shots` 结算页一张 | 未得 | llvmpipe 下常按射击 400 s 内打不死 demo boss；功能由工程冒烟内联脚本覆盖（结算页/结果页/GAME OVER/续关/存回放/播放） |
+| d | §5 菜单为 Control 场景 | 代码生成的 `Menu` CanvasLayer，无 tscn | 四个菜单同一形状，一个类够用 |
+| e | §5 回放播放时 GAME OVER 页 | 不盖页、不停拍 | 录制时的停拍贡献零帧，播放照走；日志里若有续关照播；播完才盖页 |
+| f | 提交切分 | 核 / 桥 / 壳+内容搬家+文档 三段 | 同 spec §7 |

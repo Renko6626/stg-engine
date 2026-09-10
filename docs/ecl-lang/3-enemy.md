@@ -45,7 +45,7 @@ sub main() {
 ```
 
 那句 `wait(150)` 是重点：`move_to` 是引擎侧插值器，发起后立即返回；主任务不 `wait` 够帧数就
-走到末尾的话，敌会在缓动跑完之前退场。`godot/ecl/demo/stage1.ecl` 的杂兵是这段的真实版本。
+走到末尾的话，敌会在缓动跑完之前退场。`godot/ecl/game/stage1.ecl` 的杂兵是这段的真实版本。
 
 ## 敌的生成与轮询（`spawn_enemy` 的 `task` 参 + `enemy_hp`）
 
@@ -84,7 +84,7 @@ sub main() {
 上面这段只演示"怎么轮询"，不是"boss 该怎么写"：它的 `boss_main` 只 `wait(60)` 就返回了，按
 上一节「主任务跑完 = 这只敌退场」那条规则**这只 boss 会在 60 帧后
 自己退场**，等待循环随之结束。它按
-`godot/ecl/demo/boss_windchime.ecl` 原文精简改写——真实版本的 `boss_main` 跑非符 + 符卡两
+`godot/ecl/game/boss_windchime.ecl` 原文精简改写——真实版本的 `boss_main` 跑非符 + 符卡两
 阶段、`boss_battle` 的等待循环带 75 秒挂死兜底。**真实关卡编排务必带超时兜底。**
 
 ## 敌人运动（`move_to` + 四条速度动词）

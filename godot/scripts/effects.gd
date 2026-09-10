@@ -107,11 +107,7 @@ func tick(bridge: WorldBridge) -> void:
 			else:
 				xs[i] = pos.x; ys[i] = pos.y
 		if dead:
-			n -= 1
-			if i != n:
-				kind[i] = kind[n]; xs[i] = xs[n]; ys[i] = ys[n]; born[i] = born[n]
-				param[i] = param[n]; sprite[i] = sprite[n]
-				ent_index[i] = ent_index[n]; ent_gen[i] = ent_gen[n]
+			_swap_remove(i)
 			continue
 		var o := i * 12
 		buf[o] = 1.0; buf[o + 1] = 0.0; buf[o + 2] = 0.0; buf[o + 3] = xs[i]
@@ -122,7 +118,29 @@ func tick(bridge: WorldBridge) -> void:
 	RenderingServer.multimesh_set_buffer(mm.get_rid(), buf)
 	RenderingServer.multimesh_set_visible_instances(mm.get_rid(), n)
 
+func _swap_remove(i: int) -> void:
+	n -= 1
+	if i != n:
+		kind[i] = kind[n]; xs[i] = xs[n]; ys[i] = ys[n]; born[i] = born[n]
+		param[i] = param[n]; sprite[i] = sprite[n]
+		ent_index[i] = ent_index[n]; ent_gen[i] = ent_gen[n]
+
 ## 重开/读档:清空全部行与飘字(否则旧世界坐标的残留会等自己到期才消失,A9 ⑤)。
+## 时间跳变清理(F20,render-contract §0.5):只杀出生帧 > frame 的行——遡行落点之前开始的
+## 演出继续活;依附行一并按出生帧处理(其宿主若不在落点世界里,tick 时 entity_pos 返 null 自会回收)。
+func clear_after(frame: int) -> void:
+	var i := 0
+	while i < n:
+		if born[i] > frame:
+			_swap_remove(i)
+		else:
+			i += 1
+	RenderingServer.multimesh_set_visible_instances(mm.get_rid(), n)
+	for l in _labels:
+		if is_instance_valid(l):
+			l.queue_free()
+	_labels.clear()
+
 func clear_all() -> void:
 	n = 0
 	RenderingServer.multimesh_set_visible_instances(mm.get_rid(), 0)

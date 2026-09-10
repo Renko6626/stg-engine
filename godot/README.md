@@ -58,7 +58,14 @@ SIGABRT 是 Godot 自身的 bootstrap 脆弱点、与本扩展无关,不影响�
 
 ## 玩什么 / 操作
 
-跑起来即进 demo 局:杂兵段 → 风铃卡 boss 战 → 挂牌结算。
+跑起来进**标题**(壳子刀 2026-09-11):Start → 难度 → 第 1 关(杂兵段 → 风铃卡 boss 战)→
+关间结算页(Z 继续)→ 结果页(Z 回标题 / C 存回放);Practice → 选段(道中 / boss,`content_tables.gd`
+的 `PRACTICE` 表,mark 号约定道中 `N*10`、boss `N*10+5`)→ 难度;Replay → 列 `user://replays/*.stgr`
+播放(输入来自日志,播完盖页)。残机打光 → GAME OVER 页(Z 续关 / X 回标题 / C 存回放);续关是
+输入位 `BTN_CONTINUE`,世界内做,回放里照样重现。
+
+脚本结构:`scripts/main.gd` 是流程(GameFlow,只管切页),`scripts/play.gd` 是游玩页(常驻,
+World 跨关活着),`overlay.gd` 是盖在冻结画面上的页,`menu.gd` 是代码生成的菜单。
 
 | 键 | 动作 |
 |---|---|
@@ -70,13 +77,15 @@ SIGABRT 是 Godot 自身的 bootstrap 脆弱点、与本扩展无关,不影响�
 | V | **遡行**:被弹后的决死窗口(8 帧)内按,画面逐帧倒退回被弹前 30 帧,落地带 30 帧无敌 |
 | D | 时间停止(临时键位;停止合并那刀再定) |
 | Esc | 暂停(宿主停拍,世界时间线零帧) |
-| Z(结算/GAME OVER 时) | 重开 |
+| Z / X / C(覆盖页上) | 确认(继续 / 续关 / 回标题) / 回标题 / 存回放 |
+| 方向键 + Z / X(菜单) | 选择 / 确认 / 返回 |
 
-关卡内容是 `ecl/demo/*.ecl` 三个文件(目录整取、按文件名排序编译);改完不用重编 Rust,重开
+关卡内容是 `ecl/game/*.ecl`(目录整取、按文件名排序编译;`main.ecl` 顺序调各关 sub,关底
+`add_score(bonus); stage_clear(N);`,全通 `stage_clear(0)`);改完不用重编 Rust,重开
 Godot 即可。语法手册见 [`../docs/ecl-lang.md`](../docs/ecl-lang.md),只编译不跑的快速检查:
 
 ```bash
-cargo run -p stg-harness -- check godot/ecl/demo
+cargo run -p stg-harness -- check godot/ecl/game
 ```
 
 ## 扩展没加载怎么判断

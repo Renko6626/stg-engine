@@ -9,7 +9,7 @@
 
 ```ecl
 const SPELL_WINDCHIME: int = 1;
-const RICE: int = 64; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const RICE: int = 64; // 内容包词表（示例：见 godot/ecl/game/bullets.ecl）
 
 xformdef WIND_CHIME { set_speed(2.0fx); @30 turn(90deg); }
 
@@ -238,7 +238,7 @@ cargo run -p stg-harness -- check stage/
 - **`const` 跨文件可见。** 一个文件里 `const RICE: int = 64;`，别的文件直接写 `RICE` 就能用，
   不需要重复声明，也不受文件先后序影响。所以整局脚本的共享词表（弹型/色号、`globals` 自由段
   槽号、符卡 id）就该单独摊一个 `00_defs.ecl` 放 `const`，别在每个文件里各抄一份——抄岔了是
-  静默的，数值不同但都能编过。`godot/ecl/demo/bullets.ecl` 就是这个用法。
+  静默的，数值不同但都能编过。`godot/ecl/game/bullets.ecl` 就是这个用法。
 - **收集顺序不影响产物字节。** 不管传入的文件先后序是 A→B 还是 B→A，合并后的 `EclImage`
   逐位相同。
 

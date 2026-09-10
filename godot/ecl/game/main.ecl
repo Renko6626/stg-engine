@@ -4,15 +4,16 @@
 sub main() {
     bgm(1);
     bg(1);
-    mark(1); // 杂兵段练习位
+    mark(10); // 第 1 关道中练习位(壳子刀约定:道中 N*10)
     stage1();
-    mark(2) { // boss 段练习位。跳入补偿(自动):bg(1);块内手写的 bgm/bg_phase 抑制同类注入
+    mark(15) { // 第 1 关 boss 段练习位(N*10+5)。跳入补偿(自动):bg(1);块内手写的 bgm/bg_phase 抑制同类注入
         bgm(2);
         bg_phase(1); // boss 战背景停滚
     }
     boss_battle();
     bg_phase(0);
     add_score(100000); // 关底 bonus 世界内入账(结算数字在停拍前定格)
-    stage_clear(1); // = SYS 723 + wait(1):事件走通道 A,不再是 emit_req 挂牌
+    stage_clear(1); // = SYS 723 + wait(1):事件走通道 A;宿主停拍画结算页,确认后下一帧才到下面
+    stage_clear(0); // 0 = 结局:demo 只有一关,结算页之后直接结果页(壳子刀 spec §2)
     loop { wait(600); } // 停拍后驻留(没有下一关)
 }

@@ -25,7 +25,7 @@
 路数写死、只开一次火——这时候 `batch` 一句就是一张网格，别的路都比它长：
 
 ```ecl
-const RICE: int = 64;      // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const RICE: int = 64;      // 内容包词表（示例：见 godot/ecl/game/bullets.ecl）
 const COLOR_RED: int = 0;
 
 // 杂兵冲进来，撂一发爆散，走人
@@ -60,7 +60,7 @@ sub main() {
 
 ### 手算整周环会掉余数——一个真发生过的例子
 
-`godot/ecl/demo/boss_windchime.ecl` 的风铃卡原本手算 `astep = 65536 / ways`，而路数随难度走：
+`godot/ecl/game/boss_windchime.ecl` 的风铃卡原本手算 `astep = 65536 / ways`，而路数随难度走：
 `ways = 28 + global(GVAR_RANK) * 2`。整数除法一取整，`ways` 颗弹就铺不满一整圈：
 
 | 难度 | `ways` | `65536 / ways` | `ways × step` | 缺口 |
@@ -97,7 +97,7 @@ bug 进了已发布内容，一直活到有人拿发射器重写它才被发现�
 （见下方「发射器」节），两者别记混。
 
 ```ecl
-const RICE: int = 64;      // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const RICE: int = 64;      // 内容包词表（示例：见 godot/ecl/game/bullets.ecl）
 const COLOR_RED: int = 0;
 
 async sub two_ways() {
@@ -140,7 +140,7 @@ sub main() {
 `sh_aim`/`sh_ring`/`sh_dist` 这些位，表现为"莫名其妙多了个偏移"。
 
 ```ecl
-const RICE: int = 64;      // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const RICE: int = 64;      // 内容包词表（示例：见 godot/ecl/game/bullets.ecl）
 const COLOR_RED: int = 0;
 
 xformdef SLOW_DOWN { @30 set_speed(0.6fx); }   // 变换序列，见下面「xformdef」节
@@ -197,7 +197,7 @@ sub main() {
 扇形只是变宽，中轴不动——所以下面这种写法是对的，不需要每次自己算 `−(n−1)·step/2`：
 
 ```ecl
-const NEEDLE: int = 16;   // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const NEEDLE: int = 16;   // 内容包词表（示例：见 godot/ecl/game/bullets.ecl）
 const COLOR_WHITE: int = 4;
 
 async sub aimed_fan() {
@@ -242,7 +242,7 @@ sub main() {
 （半个间隔 = 半个 `65536/n`）：
 
 ```ecl
-const RICE: int = 64;     // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const RICE: int = 64;     // 内容包词表（示例：见 godot/ecl/game/bullets.ecl）
 const COLOR_BLUE: int = 8;
 
 async sub two_layer_ring() {
@@ -402,7 +402,7 @@ xformdef ARC_SHOT {
     set_life(180);
 }
 
-const BALL: int = 48; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const BALL: int = 48; // 内容包词表（示例：见 godot/ecl/game/bullets.ecl）
 const COLOR_CYAN: int = 7;
 
 sub main() {
@@ -430,7 +430,7 @@ op，然后等 N 帧再走下一条」。
 带 `@N` 的 op——那条也在同一帧发射，发射之后才开始停 N 帧。想表达"先做 A、等 N 帧、再做
 B"，`@N` 必须挂在 **A** 上，不是 B 上。
 
-对照——`godot/ecl/demo/boss_windchime.ecl` 的 `WIND_CHIME` 就是一次真实事故：
+对照——`godot/ecl/game/boss_windchime.ecl` 的 `WIND_CHIME` 就是一次真实事故：
 
 ```text
 // 错写法：@30 挂在 turn 上，读起来像"等 30 帧再转"
@@ -450,7 +450,7 @@ xformdef WIND_CHIME {
     turn(90deg);
 }
 
-const BALL: int = 48; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const BALL: int = 48; // 内容包词表（示例：见 godot/ecl/game/bullets.ecl）
 const COLOR_CYAN: int = 7;
 
 sub main() {
@@ -479,7 +479,7 @@ sub main() {
 回收，"owner 死 → 任务静默回收"的门禁直接把它拦下：**子弹一颗不出**。而且这是彻底静默的
 失败——没有 Fault、没有 `contract_viol`、没有 `pool_full`，画面上只是什么都没发生。
 
-**处置：任务侧的 `wait` 比 xformdef 的自毁延迟少 1。** `godot/ecl/demo/boss_mothersplit.ecl`
+**处置：任务侧的 `wait` 比 xformdef 的自毁延迟少 1。** `godot/ecl/game/boss_mothersplit.ecl`
 里就写成 `MOTHER_SPLIT_TASK_WAIT = MOTHER_LIFE - 1`，并用 `harness run --at` 逐帧扫过：
 差 1 帧稳定成功、不减稳定失败。
 
@@ -499,7 +499,7 @@ xformdef SWAP_LOOK {
     @10 set_shape(BALL); // 保色：不管当前是什么色，只把形状换成大玉
 }
 
-const OUTLINE: int = 32; // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const OUTLINE: int = 32; // 内容包词表（示例：见 godot/ecl/game/bullets.ecl）
 const BALL: int = 48;
 const COLOR_BLUE: int = 8;
 

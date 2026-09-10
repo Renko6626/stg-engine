@@ -184,7 +184,7 @@ uniform 声明等),不证明**运行期数据通路**(`INSTANCE_CUSTOM` 实际�
 
 ### G11. `DirAccess.open` 对不存在的目录静默返回 `null`,不打任何 stderr
 
-`main.gd::_boot` 用 `DirAccess.open("res://ecl/demo")` 读关卡目录——指向不存在路径时该调用
+`main.gd::_boot` 用 `DirAccess.open("res://ecl/game")` 读关卡目录——指向不存在路径时该调用
 **不产生任何引擎侧警告/错误输出**,只是返回值为 `null`,与部分资源加载 API(如
 `ResourceLoader.load` 失败会自己打 error)的行为不对称。**对下一次接入的含义**:任何用
 `DirAccess`/`FileAccess` 读外部内容(关卡包/mod/存档目录)的宿主代码,必须自己判 `null` 并

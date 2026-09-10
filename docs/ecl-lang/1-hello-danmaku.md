@@ -33,7 +33,7 @@ cargo run -p stg-harness -- run my.ecl --frames 300 --at 60
 `cargo run -p stg-harness -- serve --ecl my.ecl`，浏览器开 <http://localhost:8611>，
 改完脚本刷新页面即重载。
 
-想在真 Godot 里看，就去替换 `godot/ecl/demo/` 里的关卡脚本（那个目录**整取**、按文件名排序
+想在真 Godot 里看，就去替换 `godot/ecl/game/` 里的关卡脚本（那个目录**整取**、按文件名排序
 编译成一个编译单元，所以不是往里加文件——里面已经有一个 `sub main()` 了，加第四个文件会撞名），
 再 `cargo build -p stg-godot && godot --path godot`。详见
 [`godot/README.md`](../../godot/README.md)。
@@ -170,7 +170,7 @@ sub main() {
 owner（这只敌），所以子任务里的 `$self_x`/`$self_y` 读的就是敌自己的坐标：
 
 ```ecl
-const BALL: int = 48;        // 内容包词表（示例：见 godot/ecl/demo/bullets.ecl）
+const BALL: int = 48;        // 内容包词表（示例：见 godot/ecl/game/bullets.ecl）
 const COLOR_RED: int = 2;
 
 async sub shoot() {
