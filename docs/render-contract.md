@@ -13,6 +13,81 @@
    step 末尾 `+1`，故实体**第一次被画出来时 age = 1，不是 0**。
 5. **高数量短寿命走实例缓冲 + shader，低数量长寿命走节点。** 弹 / 自机弹 / 道具 / 特效走
    MultiMesh；敌人（cap 256、常态几十）与自机走节点。
+6. **核不跑任何动画，只出「三件套」事实**（§0.5）：`visual` + `phase` + `phase_frame`。
+   不设通用表现参数槽，不做 ANM VM，不做 ANM 语言，不立中立表现 crate。
+
+## 0.5 表现数据模型与生命周期纪律（2026-09-11 立规）
+
+> 背景：一份外部建议把 ZUN 的 ANM 生命周期拆成「嵌入式 / 句柄持有 / 放生式 / 混合态」，
+> 并主张显式化为 `bound` / `oneshot` 两种脚本类型由编译器检查。本仓的答案是**同一套思想、
+> 更少的机器**：那两种类型在这里是两条通道，"编译器验证"在这里是"表里就是常量"。
+> 逐条对照见本节末表。
+
+### 三件套：任何跨帧动画实体，核只提供三个字段
+
+| 字段 | 含义 | 谁写 | 壳怎么用 |
+|---|---|---|---|
+| `visual` | 不透明的格号 / id（弹 `sprite` = 图集格号，敌 `sprite` = 脚本原样传入） | 脚本 / 表 | 选图集、选节点纹理 |
+| `phase` | **语义**状态（敌 `anm_state`、背景 `bg_phase`、自机 `life_state`） | 脚本，或核的语义逻辑 | 选 label / 动画段 |
+| `phase_frame` | 写 `phase` 那一刻的帧号（敌 `anm_state_frame`、背景 `bg_phase_frame`） | 与 `phase` 同一笔写 | `age = frame − phase_frame` 选帧、算曲线 |
+
+- **ZUN 的 interrupt 在这里是状态字段，不是事件。** 壳每帧对照 `phase` 变了就跳 label；因为
+  是电平，回滚 / 遡行 / 读档后自动收敛，事件做不到。
+- **其余驱动量必须是语义字段**：`hit_flash`（核递减）、`hp/hp_max`、`invuln`、`facing`、
+  `freeze_left`、`boss_ui.hp_ratio`。**不设通用 `params[4]`**——一个"sim 不读但进校验和"的
+  槽是垃圾位的温床，且在回滚下与语义字段没有任何区别。脚本要给壳传表现参数：一次性走
+  `fx_at(kind, param)` / `fx_on`，持续的加一个**有名字**的语义字段。
+- **存储是 SoA 分散的，抽象是统一的。** 各池按 I7 各自持有自己的三件套（弹没有 `phase`，
+  它的画面是 `(sprite, age, angle)` 的纯函数）；统一的是**规矩与读口形状**，不是一个嵌套
+  struct。当第三类带 `phase` 的实体（自机动画帧）落地时，顺手把命名对齐成 `*_phase` /
+  `*_phase_frame` 并在 `WorldView` 上给同形状读口（follow-ups F23）。
+
+### 全景（各类实体现状）
+
+| 实体 | visual | phase | phase_frame | 其他驱动量 | 壳侧渲染 |
+|---|---|---|---|---|---|
+| 弹 | `sprite` | 无 | `born_frame` | `angle`、`flags` | MultiMesh + shader |
+| 自机弹 | `sprite` | 无 | 无 | 无 | MultiMesh |
+| 道具 | `sprite`（`item_type` 查表） | 无 | 无 | 无 | MultiMesh |
+| 敌 | `sprite` | `anm_state`（只脚本写） | `anm_state_frame` | `hit_flash`、`hp`、`invuln` | 256 个预分配 Sprite2D 木偶 |
+| 自机 | **无**（F23） | `life_state` | `state_timer` | `invuln`、`facing`、`bomb_phase` | 单张 Sprite2D |
+| 背景 | `bg_id` | `bg_phase` | `bg_phase_frame` | 无 | Bg 节点（A4 mini-VM 未做） |
+| 特效 | 不在核 | 不在核 | 壳记 `born` | 请求载荷 `kind/param` | fx MultiMesh 池（§4） |
+
+### 生命周期：两条通道就是两种所有权
+
+| ZUN 的说法 | 这里 | 谁负责销毁 |
+|---|---|---|
+| 嵌入式（弹内嵌 VM） | 弹没有 VM，画面是快照的纯函数 | 池回收即消失；淡出走 `vanished`（§3.6） |
+| 句柄持有（敌 / boss） | 木偶节点按池索引预分配，`(index, gen)` 识别新生 | 实体出池 → 木偶隐藏；退场动画走 oneshot（F21） |
+| 放生式（火花） | fx 行 `(kind, born, param)`，寿命 = `FX_LIFE` 表常量 | 壳按 `age ≥ life` 回收；**有限长是表的性质**，不需要编译器验证 |
+| 混合态 / detach | `EVT_ENEMY_DIED{a_index, a_gen}` 已带代数；木偶转残影 oneshot 即 detach | 壳侧，数据齐全（F21） |
+| 子 VM 跟随父级 | `fx_on` 依附行每帧 `entity_pos(index, gen)`，句柄失效即回收 | 父灭子灭；没有孤儿，因为没有 detach 的子级 |
+
+### 时间跳变（遡行 / 跳躍快进 / 读档 / 回滚）下的表现规则
+
+1. 电平（通道 A）自愈：重画即正确，无需任何特判。
+2. 边沿（通道 B）按分发器水位去重（§4）：落点 F 及以前的请求已呈现过，不重播。
+3. oneshot 清理**按出生帧**：杀 `born > F` 的行，`born ≤ F` 的继续活（落点前开始的爆炸环
+   不该被误清）。现实现是 `clear_all()`，改按出生帧记 F20。
+4. 预测回滚（M4）才有的三分支——"有 release 事件 / 没有就消失 / 残影又复活"——单机不存在：
+   遡行是整段丢弃，落点在死亡之前，敌人就在快照里，木偶按 gen 记忆直接复用。留到 `stg-net`。
+
+### 核需要动画时长时
+
+「等施法动画播完再开火」这类需求**不许**让核执行动画：时长在**编译期**成为常量。做法是把
+`ENEMY_ANIM` / `FX_LIFE` 迁进内容数据文件，照 `gen-ecl-meta` 双生成——ECL 常量一份
+（`wait(ANM_LEN_BOSS_CAST)`）、GDScript 表一份（F22）。反方向的规则更硬：**凡影响判定的量
+一律在核**（激光宽度、boss 判定位置），ANM 只负责画。
+
+### 四件明确不做的（历次拍板汇总）
+
+| 不做 | 拍板 | 理由 |
+|---|---|---|
+| ANM VM | v2 ① | 计时器归核、曲线归 shader、编排归 Godot 原生 |
+| 自造 ANM 脚本语言 + 编译器（`bound`/`oneshot` 声明类型） | 本节 | 声明类型已被"两条通道 + 表驱动 + 帧号时间源"消解；真要脚本化演出，先考虑 Godot AnimationPlayer 资源 |
+| 独立 Rust ANM runtime crate 直调 RenderingServer | v2 ③（立了又撤） | 没有 VM 就没有 runtime；桥已是"Rust 编码缓冲、一次上传"，壳只剩薄胶水 |
+| 每 VM / 每实例一个 Node | v2 ④ | 敌人 256 节点是**预分配常驻**不是逐实例创建；弹 / 特效走 MultiMesh |
 
 ## 1. 两条通道（定位）
 
@@ -273,4 +348,3 @@ DISPLAY=:2 LIBGL_ALWAYS_SOFTWARE=1 MESA_LOADER_DRIVER_OVERRIDE=llvmpipe STG_SHOT
 暗色影子（`ghost` 层 `visible_instances=5`，实弹层 0）；`jump_f363`——跳躍落地后实弹层 6 颗
 青色弹正好落在影子所在处，影子层已关。脚本化输入没撞上弹，故本次无 `rewind_land` 张；
 遡行的数值判别在桥级冒烟（走进弹流 → 决死窗口 → 落点 = 被弹帧 − 30、`view_ring` 往返）。
-
