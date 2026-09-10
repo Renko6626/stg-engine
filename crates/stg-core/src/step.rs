@@ -2299,11 +2299,16 @@ mod tests {
         // u32 正好填满，`size_of` 仍是 64；两值不变。真正逮住它的是金向量（md5 变）与
         // `vocab_hash_pinned`。四件套：① `copy_into` 走 `d.players = s.players`（Copy）自动；
         // ② checksum derive 全量入；③ 非池；④ SaveBytes derive 自动入档 ⇒ `ENGINE_VER` 16→17。
+        // 2026-09-11（壳子刀）：`PlayerState.continues: u8` 追在 `hit_frame` 之后——尾部 padding
+        // 上一刀已被 `hit_frame` 吃光，这次 u8 让 `PlayerState` 64→72（8 对齐），×2 = **+16**
+        // （1035240→1035256；`World` 同步 1195040→1195056）。哨兵终于响了一次。四件套：
+        // ① `copy_into` 走 `d.players = s.players` 自动；② checksum derive 全量入；③ 非池；
+        // ④ SaveBytes derive 自动入档 ⇒ `ENGINE_VER` 18→19。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (1035240, 1195040);
+        const EXPECTED: (usize, usize) = (1035256, 1195056);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (1035240, 1195040);
+        const EXPECTED: (usize, usize) = (1035256, 1195056);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2369,8 +2374,11 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            18,
-            "bump 必须是有意识决定(评审 + 改本测试)——17→18：壳子刀·转场协议修正(2026-09-07)。\
+            19,
+            "bump 必须是有意识决定(评审 + 改本测试)——18→19：壳子刀(2026-09-11)。\
+             PlayerState.continues u8×2 进校验和/存档(PlayerState 64→72,World +16 B,\
+             尺寸哨兵响)+ 输入词表新增 BTN_CONTINUE=10(位=0 等价旧行为,vocab_hash 变)。\
+             ——前一次 17→18：壳子刀·转场协议修正(2026-09-07)。\
              号表新增 723 stage_clear + 事件 EVT_STAGE_CLEARED=11(流程信号从通道 B 挂牌改走\
              通道 A 事实流,且表层追发 WAIT 1 让出帧);布局未动,金向量逐字节不变。\
              ——前一次 16→17：时间机制内核刀(2026-09-07)。\

@@ -72,6 +72,37 @@ pub struct Advance {
     pub rewound: Option<Cut>,
 }
 
+/// 回放播放游标（壳子刀 2026-09-11）：一份线性 log + 走到哪了。`Timeline::playback_step` 一次
+/// 走一帧，宿主把它接在 `step_frame` 的位置上就是「看回放」；`Timeline::replay_with` 是同一条
+/// 循环的一口气版本，两者不可能分歧。
+pub struct Playback {
+    log: InputLog,
+    cursor: usize,
+    cut_i: usize,
+}
+
+impl Playback {
+    pub fn frames_total(&self) -> u32 {
+        self.log.frames.len() as u32
+    }
+    pub fn cursor(&self) -> u32 {
+        self.cursor as u32
+    }
+    pub fn log(&self) -> &InputLog {
+        &self.log
+    }
+}
+
+/// `playback_step` 的结果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlaybackStep {
+    /// 本帧落了 cut（世界在喂输入前被 `rewind_landed`）——播放里没有被丢弃的分支，壳不做倒放
+    /// 动画，只是知道"这里录制时遡行过"。
+    pub landed: Option<Cut>,
+    /// log 已走完：本次没有喂帧（末帧上的 cut 仍会落）。
+    pub done: bool,
+}
+
 /// 回放/日志字节层的失败（P4 式：一切坏输入 → Err，不 panic）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplayError {
@@ -402,12 +433,30 @@ impl Timeline {
     }
 
     /// `replay` 的可观测版：每帧推进后（含落地后）调一次 `observe(&world)`，harness 用它采样
-    /// 校验和流。**同一条循环**——`replay` 就是它加一个空闭包，两者不可能分歧。
+    /// 校验和流。**同一条循环**——就是 `start_playback` + 循环 `playback_step` 到 `done`。
     pub fn replay_with(
         log: &InputLog,
         image: EclImage,
         mut observe: impl FnMut(&World),
     ) -> Result<Timeline, ReplayError> {
+        let (mut t, mut pb) = Timeline::start_playback(log.clone(), image)?;
+        loop {
+            let r = t.playback_step(&mut pb)?;
+            if r.landed.is_some() || !r.done {
+                observe(&t.world);
+            }
+            if r.done {
+                break;
+            }
+        }
+        Ok(t)
+    }
+
+    /// 从一份 log 开机进入播放（`Boot::NewGameAt` 才能从头重放）。
+    pub fn start_playback(
+        log: InputLog,
+        image: EclImage,
+    ) -> Result<(Timeline, Playback), ReplayError> {
         let Boot::NewGameAt {
             seed,
             rank,
@@ -417,43 +466,56 @@ impl Timeline {
         else {
             return Err(ReplayError::BootNotReplayable);
         };
-        let mut t =
+        let t =
             Timeline::new_game_at(seed, rank, start, loadout, image).map_err(ReplayError::Boot)?;
-        let mut ci = 0usize;
-        for (i, input) in log.frames.iter().enumerate() {
-            let f = i as u32;
-            debug_assert_eq!(
-                t.frame(),
-                f,
-                "log 索引与帧号约定：frames[f] 在 frame()==f 时喂"
-            );
-            while ci < log.cuts.len() && log.cuts[ci].to == f {
-                t.world.body.rewind_landed(log.cuts[ci].player as usize);
-                t.ring.push(&t.world);
-                t.log.cuts.push(log.cuts[ci]);
-                ci += 1;
-                observe(&t.world);
-            }
-            t.step_raw(input);
-            if t.world
-                .frame_events()
-                .iter()
-                .any(|e| e.kind == EVT_REWIND_REQUESTED)
-            {
-                return Err(ReplayError::UnexpectedRewindRequest { frame: t.frame() });
-            }
-            observe(&t.world);
+        Ok((
+            t,
+            Playback {
+                log,
+                cursor: 0,
+                cut_i: 0,
+            },
+        ))
+    }
+
+    /// 播放一帧：先落**当前帧**上的 cut（`rewind_landed` + 覆写环槽 + 记 cut），再喂
+    /// `frames[cursor]`。log 走完 → `done`（不喂帧，但末帧上的 cut 照落）。线性 log 里出现
+    /// 遡行请求 = log 与引擎不一致 → `UnexpectedRewindRequest`。
+    pub fn playback_step(&mut self, pb: &mut Playback) -> Result<PlaybackStep, ReplayError> {
+        let f = self.frame();
+        debug_assert_eq!(
+            f as usize, pb.cursor,
+            "log 索引与帧号约定：frames[f] 在 frame()==f 时喂"
+        );
+        let mut landed = None;
+        while pb.cut_i < pb.log.cuts.len() && pb.log.cuts[pb.cut_i].to == f {
+            let c = pb.log.cuts[pb.cut_i];
+            self.world.body.rewind_landed(c.player as usize);
+            self.ring.push(&self.world);
+            self.log.cuts.push(c);
+            landed = Some(c);
+            pb.cut_i += 1;
         }
-        // 末帧上的 cut（to == frames.len()）：落地但没再走——同样要落。
-        let f = t.frame();
-        while ci < log.cuts.len() && log.cuts[ci].to == f {
-            t.world.body.rewind_landed(log.cuts[ci].player as usize);
-            t.ring.push(&t.world);
-            t.log.cuts.push(log.cuts[ci]);
-            ci += 1;
-            observe(&t.world);
+        if pb.cursor >= pb.log.frames.len() {
+            return Ok(PlaybackStep { landed, done: true });
         }
-        Ok(t)
+        let input = pb.log.frames[pb.cursor];
+        pb.cursor += 1;
+        self.step_raw(&input);
+        if self
+            .world
+            .frame_events()
+            .iter()
+            .any(|e| e.kind == EVT_REWIND_REQUESTED)
+        {
+            return Err(ReplayError::UnexpectedRewindRequest {
+                frame: self.frame(),
+            });
+        }
+        Ok(PlaybackStep {
+            landed,
+            done: false,
+        })
     }
 
     /// log 的字节形态（格式见 [`InputLog::to_bytes`]）。
@@ -1080,6 +1142,54 @@ mod tests {
             Timeline::replay(&snap_log, image).err(),
             Some(ReplayError::BootNotReplayable)
         );
+    }
+
+    /// `playback_step` 逐帧播放（壳子刀）：末态 == `Timeline::replay`，cut 帧上报 `landed`，
+    /// 走完报 `done` 且再调仍 `done`、帧号不动。
+    #[test]
+    fn playback_step_matches_replay_and_reports_landing_and_done() {
+        let image = root_image();
+        let ld = Loadout::default();
+        let log = InputLog {
+            boot: Boot::NewGameAt {
+                seed: 21,
+                rank: 1,
+                start: 0,
+                loadout: ld,
+            },
+            frames: (0..40).map(InputFrame::empty).collect(),
+            cuts: vec![Cut {
+                at: 70,
+                to: 25,
+                player: 0,
+            }],
+        };
+        let rep = Timeline::replay(&log, image.clone()).unwrap();
+        let (mut t, mut pb) = Timeline::start_playback(log.clone(), image).unwrap();
+        assert_eq!(pb.frames_total(), 40);
+        let mut landed_at = None;
+        loop {
+            let r = t.playback_step(&mut pb).unwrap();
+            if let Some(c) = r.landed {
+                assert_eq!(c.to, 25);
+                landed_at = Some(t.frame() - 1); // 落在喂 frames[25] 之前，喂完帧号已是 26
+            }
+            if r.done {
+                break;
+            }
+        }
+        assert_eq!(landed_at, Some(25));
+        assert_eq!(t.frame(), 40);
+        assert_eq!(pb.cursor(), 40);
+        assert_eq!(
+            t.world().checksum(),
+            rep.world().checksum(),
+            "逐帧播放 == 一口气重放"
+        );
+        assert_eq!(t.log(), rep.log());
+        let again = t.playback_step(&mut pb).unwrap();
+        assert!(again.done);
+        assert_eq!(t.frame(), 40, "播完再调不喂帧");
     }
 
     /// 同一落点两条 cut（spec §3.4）：重放按序各落一次；`invuln` 取 max 所以与落一次逐位同，
