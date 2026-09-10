@@ -14,6 +14,7 @@ const W_NO_GAME: u32 = 1 << 0;
 const W_BAD_LAYER: u32 = 1 << 1;
 const W_BAD_MM: u32 = 1 << 2;
 const W_NO_GHOST: u32 = 1 << 3;
+const W_NO_PLAYBACK: u32 = 1 << 4;
 
 #[derive(GodotClass)]
 #[class(base=Node)]
@@ -134,6 +135,13 @@ impl WorldBridge {
     const EVT_REWIND_REQUESTED: i64 = stg_core::events::EVT_REWIND_REQUESTED as i64;
     #[constant]
     const EVT_STAGE_CLEARED: i64 = stg_core::events::EVT_STAGE_CLEARED as i64;
+    // 壳子刀(2026-09-11):续关位 + GAMEOVER 态号(壳此前手抄 4,现转出)。
+    #[constant]
+    const BTN_CONTINUE: i64 = stg_core::input::BTN_CONTINUE as i64;
+    #[constant]
+    const LIFE_GAMEOVER: i64 = stg_core::player::LIFE_GAMEOVER as i64;
+    #[constant]
+    const LIFE_ALIVE: i64 = stg_core::player::LIFE_ALIVE as i64;
     #[constant]
     const LAYER_BULLETS: i64 = frame::LAYER_BULLETS as i64;
     #[constant]
@@ -281,6 +289,84 @@ impl WorldBridge {
                 godot_error!("[stg] new_game_at 失败:{e:?}");
                 false
             }
+        }
+    }
+
+    /// 从回放日志开机(壳子刀):`names`/`sources` 同 `new_game_at`,`bytes` = 某局的
+    /// `replay_bytes()`。头校验(引擎版/词表/表/镜像/FNV)任一不符 → false + 日志。成功后
+    /// 这局是"播放态":宿主用 `playback_step` 代替 `step_frame`,`is_playback()` 为真。
+    #[func]
+    fn new_game_from_replay(
+        &mut self,
+        names: PackedStringArray,
+        sources: PackedStringArray,
+        bytes: PackedByteArray,
+    ) -> bool {
+        if names.len() != sources.len() {
+            godot_error!("[stg] new_game_from_replay:names/sources 长度不等");
+            return false;
+        }
+        let units: Vec<(String, String)> = names
+            .as_slice()
+            .iter()
+            .zip(sources.as_slice().iter())
+            .map(|(n, s)| (n.to_string(), s.to_string()))
+            .collect();
+        match boot::boot_from_replay(&units, bytes.as_slice()) {
+            Ok(g) => {
+                self.game = Some(g);
+                self.view_frame = None;
+                self.warned = 0;
+                true
+            }
+            Err(e) => {
+                godot_error!("[stg] new_game_from_replay 失败:{e:?}");
+                false
+            }
+        }
+    }
+
+    /// 这局是不是回放播放态。
+    #[func]
+    fn is_playback(&self) -> bool {
+        self.game.as_ref().is_some_and(|g| g.playback.is_some())
+    }
+
+    /// 回放总帧数(非播放态 → 0)。
+    #[func]
+    fn playback_total(&self) -> i64 {
+        self.game
+            .as_ref()
+            .and_then(|g| g.playback.as_ref())
+            .map_or(0, |p| p.frames_total() as i64)
+    }
+
+    /// 播放一帧(代替 `step_frame`):**-2** = 播完 / **-1** = 正常 / **≥0** = 本帧落了录制时
+    /// 的遡行(值 = 落点帧;播放里没有被丢弃的分支,壳不做倒放动画)。非播放态 → -2 + 日志。
+    /// 上传三层同 `step_frame`。
+    #[func]
+    fn playback_step(&mut self) -> i64 {
+        let Some(game) = self.game.as_mut() else {
+            self.warn_once(W_NO_GAME, "playback_step:尚未 new_game,no-op");
+            return -2;
+        };
+        let Some(pb) = game.playback.as_mut() else {
+            self.warn_once(W_NO_PLAYBACK, "playback_step:这局不是回放播放态,no-op");
+            return -2;
+        };
+        self.view_frame = None;
+        let r = match game.timeline.playback_step(pb) {
+            Ok(r) => r,
+            Err(e) => {
+                godot_error!("[stg] playback_step 失败:{e:?}");
+                return -2;
+            }
+        };
+        upload_layers(&self.layers, &mut self.bufs, game.world(), game.tables);
+        if r.done {
+            -2
+        } else {
+            r.landed.map_or(-1, |c| c.to as i64)
         }
     }
 
@@ -516,6 +602,7 @@ impl WorldBridge {
         d.set("invuln", p.invuln as i64);
         d.set("facing", p.facing as i64);
         d.set("hit_frame", p.hit_frame as i64);
+        d.set("continues", p.continues as i64);
         d
     }
 
