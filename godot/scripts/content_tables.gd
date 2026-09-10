@@ -2,6 +2,12 @@ class_name ContentTables
 ## 演出名表归内容包(id→名是表现层契约,引擎不注册;render-contract §4)。
 const BGM_NAMES := { 1: "Stage 1 ~ Placeholder March", 2: "Boss ~ Windchime of Seven Colors" }
 const SPELL_NAMES := { 1: "風鈴「Rainbow Wind Chime」" }
+## 练习模式入口表(壳子刀):名字 → mark 号。约定第 N 关道中 N*10、boss 段 N*10+5
+## (ecl/game/main.ecl 的 mark 号与此对应;引擎不管名字)。
+const PRACTICE := [
+	{ "name": "Stage 1", "mark": 10 },
+	{ "name": "Stage 1 Boss", "mark": 15 },
+]
 
 ## ── 敌人木偶动画表(表现契约 v2 §5.1)────────────────────────────────────────
 ## `anm_state` 是核内电平(ECL `set_anm_state` 写,世界不解释);这里把 `(sprite, state)` 映射到

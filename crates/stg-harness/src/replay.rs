@@ -143,7 +143,7 @@ mod tests {
     use stg_core::player::{LIFE_ALIVE, LIFE_DEATHWINDOW, Loadout};
     use stg_core::timeline::Boot;
 
-    const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../godot/ecl/demo");
+    const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../godot/ecl/game");
 
     /// 真 ECL 整局（demo 目录）跑进 `Timeline`：随机走位 + 周期跳躍 + 进决死窗口就遡行，
     /// 录 log → `Timeline::replay` 末态逐位同 + 字节往返全等 + 采样流两条路径对拍。

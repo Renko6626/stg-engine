@@ -2052,7 +2052,7 @@ mod tests {
         assert_eq!(w.body.view().diag().task_faults, 0);
     }
 
-    /// 敌句柄打包刀（2026-07-31）：`godot/ecl/demo/boss_windchime.ecl` 的**等 boss 死**
+    /// 敌句柄打包刀（2026-07-31）：`godot/ecl/game/boss_windchime.ecl` 的**等 boss 死**
     /// 轮询（`while ... { if enemy_hp(boss) < 0 { ... } }`）在打包后仍正确 —— 而且
     /// **打包实际上修好了这里一个潜在 bug**：boss 死、槽被回收之后若有杂兵落进那个槽，
     /// 打包前 `enemy_hp(boss)` 会读到**杂兵的血**（比如 40），`< 0` 永远不成立，轮询

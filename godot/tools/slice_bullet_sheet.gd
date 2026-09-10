@@ -10,7 +10,7 @@ extends SceneTree
 #
 # 行序 = 弹型号(值 = 行 × color_stride),必须与三处保持同源:
 #   crates/stg-core/src/tables.rs  build_tables_v0 的 SHAPE_RADIUS/SHAPE_COLOR_MASK
-#   godot/ecl/demo/bullets.ecl     内容包词表
+#   godot/ecl/game/bullets.ecl     内容包词表
 #   docs/render-contract.md §3     图集契约
 const SRC := "res://assets/bullet/bullet1.png"
 const DST := "res://assets/bullets.png"

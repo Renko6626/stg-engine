@@ -159,8 +159,11 @@ crates/
   stg-godot/        M2 桥：WorldBridge gdext cdylib（boot/frame/puppets/save 纯模块+壳；smoke/ headless 冒烟；
                     表现契约 v2 起三层 MultiMesh + 敌人木偶喂料 + vanished/entity_pos 读口）
 godot/            真 Godot 工程（场景刀）：场景树/三层 MultiMesh + 敌人节点木偶 + fx 层/分类分发器/HUD/
-                  demo 局 .ecl（杂兵+风铃卡 boss）；渲染契约见 docs/render-contract.md；
-                  冒烟 godot/smoke/run-smoke.sh
+                  ecl/game/ 关卡内容（杂兵+风铃卡 boss = 第 1 关；mark 道中 N*10 / boss N*10+5）；
+                  壳子刀（2026-09-11）：scripts/main.gd = GameFlow 流程（标题/难度/练习/回放列表）、
+                  play.gd = 游玩页（三模式一条 step 回路：NORMAL/PRACTICE 用 step_frame、REPLAY 用
+                  playback_step）、overlay.gd = 结算/GAME OVER/结果页、menu.gd = 菜单；
+                  渲染契约见 docs/render-contract.md；冒烟 godot/smoke/run-smoke.sh
   README.md       【异机开跑第一入口】clone 后怎么build/跑/排错（Windows 与 Linux 各一条路径口径）
 scripts/find-godot.sh   两个冒烟共用：选 Godot 二进制（≥4.6 版本闸）+ 超时上限
                   （低版本不加载扩展 → headless 挂死不报错，坑档 G14）

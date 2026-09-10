@@ -7,6 +7,10 @@
 > **维护规矩**：解决一条就删一条（别留"已完成"的墓碑，git log 才是历史）。新增的复审 follow-up
 > 往这里写，别只写账本。**写之前先核实**——本清单每条都经过代码核对，不是复述当年的复审原文。
 >
+> **壳子刀（2026-09-11）销 2 条**：**A8**（GAME OVER 已是独立覆盖页 + 续关 `BTN_CONTINUE` 世界内
+> 落地、计分按东方惯例，深度流程债兑现）/ **F20**（`effects.clear_after(F)` 按出生帧清理，遡行落地
+> 改走它）。**F23** 未动（自机仍单张图，`player.png` 32×32 只有一格，等美术给帧）。
+>
 > **表现纪律刀（2026-09-11，纯文档）新记 F20–F23**（fx 按出生帧清理 / 敌人退场残影 / 动画时长
 > 单一来源 / 自机动画帧 + 三件套命名对齐）；规矩本体在 `render-contract.md` §0 第 6 条与 §0.5。
 >
@@ -172,9 +176,9 @@ start_main` 三步——"唯一正典入口"的防分歧保证对该路径有洞
 
 ### A6. `.ecl` 是非 Godot 原生资源扩展名——导出 PCK 须显式 `include_filter`（场景刀 T7 记档，2026-07-26）
 
-`godot/ecl/demo/*.ecl`、`crates/stg-godot/smoke/*.ecl` 对 Godot 编辑器/导出器而言是未注册
+`godot/ecl/game/*.ecl`、`crates/stg-godot/smoke/*.ecl` 对 Godot 编辑器/导出器而言是未注册
 资源类型的普通文本文件；`_boot` 早前的内置源回退分支已在 T6 删除（demo 目录已实存，静默
-降级判为雷），现在纯靠 `DirAccess.open("res://ecl/demo")` 读磁盘文件，读不到就是硬失败（`push_error` +
+降级判为雷），现在纯靠 `DirAccess.open("res://ecl/game")` 读磁盘文件，读不到就是硬失败（`push_error` +
 `return false`），没有任何兜底。本刀只跑 headless/编辑器内路径，从未真正导出过 PCK——
 Godot 默认导出规则按已注册资源类型 + 场景引用链收集文件，`.ecl` 两头都不占，大概率被
 默认导出规则漏掉。**触发点 = 第一次做 `godot --export` 打包**：导出预设（`export_presets.cfg`）
@@ -193,19 +197,6 @@ UI/按键。`_sync_anchors`（双表示规矩：电平追平 hud/bg）目前的�
 （追注 2026-09-07：时间机制内核刀的**遡行落地**就是这条路径的第二个真消费者——`main.gd`
 `_finish_rewind` 已调 `_sync_anchors()`，证明它在"非开局"场合确实不可替代；`load_state` 的
 UI/按键仍未建，本条保留。）
-
-### A8. `GAME_OVER` 态——spec 四态，实施三态（场景刀 T7 记档，2026-07-26；终审修复波部分兑现）
-
-`docs/superpowers/specs/2026-07-25-godot-scene-design.md` §6 写的状态机是
-`PLAYING / PAUSED / STAGE_CLEAR / GAME_OVER` 四态；`main.gd` 的 `enum S` 仍只有三个，没有
-新增独立的 `GAME_OVER` 态。但**残机耗尽已有宿主侧最小处置**（终审修复波 I-1）：`_after_step`
-侦测 `hud_player().life_state == 4`（`LIFE_GAMEOVER`，`stg-core/src/player.rs`）后复用既有
-`STAGE_CLEAR` 三态，切状态 + `hud.show_banner("GAME OVER  (Z restart)", 3600.0)`，拦住了
-"残机打光却无任何反馈、宿主继续当胜利处理"这个假胜利缺口——`world/player.rs` 的生死状态机
-本身按既有设计正常演化（`LIFE_DEATHWINDOW`→...），只是复用而非新增状态，也没有区分
-"胜利结算"与"落败"两条横幅之外的任何后续（continue 续命、计分对齐胜利/落败两条路径的
-account 差异）。**触发点 = 已部分兑现**（假胜利已拦，本条降级为深度流程债）：真实内容期若
-要做 continue 续命/落败与胜利分道的计分对齐，再回来把 `GAME_OVER` 升格为独立第四态。
 
 ### A9. 演出打磨小件五包——spec 写了、实施未接（场景刀 T7 记档，2026-07-26；终审补第⑤件）
 
@@ -455,7 +446,7 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 2026-07-26）**：`APPEARANCE_MEDIUM` 一类 ② 段符号已随颜色轴刀退场——`fire`/`batch`
 现收两参（`shape`/`color`），`rainbow.ecl` 已改写成 `fire(OUTLINE, COLOR_CYAN, ...)`
 这类调用，`OUTLINE`/`COLOR_CYAN` 是脚本自己用 `const` 声明的内容包词汇（真美术接入后
-词表已换成 LASER/ARROWHEAD/OUTLINE/BALL/… 十二行，见 `godot/ecl/demo/bullets.ecl`），不再是
+词表已换成 LASER/ARROWHEAD/OUTLINE/BALL/… 十二行，见 `godot/ecl/game/bullets.ecl`），不再是
 Rust 侧注入的引擎常量；上面这句"去魔数示范"描述的是它当时（2026-07-21）的写法，读到本条
 时若查 `consts.rs` 找不到 `APPEARANCE_MEDIUM`，不是回归，是这条追注记录的迁移。
 
@@ -870,7 +861,7 @@ PC 推进，操作数永远不会被当成 opcode 解码，**运行期不存在�
 ZUN 原版 ECL 的 `@N` 就是那个意思。**读法与语义相反**，本仓至少已有两名作者（含一个不带任何
 提示、独立在本仓写弹幕的 agent）在这一处摔倒：
 
-1. **demo 的 `WIND_CHIME`**（`godot/ecl/demo/boss_windchime.ecl`，已修）：原写
+1. **demo 的 `WIND_CHIME`**（`godot/ecl/game/boss_windchime.ecl`，已修）：原写
    `set_speed(2.0fx); @30 turn(90deg);`，两条在出生同一帧全跑完，弹一出生就转了 90° 并再也
    不动，`@30` 什么都没延迟。
 2. 上面 F10 记的母弹分裂卡踩坑是同一处记号的另一种摔法：`xformdef { @110 set_life(1); }`
@@ -934,13 +925,6 @@ C 上的时停挪到 **D**（`input.gd`）。策划案里「停止」= 冻结 + 
 现在是时停（180 帧冻结）与 bomb 两个能力两份库存，合并是内容表 + HUD 的事（`BombCfg` 已能
 表达冻结 + 铺场）。**触发点 = 停止合并刀**，届时 D 键退场；策划案 10 节第 5 项（三键手指
 负担）也在那时一并试。
-
-### F20. fx 层时间跳变清理应按出生帧而非全清（表现纪律刀记档，2026-09-11）
-
-`main.gd::_finish_rewind` 与读档路径调 `effects.clear_all()`——遡行落点 F 之前就开始的
-oneshot（比如落点前 5 帧起的爆炸环）本该继续活，现在被一并清掉。规则应是杀 `born > F` 的行、
-留 `born ≤ F` 的（`render-contract.md` §0.5「时间跳变」第 3 条）。`effects.gd` 行池已有 `born`
-列，是一个循环的事。**触发点 = 下次动 effects.gd**，或目验时看到落点后特效突兀消失。
 
 ### F21. 敌人退场动画（detach / 残影）未做（表现纪律刀记档，2026-09-11）
 

@@ -33,7 +33,7 @@ jobs:
           echo "确定性防火墙通过 ✔"
       - name: godot demo 局 + 桥冒烟 .ecl 编译检查（单平台即可，纯 cargo，不涉及三平台校验和）
         run: |
-          cargo run -p stg-harness -- check godot/ecl/demo
+          cargo run -p stg-harness -- check godot/ecl/game
           cargo run -p stg-harness -- check crates/stg-godot/smoke/godot_smoke.ecl
 
   # ── 三平台构建 + 金向量校验和 ──────────────────────────────────────────

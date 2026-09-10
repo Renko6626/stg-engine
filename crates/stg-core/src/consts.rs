@@ -110,7 +110,7 @@ engine_consts! {
         REWIND_DEPTH:        u32 as int = crate::timeline::REWIND_DEPTH;
     }
     //  ② 段目前**空**（颜色轴刀 2026-07-26）：弹型名/色名归**内容包**——由各内容包
-    //  自己的 `.ecl` 用 `const` 声明（内建 demo 的一份见 `godot/ecl/demo/bullets.ecl`），
+    //  自己的 `.ecl` 用 `const` 声明（内建 demo 的一份见 `godot/ecl/game/bullets.ecl`），
     //  mod 作者与内建内容地位对等，引擎不再替某一份内容包注册词汇。段本身保留：
     //  机制（宏分段 + `validate` 的 join 校验）仍在，将来真有"引擎必须知道名字"的
     //  **可加载表行**时直接加行即可。

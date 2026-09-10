@@ -75,6 +75,9 @@ pub struct PlayerState {
     /// 进入决死窗口那一帧的 `World.frame`（时间机制内核刀）。`EVT_REWIND_REQUESTED` 把它带
     /// 给 timeline 算遡行落点（`hit_frame − REWIND_DEPTH`）。ALIVE 期间保留上次值，无消费者。
     pub hit_frame: u32,
+    /// 续关次数（壳子刀 2026-09-11）：`try_continue` 饱和加一；`== 0` 通关 = 不续关通关
+    /// （策划案 4.7 的 EX 解锁判据）。东方惯例续关后 `score = continues`。
+    pub continues: u8,
 }
 
 /// 开局装备面（整局流程刀 spec §2.2/§3）——回放/握手身份组成部分之一
@@ -124,6 +127,7 @@ impl PlayerState {
             bomb_phase: 0,
             bomb_timer: 0,
             hit_frame: 0,
+            continues: 0,
             shot_timer: 0,
             power: ld.power,
             lives: ld.lives,

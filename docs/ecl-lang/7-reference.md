@@ -57,7 +57,7 @@
 `'NAME' 与引擎常量重名，不能重新声明`（`typeck/consts.rs`）。
 
 **弹型名与颜色名不是引擎常量**（旧的 `APPEARANCE_*` 已随颜色轴刀退场）。它们归**内容包**，
-由你自己的 `.ecl` 用 `const` 声明（示例见 `godot/ecl/demo/bullets.ecl`）；同一编译单元
+由你自己的 `.ecl` 用 `const` 声明（示例见 `godot/ecl/game/bullets.ecl`）；同一编译单元
 （= 同一目录）内 `const` 跨文件可见，整局脚本只需要在一个文件里声明一次。这样 mod 作者与
 内建内容地位对等。写"轮转全部颜色"用 `BULLET_COLOR_STRIDE`，别硬编码 16。
 

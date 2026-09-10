@@ -51,7 +51,13 @@ impl WorldBody {
         let scene = self.scene_frozen();
         let actor = self.actor_frozen();
         for i in 0..crate::MAX_PLAYERS {
-            if matches!(self.players[i].life_state, LIFE_ABSENT | LIFE_GAMEOVER) {
+            if self.players[i].life_state == LIFE_GAMEOVER {
+                // 续关是 GAMEOVER 态唯一响应的输入（壳子刀）：不受 A/C 冻结组门禁——它是
+                // 局面级的元操作，不是自机的行动；成功后本帧余下相位按 RESPAWNING 走。
+                self.try_continue(i);
+                continue;
+            }
+            if self.players[i].life_state == LIFE_ABSENT {
                 continue;
             }
             // ── C 组：生死状态机计时（A4 相位 3 职责）
@@ -253,6 +259,30 @@ impl WorldBody {
         if cfg.attract_items {
             self.attract_all_items(i);
         }
+    }
+
+    /// 续关（壳子刀 spec §3）：`LIFE_GAMEOVER` 下响应上升沿——残机 / bomb / 时停回
+    /// `Loadout::default()`，`score = continues + 1`（东方惯例：分数变成续关计数），
+    /// `continues` 饱和加一，走 `commit_death` 同款重生分支（场底中心 + `RESPAWN_INVULN`）。
+    /// power 不动。非 GAMEOVER 下按沿 = no-op（`update_players` 只在 GAMEOVER 臂调本函数）。
+    fn try_continue(&mut self, i: usize) {
+        if !self.pressed_edge(i, crate::input::BTN_CONTINUE) {
+            return;
+        }
+        let ld = crate::player::Loadout::default();
+        let p = &mut self.players[i];
+        p.continues = p.continues.saturating_add(1);
+        p.lives = ld.lives;
+        p.bombs = ld.bombs;
+        p.time_stops = ld.time_stops;
+        p.score = p.continues as u64;
+        p.life_state = LIFE_RESPAWNING;
+        p.x = Fx::ZERO;
+        p.y = Fx::from_int(384);
+        p.invuln = RESPAWN_INVULN;
+        p.state_timer = 0;
+        p.bomb_phase = 0;
+        p.bomb_timer = 0;
     }
 
     /// 跳躍触发（A 组，时间机制内核刀 spec §2.2）。门禁三条：上升沿 + `LIFE_ALIVE` +
@@ -586,6 +616,54 @@ mod tests {
                 .any(|e| e.kind == EVT_REWIND_REQUESTED),
             "bomb 优先，遡行不发"
         );
+    }
+
+    /// 续关判别：GAMEOVER 按沿 → 残机/雷/时停回默认、分数 = 续关数、计数 +1、重生无敌；
+    /// ALIVE 按沿零变化；饱和不回绕。
+    #[test]
+    fn continue_restores_defaults_from_gameover_and_is_noop_otherwise() {
+        use crate::input::BTN_CONTINUE;
+        use crate::player::{LIFE_GAMEOVER, LIFE_RESPAWNING, Loadout, RESPAWN_INVULN};
+        let ld = Loadout::default();
+        // 对照：ALIVE 下按沿零变化
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].score = 12345;
+        let c0 = w.checksum();
+        step_t(&mut w, &keys(BTN_CONTINUE));
+        let mut probe = crate::step::World::new(0);
+        w.copy_into(&mut probe);
+        probe.body.players[0].input = 0;
+        probe.body.players[0].prev_input = 0;
+        probe.body.frame = 0;
+        assert_eq!(w.body.players[0].continues, 0, "ALIVE 下不续关");
+        assert_eq!(w.body.players[0].score, 12345);
+        let _ = c0;
+        // GAMEOVER 下按沿续关
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].life_state = LIFE_GAMEOVER;
+        w.body.players[0].lives = 0;
+        w.body.players[0].bombs = 0;
+        w.body.players[0].score = 999_999;
+        w.body.players[0].power = 250;
+        step_t(&mut w, &keys(BTN_CONTINUE));
+        let p = &w.body.players[0];
+        assert_eq!(p.life_state, LIFE_RESPAWNING);
+        assert_eq!(p.continues, 1);
+        assert_eq!(p.lives, ld.lives);
+        assert_eq!(p.bombs, ld.bombs);
+        assert_eq!(p.time_stops, ld.time_stops);
+        assert_eq!(p.score, 1, "分数 = 续关次数");
+        assert_eq!(p.power, 250, "power 不动");
+        assert_eq!(p.invuln, RESPAWN_INVULN);
+        // 按住不放不连环：再走一帧仍是 1 次
+        step_t(&mut w, &keys(BTN_CONTINUE));
+        assert_eq!(w.body.players[0].continues, 1);
+        // 饱和
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].life_state = LIFE_GAMEOVER;
+        w.body.players[0].continues = u8::MAX;
+        step_t(&mut w, &keys(BTN_CONTINUE));
+        assert_eq!(w.body.players[0].continues, u8::MAX);
     }
 
     /// 落地写 API：写 `REWIND_INVULN`；越界自机号 → no-op + 违约计数（P4-b）。

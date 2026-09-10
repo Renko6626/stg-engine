@@ -185,7 +185,12 @@ extern crate self as stg_core;
 /// `723 stage_clear`（发 `EVT_STAGE_CLEARED = 11` 事实事件，表层 codegen 追发 `WAIT 1`
 /// 让出一帧——修掉「`emit_req(REQ_STAGE_CLEAR)` 不让出帧、下一关开头会在挂牌同一帧跑掉」
 /// 的缝）。布局未动，金向量逐字节不变（风铃卡不调它）。
-pub const ENGINE_VER: u32 = 18;
+///
+/// **18 → 19**（壳子刀，2026-09-11）：`PlayerState.continues: u8`（×2，进校验和与存档；
+/// 追在 `hit_frame` 之后，`PlayerState` 64→72、`World` +16 B，尺寸哨兵这次响了）+ 输入词表新增
+/// `BTN_CONTINUE = 10`（位=0 等价旧行为，`actions_vocab_hash` 变）。金向量：新字段恒 0
+/// 但进哈希 ⇒ 预期改变；实测为准。
+pub const ENGINE_VER: u32 = 19;
 
 pub use stg_derive::define_pool;
 

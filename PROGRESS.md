@@ -4,30 +4,31 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-09-07）
+## 现在（2026-09-11）
 
-- **位置**：**M3 时间机制内核刀落地并收口**（spec `docs/superpowers/specs/2026-09-07-timeline-observe-jump-rewind-design.md`；
-  M3 由「环形快照 + 输入扰动 harness」按策划案 `docs/project_overview.md` **重定义为时间机制**，
-  联机回滚是附带收益）。核：`BTN_JUMP`/`BTN_REWIND`、`LIFE_JUMPING` 缺席态、`hit_frame`、
-  `EVT_REWIND_REQUESTED`、`rewind_landed`；`stg_core::timeline`（48 槽快照环 / `advance` 认领
-  遡行 / 影子世界 `preview` / `InputLog` 线性 log + cuts 字节格式 v1 + `replay`）；桥
-  `step_frame → i64`、`preview`、`view_ring`、`register_ghost_layer`、`replay_bytes`；壳 C 観測→跳躍
-  两段协议、V 遡行、倒放态。`ENGINE_VER` 16→17，金向量 md5 `b81f81e9…`。
-- **实证**：核 675 + 编译器 326 + 桥 16 + harness 47 全绿（含 10 条 timeline 单测 + demo 整局
-  真 ECL 回放闸：7 跳 1 遡行逐位重现）；两冒烟 SMOKE OK（桥级：走进弹流 → 遡行落点 = 被弹帧 − 30、
-  影子首弹比实弹多飞 15.5px、`view_ring` 往返；工程级：観測影子可见、跳躍同 tick 快进 31 帧）；
-  有头目验 `observe_f325`/`jump_f363` 人眼确认「影子在哪，弹就到哪」。
-- **回放闸揪出的 spec 偏差**：遡行落点可能在跳躍/重生中（被弹前 30 帧内），`rewind_landed` 不再
-  断言 ALIVE、无敌帧取 max（spec §10 b）。
-- **下一阶段候选**：资源体系（遡行/停止库存 + 偏差值 + 观测冷却 + 教学免费，`rewind_landed`
-  是入口）/ 停止合并（时停 + bomb 一份库存，键位收回）/ 练习模式（关键帧 + 本 log 长时间线）/
-  余晖拖尾（读环）/ 内容线（体验版第 1 关）/ `stg-py` RL 线 / 背景刀（A4）。
-- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（本刀新记 F15–F19）。
+- **位置**：**壳子刀落地并收口**（spec `docs/superpowers/specs/2026-09-11-game-shell-design.md`）——
+  游戏流程闭环立起来了：标题 → 难度 → 第 1 关 → 关间结算页 → 结果页（存回放）→ 标题；
+  GAME OVER 页续关（`BTN_CONTINUE` 世界内续关，可回放）；练习模式选段（`mark` 道中 `N*10` /
+  boss `N*10+5`）；回放列表播放（`playback_step` 逐帧、播完盖页）。内容目录 `ecl/demo` → `ecl/game`。
+  `ENGINE_VER` 18→19，金向量 md5 `978522fd…`。
+- **前置两刀同日**：转场协议修正（`stage_clear()` 内建 = `SYS 723` + `wait(1)`、`EVT_STAGE_CLEARED`
+  走通道 A、`seal_history` 关底硬边界，`ENGINE_VER` 17→18）；表现纪律（纯文档：render-contract
+  §0 第 6 条 + §0.5 三件套 / 两条通道即两种所有权 / 时间跳变规则 / 四件不做）。
+- **实证**：核 679 + 编译器 327 + 桥 17 + harness 47 全绿；桥级冒烟（续关 / 回放播完逐位同 /
+  坏日志拒收）与工程冒烟（既有断言 + 流程冒烟：内联脚本走结算页 → 确认 → 结果页 → GAME OVER →
+  续关 → 存回放落盘 → 从文件播放到播完页）SMOKE OK；标题菜单有头目验。
+- **下一阶段候选**：资源体系（遡行/停止库存 + 偏差值 + 観測冷却 + 教学免费，`rewind_landed` 是
+  入口）/ 停止合并（时停 + bomb 一份库存，键位收回）/ 练习模式长时间线（关键帧 + log，F18）/
+  内容线体验版（第 1 关蕾米教学分配、第 2 关荷取、难度连续系数）/ 表现小件（F15/F16/F21/F22/F23）。
+- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-09-11 | **壳子刀（游戏流程壳）** | 核：`BTN_CONTINUE=10`（GAMEOVER 下世界内续关：残机/雷/时停回默认、`score = continues`、饱和计数、重生）+ `PlayerState.continues`（64→72，哨兵响）+ `timeline::Playback`/`start_playback`/`playback_step`（`replay_with` 改为其包装）；`ENGINE_VER` 18→19，金向量 md5 `978522fdaae4865e8d642d211dcfae46`。桥：`new_game_from_replay`/`playback_step`/`is_playback`/`playback_total`、`BTN_CONTINUE`/`LIFE_*` 常量、`hud_player.continues`。壳：`main.gd` 改 GameFlow（标题/难度/练习/回放列表，代码生成 `Menu`），原游玩逻辑搬 `play.gd`（三模式一条 step 回路、`Overlay` 结算/GAME OVER/结果/播完页、`confirm/back/continue_game/save_replay`、F20 `clear_after`），`ecl/demo` → `ecl/game`（mark 10/15，`stage_clear(1); stage_clear(0)`），`content_tables.PRACTICE`。桥级冒烟 + 工程流程冒烟全过；销 A8/F20。 |
+| 2026-09-11 | **表现纪律（文档）** | render-contract §0 第 6 条 + §0.5：三件套 `visual/phase/phase_frame`、不设通用参数槽、两条通道即两种所有权（对照 ZUN ANM 四种生命周期）、时间跳变四规则、动画时长编译期化、四件不做（ANM VM / ANM 语言 / 中立 crate / 每实例 Node）。follow-ups F20–F23。 |
+| 2026-09-07 | **转场协议修正** | `stage_clear(stage)` 内建 = `SYS 723` + `wait(1)`（修 `emit_req` 不让出帧、下一关首帧在挂牌帧跑掉的缝）；流程信号改走通道 A 事实流 `EVT_STAGE_CLEARED`，`REQ_STAGE_CLEAR` 退役为兼容位；`Timeline::seal_history`/桥 `seal_history()` 关底封印快照环（遡行不跨关）。`ENGINE_VER` 17→18，金向量不变。 |
 | 2026-09-07 | **M3 时间机制内核刀（timeline + 観測/跳躍/遡行）** | 策划案定案后 M3 重定义：单机 STG 的三件时间工具。核加 `BTN_JUMP=8`/`BTN_REWIND=9`（Edge）、`LIFE_JUMPING=5` 缺席态（A 组整段跳过、相位 6/7 靠既有 ALIVE 门禁、不可瞄、`JUMP_FRAMES=30` 倒计时）、`PlayerState.hit_frame`（被尾部 padding 吃掉，D20 第四次）、`try_rewind` 只在决死窗口发 `EVT_REWIND_REQUESTED{player,hit_frame}`（bomb 优先）、`rewind_landed` 写 `invuln=max(..,30)`；`ENGINE_VER` 16→17，金向量 md5 `b81f81e92431bd086fc57ad57fde115e`。`stg_core::timeline`：`SnapshotRing` 48 槽（槽由帧号定、淘汰即覆写、`get_discarded` 供倒放）、`Timeline::advance` 一次一帧并认领遡行（落点 = `hit_frame−REWIND_DEPTH` 取整存档帧钳到最老、恢复 + 落地 + 覆写环槽 + 截 log + 记 Cut、丢弃死分支上的旧 cut）、影子世界 `preview(n)` = 克隆 + 清 JUMP 旧电平 + 喂一帧 JUMP + step（预览即真跳靠同一份代码）、`InputLog` 线性 log + cuts 字节格式 v1（STGR，头含引擎版/表/镜像/词表哈希，尾 FNV）+ `replay`/`replay_with`（线性 log 里出现遡行请求即 Err）。harness `replay <f.stgr> --ecl` 命令 + demo 整局回放闸。桥持 `Timeline`，`step_frame → i64`（-1 / 落点 F）、`view_ring(f)` 视图世界切换（含丢弃分支）、`preview(n)` 影子弹层上传、`register_ghost_layer`、`replay_bytes`，`load_state` 后 timeline 重建（`Boot::Snapshot` 不可从头重放）。壳：C 観測→跳躍两段协议（60 tick 窗口）、V 遡行、跳躍同 tick 快进 31 帧、`REWINDING` 倒放态每 tick 退 3 帧到落点后水位 `reset_to`/fx 清空/`_sync_anchors`、`ghost.gdshader`、HUD 时间提示；时停临时挪 D。回放闸实测揪出 spec 偏差：落点可在跳躍/重生中，`rewind_landed` 不断言 ALIVE。闸门全绿（fmt/clippy/test 675+326+16+47/两冒烟/目验 `observe_f325`/`jump_f363`）。 |
 | 2026-09-07 | **表现契约 v2 刀** | 立法「电平走 A、边沿走 B、时间源只有帧号」；核加弹 `born_frame`/敌 `anm_state_frame`（进校验和）+ `vanished` 纯输出缓冲（只记场内寿尽/被清，越界不记）+ syscall `430 set_anm_state`/`721 fx_at`/`722 fx_on` + `REQ_FX_AT=8`/`REQ_FX_ATTACHED=9`；`ENGINE_VER` 15→16，金向量 md5 `86fbc52ae5ca87c5ca0549a11c5dac01`；桥面敌层退役（三层）、弹层 custom.y = 弹龄、弹旋转改查表、`puppets()`/`vanished()`/`entity_pos()` 读口、REQ_*/EVT_* 常量导出、上传免一次拷贝；壳侧 256 个 Sprite2D 敌人木偶（手动设帧）、fx MultiMesh 池（程序化 shader，帧驱动）、分发器三类 + 水位、`--shots` 有头目验模式。有头目验（VNC+llvmpipe）四件全过，并修掉 shader 乘垃圾 `COLOR` 的老 bug。闸门全绿（fmt/clippy/test 657+326+16+45/storm/verify-tables/两冒烟 SMOKE OK）。 |
 | 2026-09-04 | **自机能力刀（时间停止 + bomb）** | 两个自机能力（`try_time_stop`/`try_bomb`，A 组沿检测触发）+ deathbomb（决死窗口内的 bomb 救人，救人不退命也不退款）+ 表驱动 `BombCfg`（角色表描述铺哪些 `FieldPool` field/时长/是否吸道具，bomb 因此成为 `FieldPool` 首个真租户）。`WorldBody` 新增 `freeze_left: [u16; 2]`（自机能力档 + ECL 演出档两个冻结槽独立计时）、`PlayerState` 新增 `time_stops`/`prev_input`（沿检测滚存位，`pressed_edge` 是 `EDGE_MASK` 词表首个真消费者）。`ENGINE_VER` 14→15（布局+号表+输入词表三重变更），表二进制格式追加 bomb 段、`TABLE_VERSION` 3→4（`tables_v0.bin` 2172→2201 B），新 syscall `513 add_time_stops`/`560 time_stop_player`，新输入位 `BTN_TIMESTOP=7`（Edge）。金向量三次改变，终值 md5 `28e172902d4efe47def818c1aab0739e`。**收口刀（Task 9）**：补 `BTN_TIMESTOP` 桥面导出+`godot/` 键位（此前七位都通了、唯独这位漏桥，能力在真工程里发不出来）；实测道具池第二压力入口（bomb 消弹 1:1 转星星+全屏吸取，rank-3 峰值~814 弹）不溢出、写成永久回归测试；`follow-ups.md` 销 E 组、新记 D20（尺寸哨兵测试被 padding 连续吃掉三次字段新增仍未响）；`stg-world-design.md` D10 表补 bomb 相关容量约束；闸门全绿（fmt/clippy debug+release/test 647+326+12+45/verify-tables/check/run 四档 pool_full 0/storm 1200 帧×8 点双源一致/两个冒烟 SMOKE OK）。 |

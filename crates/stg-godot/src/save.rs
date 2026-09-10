@@ -17,6 +17,7 @@ pub fn load_into(game: &mut Game, bytes: &[u8]) -> Result<(), String> {
                 world_checksum: w.checksum(),
             };
             game.timeline = Timeline::from_world(w, game.image().clone(), boot);
+            game.playback = None;
             Ok(())
         }
         Err(e) => Err(format!("{e:?}")),

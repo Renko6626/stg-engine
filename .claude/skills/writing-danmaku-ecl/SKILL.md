@@ -26,7 +26,7 @@ cargo run -p stg-harness -- serve --ecl <f.ecl>     # 浏览器里真看（ssh -
 **环闭没闭合、是不是 N 路均分、速度层对不对、角度是不是差了 90°**。改完弹幕不看 `--at`，
 等于没验。
 
-跑真 demo 局：`run godot/ecl/demo --frames 6000`（目录整取编译）。
+跑真 demo 局：`run godot/ecl/game --frames 6000`（目录整取编译）。
 
 ## 该读哪一篇
 
@@ -44,7 +44,7 @@ cargo run -p stg-harness -- serve --ecl <f.ecl>     # 浏览器里真看（ssh -
 | 什么 Fault、什么静默降级 | `8-errors.md` |
 
 `docs/ecl-ops.md` 是字节码层（syscall 号表），**写弹幕通常不需要**。
-`godot/ecl/demo/` 与 `crates/stg-harness/scenes/rainbow.ecl` 是可抄的真实内容。
+`godot/ecl/game/` 与 `crates/stg-harness/scenes/rainbow.ecl` 是可抄的真实内容。
 
 ## 跨机制的静默坑
 
@@ -128,8 +128,8 @@ Easy/Normal/Lunatic 三档各差 16~18 BAM，只有 Hard 恰好整除）。**要
 内容改动不碰 `crates/`。改完至少：
 
 ```bash
-cargo run -p stg-harness -- check godot/ecl/demo     # 整局编译
-cargo run -p stg-harness -- run   godot/ecl/demo --frames 6000
+cargo run -p stg-harness -- check godot/ecl/game     # 整局编译
+cargo run -p stg-harness -- run   godot/ecl/game --frames 6000
 ```
 
 `run` 退非零 = 有 fault，必须查清再说"好了"。要看画面跑

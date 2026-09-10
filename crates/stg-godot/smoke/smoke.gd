@@ -297,6 +297,55 @@ func _init():
 	if rb_bytes.size() < 8 or rb_bytes.slice(0, 4).get_string_from_ascii() != "STGR": fail("time: replay_bytes 魔数"); return
 	RenderingServer.free_rid(mm_ghost)
 
+	# ── 壳子刀(2026-09-11,spec §7 桥级两条)────────────────────────────────────
+	# ① 续关:1 条命开局,走进弹流 → 决死窗口耗尽 → GAMEOVER → 按 BTN_CONTINUE →
+	#    RESPAWNING、continues==1、残机回默认 3、score==1。
+	var one_name := PackedStringArray(["smoke.ecl"])
+	var one_src := PackedStringArray([src])
+	if not b.new_game_at(one_name, one_src, 7, 2, 0, 0, 0, 1, 3): fail("shell: new_game_at lives=1"); return
+	var mv := 0
+	while b.player_pos().y > 300.5 and mv < 120:
+		b.step_frame(WorldBridge.BTN_UP); mv += 1
+	var died := false
+	var wk := 0
+	while not died and wk < 1200:
+		b.step_frame(WorldBridge.BTN_LEFT); wk += 1
+		died = int(b.hud_player()["life_state"]) == WorldBridge.LIFE_GAMEOVER
+	if not died: fail("shell: 1 条命走进弹流 1200 帧内应 GAMEOVER"); return
+	var x_go: float = b.player_pos().x
+	b.step_frame(WorldBridge.BTN_RIGHT) # GAMEOVER 下方向键零效
+	if absf(b.player_pos().x - x_go) > 0.0001: fail("shell: GAMEOVER 下不该移动"); return
+	if int(b.hud_player()["life_state"]) != WorldBridge.LIFE_GAMEOVER: fail("shell: GAMEOVER 应保持"); return
+	b.step_frame(WorldBridge.BTN_CONTINUE)
+	var hp2: Dictionary = b.hud_player()
+	if int(hp2["life_state"]) != 3: fail("shell: 续关后应 RESPAWNING(3),得 %d" % int(hp2["life_state"])); return
+	if int(hp2["continues"]) != 1: fail("shell: continues 应为 1"); return
+	if int(hp2["lives"]) != 3: fail("shell: 续关残机回默认 3"); return
+	if int(hp2["score"]) != 1: fail("shell: 续关后 score = 续关次数"); return
+	for i in range(20): b.step_frame(0)
+	var c_end: int = b.checksum()
+	var f_end: int = b.frame()
+	# ② 回放播放:倒出 log → new_game_from_replay 逐帧播完 → 帧号/校验和与录制末态相同;
+	#    播放态 step 用 playback_step,is_playback 为真,播完返 -2 且再调仍 -2。
+	var log_bytes: PackedByteArray = b.replay_bytes()
+	if not b.new_game_from_replay(one_name, one_src, log_bytes): fail("shell: new_game_from_replay"); return
+	if not b.is_playback(): fail("shell: is_playback 应为真"); return
+	if b.playback_total() != f_end: fail("shell: playback_total 应 == 录制帧数 %d,得 %d" % [f_end, b.playback_total()]); return
+	var guard := 0
+	var last := -1
+	while guard < 5000:
+		last = b.playback_step()
+		guard += 1
+		if last == -2: break
+	if last != -2: fail("shell: 播放应以 -2 结束"); return
+	if b.frame() != f_end: fail("shell: 播完帧号应 == 录制末帧"); return
+	if b.checksum() != c_end: fail("shell: 播完校验和应 == 录制末态"); return
+	if b.playback_step() != -2: fail("shell: 播完再调仍 -2"); return
+	var bad_log := log_bytes.duplicate()
+	bad_log[12] ^= 1
+	if b.new_game_from_replay(one_name, one_src, bad_log): fail("shell: 坏日志应被拒"); return
+	if b.frame() != f_end: fail("shell: 拒收不该动世界"); return
+
 	RenderingServer.free_rid(mm)
 	b.free()
 	print("SMOKE OK")
