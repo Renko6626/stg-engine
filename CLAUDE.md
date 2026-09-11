@@ -111,6 +111,7 @@ docs/gameplay-design.md          【玩法权威】停止/観測→跳躍/死亡
                      + 体验版验证计划 + 对 setting 的推翻清单 + 下一刀引擎改动入口（§10）
 docs/setting.md                  设定集（東方時環晷 世界观/剧情/Boss/美术/音乐/预算/合规；v0.5 原貌不回溯改）
 docs/architecture.md             一页架构地图（断层线/不变量/crate 表/相位流水线/接缝），构思下一步工程用
+docs/art-brief.md                美术交接包（画师直接看：风格圣经/咲夜·蕾米 brief/立绘与点阵规格/流程条款/验收），§9 内部备注交出去前删
 docs/superpowers/{specs,plans}/  brainstorm 产出的设计与实施计划（历史记录）
 docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
 docs/checksum-mechanism.md       校验和机制 + "新字段默认入校验" 保证
