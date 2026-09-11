@@ -4,7 +4,7 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-09-11）
+## 现在（2026-09-12）
 
 - **位置**：**壳子刀落地并收口**（spec `docs/superpowers/specs/2026-09-11-game-shell-design.md`）——
   游戏流程闭环立起来了：标题 → 难度 → 第 1 关 → 关间结算页 → 结果页（存回放）→ 标题；
@@ -17,15 +17,22 @@
 - **实证**：核 679 + 编译器 327 + 桥 17 + harness 47 全绿；桥级冒烟（续关 / 回放播完逐位同 /
   坏日志拒收）与工程冒烟（既有断言 + 流程冒烟：内联脚本走结算页 → 确认 → 结果页 → GAME OVER →
   续关 → 存回放落盘 → 从文件播放到播完页）SMOKE OK；标题菜单有头目验。
-- **下一阶段候选**：资源体系（遡行/停止库存 + 偏差值 + 観測冷却 + 教学免费，`rewind_landed` 是
-  入口）/ 停止合并（时停 + bomb 一份库存，键位收回）/ 练习模式长时间线（关键帧 + log，F18）/
-  内容线体验版（第 1 关蕾米教学分配、第 2 关荷取、难度连续系数）/ 表现小件（F15/F16/F21/F22/F23）。
+- **玩法定案（2026-09-12，纯文档）**：`docs/gameplay-design.md` 落地为玩法权威——策划案
+  `project_overview.md` 降级改名 `setting.md`（设定集）。十问拍板：主角 = **停止**（时停 + 触碰消弹
+  合一，库存）与 **観測→跳躍**（観測 = 30 帧落点预览，跳躍冷却 600 帧）；**遡行并进残机**（死亡即
+  退 30 帧、偏差值 = 死亡数、独立键/库存取消）；键位 Z/Shift/X/C 三动作键；第 1 关可实施稿
+  （道中 90–120 s 含无名中 boss、蕾米用自己的卡四段、教学分配）；验证计划 V1–V7（两条 harness
+  探针）。原「资源体系」候选作废。
+- **下一阶段候选**：**玩法刀**（gameplay-design §10：停止合并 + 触碰消弹 / 跳躍冷却 / 死亡即遡行
+  / 偏差值 / harness `probe-jump`）→ 第 1 关内容刀（§6 波次表 + 四段）→ 验证 V1–V7。旁支：练习
+  模式长时间线（F18）/ 表现小件（F15/F16/F21/F22/F23）。
 - **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-09-12 | **玩法设计文档（纯文档）** | `docs/gameplay-design.md` 新建为玩法权威（三件工具数字规格 / 第 1 关可实施稿 / 验证计划 V1–V7 / 对 setting 推翻清单 / 引擎改动入口 §10）；`project_overview.md` → `setting.md` 降级设定集 + 顶部横幅；CLAUDE.md 权威文档段 + docs 清单补三行；architecture.md 刷到 M2/M3 现状（stg-godot ✅、timeline/spell 行、接缝表、索引）。无代码改动。 |
 | 2026-09-11 | **壳子刀（游戏流程壳）** | 核：`BTN_CONTINUE=10`（GAMEOVER 下世界内续关：残机/雷/时停回默认、`score = continues`、饱和计数、重生）+ `PlayerState.continues`（64→72，哨兵响）+ `timeline::Playback`/`start_playback`/`playback_step`（`replay_with` 改为其包装）；`ENGINE_VER` 18→19，金向量 md5 `978522fdaae4865e8d642d211dcfae46`。桥：`new_game_from_replay`/`playback_step`/`is_playback`/`playback_total`、`BTN_CONTINUE`/`LIFE_*` 常量、`hud_player.continues`。壳：`main.gd` 改 GameFlow（标题/难度/练习/回放列表，代码生成 `Menu`），原游玩逻辑搬 `play.gd`（三模式一条 step 回路、`Overlay` 结算/GAME OVER/结果/播完页、`confirm/back/continue_game/save_replay`、F20 `clear_after`），`ecl/demo` → `ecl/game`（mark 10/15，`stage_clear(1); stage_clear(0)`），`content_tables.PRACTICE`。桥级冒烟 + 工程流程冒烟全过；销 A8/F20。 |
 | 2026-09-11 | **表现纪律（文档）** | render-contract §0 第 6 条 + §0.5：三件套 `visual/phase/phase_frame`、不设通用参数槽、两条通道即两种所有权（对照 ZUN ANM 四种生命周期）、时间跳变四规则、动画时长编译期化、四件不做（ANM VM / ANM 语言 / 中立 crate / 每实例 Node）。follow-ups F20–F23。 |
 | 2026-09-07 | **转场协议修正** | `stage_clear(stage)` 内建 = `SYS 723` + `wait(1)`（修 `emit_req` 不让出帧、下一关首帧在挂牌帧跑掉的缝）；流程信号改走通道 A 事实流 `EVT_STAGE_CLEARED`，`REQ_STAGE_CLEAR` 退役为兼容位；`Timeline::seal_history`/桥 `seal_history()` 关底封印快照环（遡行不跨关）。`ENGINE_VER` 17→18，金向量不变。 |

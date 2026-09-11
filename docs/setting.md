@@ -1,6 +1,10 @@
 # 東方時環譜 ～ Counterfactual Alibi.
 
-**设定与剧情文档**
+**设定与剧情文档**（原 `project_overview.md`，2026-09-12 改名并降级为设定集）
+
+> **玩法以 [`gameplay-design.md`](gameplay-design.md) 为准。** 本文管世界观 / 剧情 / 美术 / 音乐 / 预算 /
+> 合规；§2 机制、§4.1 第 1 关教学、§10 待验证清单里凡与 gameplay-design 冲突的条目已被推翻，
+> 清单见该文 §9。本文正文**不回溯修改**（保留 v0.5 原貌作决策史），新结论只写进 gameplay-design。
 
 > 工作稿 v0.5｜2026-09-07
 >

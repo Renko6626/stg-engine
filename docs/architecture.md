@@ -59,11 +59,13 @@
 | `stg-core/consts` | 脚本可见引擎常量注册表（① 结构常量 / ② 表符号） | ✅ C14 | [ecl-lang](ecl-lang.md) |
 | `stg-core/ecl` | 栈机 VM（协程池 256）+ op 表 + syscall 白名单沙箱 + EclImage + 安全绑定层 | ✅ M1 | [ecl-ops](ecl-ops.md) |
 | `stg-core/{checksum,rng}` | vendored FNV-1a64 校验和 + vendored PCG32 | ✅ M0 | [checksum-mechanism](checksum-mechanism.md) |
-| `stg-core/step` | **组装层**：§3.5 宪法顺序唯一持有者 + World{body,tasks} + 快照 | ✅ M0 | design_doc §3.5 |
+| `stg-core/step` | **组装层**：§3.5 宪法顺序唯一持有者 + World{body,tasks} + 快照 + `new_game`/`new_game_at` 正典开机 | ✅ M0 | design_doc §3.5 |
+| `stg-core/spell` | 符卡计器机构（计时/衰减/破卡血线/结算入分/boss_ui 自动喂） | ✅ 2026-07-24 | `spell.rs` 顶注 |
+| `stg-core/timeline` | World 之上的时间线层：`SnapshotRing` 快照环 + 遡行兑现 + 影子世界 `preview` + `InputLog`/`Playback` 回放。World 对它无知 | ✅ M3 | spec `2026-09-07-timeline-…` |
 | `stg-derive` | `#[derive(Checksum)]` + `define_pool!` proc-macro | ✅ M0 | — |
 | `stg-ecl-compiler` | `.ecl` 表层语言（lex/parse/typeck/slots/codegen）→ EclImage；离线编译 | ✅ M1.9 | [ecl-lang](ecl-lang.md) |
 | `stg-harness` | CLI：金向量对拍 + bench 基线 + 烘焙表 bake/verify + serve WebSocket 查看器(通道 A/B 首个交互消费者) | ✅ M0 | [bench-baseline](bench-baseline.md) |
-| `stg-godot` | gdext WorldBridge + MultiMesh + 请求分发器 | ⏳ M2 未建 | design_doc §6 |
+| `stg-godot` + `godot/` | gdext WorldBridge（boot/frame/puppets/save/timeline）+ 真工程（三层 MultiMesh + 敌人木偶 + fx + HUD + GameFlow 壳） | ✅ M2 + 壳子刀 | [render-contract](render-contract.md) / [bridge-adaptation-notes](bridge-adaptation-notes.md) |
 | `stg-net` / `stg-py` | UDP 会话/重同步 / PyO3 headless 并行 env | ⏳ M4/M5 未建 | design_doc §7 |
 
 ## step 流水线（相位 0–10，顺序即宪法，PhaseGuard 押运）
@@ -115,8 +117,8 @@ InputFrame ──► step ──► [相位 0-10 演化 World] ──► 通道A
 
 | 里程碑 | 接缝（已就位的焊点） | 还缺 |
 |---|---|---|
-| **M2 表现层**（gdext） | 可见性收口 ✅（写走 API）+ **通道 A `WorldView` ✅**（五池每字段裸切片 + `alive_words()` + `view()` 单入口）+ **通道 B ✅**（`RenderReq` + `emit_req`〔世界 API/syscall 720/`.ecl` 内建〕+ `take_requests()` 出口 + settle 敌死请求）+ **外接前收口 ✅**（快照哨兵防漏 + `tasks`/`rng`/`frame`/`frame_events` 封口配 `frame()`/`frame_events()`/`tasks()` 读口 + `spawn_entry*` 表守卫 + `ENGINE_VER` + 场界常量 pub——断层线两出口齐备、误用面收干净） | 新建 crate（WorldBridge + MultiMesh + 请求分发器 + 定点→浮点边界）；开工先还 A1（道具 sprite 列）/A2（bench 重跑） |
-| **M3 回滚 harness** | 快照 = memcpy（账已实测）；RNG 随快照回滚；回放头素材就位：`seed`（World provenance 字段，`seed()` 读回）+ `content_hash` + `engine_ver`；**L1 存档字节格式 ✅**（`save_bytes`/`load_bytes` + 身份头 v1）+ **L2 storm 重演闸 ✅**（多点双源存档→逐点重演→校验和流逐位对拍，CI 短版 + 变异检验） | 环形快照调度（已定为消费侧插件，随 godot 线）+ 延迟/输入扰动 harness |
+| **M2 表现层** ✅ | 通道 A `WorldView` + 通道 B `RenderReq` + WorldBridge + 真 Godot 工程 + GameFlow 壳（标题/难度/练习/回放）全落地 | 表现小件 F15/F16/F21/F22/F23 |
+| **M3 时间机制** ✅ | `stg_core::timeline`：快照环 + 遡行兑现（`try_rewind`→`EVT_REWIND_REQUESTED`→`rewind_landed`）+ 影子世界 `preview` + `InputLog` 回放 + 壳 観測/跳躍/遡行状态机。原「回滚 netcode harness」按玩法设计重定义，联机回滚是附带收益 | **玩法刀**（[gameplay-design §10](gameplay-design.md)）：停止合并 + 触碰消弹 / 跳躍冷却 / 死亡即遡行 / 偏差值 / harness `probe-jump` |
 | **M4 网络** | lockstep+rollback 模型；K=20 采样对拍；`engine_ver`/内容哈希握手 | `stg-net`（UDP + 会话/重同步）起 phase 2 |
 | **M5 headless 并行** | 单 world 单线程、并行只在 world 之间（P3）；无外部依赖 | `stg-py`（PyO3 env） |
 | 玩法小刀 | `FieldPool` 消弹区就位（bomb 首租户）；`Shooter.flags` bit0 预留 homing | bomb 铺一个 field；homing 转向率存放待拍 |
@@ -131,5 +133,7 @@ InputFrame ──► step ──► [相位 0-10 演化 World] ──► 通道A
 | [`stg-world-design.md`](../stg-world-design.md) | 世界层实施蓝图 v1.0（20 轮评审拍板）——P1-P6 原则、A1-A9 架构、D1-D12 局部实现 |
 | [`CLAUDE.md`](../CLAUDE.md) | 工作宪法：硬规则单一入口（断层线/不变量/原则/自检清单） |
 | [`PROGRESS.md`](../PROGRESS.md) | 当前位置/下一步/里程碑史的**唯一权威** |
+| [`gameplay-design.md`](gameplay-design.md) | **玩法权威**：三件时间工具数字规格 / 第 1 关 / 体验版验证计划 / 引擎改动入口 |
+| [`setting.md`](setting.md) | 设定集：世界观/剧情/Boss/美术/音乐/预算/合规（玩法冲突处让位于上者） |
 | `docs/*.md` | 专题速查：定点坑/校验和/池布局/变换 op/ECL 语言与字节码/性能基线 |
 | `docs/superpowers/{specs,plans}/` | 各切片的设计 spec 与实施计划（历史记录） |
