@@ -109,7 +109,7 @@ design_doc.md  stg-world-design.md   权威设计（勿轻改，改动过评审�
 docs/follow-ups.md               【接手先读】技术债与待办（复审判定可延后的，逐条核实过）
 docs/gameplay-design.md          【玩法权威】停止/観測→跳躍/死亡即遡行的数字规格 + 第 1 关可实施稿
                      + 体验版验证计划 + 对 setting 的推翻清单 + 下一刀引擎改动入口（§10）
-docs/setting.md                  设定集（東方時環譜 世界观/剧情/Boss/美术/音乐/预算/合规；v0.5 原貌不回溯改）
+docs/setting.md                  设定集（東方時環晷 世界观/剧情/Boss/美术/音乐/预算/合规；v0.5 原貌不回溯改）
 docs/architecture.md             一页架构地图（断层线/不变量/crate 表/相位流水线/接缝），构思下一步工程用
 docs/superpowers/{specs,plans}/  brainstorm 产出的设计与实施计划（历史记录）
 docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
