@@ -134,6 +134,18 @@ fn emits_wait_one_after(name: &str) -> bool {
     name == "stage_clear"
 }
 
+/// `phase_begin` 糖的常量注入（boss 换段刀 spec §3.1）：返回「在表层第 `i` 位**之前**要追压的立即数」。
+/// 表层 `(slot, pattern, time_limit, hp_threshold)` → 字节码 `spell_begin` 7 参
+/// `(slot, spell_id=0, pattern, time_limit, bonus0=0, flags=SPELL_NONSPELL, hp_threshold)`。
+fn phase_begin_injects(name: &str, i: usize) -> &'static [i32] {
+    const NONSPELL: i32 = stg_core::spell::SPELL_NONSPELL as i32;
+    match (name, i) {
+        ("phase_begin", 1) => &[0],
+        ("phase_begin", 3) => &[0, NONSPELL],
+        _ => &[],
+    }
+}
+
 /// 循环栈簿记（clox 惯用法）：`break`/`continue` 各自的跳转占位位置列表，循环结构生成
 /// 完毕、`continue`/`break` 的真实目标（本地 code 位置）已知后统一回填。
 #[derive(Default)]
@@ -742,6 +754,9 @@ impl<'p> Gen<'p> {
                 }
                 i += 2;
                 continue;
+            }
+            for &v in phase_begin_injects(bi.name, i) {
+                b.push_i(v);
             }
             let (a, pk) = (&args[i], &bi.params[i]);
             match (a, pk) {
@@ -2118,5 +2133,20 @@ mod tests {
         );
         assert_eq!(g[24], 40, "杂兵的新号一切正常（防「全都读不到」的假绿）");
         assert_eq!(w.body.view().diag().task_faults, 0);
+    }
+
+    /// `phase_begin` 糖（boss 换段刀 spec §3.1）：与手写 `spell_begin(slot, 0, p, t, 0, SPELL_NONSPELL, thr)`
+    /// 编译出逐字节相同的代码。
+    #[test]
+    fn phase_begin_lowers_byte_identical_to_spell_begin_with_nonspell_flag() {
+        let sugar = "async sub p() { loop { wait(1); } }\n\
+                     async sub boss() { phase_begin(0, p, 600, 300); wait_spell(); }\n\
+                     sub main() { _ = spawn_enemy(0.0fx, 0.0fx, 900, 0, 0, 0, boss); }";
+        let hand = "async sub p() { loop { wait(1); } }\n\
+                    async sub boss() { spell_begin(0, 0, p, 600, 0, SPELL_NONSPELL, 300); wait_spell(); }\n\
+                    sub main() { _ = spawn_enemy(0.0fx, 0.0fx, 900, 0, 0, 0, boss); }";
+        let a = compile(sugar, "a.ecl").expect("糖应编译");
+        let b = compile(hand, "b.ecl").expect("手写应编译");
+        assert_eq!(a.code(), b.code());
     }
 }

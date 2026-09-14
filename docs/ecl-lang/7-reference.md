@@ -24,6 +24,7 @@
 | `$self_vy` | `fx` | owner 的笛卡尔速度 y 分量(px/帧)——敌→敌池，弹→弹池，其余 owner 恒 0 |
 | `$self_speed` | `fx` | owner 的速率(作者视图，与 $self_vx/$self_vy 恒同步) |
 | `$self_angle` | `angle` | owner 的朝向(作者视图，BAM)。**类型是 angle 不是 fx**——能直接喂 move_angle/fire，但与 fx 之间没有隐式转换；近乎静止时不更新(回填有速度下限)，零速下读到的是最后一次有效朝向 |
+| `$self_enemy` | `int` | 任务 owner 敌的敌号(与 spawn_enemy 返回值同编码,可喂 enemy_alive/enemy_x 等);owner 不是敌 → -1(**不是 0**:敌号 0 合法) |
 <!-- gen:engvars:end -->
 
 速度那四个（`$self_vx`/`$self_vy`/`$self_speed`/`$self_angle`）是敌人运动动词族刀
@@ -103,6 +104,10 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `move_angle(dur: int, angle: angle, easing: int)` — 只转向、速率一字不动;dur>0 走**最短弧**(350deg→10deg 走 +20deg 不走 -340deg)。相对转向:move_angle(60, $self_angle + 15deg, 3)
 - `move_speed(dur: int, speed: fx, easing: int)` — 只调速、方向一字不动。相对加速:move_speed(30, $self_speed * 2.0fx, 2)
 - `set_anm_state(state: int)` — 敌自身(self owner 非 ENEMY → Fault)写表现状态号 anm_state 并无条件盖 anm_state_frame=当前帧(同状态重设=重播,即 ZUN anmInterrupt 的电平版);世界不解释状态号,表现层按 (sprite,anm_state,state_age) 选帧
+- `set_invuln(frames: int)` — 敌自身无敌 frames 帧(覆写;0 取消;期间自机弹不掉血不发命中事件,自机弹本就穿透不消耗);self 非 ENEMY → Fault;frames 越出 [0,65535] no-op+计数
+- `set_hitbox(r: fx)` — 敌自身体碰半径(撞自机那一圈,生成默认 12);钳 [0,1024]+计数;self 非 ENEMY → Fault。ZUN setHitbox(w,h) 的 w 是直径还是半径待验
+- `set_hurtbox(r: fx)` — 敌自身受击半径(被自机弹/伤害区打中那一圈,生成默认 16);钳 [0,1024]+计数;self 非 ENEMY → Fault
+- `set_enemy_flag(flag: int, on: int)` — 置(on!=0)/清敌自身标志:flag 为 ENEMY_NO_BODY(不体碰,仍吃弹) / ENEMY_KILLALL_EXEMPT(kill_all_enemies 不杀) 的非空组合;其它位 no-op+计数;self 非 ENEMY → Fault
 - `boss_set(slot: int, hp_ratio: fx, spell_id: int, timer_frames: int, phase_left: int, active: int)` — 整槽写 boss_ui 公告板(脚本写/UI 读);enemy 字段取自 self owner(非 ENEMY → NULL,不 Fault);符卡 active 期 enemy/spell_id/timer_frames/hp_ratio 由引擎逐帧自动覆写,phase_left 不受影响仍归脚本
 - `pulse_signal(channel: int)` — 脉冲一条信号通道(边沿语义,仅当帧有效);放行处于弹变换 WAIT_SIGNAL 停驻态的弹(非 ECL 任务)
 - `emit_req(id: int, a0: int|fx|angle, a1: int|fx|angle, a2: int|fx|angle, a3: int|fx|angle, a4: int|fx|angle, a5: int|fx|angle)` — 通道 B 渲染请求;void 只能裸语句;args 裸载荷(fx 过 raw/angle 过 BAM/int 原样)
@@ -133,12 +138,15 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `spell_begin(slot: int, spell_id: int, pattern: sub|none, time_limit: int, bonus0: int, flags: int, hp_threshold: int)` — 开卡:绑 boss/血线/计时/计分,spawn pattern 为卡绑定模式任务(随卡生死)
 - `spell_end()` — 手动收卡(取卡按血线自动判,通常不需要)
 - `spell_timer() -> int` — 当前卡剩余帧数
+- `phase_begin(slot: int, pattern: sub|none, time_limit: int, hp_threshold: int)` — 开非符段:= spell_begin(slot, 0, pattern, time_limit, 0, SPELL_NONSPELL, hp_threshold);计时/血线/模式随段/血条照旧,不宣言不计 bonus 不出结算横幅,结束发 EVT_PHASE_ENDED;配 wait_spell() 与 spell_result(slot)
+- `spell_result(slot: int) -> int` — 槽 slot 最近一次结束方式:0 还没结束过 / SPELL_END_HP(1) 打到血线含 boss 死 / SPELL_END_TIMEOUT(2) 超时 / SPELL_END_MANUAL(3) spell_end;下一次 spell_begin 不清;越界返 0+计数
 - `add_score(delta: int)` — 给自机记分:delta 允许负(扣分),饱和钳 [0,u64::MAX] 不回绕;关底 bonus/结算记账用
 - `bgm(id: int)` — 声明当前 BGM:写世界锚点字段 bgm_id 并发 REQ_BGM;mark 跳入自动补偿最近声明(常量参)
 - `bg(id: int)` — 声明当前背景:写锚点 bg_id 并发 REQ_BG;换背景隐含新的 phase 纪元(补偿细则见 ecl-lang)
 - `bg_phase(phase: int)` — 声明背景演出段号:写 bg_phase 并自动盖 bg_phase_frame=当前帧,发 REQ_BG_PHASE;表现层按段内局部时间 seek
 - `time_stop_player(frames: int)` — 停住自机的时间 frames 帧(自机不能动/不能发新弹,自机弹也冻住;敌方照跑);0 = 立即解除;重入覆盖;越界 no-op+计数
 - `clear_bullets()` — 全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧
+- `clear_bullets_at(x: fx, y: fx, r: fx, stars: int)` — 圆形清弹:以 (x,y) 为心、半径 r 铺存活 1 帧的清弹区;stars=0 不转星星,非 0 同 clear_bullets 转星;扩张消弹波就每帧调一次加大 r;owner 无限制
 - `add_lives(delta: int)` — 增减残机:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
 - `add_bombs(delta: int)` — 增减停止库存:delta 允许负,双边钳 [0,STOP_STOCK_MAX=5] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
 - `add_power(delta: int)` — 增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout
@@ -146,6 +154,7 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `drop_add(type: int, n: int)` — 自身待掉落计数增量加 n 颗 type(只增不减,要清空用 drop_clear);计数上限 255 饱和
 - `drop_items()` — 立刻撒出自身待掉落计数;**吐完不清空**(故 drop_items();die(); 掉双份);不加分不发死亡事件
 - `die()` — 就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)
+- `kill_all_enemies(mode: int)` — 清场:按池序杀除调用者自己/带 ENEMY_KILLALL_EXEMPT/已在死之外的全部敌;mode KILL_SILENT(0) 静默退场(不掉不加分无事件) / KILL_DIE(1) 同 die() 全套;其它 mode no-op+计数;owner 无限制
 - `sh_reset(id: int)` — 重置发射器槽 id 为默认(1×1 单发、无 xform/挂弹任务/请求)
 - `sh_sprite(id: int, shape: int, color: int)` — 设发射器的弹型与颜色;查外观表(越界/空格 编译期或 Fault)
 - `sh_offset(id: int, x: fx, y: fx)` — 设出弹点**相对 owner** 的偏移;与 sh_offset_abs 写同一对字段,后写的赢(本条清绝对位标志)

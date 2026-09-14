@@ -233,6 +233,43 @@ const BUILTINS: &[Builtin] = &[
         doc: "敌自身(self owner 非 ENEMY → Fault)写表现状态号 anm_state 并无条件盖 anm_state_frame=当前帧(同状态重设=重播,即 ZUN anmInterrupt 的电平版);世界不解释状态号,表现层按 (sprite,anm_state,state_age) 选帧",
         param_names: &["state"],
     },
+    // ── 敌判定族（syscall 440-443；boss 换段刀 2026-09-14 spec §5.1）────────────
+    Builtin {
+        name: "set_invuln",
+        syscall: syscall::SYS_SET_INVULN,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: None,
+        doc: "敌自身无敌 frames 帧(覆写;0 取消;期间自机弹不掉血不发命中事件,自机弹本就穿透不消耗);self 非 ENEMY → Fault;frames 越出 [0,65535] no-op+计数",
+        param_names: &["frames"],
+    },
+    Builtin {
+        name: "set_hitbox",
+        syscall: syscall::SYS_SET_HITBOX,
+        is_op: false,
+        params: &[Val(Fx)],
+        ret: None,
+        doc: "敌自身体碰半径(撞自机那一圈,生成默认 12);钳 [0,1024]+计数;self 非 ENEMY → Fault。ZUN setHitbox(w,h) 的 w 是直径还是半径待验",
+        param_names: &["r"],
+    },
+    Builtin {
+        name: "set_hurtbox",
+        syscall: syscall::SYS_SET_HURTBOX,
+        is_op: false,
+        params: &[Val(Fx)],
+        ret: None,
+        doc: "敌自身受击半径(被自机弹/伤害区打中那一圈,生成默认 16);钳 [0,1024]+计数;self 非 ENEMY → Fault",
+        param_names: &["r"],
+    },
+    Builtin {
+        name: "set_enemy_flag",
+        syscall: syscall::SYS_SET_ENEMY_FLAG,
+        is_op: false,
+        params: &[Val(Int), Val(Int)],
+        ret: None,
+        doc: "置(on!=0)/清敌自身标志:flag 为 ENEMY_NO_BODY(不体碰,仍吃弹) / ENEMY_KILLALL_EXEMPT(kill_all_enemies 不杀) 的非空组合;其它位 no-op+计数;self 非 ENEMY → Fault",
+        param_names: &["flag", "on"],
+    },
     Builtin {
         name: "boss_set",
         syscall: syscall::SYS_BOSS_SET,
@@ -557,6 +594,27 @@ const BUILTINS: &[Builtin] = &[
         doc: "当前卡剩余帧数",
         param_names: &[],
     },
+    // ── 非符段糖 + 结束方式读口（boss 换段刀 2026-09-14 spec §3）────────────────
+    Builtin {
+        name: "phase_begin",
+        syscall: syscall::SYS_SPELL_BEGIN,
+        is_op: false,
+        // 糖：codegen 在表层第 1 位前注入 spell_id=0、第 3 位前注入 bonus0=0 与 flags=SPELL_NONSPELL，
+        // 降低为 spell_begin 7 参（见 `codegen::phase_begin_injects`）。
+        params: &[Val(Int), Sub, Val(Int), Val(Int)],
+        ret: None,
+        doc: "开非符段:= spell_begin(slot, 0, pattern, time_limit, 0, SPELL_NONSPELL, hp_threshold);计时/血线/模式随段/血条照旧,不宣言不计 bonus 不出结算横幅,结束发 EVT_PHASE_ENDED;配 wait_spell() 与 spell_result(slot)",
+        param_names: &["slot", "pattern", "time_limit", "hp_threshold"],
+    },
+    Builtin {
+        name: "spell_result",
+        syscall: syscall::SYS_SPELL_RESULT,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Int),
+        doc: "槽 slot 最近一次结束方式:0 还没结束过 / SPELL_END_HP(1) 打到血线含 boss 死 / SPELL_END_TIMEOUT(2) 超时 / SPELL_END_MANUAL(3) spell_end;下一次 spell_begin 不清;越界返 0+计数",
+        param_names: &["slot"],
+    },
     // ── 表现锚点四字段（syscall 5xx；整局流程刀 Task 2/3）─────────────────────
     Builtin {
         name: "add_score",
@@ -613,6 +671,15 @@ const BUILTINS: &[Builtin] = &[
         ret: None,
         doc: "全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧",
         param_names: &[],
+    },
+    Builtin {
+        name: "clear_bullets_at",
+        syscall: syscall::SYS_CLEAR_BULLETS_AT,
+        is_op: false,
+        params: &[Val(Fx), Val(Fx), Val(Fx), Val(Int)],
+        ret: None,
+        doc: "圆形清弹:以 (x,y) 为心、半径 r 铺存活 1 帧的清弹区;stars=0 不转星星,非 0 同 clear_bullets 转星;扩张消弹波就每帧调一次加大 r;owner 无限制",
+        param_names: &["x", "y", "r", "stars"],
     },
     // ── B20：账面增量三件套（syscall 510/511/512）。只有 add_*、没有 set_*——绝对赋值场景
     //    已被 Loadout（开局装备）收编，是人类裁定，别"补全"（裁定详见 syscall.rs 号表注释）。
@@ -679,6 +746,15 @@ const BUILTINS: &[Builtin] = &[
         ret: None,
         doc: "就地阵亡:掉落+加分+死亡事件+死亡特效,并**立即终止本任务**(后续语句不执行)",
         param_names: &[],
+    },
+    Builtin {
+        name: "kill_all_enemies",
+        syscall: syscall::SYS_KILL_ALL_ENEMIES,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: None,
+        doc: "清场:按池序杀除调用者自己/带 ENEMY_KILLALL_EXEMPT/已在死之外的全部敌;mode KILL_SILENT(0) 静默退场(不掉不加分无事件) / KILL_DIE(1) 同 die() 全套;其它 mode no-op+计数;owner 无限制",
+        param_names: &["mode"],
     },
     // ── Shooter：预存发射参数集（syscall 600-660；参照 ZUN et* 族 600-641）───────
     //    `sh_reset` 重置编号槽 → 一堆以 `id` 打头的 setter 逐项配 → `sh_fire(id)` 开火。
@@ -980,6 +1056,13 @@ pub const ENGINE_VARS: &[EngVarMeta] = &[
         syscall: syscall::SYS_SELF_ANGLE,
         doc: "owner 的朝向(作者视图，BAM)。**类型是 angle 不是 fx**——能直接喂 move_angle/fire，但与 fx 之间没有隐式转换；近乎静止时不更新(回填有速度下限)，零速下读到的是最后一次有效朝向",
     },
+    EngVarMeta {
+        ev: EngVar::SelfEnemy,
+        name: "self_enemy",
+        ty: Int,
+        syscall: syscall::SYS_SELF_ENEMY,
+        doc: "任务 owner 敌的敌号(与 spawn_enemy 返回值同编码,可喂 enemy_alive/enemy_x 等);owner 不是敌 → -1(**不是 0**:敌号 0 合法)",
+    },
 ];
 
 /// 名字（不含 `$`）→ 元数据。`lang::parse` 的白名单判定走这条。
@@ -1026,7 +1109,8 @@ mod tests {
                 | EngVar::SelfVx
                 | EngVar::SelfVy
                 | EngVar::SelfSpeed
-                | EngVar::SelfAngle => {}
+                | EngVar::SelfAngle
+                | EngVar::SelfEnemy => {}
             }
             assert!(
                 ENGINE_VARS.iter().any(|m| m.ev == ev),
@@ -1203,6 +1287,14 @@ mod tests {
             "sh_task",
             "sh_req",
             "sh_fire",
+            "spell_result",
+            "set_invuln",
+            "set_hitbox",
+            "set_hurtbox",
+            "set_enemy_flag",
+            "kill_all_enemies",
+            "clear_bullets_at",
+            "phase_begin",
         ];
         for n in names {
             assert!(lookup(n).is_some(), "内建函数 '{n}' 应在表中");
@@ -1411,6 +1503,13 @@ mod tests {
             "sh_task",
             "sh_req",
             "sh_fire",
+            "set_invuln",
+            "set_hitbox",
+            "set_hurtbox",
+            "set_enemy_flag",
+            "kill_all_enemies",
+            "clear_bullets_at",
+            "phase_begin",
         ] {
             assert_eq!(lookup(n).unwrap().ret, None, "'{n}' 应无返回值");
         }

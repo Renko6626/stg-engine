@@ -1293,4 +1293,44 @@ sub main() {
         assert_eq!((g[20], g[21]), (111, 222));
         assert_eq!(w.body.view().diag().task_faults, 0);
     }
+
+    /// 新内建端到端（boss 换段刀）：非符段超时 → spell_result==2 写进 globals；
+    /// $self_enemy == spawn_enemy 返回值；判定写口/清场/半径清弹表层可调且零 fault。
+    #[test]
+    fn phase_begin_spell_result_and_self_enemy_end_to_end() {
+        let src = "async sub p() { loop { wait(1); } }\n\
+                   async sub boss() {\n\
+                     set_global(22, $self_enemy);\n\
+                     set_invuln(10);\n\
+                     set_hitbox(20.0fx);\n\
+                     set_hurtbox(24.0fx);\n\
+                     set_enemy_flag(ENEMY_NO_BODY, 1);\n\
+                     phase_begin(0, p, 5, 300);\n\
+                     wait_spell();\n\
+                     set_global(20, spell_result(0));\n\
+                     clear_bullets_at(0.0fx, 100.0fx, 50.0fx, 0);\n\
+                     kill_all_enemies(KILL_SILENT);\n\
+                     loop { wait(1); }\n\
+                   }\n\
+                   sub main() {\n\
+                     var b: int = spawn_enemy(0.0fx, 100.0fx, 900, 0, 0, 0, boss);\n\
+                     set_global(21, b);\n\
+                     loop { wait(1); }\n\
+                   }";
+        let img = compile(src, "t.ecl").expect("应编译成功");
+        let t = &stg_core::tables::TABLES_V0;
+        let mut w = stg_core::step::World::new(1);
+        w.start_main(&img).expect("main 应能派生");
+        for f in 0..20 {
+            stg_core::step::step(&mut w, t, &img, &stg_core::input::InputFrame::empty(f));
+        }
+        let g = w.body.view().globals();
+        assert_eq!(
+            g[20],
+            stg_core::spell::SPELL_END_TIMEOUT as i32,
+            "非符段超时"
+        );
+        assert_eq!(g[22], g[21], "$self_enemy == spawn_enemy 返回值");
+        assert_eq!(w.body.view().diag().task_faults, 0);
+    }
 }
