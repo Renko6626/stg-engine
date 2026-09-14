@@ -109,8 +109,13 @@ func refresh(bridge: WorldBridge) -> void:
 		boss_bar.size.x = 368.0 * clampf(float(b["hp_ratio"]), 0.0, 1.0)
 		var s := bridge.hud_spell(0)
 		if not s.is_empty() and int(s["active"]) == 1:
-			var sname: String = ContentTables.SPELL_NAMES.get(int(s["spell_id"]), "Spell #%d" % int(s["spell_id"]))
-			spell_l.text = "%s  %d" % [sname, int(s["frames_left"]) / 60]
+			var secs := int(s["frames_left"]) / 60
+			if int(s["flags"]) & WorldBridge.SPELL_NONSPELL:
+				# 非符段（boss 换段刀）：只显示倒计时，不显示卡名
+				spell_l.text = "%d" % secs
+			else:
+				var sname: String = ContentTables.SPELL_NAMES.get(int(s["spell_id"]), "Spell #%d" % int(s["spell_id"]))
+				spell_l.text = "%s  %d" % [sname, secs]
 		else:
 			spell_l.text = ""
 	else:

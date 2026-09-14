@@ -7,6 +7,14 @@ use crate::math::{Angle, Fx};
 
 /// `flags` 的 dying 标记位（D5 预留位）：settle 命中致死置位，cleanup 回收。
 pub const ENEMY_DYING: u8 = 1 << 0;
+/// `flags` 位：不与自机体碰（碰撞行 3 跳过；仍吃自机弹）。脚本经 `set_enemy_flag` 写（boss 换段刀）。
+pub const ENEMY_NO_BODY: u8 = 1 << 1;
+/// `flags` 位：`kill_all_enemies` 不杀它（boss 换段刀）。
+pub const ENEMY_KILLALL_EXEMPT: u8 = 1 << 2;
+/// `kill_all_enemies` 模式：静默退场（同 D9 主任务 return：不掉落不加分不发事件）。
+pub const KILL_SILENT: u8 = 0;
+/// `kill_all_enemies` 模式：逐只走 `kill_enemy`（同 `die()`）。
+pub const KILL_DIE: u8 = 1;
 
 /// `vel_space`：极坐标插值空间（载体槽 = `(speed.raw(), angle.raw() as i32)`）。
 pub const VEL_SPACE_POLAR: u8 = 0;

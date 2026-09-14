@@ -160,6 +160,7 @@ impl World {
         d.players = s.players; // [PlayerState; N] 是 Copy
         d.boss_ui = s.boss_ui;
         d.spells = s.spells; // [SpellSlot; MAX_BOSSES] 是 Copy
+        d.spell_last_result = s.spell_last_result; // [u8; MAX_BOSSES] 结束方式读口（boss 换段刀）
         d.spell_seq = s.spell_seq; // [u16; MAX_BOSSES] 持久代际计数器，随快照往返（ABA 修复）
         d.bgm_id = s.bgm_id;
         d.bg_id = s.bg_id;
@@ -2382,8 +2383,12 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            20,
-            "bump 必须是有意识决定(评审 + 改本测试)——19→20：玩法刀(2026-09-14)。\
+            21,
+            "bump 必须是有意识决定(评审 + 改本测试)——20→21：boss 换段与敌人钩子刀(2026-09-14)。\
+             syscall 新增 026 self_enemy/131 spell_result/440-443 敌判定族/531 kill_all_enemies/541 clear_bullets_at;\
+             210 spawn_enemy 调用约定追加实参与 argc;WorldBody.spell_last_result [u8;2] 进校验和/存档;\
+             碰撞行 3 跳过 ENEMY_NO_BODY;EVT_PHASE_ENDED=12;符卡结算:非符段、超时钉血、超时清弹不给星。\
+             ——前一次 19→20：玩法刀(2026-09-14)。\
              PlayerState 删 bomb_phase/bomb_timer/time_stops、加 jump_cd u16/deaths u8(存档 wire format 变);\
              碰撞矩阵新增行 8 ROW_STOP_TOUCH(停止冻结中触碰消弹);号表 513 add_time_stops 退役;\
              输入词表退役位 7 BTN_TIMESTOP / 位 9 BTN_REWIND(vocab_hash 变);生命态 LIFE_RESPAWNING=3 退役;\
@@ -3300,5 +3305,19 @@ mod tests {
                 "第 {k} 颗必须冻在出发点"
             );
         }
+    }
+
+    /// 新字段 `spell_last_result`（2 B，可能被对齐吞掉、尺寸哨兵不响——D20）：
+    /// 直测它进校验和、随 copy_into 往返（boss 换段刀）。
+    #[test]
+    fn spell_last_result_rides_copy_into_and_checksum() {
+        let mut a = World::new(1);
+        let mut b = World::new(1);
+        let c0 = a.checksum();
+        a.body.spell_last_result[1] = crate::spell::SPELL_END_TIMEOUT;
+        assert_ne!(a.checksum(), c0, "新字段必须进校验和");
+        a.copy_into(&mut b);
+        assert_eq!(b.body.spell_last_result, a.body.spell_last_result);
+        assert_eq!(b.checksum(), a.checksum());
     }
 }

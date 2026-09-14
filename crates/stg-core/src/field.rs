@@ -13,6 +13,9 @@ use crate::math::Fx;
 pub const FIELD_CLEAR_BULLETS: u8 = 1 << 0;
 /// 能力位：启用碰撞矩阵行 7（Field × EnemyBody → 按 `dmg_per_frame` 扣血）。
 pub const FIELD_DAMAGE: u8 = 1 << 1;
+/// 能力位：清弹但**不转星星**（boss 换段刀 spec §6：符卡超时结算 / `clear_bullets_at(..., stars=0)`）。
+/// 弹照样标 `BULLET_CLEARED`、照样计入 `EVT_FIELD_CLEARED`。
+pub const FIELD_NO_STAR: u8 = 1 << 2;
 
 /// 覆盖全场含越界边距的半径。
 ///
@@ -66,6 +69,33 @@ pub(crate) fn fullscreen_clear_field() -> FieldInit {
         life: 1,
         owner: 0,
         flags: FIELD_CLEAR_BULLETS,
+    }
+}
+
+/// 全屏清弹、不给星——符卡超时结算专用（boss 换段刀 spec §3.2 ③）。几何与
+/// [`fullscreen_clear_field`] 同源，只多一位 `FIELD_NO_STAR`。
+pub(crate) fn fullscreen_clear_field_no_star() -> FieldInit {
+    FieldInit {
+        flags: FIELD_CLEAR_BULLETS | FIELD_NO_STAR,
+        ..fullscreen_clear_field()
+    }
+}
+
+/// 圆形一帧清弹区——`clear_bullets_at` syscall（541）的构造口（boss 换段刀 spec §6）。
+/// 半径钳制交给 `create_field`（P4-b）。`stars=false` 带 `FIELD_NO_STAR`。
+pub(crate) fn clear_field_at(x: Fx, y: Fx, r: Fx, stars: bool) -> FieldInit {
+    FieldInit {
+        x,
+        y,
+        radius: r,
+        dmg_per_frame: 0,
+        life: 1,
+        owner: 0,
+        flags: if stars {
+            FIELD_CLEAR_BULLETS
+        } else {
+            FIELD_CLEAR_BULLETS | FIELD_NO_STAR
+        },
     }
 }
 

@@ -387,7 +387,7 @@ pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
                     Some(idx) => {
                         // 子任务 locals 已被 TaskPool::spawn 全零初始化（复用槽写满纪律）——
                         // 只需覆写 [0..argc) 段，argc=0 时这是 no-op（金向量两段不变的地基）。
-                        ctx.tasks.slots[idx as usize].locals[..argc].copy_from_slice(&args[..argc]);
+                        ctx.tasks.write_args(idx, &args[..argc]);
                         // 符卡机构 spec §2.1"继承"：子任务继承父 `spell_bound`（0=不绑也是
                         // 一种继承值）——整棵模式树随卡死绝，`fire` 挂弹任务（syscall.rs 的
                         // task-spawn，非本 op）不走此路，故不继承，见该处文档。

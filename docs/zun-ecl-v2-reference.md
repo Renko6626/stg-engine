@@ -93,3 +93,26 @@ time/rank_mask/param_mask 字段（时间轴混编 + 难度过滤 + 栈引用替
 4. **int/float 双生全家桶**：I1 之下我们单 i32 + 定点变体，指令数减半。
 5. **无预算无沙箱**：ZUN 死循环即卡死、坏指令即 crash；我们双层预算 + 六类确定性 Fault +
    fuzz 实证——rollback/联机时代的必需品，ZUN 无此需求。
+
+## 游戏指令迁移对照（boss 换段与敌人钩子刀，2026-09-14）
+
+> 来源：TH18 原版 22 个 ECL 的迁移差距评估（spec `docs/superpowers/specs/2026-09-14-boss-phase-enemy-hooks-design.md` §1）。
+> 只列本刀补上口子的那几条；其余 et*/move*/anm* 的逐条判定见该评估。
+
+| ZUN（TH18） | 原版用量 | 我们 | 注意 |
+|---|---|---|---|
+| `setInterrupt(slot, hp, t, "sub")` + 读 `$TIMEOUT` | 81 / 154 | `phase_begin` 或 `spell_begin` + `wait_spell()` + `spell_result(slot)` | **结构不同**：ZUN 到线/到时抢占式跳进处理子程序，我们在主任务里顺序编排；ZUN 非符与紧跟的符卡共用一条血、段间 `lifeSet` 重灌，我们用一池总血 + 逐段递降血线 |
+| 超时时 `life = hp_value` | — | 引擎自动：超时 `hp = min(hp, 血线)` | 迁移时删掉手写重灌 |
+| `$CAPTURE` / `$MISS_COUNT` / `$BOMB_COUNT` 段首复位 | 81 / 68 / 68 | 引擎自动 | 原版只写不读，迁移时删 |
+| `setInvuln(n)` | 39 | `set_invuln(n)` | — |
+| `setHitbox(w,h)` / `setHurtbox(w,h)` | 111 / 111 | `set_hitbox(r)` / `set_hurtbox(r)` | 同名同义（hitbox 撞自机、hurtbox 挨打）；ZUN `w` 是直径还是半径待验 |
+| `flagSet(2)` / `flagClear(2)` | — | `set_enemy_flag(ENEMY_NO_BODY, 1/0)` | 按用法推断的位义，未见 exe 实证 |
+| `flagSet(32)` | 36 | `set_enemy_flag(ENEMY_KILLALL_EXEMPT, 1)` | exe 实证：bit5 不被 `enmKillAll` 清 |
+| `enmKillAll()` | 108 | `kill_all_enemies(KILL_SILENT 或 KILL_DIE)` | ZUN 被杀者掉不掉落未核实，脚本自己选 |
+| `$ID` | 1 | `$self_enemy` | 非敌读 -1 |
+| `$I0–3` / `%F0–7` 生成继承 | ≈390 次生成 | `spawn_enemy(..., sub(实参…))` | 实参拷贝、非共享；ZUN 同一敌的 async 共享这 12 格，我们要共享走 globals 自由段 |
+| `etCancel(640)` | 137 | `clear_bullets()` | 转星星 |
+| `etClear(640)` | 150 | `clear_bullets_at(0.0fx, 224.0fx, 400.0fx, 0)` | 不转星星；超时收段引擎已自动这么清 |
+| `etCancel(r)` 扩张消弹波 | 2 | 每帧 `clear_bullets_at(x, y, r, 1)` 加大 `r` | — |
+| `movePosTime(0, 0, 0.0f, 0.0f)` 段首 | 常见 | `move_to(0, $self_x, $self_y, 0)` | **别照抄成 `move_to(0, 0.0fx, 0.0fx, 0)`**：原版是取消插值，我们的 dur=0 是瞬移 |
+

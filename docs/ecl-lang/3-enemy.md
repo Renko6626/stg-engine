@@ -49,8 +49,8 @@ sub main() {
 
 ## 敌的生成与轮询（`spawn_enemy` 的 `task` 参 + `enemy_hp`）
 
-`spawn_enemy` 第 7 参 `task` 与 `fire` 第 7 参**同构**：编译期解析的 async 无参 sub 名，或
-字面量 `none`。
+`spawn_enemy` 第 7 参 `task` 与 `fire` 第 7 参**同构**：编译期解析的 async sub 名，或
+字面量 `none`。`spawn_enemy` 这一位还可以写成带实参的调用形，见下「给敌的主任务传参」。
 
 非 `none` 时新敌的 owner 三元组落 `(ENEMY, 新敌 index, generation)`，随之解锁 owner 门禁：
 `spell_begin`/`move_to`/`self_*` 系列只在这颗新敌自己的任务里才能过闸。旧态下这些调用永远
@@ -86,6 +86,37 @@ sub main() {
 自己退场**，等待循环随之结束。它按
 `godot/ecl/game/boss_windchime.ecl` 原文精简改写——真实版本的 `boss_main` 跑非符 + 符卡两
 阶段、`boss_battle` 的等待循环带 75 秒挂死兜底。**真实关卡编排务必带超时兜底。**
+
+### 给敌的主任务传参
+
+`task` 位可以写成调用形 `name(实参…)`。实参按目标 async sub 的签名逐位判型，**在
+`spawn_enemy` 那一刻求值**并拷进新任务，新任务次帧首跑时读到的就是它们：
+
+```ecl
+const BALL: int = 48;
+const COLOR_RED: int = 1;
+
+async sub zako(dir: angle, speed: fx) {
+    move_vel(0, dir, speed, 0);
+    wait(40);
+    _ = fire(BALL, COLOR_RED, $self_x, $self_y, 2.0fx, aim_player(), none, none);
+    wait(200);
+}
+
+sub main() {
+    for i in 0..4 {
+        _ = spawn_enemy(-150.0fx, (40 + i * 30) as fx, 30, 1, 100, 0, zako(20deg, 1.5fx));
+        _ = spawn_enemy(150.0fx, (40 + i * 30) as fx, 30, 1, 100, 0, zako(160deg, 1.5fx));
+    }
+    wait(400);
+}
+```
+
+⚠️ **别用 globals 顶替传参。** `set_global(槽, v); spawn_enemy(...)` 看着一样，但新任务**次帧**
+才首跑：同一帧连生两只，两只读到的都是最后写进去的那个值。实参拷贝没有这个问题。
+
+只有 `spawn_enemy` 的 `task` 位支持带参；`fire` / `sh_task` / `spell_begin` 的 sub 位仍只收
+无参 async sub，写括号直接编译报错。字节码层的调用约定见 [`ecl-ops.md`](../ecl-ops.md) 210 号。
 
 ## 敌人运动（`move_to` + 四条速度动词）
 
@@ -194,6 +225,42 @@ sub main() {
 }
 ```
 
+## 判定、无敌与标志位（`set_invuln` / `set_hitbox` / `set_hurtbox` / `set_enemy_flag`）
+
+四条都作用于**自己**：owner 不是敌 → Fault(0)，同 `move_to`。
+
+| 内建 | 写什么 | 默认 | 越界 |
+|---|---|---|---|
+| `set_invuln(frames)` | 无敌帧，覆写，`0` 取消，每帧自动减 1 | 0 | `frames` 不在 `0..=65535` → 整条 no-op + 计数 |
+| `set_hitbox(r)` | **体碰**半径：撞自机的那一圈（碰撞行 3） | `12.0fx` | 钳到 `[0, 1024]` + 计数 |
+| `set_hurtbox(r)` | **受击**半径：被自机弹 / 伤害区打中的那一圈（行 4/7） | `16.0fx` | 同上 |
+| `set_enemy_flag(flag, on)` | `on != 0` 置位，否则清位 | 无 | 只收 `ENEMY_NO_BODY` / `ENEMY_KILLALL_EXEMPT` 的组合，其它 → no-op + 计数 |
+
+- **无敌期间自机弹照样穿过去，不掉血、不发命中事件**（自机弹命中本来就不消耗）。boss 登场演出、
+  换段喘息都用它。
+- **`ENEMY_NO_BODY` 只关体碰，不关受击**：自机撞上去不死，照样能打它。要「打不动也撞不死」就
+  两个一起用。
+- **两个半径别弄反**：`hitbox` 管撞自机，`hurtbox` 管挨打。从 ZUN 移植时 `setHitbox(w,h)` /
+  `setHurtbox(w,h)` 同名同义，但 ZUN 的 `w` 是直径还是半径**尚未核实**，别直接抄字面量。
+- `ENEMY_KILLALL_EXEMPT` 见下「清场」。
+
+```ecl
+async sub boss_entry() {
+    set_invuln(120);                  // 登场 2 秒打不动
+    set_enemy_flag(ENEMY_NO_BODY, 1); // 也撞不死
+    set_hurtbox(40.0fx);              // 大体型：受击圈放大
+    move_to(90, 0.0fx, 120.0fx, 2);
+    wait(120);
+    set_enemy_flag(ENEMY_NO_BODY, 0);
+    loop { wait(1); }
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, -40.0fx, 900, 1, 5000, 1, boss_entry);
+    wait(300);
+}
+```
+
 ## 敌人的三条死亡路径与掉落控制
 
 `drop_clear` / `drop_add` / `drop_items` / `die` 四个内建都是 `self` 作用，与弹 setter 族同构：
@@ -239,6 +306,8 @@ sub main() {
 | 被自机打死 | ✔ | ✔ | ✔ | ≤ 0（打穿多少是多少，overkill 留负值） | hp ≤ 0（自机弹或消弹区伤害） |
 | `die()` | ✔ | ✔ | ✔ | 强制 `min(0)`——满血 boss 也当场归 0 | 脚本显式调用 |
 | 主任务跑完（D9） | ✘ | ✘ | ✘ | **完全不动**（满血就还是满血） | 主任务自然 `return` / 跑到末尾 |
+| `kill_all_enemies(KILL_SILENT)` 清场 | ✘ | ✘ | ✘ | 完全不动 | 被别的任务清场（本敌不是调用者、没挂免清位） |
+| `kill_all_enemies(KILL_DIE)` 清场 | ✔ | ✔ | ✔ | 强制 `min(0)` | 同上 |
 
 前两行是同一份引擎实现，四件事一起发生，而且幂等：已经在死的敌再被 `die()` 一次是 no-op，
 不会掉双份。`drop_items()` 那条坑不受此保护，它走的是另一条口子。第三行是"退场"不是"被击破"：
@@ -293,6 +362,18 @@ hp 判死（D9 退场时 hp 一点没动，可能还是满的；`enemy_hp` 只�
 
 </details>
 
+### 清场：`kill_all_enemies(mode)`
+
+换段时收使魔、boss 死后清杂兵用。按池序遍历，**跳过三类**：调用者自己、挂了
+`ENEMY_KILLALL_EXEMPT` 的、已经在死的。`mode` 只收 `KILL_SILENT`（静默退场，同 D9）和
+`KILL_DIE`（同 `die()`，掉落、加分、爆炸都有），其它值整条 no-op + 计数。关卡根任务也能调
+（它不是敌，没有「调用者自己」要跳过）。
+
+- 被清掉的敌若是某个符卡槽绑定的 boss，这一段**当帧按「打到血线」收段**（`spell_result` 记
+  `SPELL_END_HP`）。boss 自己调用不会清到自己；别的任务清场又不想误伤 boss，就给 boss 挂
+  `set_enemy_flag(ENEMY_KILLALL_EXEMPT, 1)`。
+- 被清的敌的任务树下一帧由 owner 门禁收掉，和其它死法一样。
+
 ### ⚠️ 死了的敌当帧仍参与碰撞，仍能撞死自机
 
 三条路径都只标记不回收：槽要活到相位 8 供表现层读，相位 9 的 cleanup 才收尸。而体碰检测
@@ -324,6 +405,33 @@ hp 判死（D9 退场时 hp 一点没动，可能还是满的；`enemy_hp` 只�
 离 `(x, y)` 最近的活敌，返敌号；场上无敌返 `-1`。候选是"存活且未在死亡态"的敌，并列时取低
 索引，无距离上限。返回值可以直接喂 `enemy_alive(h)` / `enemy_hp(h)` / `enemy_x(h)` /
 `enemy_y(h)`——它们是配对的：拿号 → 探活 / 轮询血量 / 读坐标。
+
+### `$self_enemy` —— 自己的敌号
+
+敌的任务里读 `$self_enemy` 得到**自己**的敌号，编码和 `spawn_enemy` 返回的一样，可以存起来、
+传给别人、喂 `enemy_alive` 等读口。owner 不是敌（关卡根任务、弹上的任务）读到 **`-1`**——注意
+不是其它 `$self_*` 那样读 0：敌号 0 是合法值。
+
+典型用法是 boss 把自己的号传给使魔，使魔据此跟随、判断 boss 还在不在：
+
+```ecl
+async sub familiar(boss: int) {
+    while enemy_alive(boss) == 1 {
+        move_to(1, enemy_x(boss) + 40.0fx, enemy_y(boss), 0);
+        wait(1);
+    }
+}
+
+async sub boss_main() {
+    _ = spawn_enemy($self_x, $self_y, 50, 0, 0, 0, familiar($self_enemy));
+    wait(300);
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 100.0fx, 900, 1, 5000, 1, boss_main);
+    wait(400);
+}
+```
 
 ### 敌号是不透明句柄
 

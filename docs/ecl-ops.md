@@ -109,6 +109,7 @@
 | 023 | `self_vy`（同刀） | — | owner 的 `vy`（`Fx` raw）——022 号的镜像，逐条同口径 |
 | 024 | `self_speed`（同刀） | — | owner 的**速率**（`Fx` raw，作者视图）。与 022/023 号恒同步（双表示：`vx/vy` 是积分真相，`speed/angle` 是作者视图，任一侧被写后另一侧立刻刷新/回填） |
 | 025 | `self_angle`（同刀） | — | owner 的**朝向**（BAM raw，作者视图）。⚠️ 表层类型是 **`angle` 不是 `fx`**（能直接喂 420 号 `move_angle` / `fire` 的角度位，与 `fx` 之间无隐式转换）。**近停时冻结**：回填有速度下限（`BACKFILL_MIN_SPEED`），零速下读到的是**最后一次有效朝向**而不是垃圾角——这是刻意的，否则停一帧就把朝向抹掉了 |
+| 026 | `self_enemy`（boss 换段刀 2026-09-14，引擎变量 `$self_enemy`） | — | owner 敌的**打包敌号**（编码同 210 号）；owner 非敌 → **-1**。⚠️ 与本族「非敌读 0」**有意不同**：打包敌号 0 是合法值，读 0 分不清。26 不是 op 号，不新增 F6 重叠点 |
 | 030 | `self_hp` | — | owner 敌 hp（非敌读 0） |
 | 031 | `self_hp_max`（M1.5） | — | owner 敌 `hp_max`（非敌读 0，同 `self_hp` 误用策略） |
 | 032 | `self_age`（M1.5） | — | 任务龄（帧）= `frame - task.born_frame`（wrapping）。**语义故意
@@ -133,6 +134,7 @@ owner 类别全族无限制。
 | 110 | `nearest_enemy`（小清洗刀 2026-07-31） | x,y | 离 `(x,y)` 最近的活敌的**打包敌号**（编码见 210 号）；场上无敌（或全 `ENEMY_DYING`）→ **-1**。世界侧 `world::nearest_enemy` 自 M0-13 就有实现和测试、从没有 syscall 暴露过（死代码），本号只是给它通电，世界侧一行未改：候选 = 存活且非 dying、平方距离 i64 比较、并列取**低索引**（I4）、无距离上限。世界侧返的一直是**完整句柄**，**敌句柄打包刀 2026-07-31** 之前这里只押 `h.index`、把 generation 丢了——本刀不是加机制，是把已有的信息接上；接上之后槽复用可辨，与 100 号 `enemy_hp` 完全同编码（两者本就配对用：本号拿号 → 100 号轮询）。空场返 -1 不计违约（合法世界状态非违约）、不 Fault。**owner 类别无限制**（关卡编排任务也该能查） |
 | 120 | `aim_player_angle` | — | 自 owner 位置瞄**目标自机**的 BAM 角。目标 = 从 owner 位置看过去**最近的可瞄自机**（非 ABSENT 非 GAMEOVER）；一个可瞄的都没有 → 回退 `players[0]` 的最后坐标——查询必须产出一个角度，没有"不瞄"这个选项。这是引擎唯一的"瞄谁"口径 `WorldBody::aim_target`，640 号 `sh_aim` 与之同源（F8 统一，2026-09-03）；单人局与旧的"恒 `players[0]`"逐位等同 |
 | 130 | `spell_timer`（符卡机构，见下方"符卡计器"） | — | owner 绑定槽 `frames_left`；owner 非敌或无绑定槽 → **-1**（`wait_spell` 糖的判据） |
+| 131 | `spell_result`（boss 换段刀 2026-09-14） | slot | 槽 `slot` 最近一次结算的**结束方式**：0 还没结束过 / `SPELL_END_HP`(1) 打到血线（含 boss 死亡、清场杀死） / `SPELL_END_TIMEOUT`(2) 超时 / `SPELL_END_MANUAL`(3) `spell_end`。存于 `WorldBody.spell_last_result`，只由结算写，`spell_begin` 不清。owner 无限制；`slot ∉ [0, MAX_BOSSES)` → 押 0 + `contract_viol` + `BAD_ARGS` |
 | 140 | `atan2`（小清洗刀 2026-07-31） | y,x | 方向角（BAM）——**参数序是 `(y, x)`**（同 libm/ZUN 惯例；两位同为 `Fx` raw，对调不判型报错、只静默把角度镜像到另一条对角线上，故 `syscall.rs` 侧钉了**两个**取值的判别腿）。派发臂逆序弹出（先 `x` 后 `y`）。**无 P4 分支**：`math::cordic::atan2`（整数 CORDIC，钉死 16 轮）对任意 `(y, x)` 都有定义，含 `(0,0)`（返 0）——没有"坏参数"这个概念，不计 `contract_viol`、不 Fault。owner 类别无限制。与 120 号 `aim_player_angle` 的关系：那条只能瞄自机（0 参、基点写死 self 位置），本条能瞄任意点/任意敌 |
 | 141 | `dist`（小清洗刀 2026-07-31） | dx,dy | 向量 `(dx,dy)` 的**模长**（`Fx` raw）——**不是两点距离**，两点距离由脚本自己减（`dist(bx-ax, by-ay)`）。实现 = `isqrt(len_sq(dx,dy))`：`geom::len_sq` 返 **Q32.32**（`raw²`，不归一化），`isqrt` 开根正好把它变回 **Q16.16**（见 CLAUDE.md「定点乘法规范」）。值域：`len_sq` 恒 ≥0 故 `as u64` 安全；满屏最大约 1.7e15 → 开根 ≈4.1e7，远在 i32 上限内。**收窄回 i32 处饱和不回绕**：上面那句余量论证只覆盖**世界坐标差**这个域，而本条是通用两参 syscall——脚本能直接喂极端 `fx`。`dx = dy = i32::MAX` 时 `len_sq` ≈ 9.22e18（贴着 i64 上限但不溢出），开根 = 3037000498 **超 `i32::MAX`**，裸 `as i32` 会静默回绕成 **-1257966798**（负距离，会往下游传播的无意义值）；故实现是 `isqrt(..).min(i32::MAX as u32) as i32`——确定性降级到最大可表示距离，**钳位是正常语义**，不计 `contract_viol`、不 Fault（同 `add_score`/`add_lives` 族口径）。**无 P4 计数分支**（任意 i32 对都合法）。**为什么不单独暴露 `len_sq`/`isqrt`**（人类裁定）：`len_sq` 返 i64 而脚本值域是 i32 装不下，单独的 `isqrt` 对脚本没有直接用处——`dist` 才是那个有用的组合。owner 类别无限制 |
 | 150 | `rand_range` | n | [0,n) 消耗世界 RNG；n≤0 压 0 不消耗 |
@@ -145,7 +147,7 @@ owner 类别全族无限制。
 |---|---|---|---|
 | 200 | `create_bullet` | appearance,x,y,speed,angle,xform_off,xform_cnt,task_sub | 弹句柄或 -1 |
 | 201 | `create_bullets_batch` | appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step | 实发数 |
-| 210 | `spawn_enemy` | x,y,hp,drop_table,score,sprite,task_sub | **打包敌号**或 -1（**敌句柄打包刀 2026-07-31**：押的不再是裸池 index，而是 `((gen & 0x7FFF) << 16) \| index`。只押 generation 的低 15 位 ⇒ **打包值恒非负**，`-1` 仍是唯一的无效哨兵；代价是 ABA 检测周期从 65536 次同槽复用降到 32768，记在 `docs/follow-ups.md`。脚本侧敌号是**不透明值**——别猜数值、别做算术，**两个敌号相等 ⇒ 同一只敌**。100/101/102/103/110 全族同编码）（A5 乙案：`task_sub` 同 200 号 `create_bullet` 同款 canonical `SubId`/-1=none；`task_sub>=0` 时必须指向零参数 `Async` sub，绑定层派子任务，owner=新敌。**`drop_table` 在这里就展开成敌身上的 `drop_count[..]` 五槽**（敌死效果刀起表号退化成生成参数，此后无人读表号，见 520-522 号）；**P4-b**：表号越界（含负数——`as u16` 回绕后仍越界）→ **视同空表** + `contract_viol` +1 + `last_status=BAD_ARGS`，敌照建、**不 Fault**（原检查住 `settle::damage_enemy`，随掉落状态前移至此）） |
+| 210 | `spawn_enemy` | x,y,hp,drop_table,score,sprite,task_sub,arg0…arg(n−1),argc（**boss 换段刀 2026-09-14 追加**实参与个数；门禁全部先于建敌：argc 越 `[0, LOCALS]` 或栈不够 `argc+7` → Fault(2)；task 为 none 却带参、sub 非 Async 或形参个数 ≠ argc → Fault(0)；实参写进新任务 `locals[0..argc)`，与 `OP_SPAWN` 共用 `TaskPool::write_args`） | **打包敌号**或 -1（**敌句柄打包刀 2026-07-31**：押的不再是裸池 index，而是 `((gen & 0x7FFF) << 16) \| index`。只押 generation 的低 15 位 ⇒ **打包值恒非负**，`-1` 仍是唯一的无效哨兵；代价是 ABA 检测周期从 65536 次同槽复用降到 32768，记在 `docs/follow-ups.md`。脚本侧敌号是**不透明值**——别猜数值、别做算术，**两个敌号相等 ⇒ 同一只敌**。100/101/102/103/110 全族同编码）（A5 乙案：`task_sub` 同 200 号 `create_bullet` 同款 canonical `SubId`/-1=none；`task_sub>=0` 时必须指向零参数 `Async` sub，绑定层派子任务，owner=新敌。**`drop_table` 在这里就展开成敌身上的 `drop_count[..]` 五槽**（敌死效果刀起表号退化成生成参数，此后无人读表号，见 520-522 号）；**P4-b**：表号越界（含负数——`as u16` 回绕后仍越界）→ **视同空表** + `contract_viol` +1 + `last_status=BAD_ARGS`，敌照建、**不 Fault**（原检查住 `settle::damage_enemy`，随掉落状态前移至此）） |
 | 220 | `drop_item` | x,y,item_type | 道具句柄或 -1 |
 
 `create_bullet` 走**丙方案**：`(xform_off, xform_cnt)` 指向本任务 locals 内打包槽
@@ -192,6 +194,10 @@ owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P
 | 420 | `move_angle`（同刀） | dur,angle,easing | —（**只转向、速率一字不动**：终点 = `(当前 speed, 目标 angle)`，走极坐标空间。3 位压栈。其余口径同 410 号） |
 | 421 | `move_speed`（同刀） | dur,speed,easing | —（**只调速、方向一字不动**：终点 = `(目标 speed, 当前 angle)`，走极坐标空间。3 位压栈。其余口径同 410 号） |
 | 430 | `set_anm_state`（表现契约 v2，2026-09-07） | state | —（**self-only**，owner 非敌 → Fault(0)；悬垂 owner 句柄 → no-op + `contract_viol` + `STALE_HANDLE`。写 `anm_state = state as u16` 并**无条件**盖 `anm_state_frame = 当前帧`——同状态重设 = 重播（ZUN `anmInterrupt` 重触发语义的电平版）。世界不解释状态号；表现层按 `(sprite, anm_state, frame − anm_state_frame)` 选帧，见 `render-contract.md` §7。**不是** ZUN 的 `anmSetSprite`：运行期换贴图不进核，换形态用状态号映射） |
+| 440 | `set_invuln`（boss 换段刀 2026-09-14，敌判定族） | frames | —（**self-only**，owner 非敌 → Fault(0)；悬垂 owner 句柄 → no-op + `contract_viol` + `STALE_HANDLE`。覆写 `enemies.invuln`，0 = 取消；期间伤害结算跳过、不发 `EVT_SHOT_HIT_ENEMY`，相位 5 每帧递减。`frames ∉ [0,65535]` → 整条 no-op + `contract_viol` + `BAD_ARGS`） |
+| 441 | `set_hitbox`（同刀） | r | —（self-only 同 440。写**体碰半径** `radius`（碰撞行 3）；`Fx` raw，钳 `[0, MAX_ENTITY_RADIUS]`，钳了计 `contract_viol`，同 `create_enemy` 口径） |
+| 442 | `set_hurtbox`（同刀） | r | —（self-only 同 440。写**受击半径** `hurtbox`（碰撞行 4/7）；钳制同 441） |
+| 443 | `set_enemy_flag`（同刀） | flag,on | —（self-only 同 440。`on != 0` 置位否则清位；`flag` 须为 `ENEMY_NO_BODY(2) \| ENEMY_KILLALL_EXEMPT(4)` 的**非空子集**，含 `ENEMY_DYING` 或未知位或 0 → 整条 no-op + `contract_viol` + `BAD_ARGS`。`ENEMY_NO_BODY` 让碰撞行 3 跳过、仍吃弹） |
 
 ### 5xx —— 局面·记账·道具（14）
 
@@ -209,7 +215,9 @@ owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P
 | 521 | `drop_add`（敌死效果刀） | type,n | —（逆序弹栈 `n, type`；给 self 敌的待掉落计数**增量**加 `n` 颗 `type`，**只增不减**（人类裁定，清空用 520）。`type` 收窄 `[0, items::ITEM_TYPE_COUNT)`，越界 → no-op + `contract_viol` + `BAD_ARGS`，**不 Fault**（P4-b）；`n` **先钳** `[0, u8::MAX]`（负 n 视同 0）**再 `saturating_add`** 到计数上——两步都要，只钳不饱和会在近 255 时 debug panic，只饱和不钳会让负 n `as u8` 回绕。owner 须为敌，否则 Fault(0)。参照 ZUN `dropExtra`(507)） |
 | 522 | `drop_items`（敌死效果刀） | — | —（**0 参**；立刻把 self 敌的待掉落计数撒出去（按类型编号升序逐颗 `spawn_drop`，**消耗世界 RNG**）。**吐完不清空计数**（人类裁定，照 ZUN 字面）——故 `drop_items(); die();` 掉**双份**，作者自负；**不加分、不发 `EVT_ENEMY_DIED`、不发 `REQ_ENEMY_DEATH`、不标 `ENEMY_DYING`**；对已 dying 的敌照撒不误（无幂等门禁，与 530 不同）。池满走 `spawn_drop` 自身的 P4-a 逐颗降级。owner 须为敌，否则 Fault(0)。参照 ZUN `dropItems`(509)） |
 | 530 | `die`（敌死效果刀） | — | —（**0 参**；对 self 敌跑**完整死亡效果**（`world::settle::kill_enemy`）：`hp = hp.min(0)` → 标 `ENEMY_DYING` → 撒掉落 → `enemies.score` 记进自机 0 → `EVT_ENEMY_DIED` → `REQ_ENEMY_DEATH`。**幂等**：已 dying → 直接返回。**只标记不回收**，相位 9 cleanup 才收尸——当帧体碰仍成立。表层 `die()` 由 codegen 降低成 **`SYS 530` + `OP_KILL_SELF` 两条指令**，故调用它的任务立即终止（人类裁定），后续语句不执行；**手写字节码只发 `SYS 530` 不会终止任务**。owner 须为敌，否则 Fault(0)。参照 ZUN `die`(561)——ZUN 那条还经 `setDeath`(556) 间接一层，留给 `death_script` 通电那一刀） |
+| 531 | `kill_all_enemies`（boss 换段刀 2026-09-14） | mode | —（owner 无限制。按池索引升序遍历存活敌，跳过：调用任务的 owner 敌、已 `ENEMY_DYING`、带 `ENEMY_KILLALL_EXEMPT`。`mode = KILL_SILENT(0)` 只置 dying（同 D9 退场：不掉落不加分不发事件）；`KILL_DIE(1)` 逐只 `kill_enemy`（同 530 `die`）；其它 → 整条 no-op + `contract_viol` + `BAD_ARGS`。杀到符卡槽绑定 boss → 当帧相位 7 按血线路径结算） |
 | 540 | `clear_bullets`（B19） | — | —（**0 参**；调 `create_field(field::fullscreen_clear_field())` 铺一个覆盖全场、`life=1`、`FIELD_CLEAR_BULLETS` 的作用区，当帧相位 6 生效——消弹转星星与 `EVT_FIELD_CLEARED` 都是消弹区机制白送的，syscall 层零新逻辑；不做参数收窄；**P4-a 两处**：(a) field 池（cap 16）满 → 走 `create_field` 自身降级（NULL + `diag.pool_full[POOL_FIELD]` +1），**不 Fault**；(b) **消弹转星星是 1:1，而道具池 cap 1024 < 弹池 cap 8192** ⇒ 一次消掉的弹多于道具池余量时，多出的星星**生不出来**：逐颗计 `diag.pool_full[POOL_ITEM]`、**循环有界不短路**（判别腿 `star_pool_full_counts_every_missing_star`），弹照消不误。**这是已知设计边界不是债**——F12 实测 demo 收卡一帧 626 颗弹，池还是 512 时四个难度档全溢出，抬到 1024 才盖住（`ENGINE_VER` 13→14）；owner 类别无限制） |
+| 541 | `clear_bullets_at`（boss 换段刀 2026-09-14） | x,y,r,stars | —（owner 无限制。铺一个中心 `(x,y)`、半径 `r`（`Fx` raw，钳制走 `create_field`）、`life=1`、无伤害的清弹区；`stars == 0` 带 `FIELD_NO_STAR`：弹照标 `BULLET_CLEARED`、照计 `EVT_FIELD_CLEARED`，但不转星星。池满走 P4-a。扩张消弹波 = 脚本每帧调一次加大 `r`） |
 | 550 | `bgm` | id | —（写表现锚点 `bgm_id` + 发 `REQ_BGM`；`id` 收窄 `0..=65535`，越界 → no-op + `diag.contract_viol` +1 + `last_status=BAD_ARGS`，**不 Fault**（P4-b），owner 类别无限制） |
 | 551 | `bg` | id | —（同上，写 `bg_id` + 发 `REQ_BG`；同一收窄/no-op 口径） |
 | 552 | `bg_phase` | n | —（写 `bg_phase`，同时把 `bg_phase_frame` 盖为当前帧，再发 `REQ_BG_PHASE`；`n` 同上收窄/no-op 口径） |
@@ -278,7 +286,7 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
 - **`607 etAim` 的九值 aimmode 枚举**——D-6 塌成 `sh_aim`/`sh_ring` 两个正交布尔（640/641 号）：
   mode 4/5 在两布尔下冗余，**mode 6/7/8 的随机模式不做**（另见 `follow-ups.md` D13）。
 
-## 符卡计器（syscall 130/740/741 + `wait_spell` 糖；spec 2026-07-24）
+## 符卡计器（syscall 130/131/740/741 + `wait_spell` / `phase_begin` 糖；spec 2026-07-24，boss 换段刀 2026-09-14 扩）
 
 记账（计时/衰减/超时/破卡/`boss_ui` 喂送）全归引擎 `SpellState` 机构（settle 相位符卡趟），
 三条 syscall 是脚本唯一的操作面；表层参考见 [`ecl-lang.md`](ecl-lang.md)"符卡"节。
@@ -298,6 +306,14 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
 - **`spell_timer`（130）**：无参，读族。owner 非 `ENEMY` 或无绑定槽 → **押 -1**（同
   `self_hp`/`self_hp_max` 误用降级口径——不 Fault，方便脚本用 `>= 0` 判活）；有绑定槽 →
   该槽 `frames_left`。这个 `-1` 判据正是 `wait_spell()` 糖的展开条件。
+- **`spell_result`（131，boss 换段刀）**：1 参 `slot`，读族，owner 无限制。押 `WorldBody.spell_last_result[slot]`：
+  0 还没结束过 / 1 血线 / 2 超时 / 3 手动；槽越界押 0 + `contract_viol` + `BAD_ARGS`。只由结算写，`spell_begin` 不清。
+- **非符段 `SPELL_NONSPELL`（flags bit2）**：`spell_begin` 不发 `EVT_SPELL_DECLARED`/`REQ_SPELL_DECLARE`，bonus 三字段写 0
+  （传入值忽略、不计违约），`SPELL_SURVIVAL` 位忽略；结算不付分、不发 CAPTURED/FAILED/`REQ_SPELL_RESULT`，改发
+  `EVT_PHASE_ENDED`（12，`data = [spell_id, cause]`）。表层糖 `phase_begin` 纯前端注入常量，降低到 740。
+- **结算顺序**（`settle_one_spell(slot, cause)`，`cause` = 1 血线 / 2 超时 / 3 手动）：① 超时时绑定 boss 存活且非 dying →
+  `hp = min(hp, hp_threshold)`；② 付分与事件；③ 除非 `SPELL_NO_CLEAR` 铺全屏清弹区，**超时路径带 `FIELD_NO_STAR`**（不转
+  星星）；④ 写 `spell_last_result`；⑤ 槽与 `boss_ui` 清零。
 
 **`wait_spell()` 语法糖**（纯编译器前端，零 VM/字节码改动）：`lang::parse` 直接把
 `wait_spell();` 展开成等价的 `Stmt::While` 子树，等同于脚本作者手写

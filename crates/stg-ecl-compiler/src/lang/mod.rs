@@ -247,7 +247,7 @@ mod tests {
     /// > **百分区重排（2026-07-31）没有消掉这个坑**，只换了例子：旧例子是
     /// > `SYS_CREATE_BULLET == 20`，重排后 `create_bullet` 是 200 号、确实与 op 空间
     /// > 错开了，但 **`0xx` 族（`$` 引擎变量，000–032）整族仍落在 op 号域内**
-    /// > （op 是 `u8`、现最大 60 = `OP_SYS`）——12 条里每一条都撞着一个 op
+    /// > （op 是 `u8`、现最大 60 = `OP_SYS`）——000–032 共 13 条，其中 026 `self_enemy`（boss 换段刀）不是 op 号，其余 12 条各撞一个 op
     /// > （`self_x`=20=`OP_ADD`、`player_x`=10=`OP_PUSHI`、`frame`=0=`OP_END` …）。
     /// > spec `2026-07-31-syscall-renumber-design.md` §3 那句"syscall 全部推到 100 以上
     /// > 后两个号空间永久错开"对 `0xx` 族**不成立**。
@@ -1267,5 +1267,70 @@ sub main() {
             );
             assert_eq!(view.diag().task_faults, 0);
         }
+    }
+
+    /// 带参 spawn_enemy 端到端（boss 换段刀 spec §4）：同一帧生成两只，各自把实参写进
+    /// 不同 globals 槽；次帧首跑后两槽分别是各自的实参。
+    #[test]
+    fn spawn_enemy_with_args_end_to_end_same_frame() {
+        let src = "async sub zako(slot: int, v: int) {\n\
+                     set_global(slot, v);\n\
+                     loop { wait(1); }\n\
+                   }\n\
+                   sub main() {\n\
+                     _ = spawn_enemy(-50.0fx, 50.0fx, 10, 0, 0, 0, zako(20, 111));\n\
+                     _ = spawn_enemy(50.0fx, 50.0fx, 10, 0, 0, 0, zako(21, 222));\n\
+                     loop { wait(1); }\n\
+                   }";
+        let img = compile(src, "t.ecl").expect("应编译成功");
+        let t = &stg_core::tables::TABLES_V0;
+        let mut w = stg_core::step::World::new(1);
+        w.start_main(&img).expect("main 应能派生");
+        for f in 0..3 {
+            stg_core::step::step(&mut w, t, &img, &stg_core::input::InputFrame::empty(f));
+        }
+        let g = w.body.view().globals();
+        assert_eq!((g[20], g[21]), (111, 222));
+        assert_eq!(w.body.view().diag().task_faults, 0);
+    }
+
+    /// 新内建端到端（boss 换段刀）：非符段超时 → spell_result==2 写进 globals；
+    /// $self_enemy == spawn_enemy 返回值；判定写口/清场/半径清弹表层可调且零 fault。
+    #[test]
+    fn phase_begin_spell_result_and_self_enemy_end_to_end() {
+        let src = "async sub p() { loop { wait(1); } }\n\
+                   async sub boss() {\n\
+                     set_global(22, $self_enemy);\n\
+                     set_invuln(10);\n\
+                     set_hitbox(20.0fx);\n\
+                     set_hurtbox(24.0fx);\n\
+                     set_enemy_flag(ENEMY_NO_BODY, 1);\n\
+                     phase_begin(0, p, 5, 300);\n\
+                     wait_spell();\n\
+                     set_global(20, spell_result(0));\n\
+                     clear_bullets_at(0.0fx, 100.0fx, 50.0fx, 0);\n\
+                     kill_all_enemies(KILL_SILENT);\n\
+                     loop { wait(1); }\n\
+                   }\n\
+                   sub main() {\n\
+                     var b: int = spawn_enemy(0.0fx, 100.0fx, 900, 0, 0, 0, boss);\n\
+                     set_global(21, b);\n\
+                     loop { wait(1); }\n\
+                   }";
+        let img = compile(src, "t.ecl").expect("应编译成功");
+        let t = &stg_core::tables::TABLES_V0;
+        let mut w = stg_core::step::World::new(1);
+        w.start_main(&img).expect("main 应能派生");
+        for f in 0..20 {
+            stg_core::step::step(&mut w, t, &img, &stg_core::input::InputFrame::empty(f));
+        }
+        let g = w.body.view().globals();
+        assert_eq!(
+            g[20],
+            stg_core::spell::SPELL_END_TIMEOUT as i32,
+            "非符段超时"
+        );
+        assert_eq!(g[22], g[21], "$self_enemy == spawn_enemy 返回值");
+        assert_eq!(w.body.view().diag().task_faults, 0);
     }
 }

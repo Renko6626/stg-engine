@@ -108,6 +108,19 @@ engine_consts! {
         //  数值单一来源 = `crate::player::JUMP_FRAMES` / `crate::timeline::REWIND_DEPTH`。
         JUMP_FRAMES:         u16 as int = crate::player::JUMP_FRAMES;
         REWIND_DEPTH:        u32 as int = crate::timeline::REWIND_DEPTH;
+        //  符卡机构 flags 位与结束方式（boss 换段刀 2026-09-14）：`spell_begin` 第 6 参与
+        //  `spell_result(slot)` 的返回值。此前脚本只能写字面量 1/2。
+        SPELL_SURVIVAL:      u8 as int = crate::spell::SPELL_SURVIVAL;
+        SPELL_NO_CLEAR:      u8 as int = crate::spell::SPELL_NO_CLEAR;
+        SPELL_NONSPELL:      u8 as int = crate::spell::SPELL_NONSPELL;
+        SPELL_END_HP:        u8 as int = crate::spell::SPELL_END_HP;
+        SPELL_END_TIMEOUT:   u8 as int = crate::spell::SPELL_END_TIMEOUT;
+        SPELL_END_MANUAL:    u8 as int = crate::spell::SPELL_END_MANUAL;
+        //  敌判定标志位与清场模式（boss 换段刀 2026-09-14）：`set_enemy_flag` / `kill_all_enemies` 参数。
+        ENEMY_NO_BODY:        u8 as int = crate::enemy::ENEMY_NO_BODY;
+        ENEMY_KILLALL_EXEMPT: u8 as int = crate::enemy::ENEMY_KILLALL_EXEMPT;
+        KILL_SILENT:          u8 as int = crate::enemy::KILL_SILENT;
+        KILL_DIE:             u8 as int = crate::enemy::KILL_DIE;
     }
     //  ② 段目前**空**（颜色轴刀 2026-07-26）：弹型名/色名归**内容包**——由各内容包
     //  自己的 `.ecl` 用 `const` 声明（内建 demo 的一份见 `godot/ecl/game/bullets.ecl`），

@@ -201,6 +201,8 @@ pub enum EngVar {
     SelfVy,
     SelfSpeed,
     SelfAngle,
+    /// `$self_enemy`：owner 敌的打包敌号，非敌 -1（boss 换段刀）。
+    SelfEnemy,
 }
 
 /// 表达式。

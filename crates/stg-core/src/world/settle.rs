@@ -150,7 +150,11 @@ impl WorldBody {
             self.bullets.flags[b] |= crate::bullets::BULLET_CLEARED;
             cleared_counts[h.active as usize] += 1;
             // 每颗被消的弹在原位转一颗星星（30 分经济回流；池满 P4-a 逐颗降级计数）。
-            self.spawn_star_at(self.bullets.x[b], self.bullets.y[b], star_target);
+            // FIELD_NO_STAR 的区只清不转星（boss 换段刀 spec §6）；幂等门已保证一颗弹只处理一次，
+            // 故多区重叠时由 hits 序中第一条命中的区决定，确定性。
+            if self.fields.flags[h.active as usize] & crate::field::FIELD_NO_STAR == 0 {
+                self.spawn_star_at(self.bullets.x[b], self.bullets.y[b], star_target);
+            }
         }
         // 聚合事件：按 field 索引升序产出（不依赖 hits 的分组连续性 → 与 collide 循环结构解耦）
         for (f, &count) in cleared_counts.iter().enumerate() {
@@ -1299,5 +1303,99 @@ mod tests {
                 (1, 9857, -167669),
             ]
         );
+    }
+
+    /// FIELD_NO_STAR（boss 换段刀 spec §6）：弹照清、清弹事件照计，但不转星星。
+    #[test]
+    fn no_star_field_clears_without_spawning_stars() {
+        use crate::field::{FIELD_CLEAR_BULLETS, FIELD_NO_STAR};
+        let mut w = crate::step::World::new(1);
+        spawn_field(&mut w, 0, 100, 40, FIELD_CLEAR_BULLETS | FIELD_NO_STAR, 1);
+        let b = bullet_at(&mut w, 0, 100);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        let bi = w.body.bullets.get(b).unwrap();
+        assert_ne!(w.body.bullets.flags[bi] & crate::bullets::BULLET_CLEARED, 0);
+        assert_eq!(w.body.items.iter_alive().count(), 0, "不转星星");
+        assert_eq!(
+            w.body.frame_events[0].kind,
+            crate::events::EVT_FIELD_CLEARED
+        );
+    }
+
+    /// `set_enemy_invuln`（boss 换段刀 spec §5.1）：无敌期间自机弹重叠既不掉血也不发命中事件；
+    /// 解除后同一发照打（对照腿，证明是 invuln 挡的而不是几何没碰上）。
+    #[test]
+    fn invulnerable_enemy_takes_no_damage_and_no_hit_event() {
+        use crate::events::EVT_SHOT_HIT_ENEMY;
+        let mut w = crate::step::World::new(1);
+        let e = spawn_enemy(&mut w, 0, 100, 50);
+        w.body.set_enemy_invuln(e, 5);
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: Fx::ZERO,
+            y: Fx::from_int(100),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 7,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        let i = w.body.enemies.get(e).unwrap();
+        assert_eq!(w.body.enemies.hp[i], 50);
+        assert!(
+            (0..w.body.frame_events_len as usize)
+                .all(|k| w.body.frame_events[k].kind != EVT_SHOT_HIT_ENEMY)
+        );
+
+        w.body.set_enemy_invuln(e, 0);
+        w.body.hits_len = 0;
+        w.body.frame_events_len = 0;
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        assert_eq!(w.body.enemies.hp[i], 43, "解除后同一发打得进");
+    }
+
+    /// `clear_field_at` 几何判别（boss 换段刀 spec §6）：圆内弹被清、圆外弹保留（证明半径真的生效、
+    /// 不是全屏）；stars=true 给星。
+    #[test]
+    fn clear_field_at_clears_inside_and_keeps_outside() {
+        let mut w = crate::step::World::new(1);
+        w.body.create_field(crate::field::clear_field_at(
+            Fx::ZERO,
+            Fx::from_int(100),
+            Fx::from_int(40),
+            true,
+        ));
+        let inside = bullet_at(&mut w, 10, 100);
+        let outside = bullet_at(&mut w, 150, 100);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        let cleared = |w: &crate::step::World, h| {
+            let i = w.body.bullets.get(h).unwrap();
+            w.body.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0
+        };
+        assert!(cleared(&w, inside));
+        assert!(!cleared(&w, outside));
+        assert_eq!(w.body.items.iter_alive().count(), 1, "stars=true 给星");
     }
 }

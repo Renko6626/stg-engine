@@ -705,6 +705,19 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
 
 ---
 
+### D21. boss 换段与敌人钩子刀的五条非目标（spec §10 记档，2026-09-14）
+
+1. **`fire` / `sh_task` / `spell_begin` pattern 带参**——触发点：内容里出现需要参数化的弹任务或模式。
+   `sh_task` 要在发射器槽里存实参（涨 `TaskPool`，过 D10）；`fire` 与 `spell_begin` 可照 210 的调用约定直接做。
+2. **永久「不吃弹 + 不可锁定」位**（ZUN `flagSet(1)` 的锁定语义）——触发点：自机 homing 需要排除某类敌。
+   现状无敌走 `set_invuln`（上限 65535 帧），`nearest_enemy` 不看它。
+3. **一只敌同时挂两个计时器**（TH18 st07mbs「整体计时 + 卡内计时」）——触发点：Extra 中 boss 类内容。
+   现状一只敌只能绑一个符卡槽；伴生计时任务 + `spell_end` 可近似，但结算记 `SPELL_END_MANUAL`。
+4. **表层开放 `kill_children` / 按句柄杀任务**——开放时须同步处理 `vm.rs` D9 注释所述 `main_task` 清零（`OP_KILL_CHILDREN`
+   绕过 `run_tasks`，被杀子任务若恰是某敌主任务会留下陈旧槽号）。任务池无逐槽 generation，按句柄杀有 ABA，要先设计。
+5. **`death_script` 通电（ZUN `setDeath`）**——设计已定形（`stg-world-design.md` 相位 9 挂钩：扫 `EVT_ENEMY_DIED`、
+   派生 `sub(x: fx, y: fx)`、owner = STAGE），第 1 关用不到。
+
 ## F. 长期预留（M0-18 性能审记档，均不动现刀）
 
 ### F1. 嵌入式画像三条（单片机移植预留）

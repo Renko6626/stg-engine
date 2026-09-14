@@ -310,9 +310,21 @@ impl<'p, 't> Checker<'p, 't> {
                         None => ok = false,
                     }
                 }
-                ParamKind::SubRef => match self.resolve_ident_ref(a, span, RefKind::Sub, b.name) {
-                    Some(r) => out.push(CallArg::SubRef(r)),
-                    None => ok = false,
+                ParamKind::SubRef => match a {
+                    Expr::Call {
+                        name,
+                        args: sub_args,
+                        span: cspan,
+                    } => match self
+                        .resolve_sub_ref_with_args(b.name, name, sub_args, *cspan, locals)
+                    {
+                        Some(arg) => out.push(arg),
+                        None => ok = false,
+                    },
+                    _ => match self.resolve_ident_ref(a, span, RefKind::Sub, b.name) {
+                        Some(r) => out.push(CallArg::SubRef(r)),
+                        None => ok = false,
+                    },
                 },
             }
         }
@@ -349,6 +361,52 @@ impl<'p, 't> Checker<'p, 't> {
             };
             self.err(expr_span(blamed).unwrap_or(span), e.msg);
         }
+    }
+
+    /// task 位的 `name(实参…)` 写法（boss 换段刀 spec §4.1）：只 `spawn_enemy` 接受；
+    /// 目标须为已声明 async sub，实参按其签名判型（同 `spawn f(args);` 的规则，复用
+    /// `check_sub_call_args`——实参里嵌套的同步调用照常记调用图边）。
+    fn resolve_sub_ref_with_args(
+        &mut self,
+        builtin_name: &str,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+        locals: &LocalScope,
+    ) -> Option<CallArg> {
+        if builtin_name != "spawn_enemy" {
+            self.err(
+                span,
+                format!(
+                    "'{builtin_name}' 的 task 引用不能带实参（目前只有 spawn_enemy 的 task 位支持带参）"
+                ),
+            );
+            return None;
+        }
+        if name == "none" {
+            self.err(span, "'none' 不能带实参".into());
+            return None;
+        }
+        let Some(sub) = self.subs.get(name).copied() else {
+            self.err(span, format!("未知的 sub 名 '{name}'"));
+            return None;
+        };
+        if !sub.is_async {
+            self.err(
+                span,
+                format!("'{name}' 用作 spawn_enemy 的 task 引用必须声明为 async sub"),
+            );
+            return None;
+        }
+        let typed = self.check_sub_call_args(&sub.params, args, span, locals)?;
+        let exprs = typed
+            .into_iter()
+            .map(|a| match a {
+                CallArg::Val(t) => t,
+                _ => unreachable!("check_sub_call_args 只产 Val"),
+            })
+            .collect();
+        Some(CallArg::SubRefArgs(name.to_string(), exprs))
     }
 
     fn resolve_ident_ref(
@@ -391,7 +449,7 @@ impl<'p, 't> Checker<'p, 't> {
                                 *vspan,
                                 format!(
                                     "'{name}' 用作 {builtin_name} 的 task 引用必须是无参 async sub\
-                                     （派生不带实参——需要传参请用 spawn）"
+                                     （派生不带实参——需要传参请用 spawn；spawn_enemy 的 task 位可写 name(实参…)）"
                                 ),
                             );
                             return None;

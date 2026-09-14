@@ -555,6 +555,7 @@ impl SubBuilder {
         self.push_i(score as i32);
         self.push_i(sprite as i32);
         self.push_task_ref(task_script);
+        self.push_i(0); // argc = 0（210 调用约定追加，boss 换段刀；builder 只造无参形态）
         self.sys(syscall::SYS_SPAWN_ENEMY);
     }
 

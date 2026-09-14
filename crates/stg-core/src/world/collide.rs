@@ -1,7 +1,7 @@
 //! 相位 6 · 碰撞收集（D8 矩阵）。
 //!
 //! **只收集不改状态硬规则**：本相位纯读，只经 `push_hit` 追加 `hits`；改状态一律在 settle（相位 7）。
-//! 半径映射见 D8：行1/2 弹×自机(hit/graze)、行3 敌体×自机(体碰 radius)、行4 自机弹×敌人(受击 hurtbox)、
+//! 半径映射见 D8：行1/2 弹×自机(hit/graze)、行3 敌体×自机(体碰 radius；`ENEMY_NO_BODY` 跳过)、行4 自机弹×敌人(受击 hurtbox)、
 //! 行5 道具×自机(拾取半径+graze_radius)、行6 作用区×敌弹、行7 作用区×敌人(受击 hurtbox)、
 //! 行8 停止冻结中自机判定圆×冻弹（触碰消弹，玩法刀；只在冻结分支收集）。
 
@@ -117,6 +117,9 @@ impl WorldBody {
                 while bits != 0 {
                     let e = w * 64 + bits.trailing_zeros() as usize;
                     bits &= bits - 1;
+                    if self.enemies.flags[e] & crate::enemy::ENEMY_NO_BODY != 0 {
+                        continue; // 脚本关了体碰（boss 换段刀 spec §5.1）；仍不查 dying（D-9）
+                    }
                     let dx = self.enemies.x[e] - px;
                     let dy = self.enemies.y[e] - py;
                     let d2 = len_sq(dx, dy);
@@ -561,5 +564,76 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    /// `ENEMY_NO_BODY`（boss 换段刀 spec §5.1 / §8-8）：圆心重合也不收行 3，但行 4 照收（仍吃弹）。
+    #[test]
+    fn collide_body_skips_no_body_enemy_but_shots_still_hit() {
+        use crate::events::{ROW_BODY_PLAYER_HIT, ROW_SHOT_ENEMY};
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(100);
+        let e = spawn_enemy(&mut w, 0, 100, 5);
+        let ei = w.body.enemies.get(e).unwrap();
+        w.body.enemies.flags[ei] |= crate::enemy::ENEMY_NO_BODY;
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: Fx::ZERO,
+            y: Fx::from_int(100),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 1,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        let count = |row| {
+            (0..w.body.hits_len as usize)
+                .filter(|&k| w.body.hits[k].row == row)
+                .count()
+        };
+        assert_eq!(count(ROW_BODY_PLAYER_HIT), 0, "不体碰");
+        assert_eq!(count(ROW_SHOT_ENEMY), 1, "仍吃自机弹");
+    }
+
+    /// 判别式（D8 教训）：`set_enemy_hitbox` 只改行 3，`set_enemy_hurtbox` 只改行 7。
+    /// 自机 (0,100) hit 2.5；敌 (30,100) 默认 radius 12 / hurtbox 16；伤害区 (-20,100) r=20，距敌 50。
+    /// 默认：12+2.5<30 不体碰、20+16<50 不受击；各改成 40 后恰好翻转各自那一行。
+    #[test]
+    fn set_enemy_hitbox_moves_body_row_only_and_hurtbox_moves_field_row_only() {
+        use crate::events::{ROW_BODY_PLAYER_HIT, ROW_FIELD_ENEMY};
+        use crate::field::FIELD_DAMAGE;
+        fn run(hit: Option<i32>, hurt: Option<i32>) -> (usize, usize) {
+            let mut w = crate::step::World::new(1);
+            w.body.players[0].x = Fx::ZERO;
+            w.body.players[0].y = Fx::from_int(100);
+            let e = spawn_enemy(&mut w, 30, 100, 5);
+            spawn_field(&mut w, -20, 100, 20, FIELD_DAMAGE, 1);
+            if let Some(r) = hit {
+                w.body.set_enemy_hitbox(e, Fx::from_int(r));
+            }
+            if let Some(r) = hurt {
+                w.body.set_enemy_hurtbox(e, Fx::from_int(r));
+            }
+            #[cfg(debug_assertions)]
+            {
+                w.body.phase_guard = PH_COLLIDE;
+            }
+            w.body.collide(&crate::tables::TABLES_V0);
+            let count = |row| {
+                (0..w.body.hits_len as usize)
+                    .filter(|&k| w.body.hits[k].row == row)
+                    .count()
+            };
+            (count(ROW_BODY_PLAYER_HIT), count(ROW_FIELD_ENEMY))
+        }
+        assert_eq!(run(None, None), (0, 0));
+        assert_eq!(run(Some(40), None), (1, 0), "hitbox 只改体碰");
+        assert_eq!(run(None, Some(40)), (0, 1), "hurtbox 只改受击");
     }
 }

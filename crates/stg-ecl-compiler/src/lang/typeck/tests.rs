@@ -1114,3 +1114,37 @@ fn wait_boundaries_are_legal_and_runtime_expressions_pass_through() {
     ok("sub main() { wait(65535); }");
     ok("async sub s() { wait($self_age); }\nsub main() { wait(1); }");
 }
+
+// ── boss 换段与敌人钩子刀 Task 4：spawn_enemy task 位带参 ──────────────────────────
+
+#[test]
+fn spawn_enemy_task_accepts_sub_call_with_matching_args() {
+    ok("async sub zako(dir: int, v: fx) { loop { wait(1); } }\n\
+        sub main() { _ = spawn_enemy(0.0fx, 0.0fx, 1, 0, 0, 0, zako(1, 2.5fx)); }");
+}
+
+#[test]
+fn spawn_enemy_task_args_are_type_and_arity_checked() {
+    let src_arity = "async sub zako(dir: int) { loop { wait(1); } }\n\
+                     sub main() { _ = spawn_enemy(0.0fx, 0.0fx, 1, 0, 0, 0, zako(1, 2)); }";
+    assert!(err(src_arity).iter().any(|e| e.msg.contains("参数个数")));
+    let src_ty = "async sub zako(dir: int) { loop { wait(1); } }\n\
+                  sub main() { _ = spawn_enemy(0.0fx, 0.0fx, 1, 0, 0, 0, zako(1.0fx)); }";
+    assert!(!err(src_ty).is_empty());
+    let src_none = "sub main() { _ = spawn_enemy(0.0fx, 0.0fx, 1, 0, 0, 0, none(1)); }";
+    assert!(!err(src_none).is_empty());
+    let src_sync = "sub zako(dir: int) { }\n\
+                    sub main() { _ = spawn_enemy(0.0fx, 0.0fx, 1, 0, 0, 0, zako(1)); }";
+    assert!(err(src_sync).iter().any(|e| e.msg.contains("async sub")));
+}
+
+#[test]
+fn fire_task_rejects_sub_call_with_args_pointing_to_spawn_enemy() {
+    let src = "async sub t(a: int) { }\n\
+               sub main() { _ = fire(0, 0, 0fx, 0fx, 0fx, 0deg, none, t(1)); }";
+    let errors = err(src);
+    assert!(
+        errors.iter().any(|e| e.msg.contains("只有 spawn_enemy")),
+        "{errors:?}"
+    );
+}
