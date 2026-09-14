@@ -218,7 +218,7 @@ mod tests {
         assert!((MAX_BIT_USED as u32) < u32::BITS);
     }
 
-    /// `EDGE_MASK` = 全部沿触发位的并集；当前词表中 BOMB / TIMESTOP / JUMP / REWIND 是沿语义。
+    /// `EDGE_MASK` = 全部沿触发位的并集；当前词表中 BOMB / JUMP / CONTINUE 是沿语义。
     #[test]
     fn edge_mask_is_exactly_the_edge_actions() {
         assert_eq!(EDGE_MASK, BTN_BOMB | BTN_JUMP | BTN_CONTINUE);

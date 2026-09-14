@@ -5,7 +5,7 @@ use crate::math::Fx;
 // ── 生死状态（本块只用 ABSENT/ALIVE；其余待碰撞那块）──────────────────
 pub const LIFE_ABSENT: u8 = 0; // 全零默认 = 不在场
 pub const LIFE_ALIVE: u8 = 1;
-pub const LIFE_DEATHWINDOW: u8 = 2; // 决死窗口（中弹后可 bomb 救）
+pub const LIFE_DEATHWINDOW: u8 = 2; // 决死窗口（中弹后可停止救，deathstop）
 // 3 退役（原 LIFE_RESPAWNING 场底重生，玩法刀 2026-09-14：死亡即遡行）：值不复用。
 pub const LIFE_GAMEOVER: u8 = 4; // 命尽、不再重生
 /// 跳躍中（时间机制内核刀 2026-09-07）：自机**缺席**——不动、不射、不用能力、不碰撞、

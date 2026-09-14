@@ -50,7 +50,7 @@ impl WorldBody {
         for i in 0..crate::MAX_PLAYERS {
             if self.players[i].life_state == LIFE_GAMEOVER {
                 // 续关是 GAMEOVER 态唯一响应的输入（壳子刀）：不受 A/C 冻结组门禁——它是
-                // 局面级的元操作，不是自机的行动；成功后本帧余下相位按 RESPAWNING 走。
+                // 局面级的元操作，不是自机的行动；成功后本帧余下相位按 ALIVE 走（玩法刀：原地复活）。
                 self.try_continue(i);
                 continue;
             }
@@ -65,14 +65,17 @@ impl WorldBody {
                 }
                 match self.players[i].life_state {
                     LIFE_DEATHWINDOW => {
-                        // deathbomb 挂点已接：窗口内按 bomb 会在 A 组 `try_bomb` 里把
-                        // 状态拨回 LIFE_ALIVE 并清 state_timer；这里只处理"没人救"的那条
-                        // 分支——窗口只在无 bomb 到达时才耗尽。
+                        // deathstop 挂点：窗口内按 X 会在 A 组 `try_stop` 里拨回 LIFE_ALIVE 并清
+                        // state_timer；这里只处理"没人救"的分支。C 组先于 A 组 ⇒ 耗尽那一帧按 X
+                        // 已来不及（有效窗口 = 进窗后 DEATHBOMB_WINDOW−1 帧）。
                         if self.players[i].state_timer > 0 {
                             self.players[i].state_timer -= 1;
                         }
                         if self.players[i].state_timer == 0 {
                             self.commit_death(i);
+                            // 死亡帧 A 组整段不跑（玩法刀复审）：`commit_death` 已原地复活，否则同帧
+                            // 按 X 会在扣命之后再白扣一发停止（无 timeline 宿主可见）。
+                            continue;
                         }
                     }
                     LIFE_JUMPING => {
@@ -200,7 +203,7 @@ impl WorldBody {
 
     /// 跳躍触发（A 组，时间机制内核刀 spec §2.2）。门禁四条：上升沿 + `LIFE_ALIVE` +
     /// 冷却已尽（玩法刀）+ 场景未冻结（时停中按跳躍无效——两种时间能力不叠加，规则只有一条）。
-    /// DEATHWINDOW / RESPAWNING / JUMPING 下按下 = no-op，**不计违约**（玩家操作不是脚本坏参）。
+    /// DEATHWINDOW / JUMPING 下按下 = no-op，**不计违约**（玩家操作不是脚本坏参）。
     /// 进入 `LIFE_JUMPING`，`state_timer = JUMP_FRAMES`，倒计时归 C 组。
     fn try_jump(&mut self, i: usize) {
         if !self.pressed_edge(i, crate::input::BTN_JUMP)
@@ -227,6 +230,12 @@ impl WorldBody {
         p.deaths = p.deaths.saturating_add(1);
         p.lives = p.lives.saturating_sub(1).max(1);
         p.invuln = p.invuln.max(crate::player::REWIND_INVULN);
+        if p.life_state == LIFE_DEATHWINDOW {
+            // 落点快照在决死窗口里（关底 `seal_history` / 窗口内读档后环首帧）：这次死亡的代价
+            // 刚付过，拨回 ALIVE——否则窗口在恢复出的世界里再耗尽一次，连环遡行直到 GAMEOVER。
+            p.life_state = LIFE_ALIVE;
+            p.state_timer = 0;
+        }
         self.void_spell_captures();
     }
 
@@ -1020,5 +1029,54 @@ mod tests {
         press(&mut w, BTN_BOMB);
         assert_eq!(w.body.bullets.iter_alive().count(), 0);
         assert_eq!(w.body.players[0].life_state, crate::player::LIFE_ALIVE);
+    }
+
+    /// 落点快照停在决死窗口里（关底封印 / 窗口内读档）：落地拨回 ALIVE、清窗口计时——
+    /// 否则窗口在恢复出的世界里再耗尽一次，连环遡行直到 GAMEOVER（复审 Important 1）。
+    #[test]
+    fn rewind_landed_on_a_deathwindow_snapshot_revives() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = 3;
+        w.body.rewind_landed(0);
+        assert_eq!(w.body.players[0].life_state, crate::player::LIFE_ALIVE);
+        assert_eq!(w.body.players[0].state_timer, 0);
+    }
+
+    /// 死亡帧 A 组不跑：同帧按 X 不得在扣命之后再扣一发停止（复审 Minor 3）。
+    #[test]
+    fn death_frame_skips_actions() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].bombs = 1;
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = 1;
+        let lives0 = w.body.players[0].lives;
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.players[0].lives, lives0 - 1, "窗口耗尽已扣命");
+        assert_eq!(w.body.players[0].bombs, 1, "死亡帧不发动停止");
+        assert_eq!(w.body.freeze_left[0], 0);
+    }
+
+    /// JUMPING / GAMEOVER 下按 X 无效。
+    #[test]
+    fn stop_is_noop_while_jumping_or_gameover() {
+        for st in [LIFE_JUMPING, crate::player::LIFE_GAMEOVER] {
+            let mut w = crate::step::World::new(1);
+            w.body.players[0].bombs = 1;
+            w.body.players[0].life_state = st;
+            w.body.players[0].state_timer = JUMP_FRAMES;
+            press(&mut w, BTN_BOMB);
+            assert_eq!(w.body.players[0].bombs, 1, "state {st}");
+            assert_eq!(w.body.freeze_left[0], 0, "state {st}");
+        }
+    }
+
+    /// 失格只动 active 槽。
+    #[test]
+    fn void_spell_captures_leaves_inactive_slots_alone() {
+        let mut w = crate::step::World::new(1);
+        w.body.spells[1].capture_ok = 1; // active == 0 的槽
+        w.body.void_spell_captures();
+        assert_eq!(w.body.spells[1].capture_ok, 1);
     }
 }

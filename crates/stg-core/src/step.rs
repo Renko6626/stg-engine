@@ -2387,7 +2387,8 @@ mod tests {
              PlayerState 删 bomb_phase/bomb_timer/time_stops、加 jump_cd u16/deaths u8(存档 wire format 变);\
              碰撞矩阵新增行 8 ROW_STOP_TOUCH(停止冻结中触碰消弹);号表 513 add_time_stops 退役;\
              输入词表退役位 7 BTN_TIMESTOP / 位 9 BTN_REWIND(vocab_hash 变);生命态 LIFE_RESPAWNING=3 退役;\
-             WorldTables 删 CharacterCfg.bomb(TABLE_VERSION 5,content_hash 变);回放头 LOG_FILE_VER 2。\
+             WorldTables 删 CharacterCfg.bomb(TABLE_VERSION 5,content_hash 变);回放头 LOG_FILE_VER 2;\
+             行为:PIECES_PER_BOMB 5→4、默认停止库存 3→2、跳躍冷却 600、死亡帧 A 组跳过。\
              ——前一次 18→19：壳子刀(2026-09-11)。\
              PlayerState.continues u8×2 进校验和/存档(PlayerState 64→72,World +16 B,\
              尺寸哨兵响)+ 输入词表新增 BTN_CONTINUE=10(位=0 等价旧行为,vocab_hash 变)。\
@@ -2913,8 +2914,8 @@ mod tests {
                 args: [77, 0],
             }],
         );
-        // 相位 9 负载：一颗提前标好 `BULLET_CLEARED` 的弹——冻 C 时这一枪不该被收走，
-        // 解冻后应立刻被清掉。
+        // 相位 9 负载：一颗提前标好 `BULLET_CLEARED` 的弹——玩法刀起冻 C（停止）时冻结分支
+        // 首帧即收，C 未冻时同样当帧收。
         let cleared_h = crate::world::test_support::bullet_at(&mut w, 300, 100);
         let cleared_i = w.body.bullets.get(cleared_h).unwrap();
         w.body.bullets.flags[cleared_i] |= crate::bullets::BULLET_CLEARED;
@@ -3140,6 +3141,8 @@ mod tests {
         w.body.bullets.x[ai] = Fx::from_raw(sum);
         w.body.bullets.x[bi] = Fx::from_raw(-(sum + 1));
         let score0 = w.body.players[0].score;
+        // 行 8 不看 invuln（spec §2.4）：带着遡行落地无敌帧照样触碰消弹（复审 Important 2）。
+        w.body.players[0].invuln = crate::player::REWIND_INVULN;
         w.body.freeze_left = [10, 0];
         step_empty(&mut w);
         assert!(w.body.bullets.get(a).is_none(), "恰好相切：被消且当帧回收");

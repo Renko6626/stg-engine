@@ -63,7 +63,7 @@ pub const EVT_SPELL_FAILED: u8 = 8;
 pub const EVT_SHOT_HIT_ENEMY: u8 = 9;
 /// 自机死亡请求遡行（玩法刀 2026-09-14：相位 3 C 组 `commit_death` 在决死窗口耗尽且残机未尽时产出）：
 /// `a_index` = 自机号（`a_gen` 恒 0），`x`/`y` = 自机当帧位置，
-/// `data = [hit_frame, 0]`（进入决死窗口那一帧的帧号）。**世界只发请求不改状态**——
+/// `data = [hit_frame, 0]`（进入决死窗口那一帧的帧号）。世界侧的原地继续只是无 timeline 宿主的兜底——
 /// 兑现（恢复快照 + `rewind_landed`）归 `stg_core::timeline`；无 timeline 的宿主（如裸
 /// harness）看到它就是一条无人认领的事实——世界已原地继续（`REWIND_INVULN` 无敌）。
 pub const EVT_REWIND_REQUESTED: u8 = 10;
@@ -76,7 +76,7 @@ pub const EVT_STAGE_CLEARED: u8 = 11;
 // ── `vanished`：本帧离开池的敌弹（表现契约 v2 spec §3.4）────────────────────
 /// 弹 `life` 归零。
 pub const VANISH_LIFE: u8 = 1;
-/// 弹被作用区清除（`BULLET_CLEARED`：bomb / deathbomb / 自机中弹清屏 / `clear_bullets`）。
+/// 弹被作用区清除（`BULLET_CLEARED`：停止触碰消弹 / 自机中弹清屏 / `clear_bullets`）。
 pub const VANISH_CLEARED: u8 = 2;
 
 /// 一行 `vanished`（12 B）：本帧在相位 9 被回收的一颗**敌弹**的最后位置与外观。

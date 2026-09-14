@@ -197,7 +197,8 @@ extern crate self as stg_core;
 /// `ROW_STOP_TOUCH`（相位 6/7/9 冻结分支）；③ syscall 513 `add_time_stops` 退役（号不复用）、
 /// `add_bombs` 上钳 5；④ 输入词表退役位 7/9、生命态退役 3（`LIFE_RESPAWNING`），死亡改为原地
 /// 继续 + `EVT_REWIND_REQUESTED`；⑤ `WorldTables` 删 `CharacterCfg.bomb`（`TABLE_VERSION` 5）
-/// ⇒ 表 `content_hash` 变；回放头 `LOG_FILE_VER` 2。**金向量预期改变**；实测为准。
+/// ⇒ 表 `content_hash` 变；回放头 `LOG_FILE_VER` 2。行为：`PIECES_PER_BOMB` 5→4、默认停止库存
+/// 3→2、跳躍冷却 600 帧门禁、死亡帧 A 组跳过。**金向量预期改变**；实测为准。
 pub const ENGINE_VER: u32 = 20;
 
 pub use stg_derive::define_pool;
