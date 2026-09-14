@@ -19,6 +19,9 @@ pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
 /// "每个自机时停时长不同"成为内容需求，再迁进 `CharacterCfg`。
 pub const TIMESTOP_FRAMES: u16 = 180;
 
+/// 停止库存上限（gameplay-design §1）。三个入口钳它：碎片进位、`SYS_ADD_BOMBS`、`new_game_at`。
+pub const STOP_STOCK_MAX: u8 = 5;
+
 /// 跳躍跨过的帧数（时间机制内核刀 spec §2.2）。也是宿主影子世界（観測）的预览步数——
 /// 影子 = 克隆 + 喂一帧 `BTN_JUMP` + step 本数，与真跳同一条代码路径。先 30（0.5 s），
 /// 手感要 1 s 再提 60。
@@ -88,13 +91,13 @@ pub struct Loadout {
 }
 
 impl Default for Loadout {
-    /// 正典默认 = 机体0/0火力/3残/3停止——`PlayerState::spawn` 的硬编码收编为此单一来源。
+    /// 正典默认 = 机体0/0火力/3残/2停止——`PlayerState::spawn` 的硬编码收编为此单一来源。
     fn default() -> Self {
         Loadout {
             character: 0,
             power: 0,
             lives: 3,
-            bombs: 3,
+            bombs: 2,
         }
     }
 }
@@ -163,6 +166,11 @@ mod tests {
         assert_eq!(p.power_tier(), 4, "满火力 4 档");
         p.power = 999; // 越 POWER_MAX 的非常规直写（P4-b）
         assert_eq!(p.power_tier(), 4, "越界火力钳到满档，不越 sets 表界");
+    }
+
+    #[test]
+    fn default_loadout_starts_with_two_stops() {
+        assert_eq!(Loadout::default().bombs, 2, "gameplay-design §1：初始 2");
     }
 
     /// 迁表回归（M0-17 T3）：`spawn` 判定/擦弹半径与 `TABLES_V0` 表值逐位相等——

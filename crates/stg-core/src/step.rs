@@ -123,7 +123,7 @@ impl World {
         let p = &mut w.body.players[0];
         p.power = loadout.power.min(crate::items::POWER_MAX);
         p.lives = loadout.lives;
-        p.bombs = loadout.bombs;
+        p.bombs = loadout.bombs.min(crate::player::STOP_STOCK_MAX);
         w.body.set_var(crate::consts::GVAR_RANK, rank);
         let root_idx = w.start_main(image)?;
         if let Some(ip) = landing {
@@ -2659,7 +2659,7 @@ mod tests {
         );
     }
 
-    /// 装备钳位:power 越 `POWER_MAX` 钳、lives/bombs 全域直收(u8 无上限常量);
+    /// 装备钳位:power 越 `POWER_MAX` 钳、bombs 越 `STOP_STOCK_MAX` 钳(玩法刀)、lives 全域直收;
     /// score/graze 仍出场默认 0(装备面不碰这两个字段)。
     #[test]
     fn new_game_at_applies_loadout_with_clamp() {
@@ -2668,13 +2668,17 @@ mod tests {
             character: 0,
             power: 9999,
             lives: 8,
-            bombs: 1,
+            bombs: 9,
         };
         let w = World::new_game_at(7, 2, 0, loadout, &image).expect("new_game_at");
         let p = &w.body.players[0];
         assert_eq!(p.power, crate::items::POWER_MAX, "power 钳到 POWER_MAX");
         assert_eq!(p.lives, 8, "lives 全域直收");
-        assert_eq!(p.bombs, 1, "bombs 全域直收");
+        assert_eq!(
+            p.bombs,
+            crate::player::STOP_STOCK_MAX,
+            "bombs 钳到停止库存上限"
+        );
         assert_eq!(p.score, 0);
         assert_eq!(p.graze, 0);
     }

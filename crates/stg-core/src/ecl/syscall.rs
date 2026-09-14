@@ -179,7 +179,7 @@ pub const SYS_CLEAR_BULLETS: u16 = 540;
 /// 别把这族"补全"成 `set_lives`/`set_bombs`/`set_power` 四件套——多一条写路径就多一处
 /// 与 `Loadout` 抢开局初值的歧义。
 pub const SYS_ADD_LIVES: u16 = 510;
-/// bomb 增量（B20）。语义同 [`SYS_ADD_LIVES`]，钳 `[0, u8::MAX]`；增量形态同为人类裁定。
+/// 停止库存增量（B20；玩法刀起钳 `[0, STOP_STOCK_MAX]`）。语义同 [`SYS_ADD_LIVES`]；增量形态同为人类裁定。
 pub const SYS_ADD_BOMBS: u16 = 511;
 /// 火力增量（B20）。语义同 [`SYS_ADD_LIVES`]，但上钳是 [`crate::items::POWER_MAX`]（400，
 /// = 显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 索引就 OOB（见
@@ -861,7 +861,9 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_ADD_BOMBS => {
             let d = pop(task)?;
             let p = &mut ctx.body.players[0];
-            p.bombs = (p.bombs as i32).saturating_add(d).clamp(0, u8::MAX as i32) as u8;
+            p.bombs = (p.bombs as i32)
+                .saturating_add(d)
+                .clamp(0, crate::player::STOP_STOCK_MAX as i32) as u8;
             Ok(())
         }
         SYS_ADD_POWER => {
@@ -4693,9 +4695,10 @@ mod tests {
         assert_eq!(w.body.players[0].lives, u8::MAX, "上钳 u8::MAX，不回绕成 0");
     }
 
-    /// B20：`add_bombs(d)` 同构（独立字段——判别腿：写错字段会让 lives 动而 bombs 不动）。
+    /// `add_bombs(d)`：钳 `[0, STOP_STOCK_MAX=5]`（玩法刀；原 `[0,255]`）。判别腿：写错字段会让 lives 动。
     #[test]
     fn add_bombs_clamps_both_ends() {
+        use crate::player::STOP_STOCK_MAX;
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
         w.body.players[0].bombs = 3;
@@ -4712,9 +4715,8 @@ mod tests {
         assert!(call(&mut w, &ecl, &mut task, SYS_ADD_BOMBS, &[-1]).is_ok());
         assert_eq!(w.body.players[0].bombs, 0, "下钳 0，不回绕成 255");
 
-        w.body.players[0].bombs = u8::MAX;
-        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_BOMBS, &[1]).is_ok());
-        assert_eq!(w.body.players[0].bombs, u8::MAX, "上钳 u8::MAX");
+        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_BOMBS, &[9]).is_ok());
+        assert_eq!(w.body.players[0].bombs, STOP_STOCK_MAX, "上钳 5");
     }
 
     /// `power` 上限是 `POWER_MAX`（400，= 显示 4.00），**不是 `u16::MAX`**——判别腿：
@@ -4768,7 +4770,12 @@ mod tests {
             } else {
                 w.body.players[0].bombs
             };
-            assert_eq!(v, u8::MAX, "syscall {no}：i32::MAX 应钳到 u8::MAX");
+            let cap = if no == SYS_ADD_LIVES {
+                u8::MAX
+            } else {
+                crate::player::STOP_STOCK_MAX
+            };
+            assert_eq!(v, cap, "syscall {no}：i32::MAX 应钳到上限");
 
             assert!(call(&mut w, &ecl, &mut task, no, &[i32::MIN]).is_ok());
             let v = if no == SYS_ADD_LIVES {

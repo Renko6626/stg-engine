@@ -31,7 +31,8 @@ pub const MAGNET_PICKED: u8 = 0xFE;
 /// `PlayerState::power_tier`。世界侧只存整数单位，除以 100 是表现层的事（I1）。
 pub const POWER_MAX: u16 = 400;
 pub const PIECES_PER_LIFE: u8 = 5;
-pub const PIECES_PER_BOMB: u8 = 5;
+/// 停止碎片进位数（玩法刀 2026-09-14：5 → 4，gameplay-design §1）。
+pub const PIECES_PER_BOMB: u8 = 4;
 
 // cap 512 → 1024（F12 定案，2026-09-03）：**消弹转星星是 1:1**（`world/settle.rs` 趟一
 // 逐颗调 `spawn_star_at`），而弹池 cap 是 8192 —— 任何一次大规模消弹都可能一帧内要走

@@ -300,7 +300,10 @@ impl WorldBody {
                 pl.bomb_pieces = pl.bomb_pieces.saturating_add(1);
                 if pl.bomb_pieces >= PIECES_PER_BOMB {
                     pl.bomb_pieces = 0;
-                    pl.bombs = pl.bombs.saturating_add(1);
+                    // 停止库存上限（玩法刀）：满了碎片照清、不加。
+                    if pl.bombs < crate::player::STOP_STOCK_MAX {
+                        pl.bombs += 1;
+                    }
                 }
             }
             ITEM_STAR => {
@@ -968,8 +971,32 @@ mod tests {
         w.body.players[0].bomb_pieces = crate::items::PIECES_PER_BOMB - 1;
         w.body
             .credit_item(0, crate::items::ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);
-        assert_eq!(w.body.players[0].bombs, u8::MAX, "炸弹数须饱和");
+        assert_eq!(
+            w.body.players[0].bombs,
+            u8::MAX,
+            "库存超上限的直写值不被进位推高"
+        );
         assert_eq!(w.body.players[0].bomb_pieces, 0);
+    }
+
+    /// 停止碎片（玩法刀）：4 枚进 1 发；库存已满时碎片照清、不加（判别腿：满库存 5 与 4 各一次）。
+    #[test]
+    fn stop_piece_carry_respects_stock_max() {
+        use crate::items::{ITEM_BOMB_PIECE, PIECES_PER_BOMB};
+        use crate::player::STOP_STOCK_MAX;
+        assert_eq!(PIECES_PER_BOMB, 4, "gameplay-design §1：4 碎片 = 1 发");
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].bombs = STOP_STOCK_MAX - 1;
+        w.body.players[0].bomb_pieces = PIECES_PER_BOMB - 1;
+        w.body
+            .credit_item(0, ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);
+        assert_eq!(w.body.players[0].bombs, STOP_STOCK_MAX, "未满：进位加一");
+        assert_eq!(w.body.players[0].bomb_pieces, 0);
+        w.body.players[0].bomb_pieces = PIECES_PER_BOMB - 1;
+        w.body
+            .credit_item(0, ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);
+        assert_eq!(w.body.players[0].bombs, STOP_STOCK_MAX, "已满：不加");
+        assert_eq!(w.body.players[0].bomb_pieces, 0, "已满：碎片照清");
     }
 
     /// 同帧双拾取幂等：趟三首见即标 `MAGNET_PICKED`，二次 hit 遇标即跳过入账（手工双推 hits，
