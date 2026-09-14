@@ -62,6 +62,10 @@ impl WorldBody {
             }
             // ── C 组：生死状态机计时（A4 相位 3 职责）
             if !scene {
+                // 跳躍冷却（玩法刀）：先减后判——落地帧的写满在下面 JUMPING 臂，本帧不被自己减掉。
+                if self.players[i].jump_cd > 0 {
+                    self.players[i].jump_cd -= 1;
+                }
                 match self.players[i].life_state {
                     LIFE_DEATHWINDOW => {
                         // deathbomb 挂点已接：窗口内按 bomb 会在 A 组 `try_bomb` 里把
@@ -91,6 +95,7 @@ impl WorldBody {
                         }
                         if self.players[i].state_timer == 0 {
                             self.players[i].life_state = LIFE_ALIVE;
+                            self.players[i].jump_cd = crate::player::JUMP_COOLDOWN;
                         }
                     }
                     LIFE_ALIVE => {
@@ -196,14 +201,15 @@ impl WorldBody {
         p.state_timer = 0;
     }
 
-    /// 跳躍触发（A 组，时间机制内核刀 spec §2.2）。门禁三条：上升沿 + `LIFE_ALIVE` +
-    /// 场景未冻结（时停中按跳躍无效——两种时间能力不叠加，规则只有一条）。
+    /// 跳躍触发（A 组，时间机制内核刀 spec §2.2）。门禁四条：上升沿 + `LIFE_ALIVE` +
+    /// 冷却已尽（玩法刀）+ 场景未冻结（时停中按跳躍无效——两种时间能力不叠加，规则只有一条）。
     /// DEATHWINDOW / RESPAWNING / JUMPING 下按下 = no-op，**不计违约**（玩家操作不是脚本坏参）。
     /// 进入 `LIFE_JUMPING`，`state_timer = JUMP_FRAMES`，倒计时归 C 组。
     fn try_jump(&mut self, i: usize) {
         if !self.pressed_edge(i, crate::input::BTN_JUMP)
             || self.players[i].life_state != LIFE_ALIVE
             || self.scene_frozen()
+            || self.players[i].jump_cd != 0
         {
             return;
         }
@@ -390,6 +396,55 @@ mod tests {
             w.body.players[0].life_state, LIFE_ALIVE,
             "恰第 N 帧回 ALIVE"
         );
+    }
+
+    /// 冷却判别（落地后，玩法刀）：再走 598 帧（cd=2）按 JUMP 仍 ALIVE；再走 599 帧（cd=1）按
+    /// JUMP——本帧 C 组先减到 0、A 组门禁放行 ⇒ 起跳。两腿夹住「恰好 600 帧」。
+    #[test]
+    fn jump_cooldown_blocks_until_exactly_expired() {
+        use crate::player::{JUMP_COOLDOWN, LIFE_ALIVE};
+        let land = || {
+            let mut w = crate::step::World::new(1);
+            step_t(&mut w, &keys(BTN_JUMP));
+            for _ in 0..JUMP_FRAMES {
+                step_t(&mut w, &InputFrame::empty(0));
+            }
+            assert_eq!(w.body.players[0].life_state, LIFE_ALIVE);
+            assert_eq!(w.body.players[0].jump_cd, JUMP_COOLDOWN, "落地那帧写满冷却");
+            w
+        };
+        let mut w = land();
+        for _ in 0..(JUMP_COOLDOWN - 2) {
+            step_t(&mut w, &InputFrame::empty(0));
+        }
+        step_t(&mut w, &keys(BTN_JUMP));
+        assert_eq!(w.body.players[0].life_state, LIFE_ALIVE, "cd 未尽不得跳");
+        let mut w = land();
+        for _ in 0..(JUMP_COOLDOWN - 1) {
+            step_t(&mut w, &InputFrame::empty(0));
+        }
+        step_t(&mut w, &keys(BTN_JUMP));
+        assert_eq!(w.body.players[0].life_state, LIFE_JUMPING, "cd 恰尽即可跳");
+    }
+
+    /// 冷却归 C 组：停止冻结期间不走。
+    #[test]
+    fn jump_cooldown_does_not_tick_while_scene_frozen() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].jump_cd = 100;
+        w.body.freeze_left = [11, 0];
+        for _ in 0..10 {
+            step_t(&mut w, &InputFrame::empty(0));
+        }
+        assert_eq!(w.body.players[0].jump_cd, 100);
+    }
+
+    #[test]
+    fn jump_cd_enters_the_checksum() {
+        let mut w = crate::step::World::new(1);
+        let c0 = w.checksum();
+        w.body.players[0].jump_cd = 1;
+        assert_ne!(w.checksum(), c0);
     }
 
     /// 门禁：DEATHWINDOW / RESPAWNING / 场景冻结 / 跳躍中再按 → 零变化。

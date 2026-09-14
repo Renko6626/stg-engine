@@ -29,6 +29,8 @@ pub const STOP_TOUCH_SCORE: u64 = 10;
 /// 影子 = 克隆 + 喂一帧 `BTN_JUMP` + step 本数，与真跳同一条代码路径。先 30（0.5 s），
 /// 手感要 1 s 再提 60。
 pub const JUMP_FRAMES: u16 = 30;
+/// 跳躍冷却（帧，gameplay-design §2）：落地那帧写满，C 组逐帧减，`== 0` 才能再跳。
+pub const JUMP_COOLDOWN: u16 = 600;
 /// 遡行落地后的无敌帧（spec §2.3）——策划案 2.3「落点附加短暂无敌帧」那条退路的实现，
 /// 由 `WorldBody::rewind_landed` 写入。
 pub const REWIND_INVULN: u16 = 30;
@@ -60,6 +62,8 @@ pub struct PlayerState {
     pub life_state: u8,
     pub state_timer: u16,
     pub invuln: u16,
+    /// 跳躍冷却剩余帧（玩法刀）。落地写 `JUMP_COOLDOWN`，C 组计时（停止冻结期间不走）。
+    pub jump_cd: u16,
     /// 发弹相位计时器（M0-17 T4：取代旧 `shot_cd` 倒计时）：持 SHOT 逐帧 `wrapping_add(1)`，
     /// 松手清零；相位 3 解释器用**自增前**的值判 `shot_timer % interval == delay % interval`
     /// （先判后加——见 `world/player.rs::char0_update_shot` 钉死注记 + 判别测试
@@ -123,6 +127,7 @@ impl PlayerState {
             life_state: LIFE_ALIVE,
             state_timer: 0,
             invuln: 0,
+            jump_cd: 0,
             hit_frame: 0,
             continues: 0,
             shot_timer: 0,

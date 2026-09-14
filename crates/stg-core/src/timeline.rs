@@ -889,6 +889,8 @@ mod tests {
         }
         assert_eq!(t.world().body.players[0].life_state, LIFE_ALIVE);
         assert_ne!(t.world().body.players[0].prev_input & BTN_JUMP, 0);
+        // 冷却是另一条门禁（玩法刀），本条只押「旧电平被清」——清掉冷却再预览。
+        t.world.body.players[0].jump_cd = 0;
         t.preview_begin();
         t.preview_step();
         assert_eq!(
@@ -896,6 +898,16 @@ mod tests {
             LIFE_JUMPING,
             "影子首步必须起跳"
         );
+    }
+
+    /// 冷却中観測（玩法刀 spec §3）：影子喂的 JUMP 被门禁拒，影子自机仍在场。
+    #[test]
+    fn preview_during_cooldown_keeps_the_shadow_player_present() {
+        let mut t = bare(15);
+        t.world.body.players[0].jump_cd = 100;
+        t.preview_begin();
+        t.preview_step();
+        assert_eq!(t.shadow().body.players[0].life_state, LIFE_ALIVE);
     }
 
     // ── 遡行 ──
