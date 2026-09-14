@@ -47,25 +47,29 @@ var hud: Hud
 var effects: Effects
 var smoke := false
 var _smoke_saw_bgm := false # 冒烟②侦听 REQ_BGM 用(成员变量,lambda 捕获值类型局部不回写)
-## `--shots` 有头目验模式(表现契约 v2 DoD §7.2 第 6 条):脚本化输入(常按射击,第 200 帧放
-## bomb)跑 demo,在 SHOT_FRAMES 各帧把 SubViewport 存成 PNG 到 $STG_SHOTS_DIR,最后一张后退出。
+## `--shots` 有头目验模式(表现契约 v2 DoD §7.2 第 6 条):脚本化输入(常按射击,第 200 帧按
+## 停止)跑 demo,在 SHOT_FRAMES 各帧把 SubViewport 存成 PNG 到 $STG_SHOTS_DIR,最后一张后退出。
 ## 需要真渲染器(本机走 VNC 桌面 + llvmpipe:`DISPLAY=:2 LIBGL_ALWAYS_SOFTWARE=1 godot
 ## --rendering-driver opengl3 --path godot -- --shots`)。顺带打印各层 visible_instances
 ## (B26 ②:headless 恒 0,有头才有真值)。
 var shots_mode := false
 ## 帧 60..75 向左走到 x≈-48 的杂兵正下方(自机每帧约 3px),之后自机弹持续命中:受击闪白/火花
-## 可在 95/100 帧看到,杂兵 hp=40 打死后有爆炸环(REQ_ENEMY_DEATH)。第 200 帧放 bomb。
-const SHOT_FRAMES := { 95: "hit_a", 100: "hit_b", 130: "zako", 201: "bomb_t1", 206: "bomb_t6", 214: "bomb_t14", 320: "observe", 361: "jump", 620: "boss" }
-const SHOT_BOMB_FRAME := 200
+## 可在 95/100 帧看到,杂兵 hp=40 打死后有爆炸环(REQ_ENEMY_DEATH)。第 200 帧按停止。
+const SHOT_FRAMES := { 95: "hit_a", 100: "hit_b", 130: "zako", 201: "stop_t1", 206: "stop_t6", 214: "stop_t14", 320: "observe", 361: "jump", 620: "boss" }
+const SHOT_STOP_FRAME := 200
 const SHOT_LEFT_FRAMES := [60, 76]
 var _shots_left := 0
-var _death_shot_at := -1 # 首次 REQ_ENEMY_DEATH 后第 4 帧补一张(爆炸环 20 帧寿命的前四分之一)
+var _death_shot_at := -1
+## 目验闪避:脚本输入按帧号固定,落地后原样再撞(落点 = 被弹前 30 帧、落地无敌 30 帧)⇒ 确定性连死。
+## 每次遡行落地后左右交替闪 40 帧,让未来与上一次不同(玩法刀)。
+var _shots_dodge_until := -1
+var _shots_dodge_dir := 0 # 首次 REQ_ENEMY_DEATH 后第 4 帧补一张(爆炸环 20 帧寿命的前四分之一)
 
 ## ── 時環晷 时间机制(spec §5)────────────────────────────────────────────────
 ## 観測:按一下 C 进入,窗口 OBSERVE_WINDOW tick 内每 tick 让影子世界跑 JUMP_FRAMES 步并
 ## 显示影子层;窗口内再按一下 C = 跳躍(把 BTN_JUMP 注入**这一帧**的输入,一帧即沿);
 ## 窗口到期自动退出。跳躍期间/倒放期间按 C 忽略。
-const OBSERVE_WINDOW := 60
+const OBSERVE_WINDOW := 180 # 玩法刀:3 s
 const SCRUB_STEP := 3 # 遡行倒放每 tick 退几帧
 var observing := false
 var _observe_left := 0
@@ -135,7 +139,8 @@ func start(p_mode: int, p_rank: int, p_mark: int, p_lives: int = BOOT_LIVES,
 	mode = p_mode
 	rank = p_rank
 	start_mark = p_mark
-	lives = p_lives
+	# 目验(--shots):脚本化输入站桩挨打,停止只冻不清场(玩法刀),3 条命撑不到 boss 帧——给足命。
+	lives = 9 if shots_mode else p_lives
 	_units_names = names
 	_units_sources = sources
 	_replay_bytes = replay_bytes
@@ -330,6 +335,8 @@ func _finish_rewind() -> void:
 	state = S.PLAYING
 	_update_time_hint()
 	if shots_mode:
+		_shots_dodge_until = _scrub_to + 40
+		_shots_dodge_dir = WorldBridge.BTN_LEFT if _shots_dodge_dir == WorldBridge.BTN_RIGHT else WorldBridge.BTN_RIGHT
 		_shots_left += 1
 		_capture("rewind_land")
 
@@ -337,11 +344,12 @@ func _finish_rewind() -> void:
 func _update_time_hint() -> void:
 	var st := int(bridge.hud_player().get("life_state", 0))
 	if observing:
-		hud.set_time_hint("観測 %d  (C 跳躍)" % _observe_left)
+		var tail := "冷却中" if int(bridge.hud_player().get("jump_cd", 0)) > 0 else "C 跳躍"
+		hud.set_time_hint("観測 %d  (%s)" % [_observe_left, tail])
 	elif st == WorldBridge.LIFE_JUMPING:
 		hud.set_time_hint("跳躍")
 	elif st == WorldBridge.LIFE_DEATHWINDOW:
-		hud.set_time_hint("V 遡行")
+		hud.set_time_hint("X 停止")
 	else:
 		hud.set_time_hint("")
 
@@ -375,10 +383,12 @@ func _drain_events() -> void:
 				# 宿主停拍;下一关第一帧要等玩家确认(现在 = Z 重开,结算页是壳子刀正文)。
 				_on_stage_clear(int(ev.get("data0", 0)))
 
-## 目验模式的脚本化输入:常按射击;第 SHOT_BOMB_FRAME 帧按一帧 bomb(沿检测,按一帧即触发)。
+## 目验模式的脚本化输入:常按射击;第 SHOT_STOP_FRAME 帧按一帧停止(沿检测,按一帧即触发)。
 func _scripted_mask(frame: int) -> int:
 	var m := WorldBridge.BTN_SHOT
-	if frame == SHOT_BOMB_FRAME:
+	if frame < _shots_dodge_until:
+		m |= _shots_dodge_dir
+	if frame == SHOT_STOP_FRAME:
 		m |= WorldBridge.BTN_BOMB
 	if frame >= SHOT_LEFT_FRAMES[0] and frame < SHOT_LEFT_FRAMES[1]:
 		m |= WorldBridge.BTN_LEFT
@@ -441,6 +451,11 @@ func _on_stage_clear(stage: int) -> void:
 		_capture_root("stage_clear_page")
 
 func _on_game_over() -> void:
+	if shots_mode:
+		# 目验不该停在 GAME OVER 页上干等(不 step 就永远到不了 SHOT_FRAME_CAP):响亮退出。
+		print("[shots] GAME OVER at frame %d before all shots were taken" % bridge.frame())
+		get_tree().quit(1)
+		return
 	state = S.STOPPED
 	var p := bridge.hud_player()
 	overlay.show_page(Overlay.Kind.GAME_OVER, "GAME OVER", [

@@ -1,12 +1,15 @@
 class_name Hud
 extends CanvasLayer
-## 右栏(x≥424):分/残机/bomb/power/graze + 曲名;boss 条覆盖弹幕域顶部;中央横幅。
+## 右栏(x≥424):分/残机/停止/power/graze/偏差 + 冷却条 + 曲名;boss 条覆盖弹幕域顶部;中央横幅。
 
 var score_l: Label
 var lives_l: Label
 var bombs_l: Label
 var power_l: Label
 var graze_l: Label
+var deaths_l: Label # 偏差值 = 死亡数(玩法刀)
+var jump_bg: ColorRect # 跳躍冷却条底(满 = 可跳,只画条不写数字)
+var jump_bar: ColorRect
 var bgm_l: Label
 var boss_bar: ColorRect
 var boss_bar_bg: ColorRect
@@ -21,7 +24,15 @@ func _ready() -> void:
 	panel.custom_minimum_size = Vector2(200, 0)
 	add_child(panel)
 	score_l = _row(panel); lives_l = _row(panel); bombs_l = _row(panel)
-	power_l = _row(panel); graze_l = _row(panel); bgm_l = _row(panel)
+	power_l = _row(panel); graze_l = _row(panel); deaths_l = _row(panel); bgm_l = _row(panel)
+	jump_bg = ColorRect.new()
+	jump_bg.custom_minimum_size = Vector2(120, 4)
+	jump_bg.color = Color(1, 1, 1, 0.15)
+	panel.add_child(jump_bg)
+	jump_bar = ColorRect.new()
+	jump_bar.size = Vector2(120, 4)
+	jump_bar.color = Color(0.55, 0.8, 1.0)
+	jump_bg.add_child(jump_bar)
 
 	boss_bar_bg = ColorRect.new()
 	boss_bar_bg.position = Vector2(40, 20); boss_bar_bg.size = Vector2(368, 4)
@@ -84,7 +95,10 @@ func refresh(bridge: WorldBridge) -> void:
 		return
 	score_l.text = "Score  %d" % int(p["score"])
 	lives_l.text = "Player %d (%d)" % [int(p["lives"]), int(p["life_pieces"])]
-	bombs_l.text = "Bomb   %d (%d)" % [int(p["bombs"]), int(p["bomb_pieces"])]
+	bombs_l.text = "Stop   %d (%d)" % [int(p["bombs"]), int(p["bomb_pieces"])]
+	deaths_l.text = "偏差   %d" % int(p.get("deaths", 0))
+	var cd := int(p.get("jump_cd", 0))
+	jump_bar.size.x = 120.0 * (1.0 - float(cd) / float(WorldBridge.JUMP_COOLDOWN))
 	power_l.text = "Power  %.2f" % (int(p["power"]) / 100.0)
 	graze_l.text = "Graze  %d" % int(p["graze"])
 	var b := bridge.hud_boss(0)
