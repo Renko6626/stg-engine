@@ -1370,4 +1370,32 @@ mod tests {
         w.body.settle(&crate::tables::TABLES_V0);
         assert_eq!(w.body.enemies.hp[i], 43, "解除后同一发打得进");
     }
+
+    /// `clear_field_at` 几何判别（boss 换段刀 spec §6）：圆内弹被清、圆外弹保留（证明半径真的生效、
+    /// 不是全屏）；stars=true 给星。
+    #[test]
+    fn clear_field_at_clears_inside_and_keeps_outside() {
+        let mut w = crate::step::World::new(1);
+        w.body.create_field(crate::field::clear_field_at(
+            Fx::ZERO,
+            Fx::from_int(100),
+            Fx::from_int(40),
+            true,
+        ));
+        let inside = bullet_at(&mut w, 10, 100);
+        let outside = bullet_at(&mut w, 150, 100);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        let cleared = |w: &crate::step::World, h| {
+            let i = w.body.bullets.get(h).unwrap();
+            w.body.bullets.flags[i] & crate::bullets::BULLET_CLEARED != 0
+        };
+        assert!(cleared(&w, inside));
+        assert!(!cleared(&w, outside));
+        assert_eq!(w.body.items.iter_alive().count(), 1, "stars=true 给星");
+    }
 }

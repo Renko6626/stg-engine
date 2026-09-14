@@ -85,6 +85,9 @@ pub const SYS_SELF_HP_MAX: u16 = 31;
 /// 无绑定 → `-1`（`wait_spell()` 语法糖的判据，同 `SYS_SELF_HP` 误用降级口径：owner
 /// 非 ENEMY 直接押 -1，不 Fault）。
 pub const SYS_SPELL_TIMER: u16 = 130;
+/// `spell_result(slot)`（boss 换段刀 spec §3.3；owner 无限制）：押 `spell_last_result[slot]`
+/// （0 还没结束过 / 1 血线 / 2 超时 / 3 手动）；`slot ∉ [0, MAX_BOSSES)` → 押 0 + 违约。
+pub const SYS_SPELL_RESULT: u16 = 131;
 /// 查敌读口(A5 补遗):活敌返 hp,其余 -1。1 参 `handle` = **打包敌号**(含 generation,
 /// 见 [`pack_enemy_handle`])。P4-b:越界/死槽/**gen 不符**/负值一律 -1,不 Fault
 /// ——stage 编排等 boss 死的轮询原语。
@@ -173,6 +176,9 @@ pub const SYS_TIME_STOP_PLAYER: u16 = 560;
 /// 那刀的职责（bomb = `FIELD_CLEAR_BULLETS | FIELD_DAMAGE` + 自机无敌）。
 /// P4-a：field 池满 → `create_field` 自身的降级（NULL + 计数），本 syscall 不 Fault。
 pub const SYS_CLEAR_BULLETS: u16 = 540;
+/// `clear_bullets_at(x, y, r, stars)`（boss 换段刀 spec §6；owner 无限制）：圆形一帧清弹区，
+/// `stars == 0` 带 `FIELD_NO_STAR`（清而不转星）。半径钳制走 `create_field`。
+pub const SYS_CLEAR_BULLETS_AT: u16 = 541;
 /// 残机增量（B20；1 参 `delta`、无返回）。双边钳 `[0, u8::MAX]`（P4-b：`delta` 是脚本给的
 /// 任意 `i32`，先 `saturating_add` 再 `clamp`，不回绕不 panic）。
 ///
@@ -407,6 +413,7 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_NEAREST_ENEMY
             | SYS_AIM_PLAYER_ANGLE
             | SYS_SPELL_TIMER
+            | SYS_SPELL_RESULT
             | SYS_ATAN2
             | SYS_DIST
             | SYS_RAND_RANGE
@@ -447,6 +454,7 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_DIE
             | SYS_KILL_ALL_ENEMIES
             | SYS_CLEAR_BULLETS
+            | SYS_CLEAR_BULLETS_AT
             | SYS_BGM
             | SYS_BG
             | SYS_BG_PHASE
@@ -777,6 +785,18 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         }
         SYS_AIM_PLAYER_ANGLE => sys_aim_player_angle(task, ctx),
         SYS_SPELL_TIMER => sys_spell_timer(task, ctx),
+        SYS_SPELL_RESULT => {
+            let slot = pop(task)?;
+            let v = match usize::try_from(slot) {
+                Ok(s) if s < crate::boss::MAX_BOSSES => ctx.body.spell_last_result[s] as i32,
+                _ => {
+                    ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+                    ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+                    0
+                }
+            };
+            push(task, v)
+        }
         // ── 数学/查询面 110/140/141（参数**逆序弹出**，照 `sys_move_enemy_to`）────────────
         SYS_ATAN2 => {
             let x = pop(task)?;
@@ -987,6 +1007,19 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_DIE => {
             let h = self_enemy_handle(task)?;
             ctx.body.kill_enemy_by_handle(h, ctx.tables);
+            Ok(())
+        }
+        SYS_CLEAR_BULLETS_AT => {
+            let stars = pop(task)?;
+            let r = pop(task)?;
+            let y = pop(task)?;
+            let x = pop(task)?;
+            ctx.body.create_field(crate::field::clear_field_at(
+                Fx::from_raw(x),
+                Fx::from_raw(y),
+                Fx::from_raw(r),
+                stars != 0,
+            ));
             Ok(())
         }
         SYS_CLEAR_BULLETS => {
@@ -2194,6 +2227,7 @@ mod tests {
             (SYS_NEAREST_ENEMY, "nearest_enemy", 1),
             (SYS_AIM_PLAYER_ANGLE, "aim_player_angle", 1),
             (SYS_SPELL_TIMER, "spell_timer", 1),
+            (SYS_SPELL_RESULT, "spell_result", 1),
             (SYS_ATAN2, "atan2", 1),
             (SYS_DIST, "dist", 1),
             (SYS_RAND_RANGE, "rand_range", 1),
@@ -2230,6 +2264,7 @@ mod tests {
             (SYS_DIE, "die", 5),
             (SYS_KILL_ALL_ENEMIES, "kill_all_enemies", 5),
             (SYS_CLEAR_BULLETS, "clear_bullets", 5),
+            (SYS_CLEAR_BULLETS_AT, "clear_bullets_at", 5),
             (SYS_BGM, "bgm", 5),
             (SYS_BG, "bg", 5),
             (SYS_BG_PHASE, "bg_phase", 5),
@@ -2291,9 +2326,9 @@ mod tests {
 
         assert_eq!(
             table.len(),
-            85,
+            87,
             "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 − 玩法刀退役 513 \
-             + boss 换段刀六条（026/440/441/442/443/531）= 85：增改需同步这个数"
+             + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87：增改需同步这个数"
         );
 
         // (a) 族归属：搬错族立刻红
@@ -7313,5 +7348,54 @@ mod tests {
             EVT_ENEMY_DIED
         );
         assert_eq!(w.body.items.iter_alive().count(), 3, "掉落表 1 = 3 颗");
+    }
+
+    // ── boss 换段与敌人钩子刀 Task 3：spell_result 131 / clear_bullets_at 541 ──────────
+
+    /// 131 `spell_result`：读槽值；越界 / 负槽号押 0 + 违约。owner 无限制（STAGE 可读）。
+    #[test]
+    fn spell_result_reads_slot_and_rejects_out_of_range() {
+        let (mut w, ecl) = fresh();
+        w.body.spell_last_result[1] = crate::spell::SPELL_END_TIMEOUT;
+        let mut stage = Task::default();
+        assert!(call(&mut w, &ecl, &mut stage, SYS_SPELL_RESULT, &[1]).is_ok());
+        assert_eq!(stage.stack[0], crate::spell::SPELL_END_TIMEOUT as i32);
+        for bad in [-1, crate::boss::MAX_BOSSES as i32] {
+            let mut t = Task::default();
+            let v0 = w.body.diag.contract_viol;
+            assert!(call(&mut w, &ecl, &mut t, SYS_SPELL_RESULT, &[bad]).is_ok());
+            assert_eq!(t.stack[0], 0);
+            assert_eq!(w.body.diag.contract_viol, v0 + 1);
+        }
+    }
+
+    /// 541 `clear_bullets_at`：按参数铺一帧清弹区；stars=0 带 FIELD_NO_STAR。
+    #[test]
+    fn clear_bullets_at_creates_one_frame_field_with_star_bit() {
+        use crate::field::{FIELD_CLEAR_BULLETS, FIELD_NO_STAR};
+        let (mut w, ecl) = fresh();
+        let mut stage = Task::default();
+        let args = [
+            Fx::from_int(-30).raw(),
+            Fx::from_int(200).raw(),
+            Fx::from_int(40).raw(),
+            0,
+        ];
+        assert!(call(&mut w, &ecl, &mut stage, SYS_CLEAR_BULLETS_AT, &args).is_ok());
+        let f = w.body.fields.iter_alive().next().expect("应建清弹区");
+        assert_eq!(w.body.fields.x[f], Fx::from_int(-30));
+        assert_eq!(w.body.fields.y[f], Fx::from_int(200));
+        assert_eq!(w.body.fields.radius[f], Fx::from_int(40));
+        assert_eq!(w.body.fields.life[f], 1);
+        assert_eq!(w.body.fields.dmg_per_frame[f], 0);
+        assert_eq!(w.body.fields.flags[f], FIELD_CLEAR_BULLETS | FIELD_NO_STAR);
+
+        let (mut w2, _) = fresh();
+        let mut args2 = args;
+        args2[3] = 1;
+        let mut stage2 = Task::default();
+        assert!(call(&mut w2, &ecl, &mut stage2, SYS_CLEAR_BULLETS_AT, &args2).is_ok());
+        let f2 = w2.body.fields.iter_alive().next().unwrap();
+        assert_eq!(w2.body.fields.flags[f2], FIELD_CLEAR_BULLETS);
     }
 }

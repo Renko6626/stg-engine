@@ -81,6 +81,24 @@ pub(crate) fn fullscreen_clear_field_no_star() -> FieldInit {
     }
 }
 
+/// 圆形一帧清弹区——`clear_bullets_at` syscall（541）的构造口（boss 换段刀 spec §6）。
+/// 半径钳制交给 `create_field`（P4-b）。`stars=false` 带 `FIELD_NO_STAR`。
+pub(crate) fn clear_field_at(x: Fx, y: Fx, r: Fx, stars: bool) -> FieldInit {
+    FieldInit {
+        x,
+        y,
+        radius: r,
+        dmg_per_frame: 0,
+        life: 1,
+        owner: 0,
+        flags: if stars {
+            FIELD_CLEAR_BULLETS
+        } else {
+            FIELD_CLEAR_BULLETS | FIELD_NO_STAR
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
