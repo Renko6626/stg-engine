@@ -192,6 +192,10 @@ pub struct WorldBody {
     /// 与 `spells[slot]` 本身（inactive 时全字段清零）刻意分层：槽内 `epoch` 是"当前占用者的
     /// 世代"，这里是"这个槽历史上一共发过多少代"。全零初始化合法（首次 begin 即从 1 起算）。
     pub(crate) spell_seq: [u16; crate::boss::MAX_BOSSES],
+    /// 每槽最近一次结算的结束方式（boss 换段刀 spec §3.3）：`SPELL_END_*`，0 = 该槽还没结束过。
+    /// 只由 `settle_one_spell` 写，`spell_begin` 不清；`spell_result` syscall（131）读。
+    /// 全零初始化合法（`World::new` 走 `alloc_zeroed`）。
+    pub(crate) spell_last_result: [u8; crate::boss::MAX_BOSSES],
     /// 表现锚点（整局流程刀 spec §4）：存读档/回滚/中段启动后表现层重同步的世界侧真相。
     /// 仅 5xx 族 syscall 写、任何相位不读（判别式测试押运）；P6 全量入校验和，facing 先例。
     pub(crate) bgm_id: u16,
@@ -860,6 +864,9 @@ impl WorldBody {
             self.last_status = STATUS_BAD_ARGS;
             return false;
         }
+        let nonspell = flags & crate::spell::SPELL_NONSPELL != 0;
+        // 非符段 bonus 恒 0（传入值忽略、不计违约，boss 换段刀 spec §3.1）。
+        let bonus0 = if nonspell { 0 } else { bonus0 };
         let hp_start = self.enemies.hp[bi];
         let bonus_floor = bonus0 / 10;
         let dec_per_frame = (bonus0 - bonus_floor) / time_limit as u32;
@@ -883,78 +890,122 @@ impl WorldBody {
             bonus_floor,
             dec_per_frame,
         };
-        self.push_event(Event {
-            kind: crate::events::EVT_SPELL_DECLARED,
-            a_index: boss.index,
-            a_gen: boss.generation,
-            x: self.enemies.x[bi],
-            y: self.enemies.y[bi],
-            data: [spell_id as i32, bonus0 as i32],
-        });
-        let survival_bit = (flags & crate::spell::SPELL_SURVIVAL != 0) as i32;
-        self.emit_req(
-            crate::consts::REQ_SPELL_DECLARE,
-            [
-                spell_id as i32,
-                bonus0 as i32,
-                time_limit as i32,
-                survival_bit,
-                0,
-                0,
-            ],
-        );
+        // 非符段不宣言（不发事件、不发请求——壳不弹横幅，boss 换段刀 spec §3.1）。
+        if !nonspell {
+            self.push_event(Event {
+                kind: crate::events::EVT_SPELL_DECLARED,
+                a_index: boss.index,
+                a_gen: boss.generation,
+                x: self.enemies.x[bi],
+                y: self.enemies.y[bi],
+                data: [spell_id as i32, bonus0 as i32],
+            });
+            let survival_bit = (flags & crate::spell::SPELL_SURVIVAL != 0) as i32;
+            self.emit_req(
+                crate::consts::REQ_SPELL_DECLARE,
+                [
+                    spell_id as i32,
+                    bonus0 as i32,
+                    time_limit as i32,
+                    survival_bit,
+                    0,
+                    0,
+                ],
+            );
+        }
         true
     }
 
-    /// 符卡结算原子包（HP 路径/超时路径/逃生舱口共用，spec §4 结束矩阵）：付分（`captured`
-    /// 时 `players[0].score += bonus_now`）+ `push_event`（CAPTURED 或 FAILED+`reason`）+
-    /// `emit_req(REQ_SPELL_RESULT)` + 除非 `SPELL_NO_CLEAR` 铺一个全屏消弹 field（`bomb`/
-    /// 敌死同租户，复用 `create_field`）+ 槽全字段清零（复用槽写满纪律的另一半：清空亦是
-    /// 全字段覆写）。`reason` 仅在 `captured==false` 时写入事件/req（1=资格失 2=超时）。
-    pub(crate) fn settle_one_spell(&mut self, slot: usize, captured: bool, reason: i32) {
+    /// 符卡/非符段结算原子包（spec 2026-07-24 §4 结束矩阵 + boss 换段刀 spec §3.2）。`cause` = `SPELL_END_*`。
+    /// 顺序：① 超时钉血 → ② 付分与事件（普通卡按 captured 规则；非符段只发 `EVT_PHASE_ENDED`）
+    /// → ③ 自动清弹（除非 `SPELL_NO_CLEAR`；超时路径不给星）→ ④ 写 `spell_last_result`
+    /// → ⑤ 槽全字段清零 + `boss_ui` 同步清（复用槽写满纪律的另一半：清空亦是全字段覆写）。
+    pub(crate) fn settle_one_spell(&mut self, slot: usize, cause: u8) {
+        use crate::spell::{
+            SPELL_END_TIMEOUT, SPELL_FAIL_CAPTURE_LOST, SPELL_FAIL_TIMEOUT, SPELL_NO_CLEAR,
+            SPELL_NONSPELL, SPELL_SURVIVAL,
+        };
         let s = self.spells[slot];
         let boss = EnemyHandle {
             index: s.boss_index,
             generation: s.boss_gen,
         };
+        // ① 超时钉血：绑定 boss 仍在且未在死 → hp = min(hp, 血线)，剩血不漏进下一段。
+        //    `min` 不是赋值：永远不抬血（判别腿 `hp_break_does_not_raise_hp_to_threshold`）。
+        if cause == SPELL_END_TIMEOUT
+            && let Some(i) = self.enemies.get(boss)
+            && self.enemies.flags[i] & crate::enemy::ENEMY_DYING == 0
+        {
+            self.enemies.hp[i] = self.enemies.hp[i].min(s.hp_threshold);
+        }
         let (x, y) = match self.enemies.get(boss) {
             Some(i) => (self.enemies.x[i], self.enemies.y[i]),
             None => (Fx::ZERO, Fx::ZERO),
         };
-        let paid = if captured { s.bonus_now } else { 0 };
-        if captured {
-            self.players[0].score += paid as u64;
-        }
-        let kind = if captured {
-            crate::events::EVT_SPELL_CAPTURED
+        if s.flags & SPELL_NONSPELL != 0 {
+            // ② 非符段：不付分、不发 CAPTURED/FAILED/REQ_SPELL_RESULT。
+            self.push_event(Event {
+                kind: crate::events::EVT_PHASE_ENDED,
+                a_index: s.boss_index,
+                a_gen: s.boss_gen,
+                x,
+                y,
+                data: [s.spell_id as i32, cause as i32],
+            });
         } else {
-            crate::events::EVT_SPELL_FAILED
-        };
-        self.push_event(Event {
-            kind,
-            a_index: s.boss_index,
-            a_gen: s.boss_gen,
-            x,
-            y,
-            data: [
-                s.spell_id as i32,
-                if captured { paid as i32 } else { reason },
-            ],
-        });
-        self.emit_req(
-            crate::consts::REQ_SPELL_RESULT,
-            [
-                s.spell_id as i32,
-                captured as i32,
-                paid as i32,
-                reason,
-                0,
-                0,
-            ],
-        );
-        if s.flags & crate::spell::SPELL_NO_CLEAR == 0 {
-            self.create_field(crate::field::fullscreen_clear_field());
+            // ② 普通卡：普通卡超时恒 FAILED(超时)，其余（HP / 耐久卡超时 / 手动）看资格。
+            let (captured, reason) = if cause == SPELL_END_TIMEOUT && s.flags & SPELL_SURVIVAL == 0
+            {
+                (false, SPELL_FAIL_TIMEOUT)
+            } else if s.capture_ok != 0 {
+                (true, 0)
+            } else {
+                (false, SPELL_FAIL_CAPTURE_LOST)
+            };
+            let paid = if captured { s.bonus_now } else { 0 };
+            if captured {
+                self.players[0].score += paid as u64;
+            }
+            let kind = if captured {
+                crate::events::EVT_SPELL_CAPTURED
+            } else {
+                crate::events::EVT_SPELL_FAILED
+            };
+            self.push_event(Event {
+                kind,
+                a_index: s.boss_index,
+                a_gen: s.boss_gen,
+                x,
+                y,
+                data: [
+                    s.spell_id as i32,
+                    if captured { paid as i32 } else { reason },
+                ],
+            });
+            self.emit_req(
+                crate::consts::REQ_SPELL_RESULT,
+                [
+                    s.spell_id as i32,
+                    captured as i32,
+                    paid as i32,
+                    reason,
+                    0,
+                    0,
+                ],
+            );
         }
+        // ③ 自动清弹：超时路径不给星（对齐 ZUN 超时走 etClear）。
+        if s.flags & SPELL_NO_CLEAR == 0 {
+            let field = if cause == SPELL_END_TIMEOUT {
+                crate::field::fullscreen_clear_field_no_star()
+            } else {
+                crate::field::fullscreen_clear_field()
+            };
+            self.create_field(field);
+        }
+        // ④ 结束方式读口（`spell_result` syscall 131）。
+        self.spell_last_result[slot] = cause;
+        // ⑤ 槽清零。
         self.spells[slot] = crate::spell::SpellSlot::default();
         // B16② 清扫(2026-07-25):结算原子同步清公告板——否则 spells 清零后整槽被
         // settle_spells 首行跳过,boss_ui 冻结旧值(无后续卡时无界陈旧)。次帧若新卡
@@ -968,13 +1019,7 @@ impl WorldBody {
         let Some(slot) = self.spell_slot_bound_to(boss.index, boss.generation) else {
             return;
         };
-        let captured = self.spells[slot].capture_ok != 0;
-        let reason = if captured {
-            0
-        } else {
-            crate::spell::SPELL_FAIL_CAPTURE_LOST
-        };
-        self.settle_one_spell(slot, captured, reason);
+        self.settle_one_spell(slot, crate::spell::SPELL_END_MANUAL);
     }
 
     /// 读族（`SYS_SPELL_TIMER` 世界侧核）：owner 绑定的 active 槽返回 `frames_left`；

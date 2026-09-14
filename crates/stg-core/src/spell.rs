@@ -51,6 +51,14 @@ pub struct SpellSlot {
 
 pub const SPELL_SURVIVAL: u8 = 1 << 0;
 pub const SPELL_NO_CLEAR: u8 = 1 << 1;
+/// 非符段（boss 换段刀 2026-09-14 spec §3.1）：计时/血线/模式随段/血条照旧；不宣言、bonus 恒 0、
+/// SURVIVAL 位忽略；结算不付分、不发 CAPTURED/FAILED/REQ_SPELL_RESULT，改发 `EVT_PHASE_ENDED`。
+pub const SPELL_NONSPELL: u8 = 1 << 2;
+
+/// 结束方式（`WorldBody::spell_last_result` 取值 / `EVT_PHASE_ENDED.data[1]`；0 = 该槽还没结束过）。
+pub const SPELL_END_HP: u8 = 1;
+pub const SPELL_END_TIMEOUT: u8 = 2;
+pub const SPELL_END_MANUAL: u8 = 3;
 
 /// 结束原因（`EVT_SPELL_FAILED.data[1]`）。
 pub(crate) const SPELL_FAIL_CAPTURE_LOST: i32 = 1;
@@ -122,20 +130,13 @@ impl WorldBody {
                 }
             };
             if hp_break {
-                let captured = s.capture_ok != 0;
-                let reason = if captured { 0 } else { SPELL_FAIL_CAPTURE_LOST };
-                self.settle_one_spell(slot, captured, reason);
+                self.settle_one_spell(slot, SPELL_END_HP);
                 continue;
             }
-            // 4. 超时判定：耐久卡活到超时即收卡点；普通卡超时恒 FAILED（不看资格）。
+            // 4. 超时判定（耐久卡活到超时即收卡点、普通卡超时恒 FAILED——captured 口径在
+            //    `settle_one_spell` 内按 flags 推导，boss 换段刀）。
             if s.frames_left == 0 {
-                let (captured, reason) = if s.flags & SPELL_SURVIVAL != 0 {
-                    let captured = s.capture_ok != 0;
-                    (captured, if captured { 0 } else { SPELL_FAIL_CAPTURE_LOST })
-                } else {
-                    (false, SPELL_FAIL_TIMEOUT)
-                };
-                self.settle_one_spell(slot, captured, reason);
+                self.settle_one_spell(slot, SPELL_END_TIMEOUT);
                 continue;
             }
             self.spells[slot].frames_left -= 1;
@@ -330,8 +331,8 @@ mod tests {
 
     /// 超时·普通卡对资格无关（Task 1 复审修 Fix 1 之一）：即使资格已先失（决死窗口清
     /// `capture_ok`），普通卡到线仍恒 `FAILED(reason=SPELL_FAIL_TIMEOUT=2)`——不是资格失
-    /// （`=1`）。这一格是三参 `settle_one_spell(slot, captured, reason)` 存在的理由：删掉
-    /// `reason` 参数、普通卡超时路径就会误报资格失。
+    /// （`=1`）。这一格钉的是 `settle_one_spell` 内「普通卡超时先于资格判定」的分支序
+    /// （boss 换段刀起由 `cause` 推导 captured/reason）：分支序写反，普通卡超时就会误报资格失。
     #[test]
     fn timeout_normal_fails_with_timeout_reason_even_when_capture_lost() {
         let (mut w, boss) = world_with_boss(1000);
@@ -611,5 +612,131 @@ mod tests {
         let cv0 = w.body.diag.contract_viol;
         w.body.spell_end_by_owner(boss); // 重复调用：no-op 不计数
         assert_eq!(w.body.diag.contract_viol, cv0, "逃生舱口重复调用安全");
+    }
+
+    /// 超时钉血（boss 换段刀 spec §3.2 ①）：普通卡 / 耐久卡 / 非符段三种超时都把 hp 钉到血线，
+    /// 下一段 `hp_start` 从血线起（剩血不漏段）。
+    #[test]
+    fn timeout_pins_hp_to_threshold_for_all_three_kinds() {
+        for flags in [0u8, SPELL_SURVIVAL, SPELL_NONSPELL] {
+            let (mut w, boss) = world_with_boss(1000);
+            assert!(w.body.spell_begin_internal(0, boss, 3, 1, 1000, flags, 300));
+            w.body.settle_spells(&crate::tables::TABLES_V0);
+            w.body.settle_spells(&crate::tables::TABLES_V0);
+            let i = w.body.enemies.get(boss).unwrap();
+            assert_eq!(w.body.enemies.hp[i], 300, "flags={flags}：超时钉到血线");
+            assert!(w.body.spell_begin_internal(0, boss, 4, 60, 1000, 0, 0));
+            assert_eq!(
+                w.body.spells[0].hp_start, 300,
+                "flags={flags}：下一段从血线起"
+            );
+        }
+    }
+
+    /// 钉血只在超时路径、且是 `min` 不是赋值：HP 路径结算时 hp 已低于血线也不被抬回血线。
+    #[test]
+    fn hp_break_does_not_raise_hp_to_threshold() {
+        let (mut w, boss) = world_with_boss(1000);
+        assert!(w.body.spell_begin_internal(0, boss, 3, 60, 1000, 0, 300));
+        let i = w.body.enemies.get(boss).unwrap();
+        w.body.enemies.hp[i] = 200;
+        w.body.settle_spells(&crate::tables::TABLES_V0);
+        assert_eq!(w.body.spells[0].active, 0);
+        assert_eq!(w.body.enemies.hp[i], 200);
+    }
+
+    /// 超时结算铺的全屏清弹区带 FIELD_NO_STAR；HP 路径不带（spec §3.2 ③）。
+    #[test]
+    fn timeout_clear_field_has_no_star_bit_hp_break_does_not() {
+        use crate::field::{FIELD_CLEAR_BULLETS, FIELD_NO_STAR};
+        let (mut w, boss) = world_with_boss(1000);
+        assert!(w.body.spell_begin_internal(0, boss, 3, 1, 0, 0, 0));
+        w.body.settle_spells(&crate::tables::TABLES_V0);
+        w.body.settle_spells(&crate::tables::TABLES_V0);
+        let f = w
+            .body
+            .fields
+            .iter_alive()
+            .next()
+            .expect("超时结算应铺清弹区");
+        assert_eq!(w.body.fields.flags[f], FIELD_CLEAR_BULLETS | FIELD_NO_STAR);
+
+        let (mut w2, boss2) = world_with_boss(1000);
+        assert!(w2.body.spell_begin_internal(0, boss2, 3, 60, 0, 0, 300));
+        let i = w2.body.enemies.get(boss2).unwrap();
+        w2.body.enemies.hp[i] = 300;
+        w2.body.settle_spells(&crate::tables::TABLES_V0);
+        let f2 = w2
+            .body
+            .fields
+            .iter_alive()
+            .next()
+            .expect("HP 结算应铺清弹区");
+        assert_eq!(w2.body.fields.flags[f2], FIELD_CLEAR_BULLETS);
+    }
+
+    /// 非符段（spec §3.1/§3.2 ②）：不宣言、bonus 恒 0、SURVIVAL 位被忽略、不付分、
+    /// 不发 CAPTURED/FAILED/REQ_SPELL_RESULT，结束发 EVT_PHASE_ENDED[spell_id, cause]。
+    #[test]
+    fn nonspell_skips_declare_bonus_and_result_and_emits_phase_ended() {
+        use crate::events::{EVT_PHASE_ENDED, EVT_SPELL_DECLARED};
+        let (mut w, boss) = world_with_boss(1000);
+        let score0 = w.body.players[0].score;
+        assert!(w.body.spell_begin_internal(
+            0,
+            boss,
+            9,
+            1,
+            5000,
+            SPELL_NONSPELL | SPELL_SURVIVAL,
+            300
+        ));
+        assert_eq!(w.body.spells[0].bonus_now, 0);
+        assert!(
+            (0..w.body.frame_events_len as usize)
+                .all(|k| w.body.frame_events[k].kind != EVT_SPELL_DECLARED)
+        );
+        assert!(
+            w.body
+                .take_requests()
+                .iter()
+                .all(|r| r.id != crate::consts::REQ_SPELL_DECLARE)
+        );
+        w.body.settle_spells(&crate::tables::TABLES_V0);
+        w.body.settle_spells(&crate::tables::TABLES_V0);
+        let ev = last_event(&w);
+        assert_eq!(ev.kind, EVT_PHASE_ENDED);
+        assert_eq!(ev.data, [9, SPELL_END_TIMEOUT as i32]);
+        assert_eq!(w.body.players[0].score, score0);
+        assert!(
+            w.body
+                .take_requests()
+                .iter()
+                .all(|r| r.id != crate::consts::REQ_SPELL_RESULT)
+        );
+    }
+
+    /// `spell_last_result`（spec §3.3）：初值 0；三种结束方式各记 1/2/3；
+    /// 新 begin 不清；只动本槽。
+    #[test]
+    fn spell_last_result_records_cause_and_survives_next_begin() {
+        let (mut w, boss) = world_with_boss(1000);
+        assert_eq!(w.body.spell_last_result, [0; crate::boss::MAX_BOSSES]);
+        assert!(w.body.spell_begin_internal(0, boss, 1, 60, 0, 0, 900));
+        let i = w.body.enemies.get(boss).unwrap();
+        w.body.enemies.hp[i] = 900;
+        w.body.settle_spells(&crate::tables::TABLES_V0);
+        assert_eq!(w.body.spell_last_result[0], SPELL_END_HP);
+
+        assert!(w.body.spell_begin_internal(0, boss, 2, 1, 0, 0, 800));
+        assert_eq!(w.body.spell_last_result[0], SPELL_END_HP, "begin 不清读口");
+        w.body.settle_spells(&crate::tables::TABLES_V0);
+        w.body.settle_spells(&crate::tables::TABLES_V0);
+        assert_eq!(w.body.spell_last_result[0], SPELL_END_TIMEOUT);
+
+        assert!(w.body.spell_begin_internal(0, boss, 3, 60, 0, 0, 0));
+        w.body.spell_end_by_owner(boss);
+        assert_eq!(w.body.spell_last_result[0], SPELL_END_MANUAL);
+        assert_eq!(w.body.spell_last_result[1], 0, "别的槽不动");
     }
 }

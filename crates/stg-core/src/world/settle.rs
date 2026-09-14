@@ -150,7 +150,11 @@ impl WorldBody {
             self.bullets.flags[b] |= crate::bullets::BULLET_CLEARED;
             cleared_counts[h.active as usize] += 1;
             // 每颗被消的弹在原位转一颗星星（30 分经济回流；池满 P4-a 逐颗降级计数）。
-            self.spawn_star_at(self.bullets.x[b], self.bullets.y[b], star_target);
+            // FIELD_NO_STAR 的区只清不转星（boss 换段刀 spec §6）；幂等门已保证一颗弹只处理一次，
+            // 故多区重叠时由 hits 序中第一条命中的区决定，确定性。
+            if self.fields.flags[h.active as usize] & crate::field::FIELD_NO_STAR == 0 {
+                self.spawn_star_at(self.bullets.x[b], self.bullets.y[b], star_target);
+            }
         }
         // 聚合事件：按 field 索引升序产出（不依赖 hits 的分组连续性 → 与 collide 循环结构解耦）
         for (f, &count) in cleared_counts.iter().enumerate() {
@@ -1298,6 +1302,28 @@ mod tests {
                 (0, -35167, -188191),
                 (1, 9857, -167669),
             ]
+        );
+    }
+
+    /// FIELD_NO_STAR（boss 换段刀 spec §6）：弹照清、清弹事件照计，但不转星星。
+    #[test]
+    fn no_star_field_clears_without_spawning_stars() {
+        use crate::field::{FIELD_CLEAR_BULLETS, FIELD_NO_STAR};
+        let mut w = crate::step::World::new(1);
+        spawn_field(&mut w, 0, 100, 40, FIELD_CLEAR_BULLETS | FIELD_NO_STAR, 1);
+        let b = bullet_at(&mut w, 0, 100);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        let bi = w.body.bullets.get(b).unwrap();
+        assert_ne!(w.body.bullets.flags[bi] & crate::bullets::BULLET_CLEARED, 0);
+        assert_eq!(w.body.items.iter_alive().count(), 0, "不转星星");
+        assert_eq!(
+            w.body.frame_events[0].kind,
+            crate::events::EVT_FIELD_CLEARED
         );
     }
 }

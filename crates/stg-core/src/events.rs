@@ -72,6 +72,10 @@ pub const EVT_REWIND_REQUESTED: u8 = 10;
 /// 后恢复 step，下一关第一帧才发生。**流程信号走通道 A 事实流，不走通道 B 渲染请求**
 /// （`REQ_STAGE_CLEAR` 那条挂牌协议自此退役为纯演出/兼容位）。
 pub const EVT_STAGE_CLEARED: u8 = 11;
+/// 非符段结束（boss 换段刀 spec §3.2）：`a_index/a_gen` = 绑定 boss，`x`/`y` = boss 当帧位置
+/// （句柄失效时为原点），`data = [spell_id, cause]`，`cause` 取 `SPELL_END_*`（1 血线 / 2 超时 / 3 手动）。
+/// 普通符卡照旧发 `EVT_SPELL_CAPTURED`/`EVT_SPELL_FAILED`，不发本事件。
+pub const EVT_PHASE_ENDED: u8 = 12;
 
 // ── `vanished`：本帧离开池的敌弹（表现契约 v2 spec §3.4）────────────────────
 /// 弹 `life` 归零。

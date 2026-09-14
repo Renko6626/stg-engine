@@ -160,6 +160,7 @@ impl World {
         d.players = s.players; // [PlayerState; N] 是 Copy
         d.boss_ui = s.boss_ui;
         d.spells = s.spells; // [SpellSlot; MAX_BOSSES] 是 Copy
+        d.spell_last_result = s.spell_last_result; // [u8; MAX_BOSSES] 结束方式读口（boss 换段刀）
         d.spell_seq = s.spell_seq; // [u16; MAX_BOSSES] 持久代际计数器，随快照往返（ABA 修复）
         d.bgm_id = s.bgm_id;
         d.bg_id = s.bg_id;
@@ -3300,5 +3301,19 @@ mod tests {
                 "第 {k} 颗必须冻在出发点"
             );
         }
+    }
+
+    /// 新字段 `spell_last_result`（2 B，可能被对齐吞掉、尺寸哨兵不响——D20）：
+    /// 直测它进校验和、随 copy_into 往返（boss 换段刀）。
+    #[test]
+    fn spell_last_result_rides_copy_into_and_checksum() {
+        let mut a = World::new(1);
+        let mut b = World::new(1);
+        let c0 = a.checksum();
+        a.body.spell_last_result[1] = crate::spell::SPELL_END_TIMEOUT;
+        assert_ne!(a.checksum(), c0, "新字段必须进校验和");
+        a.copy_into(&mut b);
+        assert_eq!(b.body.spell_last_result, a.body.spell_last_result);
+        assert_eq!(b.checksum(), a.checksum());
     }
 }
