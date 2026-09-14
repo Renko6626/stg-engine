@@ -4,34 +4,24 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-09-12）
+## 现在（2026-09-14）
 
-- **位置**：**壳子刀落地并收口**（spec `docs/superpowers/specs/2026-09-11-game-shell-design.md`）——
-  游戏流程闭环立起来了：标题 → 难度 → 第 1 关 → 关间结算页 → 结果页（存回放）→ 标题；
-  GAME OVER 页续关（`BTN_CONTINUE` 世界内续关，可回放）；练习模式选段（`mark` 道中 `N*10` /
-  boss `N*10+5`）；回放列表播放（`playback_step` 逐帧、播完盖页）。内容目录 `ecl/demo` → `ecl/game`。
-  `ENGINE_VER` 18→19，金向量 md5 `978522fd…`。
-- **前置两刀同日**：转场协议修正（`stage_clear()` 内建 = `SYS 723` + `wait(1)`、`EVT_STAGE_CLEARED`
-  走通道 A、`seal_history` 关底硬边界，`ENGINE_VER` 17→18）；表现纪律（纯文档：render-contract
-  §0 第 6 条 + §0.5 三件套 / 两条通道即两种所有权 / 时间跳变规则 / 四件不做）。
-- **实证**：核 679 + 编译器 327 + 桥 17 + harness 47 全绿；桥级冒烟（续关 / 回放播完逐位同 /
-  坏日志拒收）与工程冒烟（既有断言 + 流程冒烟：内联脚本走结算页 → 确认 → 结果页 → GAME OVER →
-  续关 → 存回放落盘 → 从文件播放到播完页）SMOKE OK；标题菜单有头目验。
-- **玩法定案（2026-09-12，纯文档）**：`docs/gameplay-design.md` 落地为玩法权威——策划案
-  `project_overview.md` 降级改名 `setting.md`（设定集）。十问拍板：主角 = **停止**（时停 + 触碰消弹
-  合一，库存）与 **観測→跳躍**（観測 = 30 帧落点预览，跳躍冷却 600 帧）；**遡行并进残机**（死亡即
-  退 30 帧、偏差值 = 死亡数、独立键/库存取消）；键位 Z/Shift/X/C 三动作键；第 1 关可实施稿
-  （道中 90–120 s 含无名中 boss、蕾米用自己的卡四段、教学分配）；验证计划 V1–V7（两条 harness
-  探针）。原「资源体系」候选作废。
-- **下一阶段候选**：**玩法刀**（gameplay-design §10：停止合并 + 触碰消弹 / 跳躍冷却 / 死亡即遡行
-  / 偏差值 / harness `probe-jump`）→ 第 1 关内容刀（§6 波次表 + 四段）→ 验证 V1–V7。旁支：练习
-  模式长时间线（F18）/ 表现小件（F15/F16/F21/F22/F23）。
+- **位置**：**玩法定案 + 美术交接（纯文档，2026-09-12）落地**，引擎停在壳子刀收口态（`ENGINE_VER` 19，
+  金向量 md5 `978522fd…`；核 679 + 编译器 327 + 桥 17 + harness 47 全绿，两冒烟 SMOKE OK）。
+  玩法权威 `docs/gameplay-design.md`：停止（时停+触碰消弹，库存）/ 観測→跳躍（冷却 600 帧）/
+  死亡即遡行（残机 −1、偏差值 = 死亡数）；标题改名 東方時環晷；画师交接包 `docs/art-brief.md`。
+- **在做**：**玩法刀**（gameplay-design §10：停止合并 + 触碰消弹 / 跳躍冷却 / 死亡即遡行 / 偏差值 /
+  harness `probe-jump`），先出 spec。
+- **之后**：第 1 关内容刀（§6 波次表 + 四段）→ 验证 V1–V7；点阵委托前做 F24（表现层 2×）。
+  旁支：F18 / 表现小件 F15/F16/F21/F22/F23。
 - **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-09-12 | **美术交接包（纯文档）** | `docs/art-brief.md`：画师直接看的交接包（风格圣经：仪器化/平涂硬描边/三色纪律；咲夜·蕾米 brief；立绘 2400 px 分层规格；自机点阵 64×96 帧表 4+6；四阶段确认与验收）；follow-ups 新记 F24（表现层 2× 基准，世界坐标 384×448 不动，触发点 = 点阵委托前）。无代码改动。 |
+| 2026-09-12 | **标题改名 東方時環晷** | 東方時環譜 → 東方時環晷（とうほうじかんぎ）：setting §0.1 v0.6（「晷」三层对应、代价与注音对策、查重记录）；gameplay-design / CLAUDE.md / `main.gd` 标题字符串 / `play.gd` 注释同步；历史 spec 旧名保留。 |
 | 2026-09-12 | **玩法设计文档（纯文档）** | `docs/gameplay-design.md` 新建为玩法权威（三件工具数字规格 / 第 1 关可实施稿 / 验证计划 V1–V7 / 对 setting 推翻清单 / 引擎改动入口 §10）；`project_overview.md` → `setting.md` 降级设定集 + 顶部横幅；CLAUDE.md 权威文档段 + docs 清单补三行；architecture.md 刷到 M2/M3 现状（stg-godot ✅、timeline/spell 行、接缝表、索引）。无代码改动。 |
 | 2026-09-11 | **壳子刀（游戏流程壳）** | 核：`BTN_CONTINUE=10`（GAMEOVER 下世界内续关：残机/雷/时停回默认、`score = continues`、饱和计数、重生）+ `PlayerState.continues`（64→72，哨兵响）+ `timeline::Playback`/`start_playback`/`playback_step`（`replay_with` 改为其包装）；`ENGINE_VER` 18→19，金向量 md5 `978522fdaae4865e8d642d211dcfae46`。桥：`new_game_from_replay`/`playback_step`/`is_playback`/`playback_total`、`BTN_CONTINUE`/`LIFE_*` 常量、`hud_player.continues`。壳：`main.gd` 改 GameFlow（标题/难度/练习/回放列表，代码生成 `Menu`），原游玩逻辑搬 `play.gd`（三模式一条 step 回路、`Overlay` 结算/GAME OVER/结果/播完页、`confirm/back/continue_game/save_replay`、F20 `clear_after`），`ecl/demo` → `ecl/game`（mark 10/15，`stage_clear(1); stage_clear(0)`），`content_tables.PRACTICE`。桥级冒烟 + 工程流程冒烟全过；销 A8/F20。 |
 | 2026-09-11 | **表现纪律（文档）** | render-contract §0 第 6 条 + §0.5：三件套 `visual/phase/phase_frame`、不设通用参数槽、两条通道即两种所有权（对照 ZUN ANM 四种生命周期）、时间跳变四规则、动画时长编译期化、四件不做（ANM VM / ANM 语言 / 中立 crate / 每实例 Node）。follow-ups F20–F23。 |
