@@ -125,6 +125,11 @@ impl WorldBridge {
     const LIFE_DEATHWINDOW: i64 = stg_core::player::LIFE_DEATHWINDOW as i64;
     #[constant]
     const JUMP_FRAMES: i64 = stg_core::player::JUMP_FRAMES as i64;
+    // 玩法刀(2026-09-14):跳躍冷却 + 停止库存上限(HUD 冷却条/库存显示用)。
+    #[constant]
+    const JUMP_COOLDOWN: i64 = stg_core::player::JUMP_COOLDOWN as i64;
+    #[constant]
+    const STOP_STOCK_MAX: i64 = stg_core::player::STOP_STOCK_MAX as i64;
     #[constant]
     const REWIND_DEPTH: i64 = stg_core::timeline::REWIND_DEPTH as i64;
     #[constant]
@@ -596,6 +601,8 @@ impl WorldBridge {
         d.set("facing", p.facing as i64);
         d.set("hit_frame", p.hit_frame as i64);
         d.set("continues", p.continues as i64);
+        d.set("jump_cd", p.jump_cd as i64);
+        d.set("deaths", p.deaths as i64);
         d
     }
 
