@@ -193,6 +193,11 @@ impl WorldBridge {
     #[constant]
     const EVT_SHOT_HIT_ENEMY: i64 = stg_core::events::EVT_SHOT_HIT_ENEMY as i64;
     #[constant]
+    const EVT_PHASE_ENDED: i64 = stg_core::events::EVT_PHASE_ENDED as i64;
+    /// 符卡槽 flags 的非符段位（boss 换段刀）：HUD 据此不显示卡名。
+    #[constant]
+    const SPELL_NONSPELL: i64 = stg_core::spell::SPELL_NONSPELL as i64;
+    #[constant]
     const VANISH_LIFE: i64 = stg_core::events::VANISH_LIFE as i64;
     #[constant]
     const VANISH_CLEARED: i64 = stg_core::events::VANISH_CLEARED as i64;

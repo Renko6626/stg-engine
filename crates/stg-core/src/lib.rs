@@ -199,7 +199,14 @@ extern crate self as stg_core;
 /// 继续 + `EVT_REWIND_REQUESTED`；⑤ `WorldTables` 删 `CharacterCfg.bomb`（`TABLE_VERSION` 5）
 /// ⇒ 表 `content_hash` 变；回放头 `LOG_FILE_VER` 2。行为：`PIECES_PER_BOMB` 5→4、默认停止库存
 /// 3→2、跳躍冷却 600 帧门禁、死亡帧 A 组跳过。**金向量预期改变**；实测为准。
-pub const ENGINE_VER: u32 = 20;
+///
+/// **20 → 21**（boss 换段与敌人钩子刀，2026-09-14）：**号表 + 调用约定 + 布局 + 碰撞矩阵 + 事件号 + 结算行为**。
+/// ① syscall 新增 `026 self_enemy` / `131 spell_result` / `440–443` 敌判定族 / `531 kill_all_enemies` /
+/// `541 clear_bullets_at`；② `210 spawn_enemy` 调用约定追加「实参…, argc」；③ `WorldBody.spell_last_result: [u8; 2]`
+/// 进校验和与存档（对齐可能吞掉、D20，已直测）；④ 碰撞行 3 跳过 `ENEMY_NO_BODY`；⑤ `EVT_PHASE_ENDED = 12`；
+/// ⑥ 符卡结算：`SPELL_NONSPELL` 非符段、所有超时把绑定 boss 的 hp 钉到血线、超时自动清弹不转星星（`FIELD_NO_STAR`）。
+/// 金向量：风铃卡时限 3600 > 600 帧窗口，行为不走超时；新字段恒 0 但进哈希 ⇒ 预期改变，实测为准。
+pub const ENGINE_VER: u32 = 21;
 
 pub use stg_derive::define_pool;
 
