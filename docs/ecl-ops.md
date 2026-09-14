@@ -109,6 +109,7 @@
 | 023 | `self_vy`（同刀） | — | owner 的 `vy`（`Fx` raw）——022 号的镜像，逐条同口径 |
 | 024 | `self_speed`（同刀） | — | owner 的**速率**（`Fx` raw，作者视图）。与 022/023 号恒同步（双表示：`vx/vy` 是积分真相，`speed/angle` 是作者视图，任一侧被写后另一侧立刻刷新/回填） |
 | 025 | `self_angle`（同刀） | — | owner 的**朝向**（BAM raw，作者视图）。⚠️ 表层类型是 **`angle` 不是 `fx`**（能直接喂 420 号 `move_angle` / `fire` 的角度位，与 `fx` 之间无隐式转换）。**近停时冻结**：回填有速度下限（`BACKFILL_MIN_SPEED`），零速下读到的是**最后一次有效朝向**而不是垃圾角——这是刻意的，否则停一帧就把朝向抹掉了 |
+| 026 | `self_enemy`（boss 换段刀 2026-09-14，引擎变量 `$self_enemy`） | — | owner 敌的**打包敌号**（编码同 210 号）；owner 非敌 → **-1**。⚠️ 与本族「非敌读 0」**有意不同**：打包敌号 0 是合法值，读 0 分不清。26 不是 op 号，不新增 F6 重叠点 |
 | 030 | `self_hp` | — | owner 敌 hp（非敌读 0） |
 | 031 | `self_hp_max`（M1.5） | — | owner 敌 `hp_max`（非敌读 0，同 `self_hp` 误用策略） |
 | 032 | `self_age`（M1.5） | — | 任务龄（帧）= `frame - task.born_frame`（wrapping）。**语义故意
@@ -192,6 +193,10 @@ owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P
 | 420 | `move_angle`（同刀） | dur,angle,easing | —（**只转向、速率一字不动**：终点 = `(当前 speed, 目标 angle)`，走极坐标空间。3 位压栈。其余口径同 410 号） |
 | 421 | `move_speed`（同刀） | dur,speed,easing | —（**只调速、方向一字不动**：终点 = `(目标 speed, 当前 angle)`，走极坐标空间。3 位压栈。其余口径同 410 号） |
 | 430 | `set_anm_state`（表现契约 v2，2026-09-07） | state | —（**self-only**，owner 非敌 → Fault(0)；悬垂 owner 句柄 → no-op + `contract_viol` + `STALE_HANDLE`。写 `anm_state = state as u16` 并**无条件**盖 `anm_state_frame = 当前帧`——同状态重设 = 重播（ZUN `anmInterrupt` 重触发语义的电平版）。世界不解释状态号；表现层按 `(sprite, anm_state, frame − anm_state_frame)` 选帧，见 `render-contract.md` §7。**不是** ZUN 的 `anmSetSprite`：运行期换贴图不进核，换形态用状态号映射） |
+| 440 | `set_invuln`（boss 换段刀 2026-09-14，敌判定族） | frames | —（**self-only**，owner 非敌 → Fault(0)；悬垂 owner 句柄 → no-op + `contract_viol` + `STALE_HANDLE`。覆写 `enemies.invuln`，0 = 取消；期间伤害结算跳过、不发 `EVT_SHOT_HIT_ENEMY`，相位 5 每帧递减。`frames ∉ [0,65535]` → 整条 no-op + `contract_viol` + `BAD_ARGS`） |
+| 441 | `set_hitbox`（同刀） | r | —（self-only 同 440。写**体碰半径** `radius`（碰撞行 3）；`Fx` raw，钳 `[0, MAX_ENTITY_RADIUS]`，钳了计 `contract_viol`，同 `create_enemy` 口径） |
+| 442 | `set_hurtbox`（同刀） | r | —（self-only 同 440。写**受击半径** `hurtbox`（碰撞行 4/7）；钳制同 441） |
+| 443 | `set_enemy_flag`（同刀） | flag,on | —（self-only 同 440。`on != 0` 置位否则清位；`flag` 须为 `ENEMY_NO_BODY(2) \| ENEMY_KILLALL_EXEMPT(4)` 的**非空子集**，含 `ENEMY_DYING` 或未知位或 0 → 整条 no-op + `contract_viol` + `BAD_ARGS`。`ENEMY_NO_BODY` 让碰撞行 3 跳过、仍吃弹） |
 
 ### 5xx —— 局面·记账·道具（14）
 
@@ -209,6 +214,7 @@ owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P
 | 521 | `drop_add`（敌死效果刀） | type,n | —（逆序弹栈 `n, type`；给 self 敌的待掉落计数**增量**加 `n` 颗 `type`，**只增不减**（人类裁定，清空用 520）。`type` 收窄 `[0, items::ITEM_TYPE_COUNT)`，越界 → no-op + `contract_viol` + `BAD_ARGS`，**不 Fault**（P4-b）；`n` **先钳** `[0, u8::MAX]`（负 n 视同 0）**再 `saturating_add`** 到计数上——两步都要，只钳不饱和会在近 255 时 debug panic，只饱和不钳会让负 n `as u8` 回绕。owner 须为敌，否则 Fault(0)。参照 ZUN `dropExtra`(507)） |
 | 522 | `drop_items`（敌死效果刀） | — | —（**0 参**；立刻把 self 敌的待掉落计数撒出去（按类型编号升序逐颗 `spawn_drop`，**消耗世界 RNG**）。**吐完不清空计数**（人类裁定，照 ZUN 字面）——故 `drop_items(); die();` 掉**双份**，作者自负；**不加分、不发 `EVT_ENEMY_DIED`、不发 `REQ_ENEMY_DEATH`、不标 `ENEMY_DYING`**；对已 dying 的敌照撒不误（无幂等门禁，与 530 不同）。池满走 `spawn_drop` 自身的 P4-a 逐颗降级。owner 须为敌，否则 Fault(0)。参照 ZUN `dropItems`(509)） |
 | 530 | `die`（敌死效果刀） | — | —（**0 参**；对 self 敌跑**完整死亡效果**（`world::settle::kill_enemy`）：`hp = hp.min(0)` → 标 `ENEMY_DYING` → 撒掉落 → `enemies.score` 记进自机 0 → `EVT_ENEMY_DIED` → `REQ_ENEMY_DEATH`。**幂等**：已 dying → 直接返回。**只标记不回收**，相位 9 cleanup 才收尸——当帧体碰仍成立。表层 `die()` 由 codegen 降低成 **`SYS 530` + `OP_KILL_SELF` 两条指令**，故调用它的任务立即终止（人类裁定），后续语句不执行；**手写字节码只发 `SYS 530` 不会终止任务**。owner 须为敌，否则 Fault(0)。参照 ZUN `die`(561)——ZUN 那条还经 `setDeath`(556) 间接一层，留给 `death_script` 通电那一刀） |
+| 531 | `kill_all_enemies`（boss 换段刀 2026-09-14） | mode | —（owner 无限制。按池索引升序遍历存活敌，跳过：调用任务的 owner 敌、已 `ENEMY_DYING`、带 `ENEMY_KILLALL_EXEMPT`。`mode = KILL_SILENT(0)` 只置 dying（同 D9 退场：不掉落不加分不发事件）；`KILL_DIE(1)` 逐只 `kill_enemy`（同 530 `die`）；其它 → 整条 no-op + `contract_viol` + `BAD_ARGS`。杀到符卡槽绑定 boss → 当帧相位 7 按血线路径结算） |
 | 540 | `clear_bullets`（B19） | — | —（**0 参**；调 `create_field(field::fullscreen_clear_field())` 铺一个覆盖全场、`life=1`、`FIELD_CLEAR_BULLETS` 的作用区，当帧相位 6 生效——消弹转星星与 `EVT_FIELD_CLEARED` 都是消弹区机制白送的，syscall 层零新逻辑；不做参数收窄；**P4-a 两处**：(a) field 池（cap 16）满 → 走 `create_field` 自身降级（NULL + `diag.pool_full[POOL_FIELD]` +1），**不 Fault**；(b) **消弹转星星是 1:1，而道具池 cap 1024 < 弹池 cap 8192** ⇒ 一次消掉的弹多于道具池余量时，多出的星星**生不出来**：逐颗计 `diag.pool_full[POOL_ITEM]`、**循环有界不短路**（判别腿 `star_pool_full_counts_every_missing_star`），弹照消不误。**这是已知设计边界不是债**——F12 实测 demo 收卡一帧 626 颗弹，池还是 512 时四个难度档全溢出，抬到 1024 才盖住（`ENGINE_VER` 13→14）；owner 类别无限制） |
 | 550 | `bgm` | id | —（写表现锚点 `bgm_id` + 发 `REQ_BGM`；`id` 收窄 `0..=65535`，越界 → no-op + `diag.contract_viol` +1 + `last_status=BAD_ARGS`，**不 Fault**（P4-b），owner 类别无限制） |
 | 551 | `bg` | id | —（同上，写 `bg_id` + 发 `REQ_BG`；同一收窄/no-op 口径） |

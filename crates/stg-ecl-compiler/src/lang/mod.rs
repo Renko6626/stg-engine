@@ -247,7 +247,7 @@ mod tests {
     /// > **百分区重排（2026-07-31）没有消掉这个坑**，只换了例子：旧例子是
     /// > `SYS_CREATE_BULLET == 20`，重排后 `create_bullet` 是 200 号、确实与 op 空间
     /// > 错开了，但 **`0xx` 族（`$` 引擎变量，000–032）整族仍落在 op 号域内**
-    /// > （op 是 `u8`、现最大 60 = `OP_SYS`）——12 条里每一条都撞着一个 op
+    /// > （op 是 `u8`、现最大 60 = `OP_SYS`）——000–032 共 13 条，其中 026 `self_enemy`（boss 换段刀）不是 op 号，其余 12 条各撞一个 op
     /// > （`self_x`=20=`OP_ADD`、`player_x`=10=`OP_PUSHI`、`frame`=0=`OP_END` …）。
     /// > spec `2026-07-31-syscall-renumber-design.md` §3 那句"syscall 全部推到 100 以上
     /// > 后两个号空间永久错开"对 `0xx` 族**不成立**。

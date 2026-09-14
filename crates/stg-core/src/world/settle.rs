@@ -1326,4 +1326,48 @@ mod tests {
             crate::events::EVT_FIELD_CLEARED
         );
     }
+
+    /// `set_enemy_invuln`（boss 换段刀 spec §5.1）：无敌期间自机弹重叠既不掉血也不发命中事件；
+    /// 解除后同一发照打（对照腿，证明是 invuln 挡的而不是几何没碰上）。
+    #[test]
+    fn invulnerable_enemy_takes_no_damage_and_no_hit_event() {
+        use crate::events::EVT_SHOT_HIT_ENEMY;
+        let mut w = crate::step::World::new(1);
+        let e = spawn_enemy(&mut w, 0, 100, 50);
+        w.body.set_enemy_invuln(e, 5);
+        w.body.create_player_shot(crate::shots::ShotInit {
+            x: Fx::ZERO,
+            y: Fx::from_int(100),
+            vx: Fx::ZERO,
+            vy: Fx::ZERO,
+            damage: 7,
+            radius: Fx::from_int(4),
+            sprite: 0,
+            owner: 0,
+            flags: 0,
+        });
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        let i = w.body.enemies.get(e).unwrap();
+        assert_eq!(w.body.enemies.hp[i], 50);
+        assert!(
+            (0..w.body.frame_events_len as usize)
+                .all(|k| w.body.frame_events[k].kind != EVT_SHOT_HIT_ENEMY)
+        );
+
+        w.body.set_enemy_invuln(e, 0);
+        w.body.hits_len = 0;
+        w.body.frame_events_len = 0;
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        assert_eq!(w.body.enemies.hp[i], 43, "解除后同一发打得进");
+    }
 }

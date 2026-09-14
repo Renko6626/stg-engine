@@ -75,6 +75,9 @@ pub const SYS_SET_VAR: u16 = 701;
 /// owner 实体的龄：零新状态（复用既有 `Task.born_frame`/`ctx.frame`），对全部 owner 种类
 /// （含 STAGE）均有意义。见 `docs/ecl-ops.md`/`docs/zun-ecl-v2-reference.md` 的偏离记档。
 pub const SYS_SELF_AGE: u16 = 32;
+/// `$self_enemy`（boss 换段刀 spec §5.2）：owner 为 ENEMY → 打包敌号（同 [`SYS_SPAWN_ENEMY`] 返回值编码）；
+/// 其余 owner → **-1**。与本族「非敌读 0」有意不同：打包敌号 0 合法。26 不是 op 号（不新增 F6 重叠点）。
+pub const SYS_SELF_ENEMY: u16 = 26;
 /// owner 上限血量（M1.5 新增）：owner=ENEMY → `enemies.hp_max[idx]`；非敌 → 押 0
 /// （同 `SYS_SELF_HP` 误用策略：静默降级，不 Fault）。
 pub const SYS_SELF_HP_MAX: u16 = 31;
@@ -202,6 +205,9 @@ pub const SYS_DROP_ITEMS: u16 = 522;
 /// 任务立即终止（人类裁定 D-4）。ZUN 的 561 还经 `setDeath`(556) 间接一层——那半留给
 /// `death_script` 通电那一刀，届时与 ZUN 完全同构。
 pub const SYS_DIE: u16 = 530;
+/// `kill_all_enemies(mode)`（boss 换段刀 spec §5.3；owner 无限制）：升序杀除调用者/免清/已死之外的敌；
+/// `KILL_SILENT(0)` 静默、`KILL_DIE(1)` 同 `die()`，其它 mode → no-op + 违约。
+pub const SYS_KILL_ALL_ENEMIES: u16 = 531;
 
 // ── Shooter：预存发射参数集（600-660；shooter 刀 2026-07-31，参照 ZUN et* 族 600-641）──
 //
@@ -338,6 +344,15 @@ pub const SYS_MOVE_SPEED: u16 = 421;
 /// 当前帧——同状态重设 = 重播。世界不解释状态号；表现层按 `(sprite, anm_state, state_age)`
 /// 选帧（`render-contract.md` §7）。`state` 截 u16（负数/超界折叠，同 sprite 号口径）。
 pub const SYS_SET_ANM_STATE: u16 = 430;
+/// 敌判定族 44x（boss 换段刀 spec §5.1；self-only，owner 非 ENEMY → Fault(0)）：
+/// `set_invuln(frames)`——覆写 `invuln`，`frames ∉ [0,65535]` → no-op + 违约。
+pub const SYS_SET_INVULN: u16 = 440;
+/// `set_hitbox(r)`——体碰半径 `radius`（碰撞行 3），钳 `[0, MAX_ENTITY_RADIUS]` + 违约。
+pub const SYS_SET_HITBOX: u16 = 441;
+/// `set_hurtbox(r)`——受击半径 `hurtbox`（碰撞行 4/7），同上钳制。
+pub const SYS_SET_HURTBOX: u16 = 442;
+/// `set_enemy_flag(flag, on)`——`flag` 须为 `ENEMY_NO_BODY | ENEMY_KILLALL_EXEMPT` 的非空子集，否则 no-op + 违约。
+pub const SYS_SET_ENEMY_FLAG: u16 = 443;
 
 // （原 "── $self_* 速度引擎变量（87-90）──" 族——本四条新表里落 0xx `$` 引擎变量族，
 // 见文件头总纲；T5；白名单 8→12）
@@ -383,6 +398,7 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_SELF_HP
             | SYS_SELF_HP_MAX
             | SYS_SELF_AGE
+            | SYS_SELF_ENEMY
             // 1xx 查询
             | SYS_ENEMY_HP
             | SYS_ENEMY_X
@@ -416,6 +432,10 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_MOVE_ANGLE
             | SYS_MOVE_SPEED
             | SYS_SET_ANM_STATE
+            | SYS_SET_INVULN
+            | SYS_SET_HITBOX
+            | SYS_SET_HURTBOX
+            | SYS_SET_ENEMY_FLAG
             // 5xx 局面·记账·道具
             | SYS_ADD_SCORE
             | SYS_ADD_LIVES
@@ -425,6 +445,7 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_DROP_ADD
             | SYS_DROP_ITEMS
             | SYS_DIE
+            | SYS_KILL_ALL_ENEMIES
             | SYS_CLEAR_BULLETS
             | SYS_BGM
             | SYS_BG
@@ -687,6 +708,18 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_FRAME => push(task, ctx.frame as i32),
         SYS_PLAYER_X => push(task, ctx.body.players[0].x.raw()),
         SYS_PLAYER_Y => push(task, ctx.body.players[0].y.raw()),
+        SYS_SELF_ENEMY => {
+            // 非敌押 -1 而非 0：打包敌号 0 合法（spec §5.2），与族内其它变量「非敌读 0」有意不同。
+            let v = if task.owner_kind == OWNER_ENEMY {
+                pack_enemy_handle(EnemyHandle {
+                    index: task.owner_index,
+                    generation: task.owner_gen,
+                })
+            } else {
+                -1
+            };
+            push(task, v)
+        }
         SYS_SELF_X => {
             let (x, _) = self_pos(task, ctx);
             push(task, x.raw())
@@ -837,6 +870,44 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_MOVE_ANGLE => sys_move_angle(task, ctx),
         SYS_MOVE_SPEED => sys_move_speed(task, ctx),
         SYS_SET_ANM_STATE => sys_set_anm_state(task, ctx),
+        // ── 敌判定族 440-443（boss 换段刀）──────────────────────────────────────
+        SYS_SET_INVULN => {
+            let h = self_enemy_handle(task)?;
+            let n = pop(task)?;
+            let Ok(frames) = u16::try_from(n) else {
+                ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+                ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+                return Ok(());
+            };
+            ctx.body.set_enemy_invuln(h, frames);
+            Ok(())
+        }
+        SYS_SET_HITBOX => {
+            let h = self_enemy_handle(task)?;
+            let r = pop(task)?;
+            ctx.body.set_enemy_hitbox(h, Fx::from_raw(r));
+            Ok(())
+        }
+        SYS_SET_HURTBOX => {
+            let h = self_enemy_handle(task)?;
+            let r = pop(task)?;
+            ctx.body.set_enemy_hurtbox(h, Fx::from_raw(r));
+            Ok(())
+        }
+        SYS_SET_ENEMY_FLAG => {
+            let h = self_enemy_handle(task)?;
+            let on = pop(task)?;
+            let mask = pop(task)?;
+            const SETTABLE: i32 =
+                (crate::enemy::ENEMY_NO_BODY | crate::enemy::ENEMY_KILLALL_EXEMPT) as i32;
+            if mask == 0 || mask & !SETTABLE != 0 {
+                ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+                ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+                return Ok(());
+            }
+            ctx.body.set_enemy_flags(h, mask as u8, on != 0);
+            Ok(())
+        }
 
         // ── 5xx 局面·记账·道具 ──────────────────────────────────────────────
         SYS_ADD_SCORE => {
@@ -893,6 +964,24 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_DROP_ITEMS => {
             let h = self_enemy_handle(task)?;
             ctx.body.spill_enemy_drops(h, ctx.tables);
+            Ok(())
+        }
+        SYS_KILL_ALL_ENEMIES => {
+            let mode = pop(task)?;
+            let die = match mode {
+                m if m == crate::enemy::KILL_SILENT as i32 => false,
+                m if m == crate::enemy::KILL_DIE as i32 => true,
+                _ => {
+                    ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+                    ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+                    return Ok(());
+                }
+            };
+            let except = (task.owner_kind == OWNER_ENEMY).then_some(EnemyHandle {
+                index: task.owner_index,
+                generation: task.owner_gen,
+            });
+            ctx.body.kill_all_enemies(except, die, ctx.tables);
             Ok(())
         }
         SYS_DIE => {
@@ -2097,6 +2186,7 @@ mod tests {
             (SYS_SELF_HP, "self_hp", 0),
             (SYS_SELF_HP_MAX, "self_hp_max", 0),
             (SYS_SELF_AGE, "self_age", 0),
+            (SYS_SELF_ENEMY, "self_enemy", 0),
             (SYS_ENEMY_HP, "enemy_hp", 1),
             (SYS_ENEMY_X, "enemy_x", 1),
             (SYS_ENEMY_Y, "enemy_y", 1),
@@ -2126,6 +2216,10 @@ mod tests {
             (SYS_MOVE_ANGLE, "move_angle", 4),
             (SYS_MOVE_SPEED, "move_speed", 4),
             (SYS_SET_ANM_STATE, "set_anm_state", 4),
+            (SYS_SET_INVULN, "set_invuln", 4),
+            (SYS_SET_HITBOX, "set_hitbox", 4),
+            (SYS_SET_HURTBOX, "set_hurtbox", 4),
+            (SYS_SET_ENEMY_FLAG, "set_enemy_flag", 4),
             (SYS_ADD_SCORE, "add_score", 5),
             (SYS_ADD_LIVES, "add_lives", 5),
             (SYS_ADD_BOMBS, "add_bombs", 5),
@@ -2134,6 +2228,7 @@ mod tests {
             (SYS_DROP_ADD, "drop_add", 5),
             (SYS_DROP_ITEMS, "drop_items", 5),
             (SYS_DIE, "die", 5),
+            (SYS_KILL_ALL_ENEMIES, "kill_all_enemies", 5),
             (SYS_CLEAR_BULLETS, "clear_bullets", 5),
             (SYS_BGM, "bgm", 5),
             (SYS_BG, "bg", 5),
@@ -2196,8 +2291,9 @@ mod tests {
 
         assert_eq!(
             table.len(),
-            79,
-            "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 − 玩法刀退役 513 = 79：增改需同步这个数"
+            85,
+            "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 − 玩法刀退役 513 \
+             + boss 换段刀六条（026/440/441/442/443/531）= 85：增改需同步这个数"
         );
 
         // (a) 族归属：搬错族立刻红
@@ -7035,5 +7131,187 @@ mod tests {
         let i = enemy_slot(task.stack[0]);
         assert_eq!(w.body.enemies.anm_state[i], 0);
         assert_eq!(w.body.enemies.anm_state_frame[i], 42);
+    }
+
+    // ── boss 换段与敌人钩子刀 Task 2：敌判定族 440-443 / $self_enemy 026 / 清场 531 ──────────
+
+    /// 440 `set_invuln`：写入；`-1`/`65536` 越界整条 no-op + 违约；非敌 owner Fault。
+    #[test]
+    fn set_invuln_writes_rejects_out_of_range_and_faults_for_non_enemy() {
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 100, 0);
+        let i = eh.index as usize;
+        assert!(call(&mut w, &ecl, &mut task, SYS_SET_INVULN, &[120]).is_ok());
+        assert_eq!(w.body.enemies.invuln[i], 120);
+        for bad in [-1, 65536] {
+            let v0 = w.body.diag.contract_viol;
+            assert!(call(&mut w, &ecl, &mut task, SYS_SET_INVULN, &[bad]).is_ok());
+            assert_eq!(w.body.enemies.invuln[i], 120, "越界 {bad} 整条 no-op");
+            assert_eq!(w.body.diag.contract_viol, v0 + 1);
+        }
+        let mut stage = Task::default();
+        assert_eq!(
+            call(&mut w, &ecl, &mut stage, SYS_SET_INVULN, &[1]),
+            Err(FAULT_BAD_OP)
+        );
+    }
+
+    /// 441/442：各写各的半径，互不串位；负半径钳 0 并计违约。
+    #[test]
+    fn set_hitbox_and_hurtbox_write_their_own_radius_and_clamp() {
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 100, 0);
+        let i = eh.index as usize;
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_SET_HITBOX,
+                &[Fx::from_int(40).raw()]
+            )
+            .is_ok()
+        );
+        assert_eq!(w.body.enemies.radius[i], Fx::from_int(40));
+        assert_eq!(w.body.enemies.hurtbox[i], Fx::from_int(16));
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_SET_HURTBOX,
+                &[Fx::from_int(24).raw()]
+            )
+            .is_ok()
+        );
+        assert_eq!(w.body.enemies.hurtbox[i], Fx::from_int(24));
+        assert_eq!(w.body.enemies.radius[i], Fx::from_int(40));
+        let v0 = w.body.diag.contract_viol;
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_SET_HITBOX,
+                &[Fx::from_int(-5).raw()]
+            )
+            .is_ok()
+        );
+        assert_eq!(w.body.enemies.radius[i], Fx::ZERO);
+        assert_eq!(w.body.diag.contract_viol, v0 + 1);
+    }
+
+    /// 443 `set_enemy_flag`：只收 NO_BODY|KILLALL_EXEMPT 的非空子集；含 DYING/未知位/0 整条拒。
+    #[test]
+    fn set_enemy_flag_accepts_only_settable_bits() {
+        use crate::enemy::{ENEMY_DYING, ENEMY_KILLALL_EXEMPT, ENEMY_NO_BODY};
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 100, 0);
+        let i = eh.index as usize;
+        let (nb, ex) = (ENEMY_NO_BODY as i32, ENEMY_KILLALL_EXEMPT as i32);
+        assert!(call(&mut w, &ecl, &mut task, SYS_SET_ENEMY_FLAG, &[nb | ex, 1]).is_ok());
+        assert_eq!(
+            w.body.enemies.flags[i],
+            ENEMY_NO_BODY | ENEMY_KILLALL_EXEMPT
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_SET_ENEMY_FLAG, &[ex, 0]).is_ok());
+        assert_eq!(w.body.enemies.flags[i], ENEMY_NO_BODY);
+        for bad in [0, ENEMY_DYING as i32, 8, nb | ENEMY_DYING as i32] {
+            let v0 = w.body.diag.contract_viol;
+            assert!(call(&mut w, &ecl, &mut task, SYS_SET_ENEMY_FLAG, &[bad, 1]).is_ok());
+            assert_eq!(
+                w.body.enemies.flags[i], ENEMY_NO_BODY,
+                "坏掩码 {bad} 不改 flags"
+            );
+            assert_eq!(w.body.diag.contract_viol, v0 + 1);
+        }
+    }
+
+    /// 026 `$self_enemy`：敌 owner 押打包敌号；非敌押 -1（打包值 0 合法，故不读 0）。
+    #[test]
+    fn self_enemy_pushes_packed_handle_or_minus_one() {
+        let (mut w, ecl) = fresh();
+        let (eh, mut task) = enemy_owner_task(&mut w, 100, 0);
+        assert!(call(&mut w, &ecl, &mut task, SYS_SELF_ENEMY, &[]).is_ok());
+        assert_eq!(task.stack[0], pack_enemy_handle(eh));
+        let mut stage = Task::default();
+        assert!(call(&mut w, &ecl, &mut stage, SYS_SELF_ENEMY, &[]).is_ok());
+        assert_eq!(stage.stack[0], -1);
+    }
+
+    /// 531 静默模式：跳过调用者 / 免清 / 已死；被杀者无事件、无加分、无掉落。
+    #[test]
+    fn kill_all_enemies_silent_skips_caller_exempt_and_dying() {
+        use crate::enemy::{ENEMY_DYING, ENEMY_KILLALL_EXEMPT, KILL_SILENT};
+        let (mut w, ecl) = fresh();
+        let (caller, mut task) = enemy_owner_task(&mut w, 10, 0);
+        let exempt = crate::world::test_support::spawn_enemy(&mut w, 10, 0, 10);
+        let dying = crate::world::test_support::spawn_enemy(&mut w, 20, 0, 10);
+        let normal = crate::world::test_support::spawn_enemy(&mut w, 30, 0, 10);
+        w.body.enemies.flags[exempt.index as usize] |= ENEMY_KILLALL_EXEMPT;
+        w.body.enemies.flags[dying.index as usize] |= ENEMY_DYING;
+        load_drop_table_1(&mut w, normal);
+        let score0 = w.body.players[0].score;
+        let ev0 = w.body.frame_events_len;
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_KILL_ALL_ENEMIES,
+                &[KILL_SILENT as i32]
+            )
+            .is_ok()
+        );
+        let is_dying =
+            |w: &World, h: EnemyHandle| w.body.enemies.flags[h.index as usize] & ENEMY_DYING != 0;
+        assert!(!is_dying(&w, caller), "调用者自己不杀");
+        assert!(!is_dying(&w, exempt), "免清位不杀");
+        assert!(is_dying(&w, normal));
+        assert_eq!(w.body.players[0].score, score0, "静默不加分");
+        assert_eq!(w.body.frame_events_len, ev0, "静默不发事件");
+        assert_eq!(w.body.items.iter_alive().count(), 0, "静默不掉落");
+    }
+
+    /// 531 击破模式走 die() 全套；坏 mode 整条 no-op + 违约。STAGE owner 无调用者豁免。
+    #[test]
+    fn kill_all_enemies_die_mode_runs_full_death_and_bad_mode_is_noop() {
+        use crate::enemy::{ENEMY_DYING, KILL_DIE};
+        use crate::events::EVT_ENEMY_DIED;
+        let (mut w, ecl) = fresh();
+        let e = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 10);
+        load_drop_table_1(&mut w, e);
+        let mut stage = Task::default();
+        let v0 = w.body.diag.contract_viol;
+        assert!(call(&mut w, &ecl, &mut stage, SYS_KILL_ALL_ENEMIES, &[2]).is_ok());
+        assert_eq!(w.body.diag.contract_viol, v0 + 1);
+        assert_eq!(
+            w.body.enemies.flags[e.index as usize] & ENEMY_DYING,
+            0,
+            "坏 mode 不杀"
+        );
+
+        let score0 = w.body.players[0].score;
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut stage,
+                SYS_KILL_ALL_ENEMIES,
+                &[KILL_DIE as i32]
+            )
+            .is_ok()
+        );
+        assert_ne!(w.body.enemies.flags[e.index as usize] & ENEMY_DYING, 0);
+        assert_eq!(
+            w.body.players[0].score,
+            score0 + 100,
+            "test_support 敌 score=100"
+        );
+        assert_eq!(
+            w.body.frame_events[w.body.frame_events_len as usize - 1].kind,
+            EVT_ENEMY_DIED
+        );
+        assert_eq!(w.body.items.iter_alive().count(), 3, "掉落表 1 = 3 颗");
     }
 }

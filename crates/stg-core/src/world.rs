@@ -516,6 +516,99 @@ impl WorldBody {
         self.last_status = STATUS_OK;
     }
 
+    /// 敌无敌帧（boss 换段刀 spec §5.1）：覆写 `invuln`，0 = 取消。P4-b：悬垂句柄 → no-op + STALE。
+    pub fn set_enemy_invuln(&mut self, h: EnemyHandle, frames: u16) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        self.enemies.invuln[i] = frames;
+        self.last_status = STATUS_OK;
+    }
+
+    /// 敌体碰半径（碰撞行 3）。钳制口径同 `create_enemy`（`[0, MAX_ENTITY_RADIUS]`，钳了计违约）。
+    pub fn set_enemy_hitbox(&mut self, h: EnemyHandle, mut r: Fx) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        if Self::clamp_radius(&mut r) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
+        self.enemies.radius[i] = r;
+        self.last_status = STATUS_OK;
+    }
+
+    /// 敌受击半径（碰撞行 4/7）。口径同 [`Self::set_enemy_hitbox`]。
+    pub fn set_enemy_hurtbox(&mut self, h: EnemyHandle, mut r: Fx) {
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        if Self::clamp_radius(&mut r) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
+        self.enemies.hurtbox[i] = r;
+        self.last_status = STATUS_OK;
+    }
+
+    /// 置/清敌标志位。`mask` 的合法性（只许 NO_BODY|KILLALL_EXEMPT）由 syscall 层验，
+    /// 本 API 信任调用方（不许碰 `ENEMY_DYING`——那是 settle/cleanup 的状态机）。
+    pub fn set_enemy_flags(&mut self, h: EnemyHandle, mask: u8, on: bool) {
+        debug_assert_eq!(
+            mask & crate::enemy::ENEMY_DYING,
+            0,
+            "脚本写口不许动 dying 位"
+        );
+        let Some(i) = self.enemies.get(h) else {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_STALE_HANDLE;
+            return;
+        };
+        if on {
+            self.enemies.flags[i] |= mask;
+        } else {
+            self.enemies.flags[i] &= !mask;
+        }
+        self.last_status = STATUS_OK;
+    }
+
+    /// 清场（boss 换段刀 spec §5.3）：池索引升序（I4），跳过 `except`、已 dying、带免清位的敌。
+    /// `die=false` 静默（只置 dying，同 D9 退场）；`die=true` 逐只 `kill_enemy`（同 `die()`）。
+    pub fn kill_all_enemies(
+        &mut self,
+        except: Option<EnemyHandle>,
+        die: bool,
+        tables: &crate::tables::WorldTables,
+    ) {
+        let skip = crate::enemy::ENEMY_DYING | crate::enemy::ENEMY_KILLALL_EXEMPT;
+        let nw = self.enemies.alive.len();
+        for w in 0..nw {
+            let mut bits = self.enemies.alive[w];
+            while bits != 0 {
+                let e = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if except.is_some_and(|h| {
+                    h.index as usize == e && h.generation == self.enemies.generation[e]
+                }) {
+                    continue;
+                }
+                if self.enemies.flags[e] & skip != 0 {
+                    continue;
+                }
+                if die {
+                    self.kill_enemy(e, tables);
+                } else {
+                    self.enemies.flags[e] |= crate::enemy::ENEMY_DYING;
+                }
+            }
+        }
+        self.last_status = STATUS_OK;
+    }
+
     /// 敌人限时缓动位移（D5；杂鱼"飘入-停-飘出"的世界侧状态机，将来 ECL syscall 直通）。
     /// 语义：绝对插值、到点即停（精确终点 + 条件化清 vx/vy，判据 `vel_touched`）；
     /// 进行中重下 = 覆盖重启；dur=0 = 瞬移（合法退化）。

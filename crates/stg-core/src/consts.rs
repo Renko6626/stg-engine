@@ -116,6 +116,11 @@ engine_consts! {
         SPELL_END_HP:        u8 as int = crate::spell::SPELL_END_HP;
         SPELL_END_TIMEOUT:   u8 as int = crate::spell::SPELL_END_TIMEOUT;
         SPELL_END_MANUAL:    u8 as int = crate::spell::SPELL_END_MANUAL;
+        //  敌判定标志位与清场模式（boss 换段刀 2026-09-14）：`set_enemy_flag` / `kill_all_enemies` 参数。
+        ENEMY_NO_BODY:        u8 as int = crate::enemy::ENEMY_NO_BODY;
+        ENEMY_KILLALL_EXEMPT: u8 as int = crate::enemy::ENEMY_KILLALL_EXEMPT;
+        KILL_SILENT:          u8 as int = crate::enemy::KILL_SILENT;
+        KILL_DIE:             u8 as int = crate::enemy::KILL_DIE;
     }
     //  ② 段目前**空**（颜色轴刀 2026-07-26）：弹型名/色名归**内容包**——由各内容包
     //  自己的 `.ecl` 用 `const` 声明（内建 demo 的一份见 `godot/ecl/game/bullets.ecl`），

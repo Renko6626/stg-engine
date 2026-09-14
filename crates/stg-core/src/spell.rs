@@ -739,4 +739,15 @@ mod tests {
         assert_eq!(w.body.spell_last_result[0], SPELL_END_MANUAL);
         assert_eq!(w.body.spell_last_result[1], 0, "别的槽不动");
     }
+
+    /// 清场杀掉绑定 boss → 当帧符卡趟按 HP 路径结算（boss 换段刀 spec §5.3）。
+    #[test]
+    fn kill_all_enemies_on_bound_boss_settles_as_hp_end() {
+        let (mut w, boss) = world_with_boss(1000);
+        assert!(w.body.spell_begin_internal(0, boss, 1, 60, 0, 0, 0));
+        w.body
+            .kill_all_enemies(None, false, &crate::tables::TABLES_V0);
+        w.body.settle_spells(&crate::tables::TABLES_V0);
+        assert_eq!(w.body.spell_last_result[0], SPELL_END_HP);
+    }
 }
