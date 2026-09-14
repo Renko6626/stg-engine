@@ -2938,6 +2938,12 @@ mod tests {
     #[test]
     fn full_freeze_changes_nothing_but_the_always_running_fields() {
         let mut w = busy_world();
+        // 玩法刀：冻结分支会在首帧回收已清除弹（`cleanup_stop_touched`，由
+        // `frozen_cleanup_only_recycles_cleared_bullets` 单独押）。本条押的是「无触碰、无待收弹
+        // 时整块逐位不变」，故先抹掉 busy_world 预置的清除标记；自机在 (0,384)，场上弹都不压身。
+        for i in 0..crate::bullets::BulletPool::CAP {
+            w.body.bullets.flags[i] &= !crate::bullets::BULLET_CLEARED;
+        }
         let mut before = World::new(0);
         w.copy_into(&mut before);
 
@@ -3015,8 +3021,8 @@ mod tests {
             "相位 4 门禁：变换游标不得推进"
         );
         assert!(
-            w.body.bullets.is_alive(cleared_i),
-            "相位 9 门禁：已标记清除的弹冻结期间不得被回收"
+            !w.body.bullets.is_alive(cleared_i),
+            "相位 9 冻结分支（玩法刀）：已标记清除的弹冻结期间即回收"
         );
     }
 
@@ -3100,6 +3106,59 @@ mod tests {
             crate::player::LIFE_ALIVE,
             "冻 C 时相位 6/7 不跑，重合也不该判中弹"
         );
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            0,
+            "玩法刀：压在身上的冻弹被触碰消掉"
+        );
+    }
+
+    /// 触碰几何判别（玩法刀 spec §2.4）：弹心距 == `br + hit_radius` 恰好碰到 → 消 +10；
+    /// 多 1 raw → 不碰。圆心重合式摆法对半径映射是瞎的（M0-7 教训），故两颗弹一左一右卡在
+    /// 边界两侧。
+    #[test]
+    fn stop_touch_clears_exactly_at_contact_distance_and_scores() {
+        let mut w = World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        let sum = (w.body.players[0].hit_radius + Fx::from_int(2)).raw();
+        let a = crate::world::test_support::bullet_at(&mut w, 0, 384);
+        let b = crate::world::test_support::bullet_at(&mut w, 0, 384);
+        let (ai, bi) = (
+            w.body.bullets.get(a).unwrap(),
+            w.body.bullets.get(b).unwrap(),
+        );
+        w.body.bullets.x[ai] = Fx::from_raw(sum);
+        w.body.bullets.x[bi] = Fx::from_raw(-(sum + 1));
+        let score0 = w.body.players[0].score;
+        w.body.freeze_left = [10, 0];
+        step_empty(&mut w);
+        assert!(w.body.bullets.get(a).is_none(), "恰好相切：被消且当帧回收");
+        assert!(w.body.bullets.get(b).is_some(), "差 1 raw：不碰");
+        assert_eq!(
+            w.body.players[0].score,
+            score0 + crate::player::STOP_TOUCH_SCORE,
+            "每弹 +10"
+        );
+        let v = w.body.vanished();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].reason, crate::events::VANISH_CLEARED);
+        assert_eq!(v[0].x, Fx::from_raw(sum), "vanished 记被消那颗的位置");
+        assert_eq!(w.body.players[0].life_state, crate::player::LIFE_ALIVE);
+    }
+
+    /// delay 弹（未出生）不参与触碰——与行 1 同口径。
+    #[test]
+    fn stop_touch_skips_delay_bullets() {
+        let mut w = World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        let h = crate::world::test_support::bullet_at(&mut w, 0, 384);
+        let i = w.body.bullets.get(h).unwrap();
+        w.body.bullets.delay[i] = 5;
+        w.body.freeze_left = [10, 0];
+        step_empty(&mut w);
+        assert!(w.body.bullets.get(h).is_some());
     }
 
     /// 背景停滞不是"什么都不做"就有的：背景由 `frame − bg_phase_frame` 驱动而 frame 恒增，

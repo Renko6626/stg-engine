@@ -22,6 +22,9 @@ pub const TIMESTOP_FRAMES: u16 = 180;
 /// 停止库存上限（gameplay-design §1）。三个入口钳它：碎片进位、`SYS_ADD_BOMBS`、`new_game_at`。
 pub const STOP_STOCK_MAX: u8 = 5;
 
+/// 停止中触碰消弹每颗的得分（gameplay-design §5）。
+pub const STOP_TOUCH_SCORE: u64 = 10;
+
 /// 跳躍跨过的帧数（时间机制内核刀 spec §2.2）。也是宿主影子世界（観測）的预览步数——
 /// 影子 = 克隆 + 喂一帧 `BTN_JUMP` + step 本数，与真跳同一条代码路径。先 30（0.5 s），
 /// 手感要 1 s 再提 60。

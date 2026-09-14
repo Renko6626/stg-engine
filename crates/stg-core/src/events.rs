@@ -28,6 +28,8 @@ pub(crate) const ROW_SHOT_ENEMY: u8 = 4;
 pub(crate) const ROW_ITEM_PLAYER: u8 = 5; // 道具 × 自机拾取圈（graze_radius 兼拾取圈，D7）
 pub(crate) const ROW_FIELD_BULLET: u8 = 6; // 作用区 × 敌弹 → 消弹
 pub(crate) const ROW_FIELD_ENEMY: u8 = 7; // 作用区 × 敌人 hurtbox → 扣血
+/// 停止冻结中：自机判定圆 × 冻住的敌弹 → 触碰消弹（玩法刀 2026-09-14）。只在 `scene_frozen()` 时收集。
+pub(crate) const ROW_STOP_TOUCH: u8 = 8;
 
 // ── 事件种类 ──────────────────────────────────────────────────────
 pub const EVT_ENEMY_DIED: u8 = 1;

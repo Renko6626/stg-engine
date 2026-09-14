@@ -125,6 +125,7 @@ impl WorldBody {
         // 同 collide，spec §4：门禁挂 C 组、不是"是否冻结"。顺手堵上一个漏洞——符卡
         // 计时住本相位尾（`settle_spells`）⇒ 冻 C 时符卡不倒计时，没法用时停白嫖 survival 卡。
         if self.scene_frozen() {
+            self.settle_stop_touch(); // 行 8 结算（玩法刀）；符卡趟照旧不跑 ⇒ 停止不烧符卡时间
             return;
         }
         // ── 趟一 · 清除/防护：行 6 消弹 ──────────────────────────────────
@@ -261,6 +262,26 @@ impl WorldBody {
         }
         // ── 符卡趟（spec 2026-07-24 §3）：三趟之后、按槽升序推进 ─────────────
         self.settle_spells(tables);
+    }
+
+    /// 行 8 结算（停止冻结中）：未清除的弹置 `BULLET_CLEARED` + 该自机 `STOP_TOUCH_SCORE`。
+    /// 不转星星、不发事件；同一颗弹多个自机碰到按 hits 序首个入账（I4）。回收在相位 9 冻结分支。
+    fn settle_stop_touch(&mut self) {
+        for k in 0..self.hits_len as usize {
+            let h = self.hits[k];
+            if h.row != crate::events::ROW_STOP_TOUCH {
+                continue;
+            }
+            let b = h.active as usize;
+            if self.bullets.flags[b] & crate::bullets::BULLET_CLEARED != 0 {
+                continue;
+            }
+            self.bullets.flags[b] |= crate::bullets::BULLET_CLEARED;
+            let p = h.passive as usize;
+            self.players[p].score = self.players[p]
+                .score
+                .saturating_add(crate::player::STOP_TOUCH_SCORE);
+        }
     }
 
     /// 拾取入账（D9 趟三）——**唯一** per-type 逻辑居所（扩展四步第 ③ 步：新增类型在此加臂）。

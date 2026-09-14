@@ -981,4 +981,15 @@ mod tests {
         press(&mut w, BTN_BOMB);
         assert_eq!(w.body.spells[0].capture_ok, 0, "停止即失格");
     }
+
+    /// 真按键端到端：身上压一颗弹，按 X → 同帧冻结 + 触碰消掉 + 仍 ALIVE。
+    #[test]
+    fn stop_by_button_clears_the_bullet_under_the_player() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].bombs = 1;
+        bullet_at(&mut w, 0, 384);
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.bullets.iter_alive().count(), 0);
+        assert_eq!(w.body.players[0].life_state, crate::player::LIFE_ALIVE);
+    }
 }
