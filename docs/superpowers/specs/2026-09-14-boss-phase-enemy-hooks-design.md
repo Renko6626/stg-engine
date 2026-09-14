@@ -1,6 +1,6 @@
 # boss 换段与敌人钩子刀 —— 非符段 / 超时钉血 / 结束读口 / 带参生成 / 判定写口 / 清场 / 半径清弹（设计，2026-09-14）
 
-> 状态：**设计已拍板，待写计划**。
+> 状态：**已落地（2026-09-14）**，实施偏差见 §11。计划 `docs/superpowers/plans/2026-09-14-boss-phase-enemy-hooks.md`。
 > 来源：TH18 原版 ECL 迁移差距评估（2026-09-14，22 个原版脚本 × 本仓 ENGINE_VER 20）的 A 类五件——
 > 第 1 关直接要用、且用现有 `.ecl` 合成不了的缺口。原版证据取自 `renkolab/local/th18.v1.00a/ecl/*.ecl.txt`
 > 与 `th18-leveledit/docs/ECL.md` 先例表（频次口径：22 文件全量；dump 为 CP932，统计须 `grep -a`）。
@@ -228,3 +228,14 @@ syscall **541**（5xx，紧挨 540 `clear_bullets`），owner 无限制：
 5. `death_script` 通电（`setDeath`）——设计已定形（`stg-world-design.md` 相位 9 挂钩），第 1 关不用。
 
 另：`move_limit`/`move_rand`、激光、ZUN 运动 mode→easing 对照表不在本刀。第 1 关内容脚本由下一刀（内容刀）使用本刀的新能力编写。
+
+## 11. 实施偏差
+
+| # | 计划/spec 原写 | 实际 | 原因 |
+|---|---|---|---|
+| 1 | `ecl-ops.md` 号表行在文档任务（Task 7）统一补 | Task 2/3 随号同步写入，号表冻结计数 79→85→87 | 冻结面守卫 `ecl_ops_doc_syscall_numbers_match_the_constants` 与 `syscall_table_is_hundred_partitioned_and_unique` 要求号与文档、计数同刀同步 |
+| 2 | §9：`clear_bullets_at` 写进 `4-bullets.md` | 写在 `6-spell-and-stage.md` 的 `clear_bullets()` 同节 | 第 4 篇没有清弹节；与 `clear_bullets()` 并列更好找 |
+| 3 | §4.2 未提 builder | `stg-ecl-compiler` 的 builder `sys_spawn_enemy` 只追压 `argc = 0`，不暴露带参形态 | 带参只走表层语言；builder 是测试/临时 DSL |
+| 4 | — | `step::tests::engine_ver_anchored` 钉版测试随 bump 同步（理由链加 20→21） | 既有「bump 须改本测试」纪律 |
+| 5 | §7：金向量 md5 实测为准 | `15a5167c…` → `de70b473ff557cbfb219df78f8f0b495` | `spell_last_result` 恒 0 但进哈希；风铃卡不走超时路径，行为不变 |
+

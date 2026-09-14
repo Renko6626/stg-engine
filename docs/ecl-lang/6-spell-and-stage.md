@@ -76,10 +76,10 @@ sub main() {
 | `pattern` | sub 名 \| `none` | 模式 sub 引用（同 `fire` 的 `task` 参同款 `SubRef`）：必须是**无参** `async sub`；`none` 不 spawn（自定义卡留口，配合 `spell_end()` 逃生舱口自行判定结束） |
 | `time_limit` | `int` | 时限，单位帧，必须 `>0` |
 | `bonus0` | `int` | 起始 bonus（分），必须 `≥0`；衰减地板 = `bonus0/10`，衰减速率 = `(bonus0-地板)/time_limit`，均在 `spell_begin` 当帧一次算定 |
-| `flags` | `int` | 位标志：bit0 `SPELL_SURVIVAL`（耐久卡——活到超时即收卡点，而非失败）；bit1 `SPELL_NO_CLEAR`（结束时不自动铺全屏消弹 field） |
+| `flags` | `int` | 位标志：bit0 `SPELL_SURVIVAL`（耐久卡——活到超时即收卡点，而非失败）；bit1 `SPELL_NO_CLEAR`（结束时不自动铺全屏消弹 field）；bit2 `SPELL_NONSPELL`（非符段，通常用 `phase_begin` 糖写，见下）。三个位都有同名引擎常量 |
 | `hp_threshold` | `int` | 破卡血线，必须 `≥0` 且 `≤` 当前 owner 血量；绑定敌 hp 触底/低于此值时自动收卡结算，且伤害结算对绑定敌**下钳**在此值（防打穿到非最终卡血线以下）——多卡序用"一池总血 + 逐卡递降血线"表达，最终卡 `hp_threshold=0` |
 
-三条原语加一条糖：
+四条原语加两条糖：
 
 - `spell_timer() -> int` 读 owner 当前绑定槽的剩余帧数 `frames_left`。owner 没有绑定槽
   （还没 `spell_begin`，或卡已经结束）恒返回 `-1`。
@@ -89,6 +89,8 @@ sub main() {
 - `spell_end()`（无参、无返回值）是逃生舱口，给非 HP/超时的自定义结束条件用，比如剧情触发
   提前收卡。owner 有绑定槽时走 HP 路径结算：资格在 → CAPTURED 付 `bonus_now`，资格失 →
   FAILED。无绑定槽调用是 no-op，重复调用安全，不算违约。
+- `spell_result(slot) -> int` 读槽 `slot` **最近一次**结束的方式，见下「这一段是怎么结束的」。
+- `phase_begin(slot, pattern, time_limit, hp_threshold)` 是非符段的语法糖，见下「非符段」。
 
 ⚠️ **`wait_spell` 在语句位置（`wait_spell(`）总是被语法糖截胡**，即使你恰好声明了同名 sub 也
 调不到它。它不是真正的词法关键字（词法层没有为它开专属 token），但对作者而言效果等同保留字。
@@ -111,6 +113,82 @@ sub main() {
 **卡 id** 纯粹是脚本/关卡资产，引擎不做任何登记，不校验唯一、不映射名字或立绘。每份 `.ecl`
 建议用 `const` 命名，如 `const SPELL_WINDCHIME: int = 1;`，同文件内每张卡起一个数字即可。
 `const` 跨文件可见，但引擎侧对 id 零协调，撞号不会有任何报错，纯靠作者自律对齐。
+
+### 非符段：`phase_begin`
+
+非符（boss 不宣言、不计 bonus 的那几段）用 `phase_begin`，写法同 `spell_begin`，少了卡 id
+和 bonus：
+
+```ecl
+async sub nonspell1() { loop { wait(60); } }
+
+async sub boss_main() {
+    phase_begin(0, nonspell1, 2400, 1300);
+    wait_spell();
+    loop { wait(1); }
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 100.0fx, 1600, 1, 5000, 1, boss_main);
+    wait(3000);
+}
+```
+
+它就是 `spell_begin(slot, 0, pattern, time_limit, 0, SPELL_NONSPELL, hp_threshold)`，编译出的
+字节码逐字节相同。和符卡比：
+
+| | 符卡 `spell_begin` | 非符 `phase_begin` |
+|---|---|---|
+| 计时、血线下钳、模式随段生死、`boss_ui` 血条 | ✔ | ✔ |
+| 宣言事件 / 请求（壳弹符卡名横幅） | ✔ | ✘ |
+| bonus 衰减与收卡付分 | ✔ | ✘（恒 0） |
+| 结束事件 | `EVT_SPELL_CAPTURED` / `EVT_SPELL_FAILED` | `EVT_PHASE_ENDED` |
+| HUD | 卡名 + 剩余秒 | 只有剩余秒 |
+| `wait_spell()` / `spell_end()` / `spell_result()` | ✔ | ✔ |
+
+`SPELL_SURVIVAL` 对非符段无效（没有收卡概念）。
+
+### 超时发生了什么
+
+时限走完时引擎做三件事，符卡、耐久卡、非符段都一样：
+
+1. **把 boss 的血钉到血线**：`hp = min(hp, hp_threshold)`。没打完的血不会漏进下一段，下一段
+   `spell_begin` 从血线起算血条。
+2. **自动清弹，但不转星星**（设了 `SPELL_NO_CLEAR` 就不清）。打到血线收段时照旧转星星。
+3. 结算：普通卡记失败，耐久卡看资格，非符段只发 `EVT_PHASE_ENDED`。
+
+### 这一段是怎么结束的：`spell_result(slot)`
+
+| 返回 | 常量 | 含义 |
+|---|---|---|
+| 0 | — | 这个槽还没结束过任何一段 |
+| 1 | `SPELL_END_HP` | 打到血线（含 boss 死亡、被清场杀死） |
+| 2 | `SPELL_END_TIMEOUT` | 超时 |
+| 3 | `SPELL_END_MANUAL` | 脚本调了 `spell_end()` |
+
+它记的是**最近一次**结束：下一次 `spell_begin` 不会清掉它，下一次结算才覆盖。所以在
+`wait_spell()` 之后马上读：
+
+```ecl
+async sub nonspell2() { loop { wait(60); } }
+
+async sub boss_main() {
+    phase_begin(0, nonspell2, 1200, 1000);
+    wait_spell();
+    if spell_result(0) != SPELL_END_TIMEOUT {
+        drop_clear();
+        drop_add(ITEM_BOMB_PIECE, 4);   // 打穿才给奖励，超时不给
+        drop_items();
+        drop_clear();
+    }
+    loop { wait(1); }
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 100.0fx, 1300, 1, 5000, 1, boss_main);
+    wait(1500);
+}
+```
 
 <details><summary>为什么不做自动切卡，以及符卡练习（select 语义）怎么用 mark 实现</summary>
 
@@ -339,6 +417,32 @@ sub 需要判它。开机时 `rank` 越 `0..=4` 一律被拒（宿主 `new_game_
 
 作用区池（cap 16）满时走 `create_field` 自身的降级——这一帧的清弹**静默失效**（计
 `diag.pool_full[POOL_FIELD]`），不 Fault、不报错。正常脚本碰不到，写"每帧清弹"这种就会。
+
+### `clear_bullets_at(x, y, r, stars)` —— 圆形清弹 / 不给星
+
+和 `clear_bullets()` 同一套机制（一帧的清弹作用区，当帧生效），多了两件事：
+
+- **只清圆内**：以 `(x, y)` 为心、半径 `r`，`r` 钳到 `[0, 1024]`。
+- **`stars == 0` 不转星星**：弹照样清掉、照样计入清弹事件，只是不给道具。符卡超时收段时引擎
+  自动铺的清弹区就是这种（见「超时发生了什么」）。
+
+扩张式消弹波（ZUN `etCancel(r)` 从小到大扩的那种）就是每帧调一次、半径逐帧加大：
+
+```ecl
+async sub clear_wave() {
+    for k in 0..40 {
+        clear_bullets_at($self_x, $self_y, (16 + k * 10) as fx, 1);
+        wait(1);
+    }
+}
+
+sub main() {
+    spawn clear_wave();
+    wait(60);
+}
+```
+
+作用区池只有 16 格、每格只活一帧，每帧调一次不会满。
 
 ### `time_stop_player()` —— 定住自机
 

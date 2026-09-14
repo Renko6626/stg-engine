@@ -52,6 +52,10 @@
 | `TIMESTOP_FRAMES` | `180` | 玩家技能"时间停止"的固定时长（帧，3 秒 @60Hz）——自机能力刀 spec §9.1，数值单一来源 = `crate::player::TIMESTOP_FRAMES` |
 | `JUMP_FRAMES` | `30` | 跳躍跨过的帧数，也是観測影子世界的预览步数——时间机制内核刀 spec §2.2，数值单一来源 = `crate::player::JUMP_FRAMES` |
 | `REWIND_DEPTH` | `30` | 遡行落点深度（落点 = 被弹帧 − 本值，钳到快照环最老一帧）——单一来源 = `crate::timeline::REWIND_DEPTH` |
+| `SPELL_SURVIVAL` / `SPELL_NO_CLEAR` / `SPELL_NONSPELL` | `1`/`2`/`4` | `spell_begin` 第 6 参 flags 的三个位（boss 换段刀 2026-09-14 起注入） |
+| `SPELL_END_HP` / `SPELL_END_TIMEOUT` / `SPELL_END_MANUAL` | `1`/`2`/`3` | `spell_result(slot)` 的返回值（0 = 该槽还没结束过） |
+| `ENEMY_NO_BODY` / `ENEMY_KILLALL_EXEMPT` | `2`/`4` | `set_enemy_flag` 的两个位：不体碰 / 不被 `kill_all_enemies` 清 |
+| `KILL_SILENT` / `KILL_DIE` | `0`/`1` | `kill_all_enemies` 的模式：静默退场 / 同 `die()` |
 | `BULLET_COLOR_STRIDE` | 内建 `16` | **表派生**：当前绑定表的每种弹型色数 |
 
 脚本**不得**重新声明同名 `const`，无论写的值是否一致——会在类型检查阶段报错

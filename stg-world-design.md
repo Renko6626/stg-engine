@@ -634,6 +634,9 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 - **字节序契约**：支持平台限定**小端**（x86_64 / aarch64 全小端），derive 按 SoA 数组原始字节哈希；大端平台不在支持矩阵，不为其付 per-element 转换税。
 - SoA 数组内部无 padding（同类型连续），整条哈希；字段间 padding 被字段级遍历天然跳过——`repr(C)` padding 垃圾字节的假 desync 问题就此根除（母文档 §3.1 陷阱的解）。
 
+> **2026-09-14 注（boss 换段与敌人钩子刀）**：行 3（敌体 × 自机）跳过带 `ENEMY_NO_BODY` 位的敌（脚本经
+> `set_enemy_flag` 写）；行 4/7 不受影响。
+
 ## D12 返回值契约总表
 
 | API | 失败模式 | 返回 | last_status | 计数器 |
@@ -659,6 +662,14 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | `spell_end` | owner 非 ENEMY | Fault | — | — |
 | | 无绑定槽（逃生舱口，重复安全） | no-op | — | — |
 | `spell_timer` | owner 非 ENEMY / 无绑定槽 | 返回 −1（降级不 Fault） | — | — |
+| `spell_result` | 槽越界 | 返回 0 | `contract_viol` | `BAD_ARGS` |
+| `set_invuln` / `set_hitbox` / `set_hurtbox` / `set_enemy_flag` | owner 非 ENEMY | Fault | — | — |
+| `set_invuln` / `set_enemy_flag` | 帧数越界 / 非法位 | no-op | `contract_viol` | `BAD_ARGS` |
+| `set_hitbox` / `set_hurtbox` | 半径越界 | 钳到 `[0, MAX_ENTITY_RADIUS]` | `contract_viol` | — |
+| `kill_all_enemies` | mode 非 0/1 | no-op | `contract_viol` | `BAD_ARGS` |
+| `clear_bullets_at` | 半径越界 / 作用区池满 | 钳制 / 不建 | `contract_viol` / `pool_full[FIELD]` | — |
+| `spawn_enemy` | argc 越界 / 栈不够 | Fault(2) | — | — |
+| `spawn_enemy` | none 带参 / 形参个数不符 | Fault(0) | — | — |
 | （内部）hits 满 | — | 丢弃（不 panic，同 P4-a） | — | `diag.hits_overflow` |
 | （内部）frame_events 满 | — | 丢弃 | — | `diag.events_overflow` |
 

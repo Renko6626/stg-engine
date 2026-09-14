@@ -6,19 +6,21 @@
 
 ## 现在（2026-09-14）
 
-- **位置**：**玩法刀落地**（spec `docs/superpowers/specs/2026-09-14-gameplay-tools-design.md`）——X = 停止
-  （时停 180 帧 + 触碰消弹，库存上限 5、碎片 4 进 1、初始 2）/ C = 観測（3 s 窗）→ 跳躍（冷却 600 帧）/
-  死亡即遡行（残机 −1、偏差值 = 死亡数，HUD 三件）。D/V 键、bomb、RESPAWNING 退役。
-  `ENGINE_VER` 20，金向量 md5 `15a5167c…`。
-- **实证**：核 673 + 编译器 327 + 桥 17 + harness 47 全绿；storm / verify-tables ✔；两冒烟 SMOKE OK；有头目验 11 张。
-- **下一步**：第 1 关内容刀（gameplay-design §6 波次表 + 中 boss + 蕾米四段）→ 探针刀（harness `probe-jump` /
-  `replay --cut-gaps`）→ 验证 V1–V7。点阵委托前做 F24（表现层 2×）。旁支 F18 / 表现小件 F15/F16/F21/F22/F23。
-- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（本刀销 F19、新记 F25）。
+- **位置**：**boss 换段与敌人钩子刀落地**（spec `docs/superpowers/specs/2026-09-14-boss-phase-enemy-hooks-design.md`）——
+  TH18 原版 ECL 迁移差距评估的 A 类五件：非符段 `phase_begin` + 超时钉血/超时清弹不给星 + `spell_result`；
+  `spawn_enemy(..., sub(实参…))` 带参；敌判定写口 `set_invuln`/`set_hitbox`/`set_hurtbox`/`set_enemy_flag`；
+  `kill_all_enemies` + `$self_enemy`；`clear_bullets_at`。`ENGINE_VER` 21，金向量 md5 `de70b473…`。
+- **实证**：核 695 + 编译器 333 + 桥 17 + harness 47 全绿；storm / verify-tables / check ✔；两冒烟 SMOKE OK。
+- **下一步**：第 1 关内容刀（gameplay-design §6：中 boss 与非符 1/2 用 `phase_begin`，符卡用 `spell_begin`，超时奖励看 `spell_result`）
+  → 探针刀（harness `probe-jump` / `replay --cut-gaps`）→ 验证 V1–V7。迁移评估 B 类（`by_rank`、xformdef 运行时参数、
+  `rand_fx`、`rad` 字面量）按内容需要排；点阵委托前做 F24。
+- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（本刀新记 D21：五条非目标）。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-09-14 | **boss 换段与敌人钩子刀** | 来源 TH18 原版 22 个 ECL 的迁移差距评估（A 类）。核：`SPELL_NONSPELL` 非符段 + `settle_one_spell(slot, cause)` 按结束方式分派（超时 `hp = min(hp, 血线)`、超时清弹带新位 `FIELD_NO_STAR`）+ `WorldBody.spell_last_result` + `EVT_PHASE_ENDED=12`；敌 `flags` 新位 `ENEMY_NO_BODY`（碰撞行 3 跳过）/`ENEMY_KILLALL_EXEMPT`；syscall 新增 026/131/440–443/531/541，210 `spawn_enemy` 调用约定追加实参+argc（与 `OP_SPAWN` 共用 `write_args`）；注入 `SPELL_*`/`ENEMY_*`/`KILL_*` 十常量；`ENGINE_VER` 20→21，金向量 md5 `de70b473ff557cbfb219df78f8f0b495`。编译器：`CallArg::SubRefArgs`（仅 `spawn_enemy` task 位）、7 条内建 + `phase_begin` 糖（与手写逐字节相同）+ `$self_enemy`。桥：`EVT_PHASE_ENDED`/`SPELL_NONSPELL`；壳 HUD 非符段只显示倒计时。文档：ecl 手册 3/6/7、ecl-ops、ZUN 迁移对照表、world-design D8/D12、follow-ups D21。闸门全绿（fmt/clippy/test 695+333+17+47/storm/verify-tables/两冒烟）。 |
 | 2026-09-14 | **玩法刀（停止 / 跳躍冷却 / 死亡即遡行）** | 核：`try_stop` 取代 bomb 与旧时停（`BTN_BOMB`=停止，位 7/9 与 syscall 513 退役，删 `BombCfg` 族，表 v5 重烘）+ 碰撞行 8 `ROW_STOP_TOUCH`（相位 6/7/9 冻结分支：判定圆×冻弹 +10 分当帧回收）+ 库存上限 5/碎片 4/默认 2 + `PlayerState.jump_cd`（落地写 600，C 组计时）+ `deaths` + `commit_death` 原地继续发遡行请求、`rewind_landed` 从快照重算残机（下限 1）/偏差值/符卡失格、落点在决死窗口拨回 ALIVE、死亡帧跳过 A 组；`LIFE_RESPAWNING` 退役，回放头 v2；`ENGINE_VER` 19→20，金向量 md5 `15a5167cfadd7e8a4c835b26bc5e8b92`。桥：`JUMP_COOLDOWN`/`STOP_STOCK_MAX`、`hud_player.jump_cd/deaths`。壳：X 停止、D/V 退场、HUD Stop/偏差/冷却条、観測窗 180、`--shots` 闪避。核心中途子 agent 复审 1 Important bug 已修。闸门全绿（fmt/clippy/test 673+327+17+47/storm/verify-tables/两冒烟/有头目验）；销 F19，记 F25。 |
 | 2026-09-12 | **美术交接包（纯文档）** | `docs/art-brief.md`：画师直接看的交接包（风格圣经：仪器化/平涂硬描边/三色纪律；咲夜·蕾米 brief；立绘 2400 px 分层规格；自机点阵 64×96 帧表 4+6；四阶段确认与验收）；follow-ups 新记 F24（表现层 2× 基准，世界坐标 384×448 不动，触发点 = 点阵委托前）。无代码改动。 |
 | 2026-09-12 | **标题改名 東方時環晷** | 東方時環譜 → 東方時環晷（とうほうじかんぎ）：setting §0.1 v0.6（「晷」三层对应、代价与注音对策、查重记录）；gameplay-design / CLAUDE.md / `main.gd` 标题字符串 / `play.gd` 注释同步；历史 spec 旧名保留。 |

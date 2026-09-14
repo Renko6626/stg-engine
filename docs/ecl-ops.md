@@ -147,7 +147,7 @@ owner 类别全族无限制。
 |---|---|---|---|
 | 200 | `create_bullet` | appearance,x,y,speed,angle,xform_off,xform_cnt,task_sub | 弹句柄或 -1 |
 | 201 | `create_bullets_batch` | appearance,x,y,n_angle,angle0,angle_step,n_speed,speed0,speed_step | 实发数 |
-| 210 | `spawn_enemy` | x,y,hp,drop_table,score,sprite,task_sub | **打包敌号**或 -1（**敌句柄打包刀 2026-07-31**：押的不再是裸池 index，而是 `((gen & 0x7FFF) << 16) \| index`。只押 generation 的低 15 位 ⇒ **打包值恒非负**，`-1` 仍是唯一的无效哨兵；代价是 ABA 检测周期从 65536 次同槽复用降到 32768，记在 `docs/follow-ups.md`。脚本侧敌号是**不透明值**——别猜数值、别做算术，**两个敌号相等 ⇒ 同一只敌**。100/101/102/103/110 全族同编码）（A5 乙案：`task_sub` 同 200 号 `create_bullet` 同款 canonical `SubId`/-1=none；`task_sub>=0` 时必须指向零参数 `Async` sub，绑定层派子任务，owner=新敌。**`drop_table` 在这里就展开成敌身上的 `drop_count[..]` 五槽**（敌死效果刀起表号退化成生成参数，此后无人读表号，见 520-522 号）；**P4-b**：表号越界（含负数——`as u16` 回绕后仍越界）→ **视同空表** + `contract_viol` +1 + `last_status=BAD_ARGS`，敌照建、**不 Fault**（原检查住 `settle::damage_enemy`，随掉落状态前移至此）） |
+| 210 | `spawn_enemy` | x,y,hp,drop_table,score,sprite,task_sub,arg0…arg(n−1),argc（**boss 换段刀 2026-09-14 追加**实参与个数；门禁全部先于建敌：argc 越 `[0, LOCALS]` 或栈不够 `argc+7` → Fault(2)；task 为 none 却带参、sub 非 Async 或形参个数 ≠ argc → Fault(0)；实参写进新任务 `locals[0..argc)`，与 `OP_SPAWN` 共用 `TaskPool::write_args`） | **打包敌号**或 -1（**敌句柄打包刀 2026-07-31**：押的不再是裸池 index，而是 `((gen & 0x7FFF) << 16) \| index`。只押 generation 的低 15 位 ⇒ **打包值恒非负**，`-1` 仍是唯一的无效哨兵；代价是 ABA 检测周期从 65536 次同槽复用降到 32768，记在 `docs/follow-ups.md`。脚本侧敌号是**不透明值**——别猜数值、别做算术，**两个敌号相等 ⇒ 同一只敌**。100/101/102/103/110 全族同编码）（A5 乙案：`task_sub` 同 200 号 `create_bullet` 同款 canonical `SubId`/-1=none；`task_sub>=0` 时必须指向零参数 `Async` sub，绑定层派子任务，owner=新敌。**`drop_table` 在这里就展开成敌身上的 `drop_count[..]` 五槽**（敌死效果刀起表号退化成生成参数，此后无人读表号，见 520-522 号）；**P4-b**：表号越界（含负数——`as u16` 回绕后仍越界）→ **视同空表** + `contract_viol` +1 + `last_status=BAD_ARGS`，敌照建、**不 Fault**（原检查住 `settle::damage_enemy`，随掉落状态前移至此）） |
 | 220 | `drop_item` | x,y,item_type | 道具句柄或 -1 |
 
 `create_bullet` 走**丙方案**：`(xform_off, xform_cnt)` 指向本任务 locals 内打包槽
@@ -286,7 +286,7 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
 - **`607 etAim` 的九值 aimmode 枚举**——D-6 塌成 `sh_aim`/`sh_ring` 两个正交布尔（640/641 号）：
   mode 4/5 在两布尔下冗余，**mode 6/7/8 的随机模式不做**（另见 `follow-ups.md` D13）。
 
-## 符卡计器（syscall 130/740/741 + `wait_spell` 糖；spec 2026-07-24）
+## 符卡计器（syscall 130/131/740/741 + `wait_spell` / `phase_begin` 糖；spec 2026-07-24，boss 换段刀 2026-09-14 扩）
 
 记账（计时/衰减/超时/破卡/`boss_ui` 喂送）全归引擎 `SpellState` 机构（settle 相位符卡趟），
 三条 syscall 是脚本唯一的操作面；表层参考见 [`ecl-lang.md`](ecl-lang.md)"符卡"节。
@@ -306,6 +306,14 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
 - **`spell_timer`（130）**：无参，读族。owner 非 `ENEMY` 或无绑定槽 → **押 -1**（同
   `self_hp`/`self_hp_max` 误用降级口径——不 Fault，方便脚本用 `>= 0` 判活）；有绑定槽 →
   该槽 `frames_left`。这个 `-1` 判据正是 `wait_spell()` 糖的展开条件。
+- **`spell_result`（131，boss 换段刀）**：1 参 `slot`，读族，owner 无限制。押 `WorldBody.spell_last_result[slot]`：
+  0 还没结束过 / 1 血线 / 2 超时 / 3 手动；槽越界押 0 + `contract_viol` + `BAD_ARGS`。只由结算写，`spell_begin` 不清。
+- **非符段 `SPELL_NONSPELL`（flags bit2）**：`spell_begin` 不发 `EVT_SPELL_DECLARED`/`REQ_SPELL_DECLARE`，bonus 三字段写 0
+  （传入值忽略、不计违约），`SPELL_SURVIVAL` 位忽略；结算不付分、不发 CAPTURED/FAILED/`REQ_SPELL_RESULT`，改发
+  `EVT_PHASE_ENDED`（12，`data = [spell_id, cause]`）。表层糖 `phase_begin` 纯前端注入常量，降低到 740。
+- **结算顺序**（`settle_one_spell(slot, cause)`，`cause` = 1 血线 / 2 超时 / 3 手动）：① 超时时绑定 boss 存活且非 dying →
+  `hp = min(hp, hp_threshold)`；② 付分与事件；③ 除非 `SPELL_NO_CLEAR` 铺全屏清弹区，**超时路径带 `FIELD_NO_STAR`**（不转
+  星星）；④ 写 `spell_last_result`；⑤ 槽与 `boss_ui` 清零。
 
 **`wait_spell()` 语法糖**（纯编译器前端，零 VM/字节码改动）：`lang::parse` 直接把
 `wait_spell();` 展开成等价的 `Stmt::While` 子树，等同于脚本作者手写
