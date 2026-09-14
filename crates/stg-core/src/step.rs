@@ -124,7 +124,6 @@ impl World {
         p.power = loadout.power.min(crate::items::POWER_MAX);
         p.lives = loadout.lives;
         p.bombs = loadout.bombs;
-        p.time_stops = loadout.time_stops;
         w.body.set_var(crate::consts::GVAR_RANK, rank);
         let root_idx = w.start_main(image)?;
         if let Some(ip) = landing {
@@ -2304,6 +2303,11 @@ mod tests {
         // （1035240→1035256；`World` 同步 1195040→1195056）。哨兵终于响了一次。四件套：
         // ① `copy_into` 走 `d.players = s.players` 自动；② checksum derive 全量入；③ 非池；
         // ④ SaveBytes derive 自动入档 ⇒ `ENGINE_VER` 18→19。
+        // 2026-09-14（玩法刀 Task 1）：`PlayerState` 删 `bomb_phase: u8`/`bomb_timer: u16`/
+        // `time_stops: u8`（逻辑 −4 B）——**实测 size_of 未变**（仍 72，释出的 4 B 变成
+        // 8 对齐 padding；D20 盲区的反向）。两值不变。四件套：① 整块 Copy 无需同步；
+        // ② checksum/④ SaveBytes derive 自动少这三字段 ⇒ wire format 变，`ENGINE_VER` 在
+        // 玩法刀 Task 6 统一 bump；③ 非池。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
         const EXPECTED: (usize, usize) = (1035256, 1195056);
@@ -2665,7 +2669,6 @@ mod tests {
             power: 9999,
             lives: 8,
             bombs: 1,
-            ..crate::player::Loadout::default()
         };
         let w = World::new_game_at(7, 2, 0, loadout, &image).expect("new_game_at");
         let p = &w.body.players[0];

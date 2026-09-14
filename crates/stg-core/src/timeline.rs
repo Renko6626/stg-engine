@@ -525,18 +525,18 @@ impl Timeline {
     }
 }
 
-// ── InputLog 字节格式 v1 ───────────────────────────────────────────────────
+// ── InputLog 字节格式 v2 ───────────────────────────────────────────────────
 //
 // magic "STGR" | file_ver u8 | ENGINE_VER u32 | tables_hash u64 | image_hash u64 | vocab_hash u64
 // | boot: tag u8 (+ 0: seed u64, rank i32, start i32, loadout{character u8, power u16, lives u8,
-//   bombs u8, time_stops u8} / 1: world_checksum u64)
+//   bombs u8} / 1: world_checksum u64)（v2 玩法刀：删 time_stops）
 // | n_frames u32 | frames[n]: frame u32, (buttons u32, _pad u32) × MAX_PLAYERS
 // | n_cuts u32 | cuts[n]: at u32, to u32, player u8
 // | fnv u64（对以上全部字节的 FNV-1a 64）
 // 纪律同 `save.rs`：小端、无 padding、定长自描述。
 
 pub(crate) const LOG_MAGIC: [u8; 4] = *b"STGR";
-pub(crate) const LOG_FILE_VER: u8 = 1;
+pub(crate) const LOG_FILE_VER: u8 = 2;
 
 impl InputLog {
     pub fn to_bytes(&self, tables_hash: u64, image_hash: u64) -> Vec<u8> {
@@ -562,7 +562,6 @@ impl InputLog {
                 out.extend_from_slice(&loadout.power.to_le_bytes());
                 out.push(loadout.lives);
                 out.push(loadout.bombs);
-                out.push(loadout.time_stops);
             }
             Boot::Snapshot { world_checksum } => {
                 out.push(1);
@@ -664,7 +663,6 @@ impl InputLog {
                 let power = u16::from_le_bytes(take(&mut r, 2)?.try_into().unwrap());
                 let lives = take(&mut r, 1)?[0];
                 let bombs = take(&mut r, 1)?[0];
-                let time_stops = take(&mut r, 1)?[0];
                 Boot::NewGameAt {
                     seed,
                     rank,
@@ -674,7 +672,6 @@ impl InputLog {
                         power,
                         lives,
                         bombs,
-                        time_stops,
                     },
                 }
             }

@@ -15,9 +15,8 @@ pub const LIFE_JUMPING: u8 = 5;
 pub const DEATHBOMB_WINDOW: u16 = 8; // 决死窗口帧
 pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
 
-/// 时间停止的固定时长（帧）。**引擎常量而非表数据**——它不在任何表里；bomb 的数字
-/// 相反，全部住 `CharacterCfg.bomb`（避免第二真相源）。若将来"每个自机时停时长不同"
-/// 成为内容需求，迁进 `CharacterCfg` 的路径与 `BombCfg` 完全同构（spec §14）。
+/// 停止（时间停止）的固定时长（帧）。**引擎常量而非表数据**——它不在任何表里。若将来
+/// "每个自机时停时长不同"成为内容需求，再迁进 `CharacterCfg`。
 pub const TIMESTOP_FRAMES: u16 = 180;
 
 /// 跳躍跨过的帧数（时间机制内核刀 spec §2.2）。也是宿主影子世界（観測）的预览步数——
@@ -55,8 +54,6 @@ pub struct PlayerState {
     pub life_state: u8,
     pub state_timer: u16,
     pub invuln: u16,
-    pub bomb_phase: u8,
-    pub bomb_timer: u16,
     /// 发弹相位计时器（M0-17 T4：取代旧 `shot_cd` 倒计时）：持 SHOT 逐帧 `wrapping_add(1)`，
     /// 松手清零；相位 3 解释器用**自增前**的值判 `shot_timer % interval == delay % interval`
     /// （先判后加——见 `world/player.rs::char0_update_shot` 钉死注记 + 判别测试
@@ -66,8 +63,6 @@ pub struct PlayerState {
     pub power: u16,
     pub lives: u8,
     pub bombs: u8,
-    /// 时间停止的剩余次数（自机能力刀）。
-    pub time_stops: u8,
     pub life_pieces: u8,
     pub bomb_pieces: u8,
     pub score: u64,
@@ -90,18 +85,16 @@ pub struct Loadout {
     pub power: u16,
     pub lives: u8,
     pub bombs: u8,
-    pub time_stops: u8,
 }
 
 impl Default for Loadout {
-    /// 正典默认 = 机体0/0火力/3残/3雷/1时停——`PlayerState::spawn` 的硬编码收编为此单一来源。
+    /// 正典默认 = 机体0/0火力/3残/3停止——`PlayerState::spawn` 的硬编码收编为此单一来源。
     fn default() -> Self {
         Loadout {
             character: 0,
             power: 0,
             lives: 3,
             bombs: 3,
-            time_stops: 1,
         }
     }
 }
@@ -124,15 +117,12 @@ impl PlayerState {
             life_state: LIFE_ALIVE,
             state_timer: 0,
             invuln: 0,
-            bomb_phase: 0,
-            bomb_timer: 0,
             hit_frame: 0,
             continues: 0,
             shot_timer: 0,
             power: ld.power,
             lives: ld.lives,
             bombs: ld.bombs,
-            time_stops: ld.time_stops,
             life_pieces: 0,
             bomb_pieces: 0,
             score: 0,

@@ -594,7 +594,7 @@ const BUILTINS: &[Builtin] = &[
         doc: "声明背景演出段号:写 bg_phase 并自动盖 bg_phase_frame=当前帧,发 REQ_BG_PHASE;表现层按段内局部时间 seek",
         param_names: &["phase"],
     },
-    // ── 自机能力刀：时停（syscall 513/560）───────────────────────────────────
+    // ── 自机能力刀：时停（syscall 560）───────────────────────────────────
     Builtin {
         name: "time_stop_player",
         syscall: syscall::SYS_TIME_STOP_PLAYER,
@@ -641,15 +641,6 @@ const BUILTINS: &[Builtin] = &[
         params: &[Val(Int)],
         ret: None,
         doc: "增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout",
-        param_names: &["delta"],
-    },
-    Builtin {
-        name: "add_time_stops",
-        syscall: syscall::SYS_ADD_TIME_STOPS,
-        is_op: false,
-        params: &[Val(Int)],
-        ret: None,
-        doc: "时停次数增量;同 add_lives 语义(允许负、饱和加、钳 [0,255])",
         param_names: &["delta"],
     },
     // ── 敌人死亡效果（syscall 520-530；参照 ZUN ECL 506/507/509/561）───────────
@@ -1193,7 +1184,6 @@ mod tests {
             "add_lives",
             "add_bombs",
             "add_power",
-            "add_time_stops",
             "drop_clear",
             "drop_add",
             "drop_items",
@@ -1402,7 +1392,6 @@ mod tests {
             "add_lives",
             "add_bombs",
             "add_power",
-            "add_time_stops",
             "drop_clear",
             "drop_add",
             "drop_items",

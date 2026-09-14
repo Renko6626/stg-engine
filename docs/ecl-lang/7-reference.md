@@ -142,7 +142,6 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `add_lives(delta: int)` — 增减残机:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
 - `add_bombs(delta: int)` — 增减 bomb 数:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
 - `add_power(delta: int)` — 增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout
-- `add_time_stops(delta: int)` — 时停次数增量;同 add_lives 语义(允许负、饱和加、钳 [0,255])
 - `drop_clear()` — 清空自身待掉落计数;self 必须是敌
 - `drop_add(type: int, n: int)` — 自身待掉落计数增量加 n 颗 type(只增不减,要清空用 drop_clear);计数上限 255 饱和
 - `drop_items()` — 立刻撒出自身待掉落计数;**吐完不清空**(故 drop_items();die(); 掉双份);不加分不发死亡事件

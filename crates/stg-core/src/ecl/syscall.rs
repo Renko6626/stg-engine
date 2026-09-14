@@ -185,8 +185,7 @@ pub const SYS_ADD_BOMBS: u16 = 511;
 /// = 显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 索引就 OOB（见
 /// `world::WorldBody::set_player_power` 文档）。增量形态同为人类裁定。
 pub const SYS_ADD_POWER: u16 = 512;
-/// 时停次数增量（自机能力刀）。语义同 [`SYS_ADD_LIVES`]，钳 `[0, u8::MAX]`。
-pub const SYS_ADD_TIME_STOPS: u16 = 513;
+// 513 退役（玩法刀 2026-09-14，原 add_time_stops）：号不复用。
 /// 清空自身待掉落计数（520；0 参、无返回。敌人死亡效果刀，参照 ZUN ECL 的 `dropClear` 506）。
 /// self owner 必须是 ENEMY，否则 Fault（misuse 策略，同 `move_enemy_to`）。
 pub const SYS_DROP_CLEAR: u16 = 520;
@@ -361,13 +360,13 @@ pub const SYS_SELF_ANGLE: u16 = 25;
 /// （百分区制下号非连续，同 [`crate::ecl::ops::op_implemented`] 的纪律）。不在表内的号
 /// 由 `dispatch` 的兜底臂返 `FAULT_BAD_OP`。
 ///
-/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、80 条结构测试的表是 `cfg(test)`，
+/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、79 条结构测试的表是 `cfg(test)`，
 /// 编译器 crate 两个都够不着）：`stg-ecl-compiler` 的 `builtins::BUILTINS` 要能断言
 /// "`is_op == false` 的条目，其 `syscall` 字段装的确实是个会被派发的号"。见
 /// `builtins.rs::builtin_dispatch_kind_matches_what_the_field_holds`。
 ///
 /// **与 `dispatch` 的同步靠测试押运，不靠自律**：`syscall_whitelist_matches_the_frozen_table`
-/// 断言"全 `u16` 域里为真的号恰好是那 80 条"，漏一条/多一条即红。
+/// 断言"全 `u16` 域里为真的号恰好是那 79 条"，漏一条/多一条即红。
 pub const fn syscall_implemented(no: u16) -> bool {
     matches!(
         no,
@@ -422,7 +421,6 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_ADD_LIVES
             | SYS_ADD_BOMBS
             | SYS_ADD_POWER
-            | SYS_ADD_TIME_STOPS
             | SYS_DROP_CLEAR
             | SYS_DROP_ADD
             | SYS_DROP_ITEMS
@@ -873,14 +871,6 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             p.power = (p.power as i32)
                 .saturating_add(d)
                 .clamp(0, crate::items::POWER_MAX as i32) as u16;
-            Ok(())
-        }
-        SYS_ADD_TIME_STOPS => {
-            let d = pop(task)?;
-            let p = &mut ctx.body.players[0];
-            p.time_stops = (p.time_stops as i32)
-                .saturating_add(d)
-                .clamp(0, u8::MAX as i32) as u8;
             Ok(())
         }
         // 敌人死亡效果四件（520-530）：一律经 `WorldBody` 的 handle 写 API（P1：调用方
@@ -2138,7 +2128,6 @@ mod tests {
             (SYS_ADD_LIVES, "add_lives", 5),
             (SYS_ADD_BOMBS, "add_bombs", 5),
             (SYS_ADD_POWER, "add_power", 5),
-            (SYS_ADD_TIME_STOPS, "add_time_stops", 5),
             (SYS_DROP_CLEAR, "drop_clear", 5),
             (SYS_DROP_ADD, "drop_add", 5),
             (SYS_DROP_ITEMS, "drop_items", 5),
@@ -2176,7 +2165,7 @@ mod tests {
         ]
     }
 
-    /// 【本刀的主判据】号表族结构：80 条、无重号、每条落在其声明族的百位区间内
+    /// 【本刀的主判据】号表族结构：79 条、无重号、每条落在其声明族的百位区间内
     /// （原 74 条 + 自机能力刀 `513`/`560` = 76；表现契约 v2 再加 `430 set_anm_state`/`721 fx_at`/`722 fx_on` = 79；壳子刀加 `723 stage_clear` = 80）。
     ///
     /// 这一刀是大规模机械重排，判别力要求与常规刀不同——不是"新行为对不对"，而是
@@ -2205,8 +2194,8 @@ mod tests {
 
         assert_eq!(
             table.len(),
-            80,
-            "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 = 80：增改需同步这个数"
+            79,
+            "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 − 玩法刀退役 513 = 79：增改需同步这个数"
         );
 
         // (a) 族归属：搬错族立刻红
@@ -2372,7 +2361,7 @@ mod tests {
     ///
     /// 两个方向都断言（缺一个就只是半张网）：
     /// - **文档 → 常量**：文档里出现的每个 `(号, 名)` 对都得在 [`frozen_table`] 里；
-    /// - **常量 → 文档**：80 条常量每条都得在文档里出现，**漏记一条即红**。
+    /// - **常量 → 文档**：79 条常量每条都得在文档里出现，**漏记一条即红**。
     ///
     /// **它还有第二重职责，别只当它是"防文档漂移"**：本条是**全仓唯一**能抓到
     /// **族内互换**（号换了、族没换，如 `SYS_ATAN2` ↔ `SYS_DIST`）的测试。
@@ -4798,27 +4787,6 @@ mod tests {
         );
         assert!(call(&mut w, &ecl, &mut task, SYS_ADD_POWER, &[i32::MIN]).is_ok());
         assert_eq!(w.body.players[0].power, 0, "i32::MIN 应钳到 0");
-    }
-
-    // ── SYS_ADD_TIME_STOPS（513；自机能力刀 T5）─────────────────────────────
-
-    /// 语义照抄 510/511/512：允许负、饱和加、钳 [0, u8::MAX]。判别力=三点（正/负/溢出），
-    /// 只测正数的话裸 `+`（debug 下 255+i32::MAX 会 panic）也能过。
-    #[test]
-    fn sys_add_time_stops_saturates_like_its_siblings() {
-        let (mut w, ecl) = fresh();
-        let mut task = Task::default();
-        w.body.players[0].time_stops = 1;
-        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_TIME_STOPS, &[2]).is_ok());
-        assert_eq!(w.body.players[0].time_stops, 3);
-        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_TIME_STOPS, &[-9]).is_ok());
-        assert_eq!(w.body.players[0].time_stops, 0, "扣穿停在 0，不回绕");
-        assert!(call(&mut w, &ecl, &mut task, SYS_ADD_TIME_STOPS, &[i32::MAX]).is_ok());
-        assert_eq!(
-            w.body.players[0].time_stops,
-            u8::MAX,
-            "上钳 u8::MAX，不 panic"
-        );
     }
 
     // ── 敌人死亡效果四 syscall（520-530；敌人死亡效果刀 T3）────────────────────
