@@ -2382,8 +2382,13 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            19,
-            "bump 必须是有意识决定(评审 + 改本测试)——18→19：壳子刀(2026-09-11)。\
+            20,
+            "bump 必须是有意识决定(评审 + 改本测试)——19→20：玩法刀(2026-09-14)。\
+             PlayerState 删 bomb_phase/bomb_timer/time_stops、加 jump_cd u16/deaths u8(存档 wire format 变);\
+             碰撞矩阵新增行 8 ROW_STOP_TOUCH(停止冻结中触碰消弹);号表 513 add_time_stops 退役;\
+             输入词表退役位 7 BTN_TIMESTOP / 位 9 BTN_REWIND(vocab_hash 变);生命态 LIFE_RESPAWNING=3 退役;\
+             WorldTables 删 CharacterCfg.bomb(TABLE_VERSION 5,content_hash 变);回放头 LOG_FILE_VER 2。\
+             ——前一次 18→19：壳子刀(2026-09-11)。\
              PlayerState.continues u8×2 进校验和/存档(PlayerState 64→72,World +16 B,\
              尺寸哨兵响)+ 输入词表新增 BTN_CONTINUE=10(位=0 等价旧行为,vocab_hash 变)。\
              ——前一次 17→18：壳子刀·转场协议修正(2026-09-07)。\
