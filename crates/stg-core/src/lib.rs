@@ -190,7 +190,16 @@ extern crate self as stg_core;
 /// 追在 `hit_frame` 之后，`PlayerState` 64→72、`World` +16 B，尺寸哨兵这次响了）+ 输入词表新增
 /// `BTN_CONTINUE = 10`（位=0 等价旧行为，`actions_vocab_hash` 变）。金向量：新字段恒 0
 /// 但进哈希 ⇒ 预期改变；实测为准。
-pub const ENGINE_VER: u32 = 19;
+///
+/// **19 → 20**（玩法刀，2026-09-14）：**布局 + 碰撞矩阵 + 号表 + 词表 + 表格式五重变更**。
+/// ① `PlayerState` 删 `bomb_phase: u8`/`bomb_timer: u16`/`time_stops: u8`、加 `jump_cd: u16`/
+/// `deaths: u8` ⇒ 存档 wire format 变（`size_of` 实测不变，D20 盲区）；② 碰撞矩阵行 8
+/// `ROW_STOP_TOUCH`（相位 6/7/9 冻结分支）；③ syscall 513 `add_time_stops` 退役（号不复用）、
+/// `add_bombs` 上钳 5；④ 输入词表退役位 7/9、生命态退役 3（`LIFE_RESPAWNING`），死亡改为原地
+/// 继续 + `EVT_REWIND_REQUESTED`；⑤ `WorldTables` 删 `CharacterCfg.bomb`（`TABLE_VERSION` 5）
+/// ⇒ 表 `content_hash` 变；回放头 `LOG_FILE_VER` 2。行为：`PIECES_PER_BOMB` 5→4、默认停止库存
+/// 3→2、跳躍冷却 600 帧门禁、死亡帧 A 组跳过。**金向量预期改变**；实测为准。
+pub const ENGINE_VER: u32 = 20;
 
 pub use stg_derive::define_pool;
 

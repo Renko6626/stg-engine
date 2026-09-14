@@ -50,7 +50,7 @@
 | 自机弹 | `sprite` | 无 | 无 | 无 | MultiMesh |
 | 道具 | `sprite`（`item_type` 查表） | 无 | 无 | 无 | MultiMesh |
 | 敌 | `sprite` | `anm_state`（只脚本写） | `anm_state_frame` | `hit_flash`、`hp`、`invuln` | 256 个预分配 Sprite2D 木偶 |
-| 自机 | **无**（F23） | `life_state` | `state_timer` | `invuln`、`facing`、`bomb_phase` | 单张 Sprite2D |
+| 自机 | **无**（F23） | `life_state` | `state_timer` | `invuln`、`facing`、`jump_cd`、`deaths` | 单张 Sprite2D |
 | 背景 | `bg_id` | `bg_phase` | `bg_phase_frame` | 无 | Bg 节点（A4 mini-VM 未做） |
 | 特效 | 不在核 | 不在核 | 壳记 `born` | 请求载荷 `kind/param` | fx MultiMesh 池（§4） |
 
@@ -199,7 +199,7 @@ step 之间取走。**
 清空、回滚重演确定性再生）。桥面 `vanished()` 返 Dictionary：`x,y`（浮点世界坐标）、`sprite`
 （弹图集格号）、`reason`（`VANISH_LIFE=1` 寿尽 / `VANISH_CLEARED=2` 被作用区清除，含 bomb、
 deathbomb、`clear_bullets`）。**只记场内、越界不记**（屏外没有淡出可画）；同帧既越界又被清按
-越界处置；被清优先于寿尽。cap 1024（bomb 峰值实测约 814），超限丢弃 + `diag.vanished_overflow`。
+越界处置；被清优先于寿尽。cap 1024（bomb 峰值实测约 814），超限丢弃 + `diag.vanished_overflow`。停止冻结期间（玩法刀）只出现 `VANISH_CLEARED`：触碰消弹当帧回收；寿尽/越界留到解冻。
 **必须在两次 step 之间取走。** 消费者：`effects.gd::fade_batch` 在原位用同一格弹贴图淡出。
 
 ## 3.7 敌人木偶喂料 `puppets()`（表现契约 v2）

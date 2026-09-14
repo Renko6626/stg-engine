@@ -12,12 +12,39 @@ use crate::enemy::ENEMY_DYING;
 use crate::math::Fx;
 
 impl WorldBody {
+    /// 冻结分支（玩法刀）：只收带 `BULLET_CLEARED` 的弹，写 `VANISH_CLEARED`（冻结中弹不动，必在场内），
+    /// 释放 xform 段。寿命/越界/自机弹/敌/道具/作用区一律留到解冻。
+    fn cleanup_stop_touched(&mut self) {
+        let nw = self.bullets.alive.len();
+        for w in 0..nw {
+            let mut bits = self.bullets.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if self.bullets.flags[i] & crate::bullets::BULLET_CLEARED == 0 {
+                    continue;
+                }
+                self.push_vanished(
+                    self.bullets.x[i],
+                    self.bullets.y[i],
+                    self.bullets.sprite[i],
+                    crate::events::VANISH_CLEARED,
+                );
+                if self.bullets.transform_head[i] != crate::xform::XFORM_NONE {
+                    self.xforms.free(self.bullets.transform_head[i]);
+                }
+                self.bullets.free_index(i);
+            }
+        }
+    }
+
     pub(crate) fn cleanup(&mut self) {
         self.phase_enter(super::PH_CLEANUP);
-        // C 组：冻 C 时没有新的越界/消弹/死亡标记产生（相位 4~7 全停），无需回收。
-        // **推论**：冻结开始前那一帧刚被标记的东西（`ENEMY_DYING` 的敌、`BULLET_CLEARED`
-        // 的弹）会一直挂在池里、槽位占着不还，直到 C 解冻那一帧才真正被收走——是确定性的
-        // "残留"而非泄漏（帧号/回放/校验和都不受影响，只是槽位暂时不空）。
+        // C 组：冻 C（停止）时相位 4~7 只剩行 8 触碰消弹，故这里只回收带 `BULLET_CLEARED`
+        // 的弹（`cleanup_stop_touched`，玩法刀）——包括冻结开始前一帧被清的弹，冻结首帧即收。
+        // **推论**：冻结开始前那一帧刚被标 `ENEMY_DYING` 的敌、寿尽/越界的弹，会一直挂在池里、
+        // 槽位占着不还，直到 C 解冻那一帧才真正被收走——是确定性的"残留"而非泄漏（帧号/回放/
+        // 校验和都不受影响，只是槽位暂时不空）。
         //
         // **同一类推论的手足**：`signals[]`（信号黑板）只在**相位 4**（`run_transforms`,
         // `transform.rs` 的 `WAIT_SIGNAL` 分支）按边沿消费——`signals[ch] == frame + 1`
@@ -29,6 +56,7 @@ impl WorldBody {
         // 序列永远丢在同一处），但脚本作者若恰好在开启时停的那一帧脉冲信号，会发现等在
         // `WAIT_SIGNAL` 上的弹再也等不到那个边沿。
         if self.scene_frozen() {
+            self.cleanup_stop_touched();
             return;
         }
         let nw = self.bullets.alive.len();
@@ -358,22 +386,29 @@ mod tests {
         assert_eq!(w.body.vanished()[0].reason, VANISH_CLEARED);
     }
 
-    /// 冻 C（玩家时停）时 cleanup 早退：寿尽弹留池、`vanished` 无行——与"残留而非泄漏"推论一致。
+    /// 冻 C（停止）时 cleanup 只收已清除弹：寿尽弹留池不记；已清除弹回收并记 `VANISH_CLEARED`。
     #[test]
-    fn vanished_is_empty_while_scene_frozen() {
+    fn frozen_cleanup_only_recycles_cleared_bullets() {
+        use crate::bullets::BULLET_CLEARED;
+        use crate::events::VANISH_CLEARED;
         #[cfg(debug_assertions)]
         use crate::world::PH_CLEANUP;
         let mut w = crate::step::World::new(1);
-        let h = crate::world::test_support::bullet_at(&mut w, 0, 100);
-        let i = w.body.bullets.get(h).unwrap();
-        w.body.bullets.life[i] = 0;
+        let dead = crate::world::test_support::bullet_at(&mut w, 0, 100);
+        let di = w.body.bullets.get(dead).unwrap();
+        w.body.bullets.life[di] = 0;
+        let cleared = crate::world::test_support::bullet_at(&mut w, 50, 100);
+        let ci = w.body.bullets.get(cleared).unwrap();
+        w.body.bullets.flags[ci] |= BULLET_CLEARED;
         w.body.freeze_left[0] = 5;
         #[cfg(debug_assertions)]
         {
             w.body.phase_guard = PH_CLEANUP;
         }
         w.body.cleanup();
-        assert!(w.body.bullets.get(h).is_some(), "冻结帧不回收");
-        assert!(w.body.vanished().is_empty());
+        assert!(w.body.bullets.get(dead).is_some(), "寿尽弹冻结中不回收");
+        assert!(w.body.bullets.get(cleared).is_none(), "已清除弹冻结中回收");
+        assert_eq!(w.body.vanished().len(), 1);
+        assert_eq!(w.body.vanished()[0].reason, VANISH_CLEARED);
     }
 }

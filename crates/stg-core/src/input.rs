@@ -131,20 +131,15 @@ define_actions! {
     BTN_RIGHT = 3, Level;
     /// 射击（消费者：`world/player.rs::char0_update_shot`，`shot_cd` 整流为连发）。
     BTN_SHOT = 4, Level;
-    /// bomb（沿触发；消费者待 bomb 切片，`EDGE_MASK` 的首个租户）。
+    /// 停止（沿触发；消费者：`world/player.rs::try_stop`）。玩法刀 2026-09-14：时停 + 触碰消弹合一，
+    /// 库存 = `PlayerState.bombs`。位 7（旧 `BTN_TIMESTOP`）退役不复用。
     BTN_BOMB = 5, Edge;
     /// 低速（消费者：`world/player.rs::move_player`）。
     BTN_SLOW = 6, Level;
-    /// 时间停止（沿触发；消费者：`world/player.rs::try_time_stop`）。
-    /// **位 = 0 必须等价旧行为**——旧回放该位恒 0，故加位不是回放格式的破坏性变更。
-    BTN_TIMESTOP = 7, Edge;
     /// 跳躍（沿触发；消费者：`world/player.rs::try_jump`）。时间机制内核刀 2026-09-07。
     /// 観測（未来预览）**不进世界**——它是宿主侧影子世界的纯表现，两次按键协议由宿主管，
     /// 宿主只在第二下把本位送进来一帧。
     BTN_JUMP = 8, Edge;
-    /// 遡行请求（沿触发；消费者：`world/player.rs::try_rewind`）。只在决死窗口内被响应，
-    /// 世界只发 `EVT_REWIND_REQUESTED`，兑现归 `stg_core::timeline`。
-    BTN_REWIND = 9, Edge;
     /// 续关（沿触发；消费者：`world/player.rs::try_continue`）。壳子刀 2026-09-11：只在
     /// `LIFE_GAMEOVER` 下响应，世界内做续关（残机回默认、分数 = 续关次数、重生），可回放。
     BTN_CONTINUE = 10, Edge;
@@ -209,13 +204,13 @@ mod tests {
         assert_eq!(BTN_SHOT, 1 << 4);
         assert_eq!(BTN_BOMB, 1 << 5);
         assert_eq!(BTN_SLOW, 1 << 6);
-        assert_eq!(BTN_TIMESTOP, 1 << 7);
+        // 位 7 退役（旧 BTN_TIMESTOP，玩法刀）：不复用
         assert_eq!(BTN_JUMP, 1 << 8);
-        assert_eq!(BTN_REWIND, 1 << 9);
+        // 位 9 退役（旧 BTN_REWIND，玩法刀：死亡即遡行）：不复用
         assert_eq!(BTN_CONTINUE, 1 << 10);
     }
 
-    /// 容量哨兵可观测面：词表当前最高位 = 9（BTN_REWIND），且在 u32 容器内。
+    /// 容量哨兵可观测面：词表当前最高位 = 10（BTN_CONTINUE），且在 u32 容器内。
     /// （溢出情形无法用运行时测试压——那是编译失败，由宏内 const 断言把守。）
     #[test]
     fn max_bit_used_pinned() {
@@ -223,19 +218,16 @@ mod tests {
         assert!((MAX_BIT_USED as u32) < u32::BITS);
     }
 
-    /// `EDGE_MASK` = 全部沿触发位的并集；当前词表中 BOMB / TIMESTOP / JUMP / REWIND 是沿语义。
+    /// `EDGE_MASK` = 全部沿触发位的并集；当前词表中 BOMB / JUMP / CONTINUE 是沿语义。
     #[test]
-    fn edge_mask_is_exactly_the_five_edge_actions() {
-        assert_eq!(
-            EDGE_MASK,
-            BTN_BOMB | BTN_TIMESTOP | BTN_JUMP | BTN_REWIND | BTN_CONTINUE
-        );
+    fn edge_mask_is_exactly_the_edge_actions() {
+        assert_eq!(EDGE_MASK, BTN_BOMB | BTN_JUMP | BTN_CONTINUE);
     }
 
     /// ACTIONS 描述表与位常量逐项一致（表即地图：名字/位/语义三列齐全、顺序按位号）。
     #[test]
     fn actions_table_matches_constants() {
-        let expected: [(&str, u32, ActionKind); 11] = [
+        let expected: [(&str, u32, ActionKind); 9] = [
             ("BTN_UP", BTN_UP, ActionKind::Level),
             ("BTN_DOWN", BTN_DOWN, ActionKind::Level),
             ("BTN_LEFT", BTN_LEFT, ActionKind::Level),
@@ -243,9 +235,7 @@ mod tests {
             ("BTN_SHOT", BTN_SHOT, ActionKind::Level),
             ("BTN_BOMB", BTN_BOMB, ActionKind::Edge),
             ("BTN_SLOW", BTN_SLOW, ActionKind::Level),
-            ("BTN_TIMESTOP", BTN_TIMESTOP, ActionKind::Edge),
             ("BTN_JUMP", BTN_JUMP, ActionKind::Edge),
-            ("BTN_REWIND", BTN_REWIND, ActionKind::Edge),
             ("BTN_CONTINUE", BTN_CONTINUE, ActionKind::Edge),
         ];
         assert_eq!(ACTIONS.len(), expected.len());
@@ -262,6 +252,7 @@ mod tests {
     fn vocab_hash_pinned() {
         // 壳子刀：加 BTN_CONTINUE=10（Edge），指纹随之变化（实测值，非手算）。
         // 前一次：时间机制内核刀加 BTN_JUMP=8 / BTN_REWIND=9 → 0x6433_59C3_B41F_121D。
-        assert_eq!(actions_vocab_hash(), 0x0786_DE58_5E72_3383); // 词表变更须有意识地更新此值
+        // 玩法刀：删 BTN_TIMESTOP=7 与 BTN_REWIND=9 → 0xFE04_C7CD_7FE1_0485；前一次壳子刀 0x0786_DE58_5E72_3383。
+        assert_eq!(actions_vocab_hash(), 0xFE04_C7CD_7FE1_0485); // 词表变更须有意识地更新此值
     }
 }

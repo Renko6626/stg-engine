@@ -115,20 +115,21 @@ impl WorldBridge {
     const BTN_BOMB: i64 = stg_core::input::BTN_BOMB as i64;
     #[constant]
     const BTN_SLOW: i64 = stg_core::input::BTN_SLOW as i64;
-    #[constant]
-    const BTN_TIMESTOP: i64 = stg_core::input::BTN_TIMESTOP as i64;
-    // 时间机制内核刀(2026-09-07):跳躍/遡行两个沿触发位 + 缺席态 + 两个帧数常量。観測不进
+    // 时间机制内核刀(2026-09-07):跳躍沿触发位(遡行键玩法刀退役:死亡即遡行)+ 缺席态 + 两个帧数常量。観測不进
     // 世界——两次按键协议归壳,壳只在第二下把 BTN_JUMP 送进来一帧。
     #[constant]
     const BTN_JUMP: i64 = stg_core::input::BTN_JUMP as i64;
-    #[constant]
-    const BTN_REWIND: i64 = stg_core::input::BTN_REWIND as i64;
     #[constant]
     const LIFE_JUMPING: i64 = stg_core::player::LIFE_JUMPING as i64;
     #[constant]
     const LIFE_DEATHWINDOW: i64 = stg_core::player::LIFE_DEATHWINDOW as i64;
     #[constant]
     const JUMP_FRAMES: i64 = stg_core::player::JUMP_FRAMES as i64;
+    // 玩法刀(2026-09-14):跳躍冷却 + 停止库存上限(HUD 冷却条/库存显示用)。
+    #[constant]
+    const JUMP_COOLDOWN: i64 = stg_core::player::JUMP_COOLDOWN as i64;
+    #[constant]
+    const STOP_STOCK_MAX: i64 = stg_core::player::STOP_STOCK_MAX as i64;
     #[constant]
     const REWIND_DEPTH: i64 = stg_core::timeline::REWIND_DEPTH as i64;
     #[constant]
@@ -272,9 +273,6 @@ impl WorldBridge {
             power: power.clamp(0, u16::MAX as i64) as u16,
             lives: lives.clamp(0, u8::MAX as i64) as u8,
             bombs: bombs.clamp(0, u8::MAX as i64) as u8,
-            // 时停刀（裁定 R-2）：不给桥面加 time_stops 入参——默认值 1 已够，
-            // 加参数是没人要的接口扩张。
-            ..Default::default()
         };
         let rank = rank.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let start = start.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
@@ -603,6 +601,8 @@ impl WorldBridge {
         d.set("facing", p.facing as i64);
         d.set("hit_frame", p.hit_frame as i64);
         d.set("continues", p.continues as i64);
+        d.set("jump_cd", p.jump_cd as i64);
+        d.set("deaths", p.deaths as i64);
         d
     }
 

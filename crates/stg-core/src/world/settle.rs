@@ -125,6 +125,7 @@ impl WorldBody {
         // 同 collide，spec §4：门禁挂 C 组、不是"是否冻结"。顺手堵上一个漏洞——符卡
         // 计时住本相位尾（`settle_spells`）⇒ 冻 C 时符卡不倒计时，没法用时停白嫖 survival 卡。
         if self.scene_frozen() {
+            self.settle_stop_touch(); // 行 8 结算（玩法刀）；符卡趟照旧不跑 ⇒ 停止不烧符卡时间
             return;
         }
         // ── 趟一 · 清除/防护：行 6 消弹 ──────────────────────────────────
@@ -263,6 +264,26 @@ impl WorldBody {
         self.settle_spells(tables);
     }
 
+    /// 行 8 结算（停止冻结中）：未清除的弹置 `BULLET_CLEARED` + 该自机 `STOP_TOUCH_SCORE`。
+    /// 不转星星、不发事件；同一颗弹多个自机碰到按 hits 序首个入账（I4）。回收在相位 9 冻结分支。
+    fn settle_stop_touch(&mut self) {
+        for k in 0..self.hits_len as usize {
+            let h = self.hits[k];
+            if h.row != crate::events::ROW_STOP_TOUCH {
+                continue;
+            }
+            let b = h.active as usize;
+            if self.bullets.flags[b] & crate::bullets::BULLET_CLEARED != 0 {
+                continue;
+            }
+            self.bullets.flags[b] |= crate::bullets::BULLET_CLEARED;
+            let p = h.passive as usize;
+            self.players[p].score = self.players[p]
+                .score
+                .saturating_add(crate::player::STOP_TOUCH_SCORE);
+        }
+    }
+
     /// 拾取入账（D9 趟三）——**唯一** per-type 逻辑居所（扩展四步第 ③ 步：新增类型在此加臂）。
     /// 未知类型：P4-b 计数忽略（两机同弃，无副作用）。
     fn credit_item(&mut self, p: usize, item_type: u8, tables: &WorldTables) {
@@ -300,7 +321,10 @@ impl WorldBody {
                 pl.bomb_pieces = pl.bomb_pieces.saturating_add(1);
                 if pl.bomb_pieces >= PIECES_PER_BOMB {
                     pl.bomb_pieces = 0;
-                    pl.bombs = pl.bombs.saturating_add(1);
+                    // 停止库存上限（玩法刀）：满了碎片照清、不加。
+                    if pl.bombs < crate::player::STOP_STOCK_MAX {
+                        pl.bombs += 1;
+                    }
                 }
             }
             ITEM_STAR => {
@@ -968,8 +992,32 @@ mod tests {
         w.body.players[0].bomb_pieces = crate::items::PIECES_PER_BOMB - 1;
         w.body
             .credit_item(0, crate::items::ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);
-        assert_eq!(w.body.players[0].bombs, u8::MAX, "炸弹数须饱和");
+        assert_eq!(
+            w.body.players[0].bombs,
+            u8::MAX,
+            "库存超上限的直写值不被进位推高"
+        );
         assert_eq!(w.body.players[0].bomb_pieces, 0);
+    }
+
+    /// 停止碎片（玩法刀）：4 枚进 1 发；库存已满时碎片照清、不加（判别腿：满库存 5 与 4 各一次）。
+    #[test]
+    fn stop_piece_carry_respects_stock_max() {
+        use crate::items::{ITEM_BOMB_PIECE, PIECES_PER_BOMB};
+        use crate::player::STOP_STOCK_MAX;
+        assert_eq!(PIECES_PER_BOMB, 4, "gameplay-design §1：4 碎片 = 1 发");
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].bombs = STOP_STOCK_MAX - 1;
+        w.body.players[0].bomb_pieces = PIECES_PER_BOMB - 1;
+        w.body
+            .credit_item(0, ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);
+        assert_eq!(w.body.players[0].bombs, STOP_STOCK_MAX, "未满：进位加一");
+        assert_eq!(w.body.players[0].bomb_pieces, 0);
+        w.body.players[0].bomb_pieces = PIECES_PER_BOMB - 1;
+        w.body
+            .credit_item(0, ITEM_BOMB_PIECE, &crate::tables::TABLES_V0);
+        assert_eq!(w.body.players[0].bombs, STOP_STOCK_MAX, "已满：不加");
+        assert_eq!(w.body.players[0].bomb_pieces, 0, "已满：碎片照清");
     }
 
     /// 同帧双拾取幂等：趟三首见即标 `MAGNET_PICKED`，二次 hit 遇标即跳过入账（手工双推 hits，

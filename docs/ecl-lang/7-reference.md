@@ -140,9 +140,8 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `time_stop_player(frames: int)` — 停住自机的时间 frames 帧(自机不能动/不能发新弹,自机弹也冻住;敌方照跑);0 = 立即解除;重入覆盖;越界 no-op+计数
 - `clear_bullets()` — 全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧
 - `add_lives(delta: int)` — 增减残机:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
-- `add_bombs(delta: int)` — 增减 bomb 数:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
+- `add_bombs(delta: int)` — 增减停止库存:delta 允许负,双边钳 [0,STOP_STOCK_MAX=5] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
 - `add_power(delta: int)` — 增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout
-- `add_time_stops(delta: int)` — 时停次数增量;同 add_lives 语义(允许负、饱和加、钳 [0,255])
 - `drop_clear()` — 清空自身待掉落计数;self 必须是敌
 - `drop_add(type: int, n: int)` — 自身待掉落计数增量加 n 颗 type(只增不减,要清空用 drop_clear);计数上限 255 饱和
 - `drop_items()` — 立刻撒出自身待掉落计数;**吐完不清空**(故 drop_items();die(); 掉双份);不加分不发死亡事件

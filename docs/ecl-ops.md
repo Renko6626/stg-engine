@@ -203,9 +203,8 @@ owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P
 |---|---|---|---|
 | 500 | `add_score`（整局流程刀，见 consts.rs 5xx 族） | delta | —（自机 0 记分；`delta` 允许负值扣分，结果**饱和钳** `[0, u64::MAX]`——扣穿停在 0、加满停在上限，不回绕；不做参数收窄，不 Fault，owner 类别无限制） |
 | 510 | `add_lives`（B20） | delta | —（自机 0；`delta` 允许负，`saturating_add` 后**双边钳** `[0, u8::MAX]`——扣穿停 0、加满停 255，不回绕不 panic；**钳位是正常语义**，不计 `contract_viol`、不 Fault（同 `add_score` 口径）；不做参数收窄，owner 类别无限制） |
-| 511 | `add_bombs`（B20） | delta | —（同 510，写 `bombs`，钳 `[0, u8::MAX]`） |
+| 511 | `add_bombs`（B20） | delta | —（同 510，写 `bombs`（停止库存），钳 `[0, STOP_STOCK_MAX=5]`（玩法刀）。513 号原 add_time_stops 已随玩法刀 2026-09-14 退役，号不复用） |
 | 512 | `add_power`（B20） | delta | —（同 510，写 `power`，但上钳是 `items::POWER_MAX`=**400**（显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 档位索引 OOB） |
-| 513 | `add_time_stops`（自机能力刀） | delta | —（同 510，写 `time_stops`，钳 `[0, u8::MAX]`） |
 | 520 | `drop_clear`（敌死效果刀） | — | —（**0 参**；把 self 敌的 `drop_count[..]` 五槽清零。**owner 须为敌**，否则 Fault(0)（同 `move_enemy_to`）；悬垂 owner 句柄 → no-op + `contract_viol` + `STALE_HANDLE`，不 Fault。参照 ZUN `dropClear`(506)） |
 | 521 | `drop_add`（敌死效果刀） | type,n | —（逆序弹栈 `n, type`；给 self 敌的待掉落计数**增量**加 `n` 颗 `type`，**只增不减**（人类裁定，清空用 520）。`type` 收窄 `[0, items::ITEM_TYPE_COUNT)`，越界 → no-op + `contract_viol` + `BAD_ARGS`，**不 Fault**（P4-b）；`n` **先钳** `[0, u8::MAX]`（负 n 视同 0）**再 `saturating_add`** 到计数上——两步都要，只钳不饱和会在近 255 时 debug panic，只饱和不钳会让负 n `as u8` 回绕。owner 须为敌，否则 Fault(0)。参照 ZUN `dropExtra`(507)） |
 | 522 | `drop_items`（敌死效果刀） | — | —（**0 参**；立刻把 self 敌的待掉落计数撒出去（按类型编号升序逐颗 `spawn_drop`，**消耗世界 RNG**）。**吐完不清空计数**（人类裁定，照 ZUN 字面）——故 `drop_items(); die();` 掉**双份**，作者自负；**不加分、不发 `EVT_ENEMY_DIED`、不发 `REQ_ENEMY_DEATH`、不标 `ENEMY_DYING`**；对已 dying 的敌照撒不误（无幂等门禁，与 530 不同）。池满走 `spawn_drop` 自身的 P4-a 逐颗降级。owner 须为敌，否则 Fault(0)。参照 ZUN `dropItems`(509)） |

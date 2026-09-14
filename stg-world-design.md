@@ -225,7 +225,7 @@ WorldTables 清单（v1）：
 
 - `PlayerState.character_id` 在相位 4 **静态分发**（`match`，编译进引擎的角色模块——不是函数指针，零 P5/I7 冲突）到各角色的 `update_shot / update_bomb / steer_shots` Rust 函数；
 - **世界管"身体与账本"**（角色无关的公共骨架）：移动积分、低速切换、场界钳制、中弹判定、决死窗口状态机、死亡/复活/无敌计时、bomb 触发仲裁（查库存、消库存、**触发帧立即无敌**）、残机/bomb/power/graze/score 账本；
-- **角色模块管"火力与个性"**：发弹模式（读 `players[i].input` 动作位）、homing 弹转向（逐帧扫最近敌人，转率为角色常量）、bomb 效果时间线（`bomb_phase/bomb_timer` 小状态机驱动，铺 Field 实体、发演出请求）；
+- **角色模块管"火力与个性"**：发弹模式（读 `players[i].input` 动作位）、homing 弹转向（逐帧扫最近敌人，转率为角色常量）、bomb 效果时间线（`bomb_phase/bomb_timer` 小状态机驱动，铺 Field 实体、发演出请求）〔2026-09-14 玩法刀：bomb 退役，X = 停止（时停 + 触碰消弹，碰撞行 8），`bomb_phase/bomb_timer`/`BombCfg` 已删〕；
   > **M0-17 修订**：发弹已从"角色模块硬编码"改为 **shottype 表驱动**——相位 3 通用解释器按
   > `[power_tier][focus]` 查 `WorldTables` 的 shooterset 逐 shooter 发射（`shot_timer` 持按
   > 累进/松手清零）；"角色模块静态分发"构想保留给 bomb 效果时间线与 homing 等真个性逻辑，
@@ -459,7 +459,7 @@ SoA，**105 B/敌**（实测），256 敌 ≈ 26.8 KB（含 gen/alive；敌人�
 | 判定 | `hit_radius: Fx, graze_radius: Fx`（角色配置拷入；graze 圈兼道具拾取圈） |
 | 输入 | `input: u16`（相位 2 译码写入的动作位） |
 | 生死状态机 | `life_state: u8, state_timer: u16, invuln: u16` |
-| bomb 状态机 | `bomb_phase: u8, bomb_timer: u16` |
+| ~~bomb 状态机~~ | 〔2026-09-14 玩法刀退役：`bomb_phase/bomb_timer` 已删；新增 `jump_cd: u16`（跳躍冷却）、`deaths: u8`（偏差值）；`LIFE_RESPAWNING` 退役，死亡即遡行〕 |
 | 火力 | `shot_timer: u16`（M0-17：持按累进/松手清零，替换原 `shot_cd` 冷却）, `power: u16`（定点百分制 0–400 = 0.00–4.00） |
 | 账本 | `lives: u8, bombs: u8, life_pieces: u8, bomb_pieces: u8, score: u64, graze: u32`（**score u64**：东方真实分数上千亿，u32 溢出） |
 
@@ -476,7 +476,7 @@ Alive ──中弹(趟二)──► DeathWindow（决死窗口, DEATHBOMB_WINDOW
 ```
 
 - **死亡连带结算世界侧固定**（掉 power、power 道具回撒规则）：它是账本公平性的一部分，与中弹判定同级，不容每个关卡脚本重写；ECL 只收 `PlayerDied` 事件做演出。
-- **bomb 触发仲裁世界侧**（触发帧立即无敌——决死救人的帧精确性不依赖任何脚本/模块延迟）；bomb **效果**由角色模块经 `bomb_phase/bomb_timer` 状态机逐帧驱动（铺 Field、发演出请求），晚一帧铺开在演出上不可见。
+- **bomb 触发仲裁世界侧**（触发帧立即无敌——决死救人的帧精确性不依赖任何脚本/模块延迟）；bomb **效果**由角色模块经 `bomb_phase/bomb_timer` 状态机逐帧驱动（铺 Field、发演出请求），晚一帧铺开在演出上不可见。〔2026-09-14 玩法刀：bomb 退役；停止（`try_stop`）同为世界侧仲裁，触发帧即冻结〕
 
 **FieldPool**（通用圆形作用区原语，碰撞矩阵行 6/7 的主动方；`define_pool!` 第 4 个实例）：cap 16，
 字段 `x y: Fx, radius: Fx, dmg_per_frame: u16, life: u16, owner: u8, flags: u8`。任何持有
@@ -611,7 +611,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | 自机弹池 | 1024 | ~28 B | 29 KB |
 | 敌人池 | 256 | **105 B**（实测，非估值——旧账 `~64 B` 起就偏低，C21 已还；敌人运动动词族刀 2026-07-31 T1 的 +30 B/敌〔speed/angle 双表示 + 速度插值器十件，World 哨兵增量 7680 B ÷ 256〕在内） | 26.8 KB（含 gen/alive） |
 | 道具池 | **1024**（F12，2026-09-03：512→1024——消弹转星星 1:1 而弹池 8192，demo 收卡一帧 626 颗弹让四个难度档全溢出；`ENGINE_VER` 13→14。**自机能力刀复核（2026-09-03）**：bomb 是这条压力的第二个入口——消弹区持续 120 帧×1:1 转星星、起爆当帧再叠加全屏吸取；实测把弹池灌到 rank-3 峰值量级〔约 814〕、真起一发 bomb 跑满整段效果时长，`diag.pool_full[POOL_ITEM]` 全程为 0（回归测试 `bomb_at_rank3_peak_bullet_count_does_not_overflow_item_pool`，`crates/stg-core/src/world/player.rs`），1024 对当前内容仍有约 210 格余量，本刀未触发再抬 cap 的裁决） | 22 B（实测） | 22.1 KB（含 gen/alive） |
-| FieldPool（通用作用区，M0-8） | 16 | ~18 B（x/y/radius 3×4B + dmg_per_frame 2B + life 2B + owner 1B + flags 1B） | ≈320 B（+ generation/alive）。**自机能力刀（2026-09-03）**：bomb 成为它的首个真租户——每次起爆按 `BombCfg.fields`（角色表驱动，v0 两条：全屏消弹 + 起爆点伤害圆）声明序铺 field，单次起爆占用 cap 的一小部分，未改容量常数。 |
+| FieldPool（通用作用区，M0-8） | 16 | ~18 B（x/y/radius 3×4B + dmg_per_frame 2B + life 2B + owner 1B + flags 1B） | ≈320 B（+ generation/alive）。**自机能力刀（2026-09-03）**：bomb 成为它的首个真租户——每次起爆按 `BombCfg.fields`（角色表驱动，v0 两条：全屏消弹 + 起爆点伤害圆）声明序铺 field，单次起爆占用 cap 的一小部分，未改容量常数。〔2026-09-14 玩法刀：bomb 退役，FieldPool 现仅 ECL `clear_bullets` 使用〕 |
 | 任务池（ECL 类型，住组装层 World） | 512 | ~600 B | 307 KB |
 | globals | 1024 × i32 | | 4 KB |
 | hits | 8192 × 6 B | | 48 KB |

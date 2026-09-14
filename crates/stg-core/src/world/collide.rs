@@ -2,12 +2,13 @@
 //!
 //! **只收集不改状态硬规则**：本相位纯读，只经 `push_hit` 追加 `hits`；改状态一律在 settle（相位 7）。
 //! 半径映射见 D8：行1/2 弹×自机(hit/graze)、行3 敌体×自机(体碰 radius)、行4 自机弹×敌人(受击 hurtbox)、
-//! 行5 道具×自机(拾取半径+graze_radius)、行6 作用区×敌弹、行7 作用区×敌人(受击 hurtbox)。
+//! 行5 道具×自机(拾取半径+graze_radius)、行6 作用区×敌弹、行7 作用区×敌人(受击 hurtbox)、
+//! 行8 停止冻结中自机判定圆×冻弹（触碰消弹，玩法刀；只在冻结分支收集）。
 
 use super::WorldBody;
 use crate::events::{
     ROW_BODY_PLAYER_HIT, ROW_BULLET_PLAYER_GRAZE, ROW_BULLET_PLAYER_HIT, ROW_FIELD_BULLET,
-    ROW_FIELD_ENEMY, ROW_ITEM_PLAYER, ROW_SHOT_ENEMY,
+    ROW_FIELD_ENEMY, ROW_ITEM_PLAYER, ROW_SHOT_ENEMY, ROW_STOP_TOUCH,
 };
 use crate::field::{FIELD_CLEAR_BULLETS, FIELD_DAMAGE};
 use crate::math::geom::len_sq;
@@ -21,6 +22,7 @@ impl WorldBody {
         // （定住你、弹幕照来，演出的威胁正在于此）。**别改成 `if frozen`**，那会让演出
         // 附赠免伤、毫无威胁（判别式单测 `cutscene_freeze_still_lets_the_player_be_hit`）。
         if self.scene_frozen() {
+            self.collide_stop_touch(); // 行 8：停止冻结中只收触碰消弹（玩法刀）
             return;
         }
         self.collide_bullets_player(); // 行 1/2：敌弹 × 自机
@@ -29,6 +31,34 @@ impl WorldBody {
         self.collide_item_player(tables); // 行 5：道具 × 自机拾取圈
         self.collide_field_bullet(); // 行 6：作用区 × 敌弹（消弹）
         self.collide_field_enemy(); // 行 7：作用区 × 敌人（伤敌）
+    }
+
+    /// 行 8：停止冻结中，自机判定圆 × 冻住的敌弹。只 ALIVE 参与、**不看 `invuln`**（停止本身
+    /// 就是无敌窗，落地无敌帧不该让触碰失效）；delay 弹跳过（与行 1 同口径）。半径和比较同行 1。
+    fn collide_stop_touch(&mut self) {
+        for p in 0..crate::MAX_PLAYERS {
+            if self.players[p].life_state != crate::player::LIFE_ALIVE {
+                continue;
+            }
+            let (px, py) = (self.players[p].x, self.players[p].y);
+            let hit_r = self.players[p].hit_radius;
+            let nw = self.bullets.alive.len();
+            for w in 0..nw {
+                let mut bits = self.bullets.alive[w];
+                while bits != 0 {
+                    let b = w * 64 + bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    if self.bullets.delay[b] > 0 {
+                        continue;
+                    }
+                    let d2 = len_sq(self.bullets.x[b] - px, self.bullets.y[b] - py);
+                    let sum = (self.bullets.radius[b] + hit_r).raw() as i64;
+                    if d2 <= sum * sum {
+                        self.push_hit(ROW_STOP_TOUCH, b as u16, p as u16);
+                    }
+                }
+            }
+        }
     }
 
     /// 行 1（hit）+ 行 2（graze）：敌弹 × 自机。一次 len_sq 复用两半径。

@@ -182,7 +182,9 @@ func _init():
 
 	var hp: Dictionary = b.hud_player()
 	if hp.get("lives", -1) != 3: fail("hud_player lives"); return
-	if hp.get("bombs", -1) != 3: fail("hud_player bombs"); return
+	if hp.get("bombs", -1) != 2: fail("hud_player bombs(玩法刀默认 2)"); return
+	if hp.get("deaths", -1) != 0: fail("hud_player deaths"); return
+	if hp.get("jump_cd", -1) != 0: fail("hud_player jump_cd"); return
 
 	# anchors(正常路径,task-4):main 顶层依次 `bgm(3); bg(2); bg_phase(1); boss_set(...);
 	# mark(9);`——本 game 走 start=0 隐式正常流,顺序执行到这四行,mark(9) 只是 `JMP after`
@@ -252,6 +254,8 @@ func _init():
 	if int(b.hud_player()["life_state"]) != WorldBridge.LIFE_JUMPING: fail("time: 第 N−1 帧仍应在跳"); return
 	b.step_frame(0)
 	if int(b.hud_player()["life_state"]) != 1: fail("time: 第 N 帧应回 ALIVE"); return
+	if int(b.hud_player()["jump_cd"]) != WorldBridge.JUMP_COOLDOWN: fail("time: 落地应写满冷却"); return
+	if b.step_frame(WorldBridge.BTN_JUMP) != -1 or int(b.hud_player()["life_state"]) != 1: fail("time: 冷却中按跳躍应无效"); return
 	# ② 影子:preview 后影子缓冲有实弹行(位置非零)、且不动权威世界(frame/checksum 不变)。
 	var f_before: int = b.frame()
 	var c_before: int = b.checksum()
@@ -262,8 +266,9 @@ func _init():
 	# 影子的弹比现在的弹多飞了 31 帧(0.5px/帧 → +15.5px):同一颗弹(压实序首行)x 差 15.5。
 	var rb := RenderingServer.multimesh_get_buffer(mm)
 	if absf((gb[3] - rb[3]) - 15.5) > 0.0001: fail("time: 影子首弹应比实弹多飞 15.5px,得 %f" % (gb[3] - rb[3])); return
-	# ③ 遡行:先上到 y≈300,再向左撞弹流;进决死窗口按 V → step_frame 返回落点 F ==
-	#    max(hit_frame−30, 环最老帧);frame() 回到 F;落地后 invuln 非零。
+	# ③ 遡行(玩法刀:死亡即遡行):先上到 y≈300,再向左撞弹流;中弹后空跑到决死窗口耗尽 →
+	#    step_frame 返回落点 F == max(hit_frame−30, 环最老帧);frame() 回到 F;落地 ALIVE、有无敌、
+	#    残机 −1、偏差值 1。
 	var moved := 0
 	while b.player_pos().y > 300.5 and moved < 120:
 		b.step_frame(WorldBridge.BTN_UP); moved += 1
@@ -276,16 +281,23 @@ func _init():
 		if int(b.hud_player()["life_state"]) == WorldBridge.LIFE_DEATHWINDOW:
 			hit_frame = int(b.hud_player()["hit_frame"])
 	if hit_frame < 0: fail("time: 向左走 900 帧没撞上弹流"); return
-	var g0: int = b.frame()
-	var landed: int = b.step_frame(WorldBridge.BTN_REWIND)
+	var lives_before: int = int(b.hud_player()["lives"])
+	var landed := -1
+	var g0 := -1
+	var waited_w := 0
+	while landed < 0 and waited_w <= 20:
+		g0 = b.frame()
+		landed = b.step_frame(0); waited_w += 1
 	var expect_to := maxi(hit_frame - WorldBridge.REWIND_DEPTH, ring_oldest)
 	if landed != expect_to: fail("time: 遡行落点应为 %d,得 %d(hit_frame %d)" % [expect_to, landed, hit_frame]); return
 	if b.frame() != expect_to: fail("time: frame() 应回到落点"); return
 	if int(b.hud_player()["life_state"]) != 1: fail("time: 落地应为 ALIVE"); return
 	if int(b.hud_player()["invuln"]) <= 0: fail("time: 落地应有无敌帧"); return
-	# 倒放读口:被丢弃的请求帧 g0+1 在下一次 step 前仍可读,且切走视图不动权威帧号;
-	# 落点本身也可读;step 后视图自动切回。
-	if not b.view_ring(g0 + 1): fail("time: view_ring(被丢弃的请求帧)"); return
+	if int(b.hud_player()["deaths"]) != 1: fail("time: 偏差值应为 1"); return
+	if int(b.hud_player()["lives"]) != lives_before - 1: fail("time: 落地残机应 −1"); return
+	# 倒放读口:被丢弃分支的窗口末帧 g0(请求帧 g0+1 已原地复活)在下一次 step 前仍可读,
+	# 且切走视图不动权威帧号;落点本身也可读;step 后视图自动切回。
+	if not b.view_ring(g0): fail("time: view_ring(被丢弃的窗口末帧)"); return
 	if int(b.hud_player()["life_state"]) != WorldBridge.LIFE_DEATHWINDOW: fail("time: 视图帧应是决死窗口那一帧"); return
 	if b.frame() != expect_to: fail("time: view_ring 不该动权威帧号"); return
 	if not b.view_ring(expect_to): fail("time: view_ring(落点)"); return
@@ -299,7 +311,7 @@ func _init():
 
 	# ── 壳子刀(2026-09-11,spec §7 桥级两条)────────────────────────────────────
 	# ① 续关:1 条命开局,走进弹流 → 决死窗口耗尽 → GAMEOVER → 按 BTN_CONTINUE →
-	#    RESPAWNING、continues==1、残机回默认 3、score==1。
+	#    ALIVE(玩法刀:原地复活)、continues==1、残机回默认 3、score==1。
 	var one_name := PackedStringArray(["smoke.ecl"])
 	var one_src := PackedStringArray([src])
 	if not b.new_game_at(one_name, one_src, 7, 2, 0, 0, 0, 1, 3): fail("shell: new_game_at lives=1"); return
@@ -318,7 +330,7 @@ func _init():
 	if int(b.hud_player()["life_state"]) != WorldBridge.LIFE_GAMEOVER: fail("shell: GAMEOVER 应保持"); return
 	b.step_frame(WorldBridge.BTN_CONTINUE)
 	var hp2: Dictionary = b.hud_player()
-	if int(hp2["life_state"]) != 3: fail("shell: 续关后应 RESPAWNING(3),得 %d" % int(hp2["life_state"])); return
+	if int(hp2["life_state"]) != 1: fail("shell: 续关后应 ALIVE(1),得 %d" % int(hp2["life_state"])); return
 	if int(hp2["continues"]) != 1: fail("shell: continues 应为 1"); return
 	if int(hp2["lives"]) != 3: fail("shell: 续关残机回默认 3"); return
 	if int(hp2["score"]) != 1: fail("shell: 续关后 score = 续关次数"); return

@@ -5,27 +5,34 @@ use crate::math::Fx;
 // ── 生死状态（本块只用 ABSENT/ALIVE；其余待碰撞那块）──────────────────
 pub const LIFE_ABSENT: u8 = 0; // 全零默认 = 不在场
 pub const LIFE_ALIVE: u8 = 1;
-pub const LIFE_DEATHWINDOW: u8 = 2; // 决死窗口（中弹后可 bomb 救）
-pub const LIFE_RESPAWNING: u8 = 3; // 场底重生、无敌
+pub const LIFE_DEATHWINDOW: u8 = 2; // 决死窗口（中弹后可停止救，deathstop）
+// 3 退役（原 LIFE_RESPAWNING 场底重生，玩法刀 2026-09-14：死亡即遡行）：值不复用。
 pub const LIFE_GAMEOVER: u8 = 4; // 命尽、不再重生
 /// 跳躍中（时间机制内核刀 2026-09-07）：自机**缺席**——不动、不射、不用能力、不碰撞、
 /// 不擦弹、不拾取、不可瞄；`state_timer` 从 `JUMP_FRAMES` 倒数到 0 回 ALIVE。
 /// 不复用 `LIFE_ABSENT`：那个态连 C 组计时都跳过，本态需要倒计时。
 pub const LIFE_JUMPING: u8 = 5;
 pub const DEATHBOMB_WINDOW: u16 = 8; // 决死窗口帧
-pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
+pub const RESPAWN_INVULN: u16 = 120; // 续关无敌帧（2 秒 @60Hz；玩法刀起唯一消费者是 try_continue）
 
-/// 时间停止的固定时长（帧）。**引擎常量而非表数据**——它不在任何表里；bomb 的数字
-/// 相反，全部住 `CharacterCfg.bomb`（避免第二真相源）。若将来"每个自机时停时长不同"
-/// 成为内容需求，迁进 `CharacterCfg` 的路径与 `BombCfg` 完全同构（spec §14）。
+/// 停止（时间停止）的固定时长（帧）。**引擎常量而非表数据**——它不在任何表里。若将来
+/// "每个自机时停时长不同"成为内容需求，再迁进 `CharacterCfg`。
 pub const TIMESTOP_FRAMES: u16 = 180;
+
+/// 停止库存上限（gameplay-design §1）。三个入口钳它：碎片进位、`SYS_ADD_BOMBS`、`new_game_at`。
+pub const STOP_STOCK_MAX: u8 = 5;
+
+/// 停止中触碰消弹每颗的得分（gameplay-design §5）。
+pub const STOP_TOUCH_SCORE: u64 = 10;
 
 /// 跳躍跨过的帧数（时间机制内核刀 spec §2.2）。也是宿主影子世界（観測）的预览步数——
 /// 影子 = 克隆 + 喂一帧 `BTN_JUMP` + step 本数，与真跳同一条代码路径。先 30（0.5 s），
 /// 手感要 1 s 再提 60。
 pub const JUMP_FRAMES: u16 = 30;
+/// 跳躍冷却（帧，gameplay-design §2）：落地那帧写满，C 组逐帧减，`== 0` 才能再跳。
+pub const JUMP_COOLDOWN: u16 = 600;
 /// 遡行落地后的无敌帧（spec §2.3）——策划案 2.3「落点附加短暂无敌帧」那条退路的实现，
-/// 由 `WorldBody::rewind_landed` 写入。
+/// 由 `WorldBody::rewind_landed` 与 `commit_death`（无 timeline 宿主的原地继续）写入（玩法刀）。
 pub const REWIND_INVULN: u16 = 30;
 
 // ── 角色配置：M0-17 T3 起移速/半径五常量已迁 `crate::tables::CharacterCfg`
@@ -55,8 +62,8 @@ pub struct PlayerState {
     pub life_state: u8,
     pub state_timer: u16,
     pub invuln: u16,
-    pub bomb_phase: u8,
-    pub bomb_timer: u16,
+    /// 跳躍冷却剩余帧（玩法刀）。落地写 `JUMP_COOLDOWN`，C 组计时（停止冻结期间不走）。
+    pub jump_cd: u16,
     /// 发弹相位计时器（M0-17 T4：取代旧 `shot_cd` 倒计时）：持 SHOT 逐帧 `wrapping_add(1)`，
     /// 松手清零；相位 3 解释器用**自增前**的值判 `shot_timer % interval == delay % interval`
     /// （先判后加——见 `world/player.rs::char0_update_shot` 钉死注记 + 判别测试
@@ -66,8 +73,6 @@ pub struct PlayerState {
     pub power: u16,
     pub lives: u8,
     pub bombs: u8,
-    /// 时间停止的剩余次数（自机能力刀）。
-    pub time_stops: u8,
     pub life_pieces: u8,
     pub bomb_pieces: u8,
     pub score: u64,
@@ -78,6 +83,9 @@ pub struct PlayerState {
     /// 续关次数（壳子刀 2026-09-11）：`try_continue` 饱和加一；`== 0` 通关 = 不续关通关
     /// （策划案 4.7 的 EX 解锁判据）。东方惯例续关后 `score = continues`。
     pub continues: u8,
+    /// 偏差值 = 本局死亡次数（玩法刀，gameplay-design §3）。纯叙事计数，不进任何战斗数值；
+    /// `commit_death` 与 `rewind_landed` 各加一（前者在死分支、后者在恢复出的世界），续关不清。
+    pub deaths: u8,
 }
 
 /// 开局装备面（整局流程刀 spec §2.2/§3）——回放/握手身份组成部分之一
@@ -90,18 +98,16 @@ pub struct Loadout {
     pub power: u16,
     pub lives: u8,
     pub bombs: u8,
-    pub time_stops: u8,
 }
 
 impl Default for Loadout {
-    /// 正典默认 = 机体0/0火力/3残/3雷/1时停——`PlayerState::spawn` 的硬编码收编为此单一来源。
+    /// 正典默认 = 机体0/0火力/3残/2停止——`PlayerState::spawn` 的硬编码收编为此单一来源。
     fn default() -> Self {
         Loadout {
             character: 0,
             power: 0,
             lives: 3,
-            bombs: 3,
-            time_stops: 1,
+            bombs: 2,
         }
     }
 }
@@ -124,15 +130,14 @@ impl PlayerState {
             life_state: LIFE_ALIVE,
             state_timer: 0,
             invuln: 0,
-            bomb_phase: 0,
-            bomb_timer: 0,
+            jump_cd: 0,
             hit_frame: 0,
             continues: 0,
+            deaths: 0,
             shot_timer: 0,
             power: ld.power,
             lives: ld.lives,
             bombs: ld.bombs,
-            time_stops: ld.time_stops,
             life_pieces: 0,
             bomb_pieces: 0,
             score: 0,
@@ -173,6 +178,11 @@ mod tests {
         assert_eq!(p.power_tier(), 4, "满火力 4 档");
         p.power = 999; // 越 POWER_MAX 的非常规直写（P4-b）
         assert_eq!(p.power_tier(), 4, "越界火力钳到满档，不越 sets 表界");
+    }
+
+    #[test]
+    fn default_loadout_starts_with_two_stops() {
+        assert_eq!(Loadout::default().bombs, 2, "gameplay-design §1：初始 2");
     }
 
     /// 迁表回归（M0-17 T3）：`spawn` 判定/擦弹半径与 `TABLES_V0` 表值逐位相等——

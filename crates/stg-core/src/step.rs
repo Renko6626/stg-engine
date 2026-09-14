@@ -123,8 +123,7 @@ impl World {
         let p = &mut w.body.players[0];
         p.power = loadout.power.min(crate::items::POWER_MAX);
         p.lives = loadout.lives;
-        p.bombs = loadout.bombs;
-        p.time_stops = loadout.time_stops;
+        p.bombs = loadout.bombs.min(crate::player::STOP_STOCK_MAX);
         w.body.set_var(crate::consts::GVAR_RANK, rank);
         let root_idx = w.start_main(image)?;
         if let Some(ip) = landing {
@@ -2304,6 +2303,15 @@ mod tests {
         // （1035240→1035256；`World` 同步 1195040→1195056）。哨兵终于响了一次。四件套：
         // ① `copy_into` 走 `d.players = s.players` 自动；② checksum derive 全量入；③ 非池；
         // ④ SaveBytes derive 自动入档 ⇒ `ENGINE_VER` 18→19。
+        // 2026-09-14（玩法刀 Task 1）：`PlayerState` 删 `bomb_phase: u8`/`bomb_timer: u16`/
+        // `time_stops: u8`（逻辑 −4 B）——**实测 size_of 未变**（仍 72，释出的 4 B 变成
+        // 8 对齐 padding；D20 盲区的反向）。两值不变。四件套：① 整块 Copy 无需同步；
+        // ② checksum/④ SaveBytes derive 自动少这三字段 ⇒ wire format 变，`ENGINE_VER` 在
+        // 玩法刀 Task 6 统一 bump；③ 非池。
+        // 2026-09-14（玩法刀 Task 4/5）：`PlayerState` 加 `jump_cd: u16`（插在 `invuln` 后）、
+        // `deaths: u8`（追在 `continues` 后）——逻辑 +3 B，恰好落进 Task 1 释出的 padding，
+        // **实测 size_of 仍 72**，两值不变（D20 盲区，哨兵不响）。判别面改由
+        // `jump_cd_enters_the_checksum` / `deaths_enters_the_checksum` 两条押。四件套同 Task 1。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
         const EXPECTED: (usize, usize) = (1035256, 1195056);
@@ -2374,8 +2382,14 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            19,
-            "bump 必须是有意识决定(评审 + 改本测试)——18→19：壳子刀(2026-09-11)。\
+            20,
+            "bump 必须是有意识决定(评审 + 改本测试)——19→20：玩法刀(2026-09-14)。\
+             PlayerState 删 bomb_phase/bomb_timer/time_stops、加 jump_cd u16/deaths u8(存档 wire format 变);\
+             碰撞矩阵新增行 8 ROW_STOP_TOUCH(停止冻结中触碰消弹);号表 513 add_time_stops 退役;\
+             输入词表退役位 7 BTN_TIMESTOP / 位 9 BTN_REWIND(vocab_hash 变);生命态 LIFE_RESPAWNING=3 退役;\
+             WorldTables 删 CharacterCfg.bomb(TABLE_VERSION 5,content_hash 变);回放头 LOG_FILE_VER 2;\
+             行为:PIECES_PER_BOMB 5→4、默认停止库存 3→2、跳躍冷却 600、死亡帧 A 组跳过。\
+             ——前一次 18→19：壳子刀(2026-09-11)。\
              PlayerState.continues u8×2 进校验和/存档(PlayerState 64→72,World +16 B,\
              尺寸哨兵响)+ 输入词表新增 BTN_CONTINUE=10(位=0 等价旧行为,vocab_hash 变)。\
              ——前一次 17→18：壳子刀·转场协议修正(2026-09-07)。\
@@ -2655,7 +2669,7 @@ mod tests {
         );
     }
 
-    /// 装备钳位:power 越 `POWER_MAX` 钳、lives/bombs 全域直收(u8 无上限常量);
+    /// 装备钳位:power 越 `POWER_MAX` 钳、bombs 越 `STOP_STOCK_MAX` 钳(玩法刀)、lives 全域直收;
     /// score/graze 仍出场默认 0(装备面不碰这两个字段)。
     #[test]
     fn new_game_at_applies_loadout_with_clamp() {
@@ -2664,14 +2678,17 @@ mod tests {
             character: 0,
             power: 9999,
             lives: 8,
-            bombs: 1,
-            ..crate::player::Loadout::default()
+            bombs: 9,
         };
         let w = World::new_game_at(7, 2, 0, loadout, &image).expect("new_game_at");
         let p = &w.body.players[0];
         assert_eq!(p.power, crate::items::POWER_MAX, "power 钳到 POWER_MAX");
         assert_eq!(p.lives, 8, "lives 全域直收");
-        assert_eq!(p.bombs, 1, "bombs 全域直收");
+        assert_eq!(
+            p.bombs,
+            crate::player::STOP_STOCK_MAX,
+            "bombs 钳到停止库存上限"
+        );
         assert_eq!(p.score, 0);
         assert_eq!(p.graze, 0);
     }
@@ -2897,8 +2914,8 @@ mod tests {
                 args: [77, 0],
             }],
         );
-        // 相位 9 负载：一颗提前标好 `BULLET_CLEARED` 的弹——冻 C 时这一枪不该被收走，
-        // 解冻后应立刻被清掉。
+        // 相位 9 负载：一颗提前标好 `BULLET_CLEARED` 的弹——玩法刀起冻 C（停止）时冻结分支
+        // 首帧即收，C 未冻时同样当帧收。
         let cleared_h = crate::world::test_support::bullet_at(&mut w, 300, 100);
         let cleared_i = w.body.bullets.get(cleared_h).unwrap();
         w.body.bullets.flags[cleared_i] |= crate::bullets::BULLET_CLEARED;
@@ -2931,6 +2948,12 @@ mod tests {
     #[test]
     fn full_freeze_changes_nothing_but_the_always_running_fields() {
         let mut w = busy_world();
+        // 玩法刀：冻结分支会在首帧回收已清除弹（`cleanup_stop_touched`，由
+        // `frozen_cleanup_only_recycles_cleared_bullets` 单独押）。本条押的是「无触碰、无待收弹
+        // 时整块逐位不变」，故先抹掉 busy_world 预置的清除标记；自机在 (0,384)，场上弹都不压身。
+        for i in 0..crate::bullets::BulletPool::CAP {
+            w.body.bullets.flags[i] &= !crate::bullets::BULLET_CLEARED;
+        }
         let mut before = World::new(0);
         w.copy_into(&mut before);
 
@@ -3008,8 +3031,8 @@ mod tests {
             "相位 4 门禁：变换游标不得推进"
         );
         assert!(
-            w.body.bullets.is_alive(cleared_i),
-            "相位 9 门禁：已标记清除的弹冻结期间不得被回收"
+            !w.body.bullets.is_alive(cleared_i),
+            "相位 9 冻结分支（玩法刀）：已标记清除的弹冻结期间即回收"
         );
     }
 
@@ -3093,6 +3116,61 @@ mod tests {
             crate::player::LIFE_ALIVE,
             "冻 C 时相位 6/7 不跑，重合也不该判中弹"
         );
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            0,
+            "玩法刀：压在身上的冻弹被触碰消掉"
+        );
+    }
+
+    /// 触碰几何判别（玩法刀 spec §2.4）：弹心距 == `br + hit_radius` 恰好碰到 → 消 +10；
+    /// 多 1 raw → 不碰。圆心重合式摆法对半径映射是瞎的（M0-7 教训），故两颗弹一左一右卡在
+    /// 边界两侧。
+    #[test]
+    fn stop_touch_clears_exactly_at_contact_distance_and_scores() {
+        let mut w = World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        let sum = (w.body.players[0].hit_radius + Fx::from_int(2)).raw();
+        let a = crate::world::test_support::bullet_at(&mut w, 0, 384);
+        let b = crate::world::test_support::bullet_at(&mut w, 0, 384);
+        let (ai, bi) = (
+            w.body.bullets.get(a).unwrap(),
+            w.body.bullets.get(b).unwrap(),
+        );
+        w.body.bullets.x[ai] = Fx::from_raw(sum);
+        w.body.bullets.x[bi] = Fx::from_raw(-(sum + 1));
+        let score0 = w.body.players[0].score;
+        // 行 8 不看 invuln（spec §2.4）：带着遡行落地无敌帧照样触碰消弹（复审 Important 2）。
+        w.body.players[0].invuln = crate::player::REWIND_INVULN;
+        w.body.freeze_left = [10, 0];
+        step_empty(&mut w);
+        assert!(w.body.bullets.get(a).is_none(), "恰好相切：被消且当帧回收");
+        assert!(w.body.bullets.get(b).is_some(), "差 1 raw：不碰");
+        assert_eq!(
+            w.body.players[0].score,
+            score0 + crate::player::STOP_TOUCH_SCORE,
+            "每弹 +10"
+        );
+        let v = w.body.vanished();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].reason, crate::events::VANISH_CLEARED);
+        assert_eq!(v[0].x, Fx::from_raw(sum), "vanished 记被消那颗的位置");
+        assert_eq!(w.body.players[0].life_state, crate::player::LIFE_ALIVE);
+    }
+
+    /// delay 弹（未出生）不参与触碰——与行 1 同口径。
+    #[test]
+    fn stop_touch_skips_delay_bullets() {
+        let mut w = World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        let h = crate::world::test_support::bullet_at(&mut w, 0, 384);
+        let i = w.body.bullets.get(h).unwrap();
+        w.body.bullets.delay[i] = 5;
+        w.body.freeze_left = [10, 0];
+        step_empty(&mut w);
+        assert!(w.body.bullets.get(h).is_some());
     }
 
     /// 背景停滞不是"什么都不做"就有的：背景由 `frame − bg_phase_frame` 驱动而 frame 恒增，
