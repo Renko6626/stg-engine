@@ -147,7 +147,7 @@ crates/
                      /boss_ui 自动喂；模式随卡生死靠 spell_bound+epoch；控制归脚本，2026-07-24）
     src/world.rs     WorldBody 字段所有权 + 写 API + 读口(frame/frame_events/take_requests/rand_range
                      /表现锚点四读口 bgm_id·bg_id·bg_phase·bg_phase_frame) + push_* + PhaseGuard + 场界常量(pub)
-    src/world/       【模块结构镜像相位骨架】player(相1+3，shottype 表驱动发弹) / transform(相4)
+    src/world/       【模块结构镜像相位骨架】player(相1+3，shottype 发弹 / 停止 / 跳躍冷却 / 死亡即遡行) / transform(相4)
                      / integrate(相5) / collide(相6) / settle(相7) / cleanup(相9) / motion(D3 运动写 API)
                      / view(通道 A `WorldView` 零拷贝只读视图)
     src/ecl/         【M1】栈机 VM：task(协程池 256) / ops(op 表+ARITY) / vm(解释核+相2调度租户)
@@ -223,7 +223,7 @@ cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 
   全部落地——headless 可玩可验证一整段 demo 局（杂兵段 → 风铃卡 boss 战 → 挂牌结算）。
 - **M3 ✅**（2026-09-07，**时间机制内核刀**——原「环形快照 + 输入扰动 harness」按策划案
   `docs/setting.md` 重定义，联机回滚是附带收益）`stg_core::timeline`（快照环 +
-  遡行兑现 + 影子世界 + `InputLog` 回放）+ 核内 `LIFE_JUMPING` 缺席态/`BTN_JUMP`/`BTN_REWIND`
+  遡行兑现 + 影子世界 + `InputLog` 回放）+ 核内 `LIFE_JUMPING` 缺席态/`BTN_JUMP`/`BTN_REWIND`（玩法刀 2026-09-14 退役：死亡即遡行）
   + 桥 `preview`/`view_ring`/`replay_bytes` + 壳 観測/跳躍/遡行状态机；harness `replay` 闸。
   spec `docs/superpowers/specs/2026-09-07-timeline-observe-jump-rewind-design.md`。
 - **M4** `stg-net`（UDP + 会话/重同步）—— **phase 2 起点**。

@@ -197,4 +197,17 @@ A 组调用序：`try_jump` → `try_stop` → `move_player` → 发弹（`try_r
 
 ## 10. 实施偏差记录
 
-（收口时填）
+| # | spec / plan 原文 | 实际 | 理由 |
+|---|---|---|---|
+| a | 删 `attract_all_items` | 保留 | 它是 `pub fn`，无 dead_code 警告；删它是无关 API 收缩 |
+| b | 回放闸 1400 次推进 / 跳 ≥2 | 500 次 / 跳 ≥1 | 冷却 600 下凑两跳要 1400 次，单测 38 s（每次存环 + 全量校验和）；跳 1 次已覆盖混合回放 |
+| c | `full_freeze_changes_nothing…` 挪自机 | 先抹 busy_world 预置的 `BULLET_CLEARED` | 红因是冻结分支首帧收已清除弹（spec 行为），不是触碰；性质改押「无触碰无待收弹时逐位不变」 |
+| d | §4.3 落地只重算代价 | 落点快照在决死窗口时另拨回 ALIVE、清 `state_timer` | 核心复审 Important：`seal_history`/窗口内读档后落点仍在窗口 ⇒ 连环遡行至 GAMEOVER（已复现） |
+| e | §4.2 `commit_death` 后 A 组照跑 | 死亡帧 A 组整段跳过 | 复审 Minor：无 timeline 宿主同帧按 X 会扣命后再扣停止；deathstop 有效窗口因 C 组先于 A 组为 7 帧（旧代码即如此） |
+| f | 目验沿用 3 命 | `--shots` 下 9 命 + 每次落地左右交替闪 40 帧 + GAME OVER 响亮退出 | 落点 = 被弹前 30 帧且落地无敌 30 帧、脚本输入按帧号固定 ⇒ 确定性连死，停在 GAME OVER 页挂到超时 |
+| g | 2P 多请求 | 未处理，记 follow-ups **F25** | 同帧双死只认领一条，第二人代价被快照抹掉；现无 2P 内容 |
+
+实测：`ENGINE_VER` 20；金向量 md5 `15a5167cfadd7e8a4c835b26bc5e8b92`（段一自帧 0 起变，段二逐字节不变——T6 时的
+`680fb23e…` 被 e 条再改一次）；词表指纹 `0xFE04_C7CD_7FE1_0485`；`PlayerState` `size_of` 全程 72（三删两加全被
+padding 吸收，尺寸哨兵未响，靠两条「改值⇒校验和变」测试押）；测试 核 673 + 编译器 327 + 桥 17 + harness 47；
+storm ✔、verify-tables ✔、两冒烟 SMOKE OK、`--shots` 有头目验 11 张（含 `stop_t*`/`rewind_land`/`boss`）exit 0。
