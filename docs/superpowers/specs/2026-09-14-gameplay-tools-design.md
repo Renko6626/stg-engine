@@ -39,7 +39,10 @@ A 组调用序：`try_jump` → `try_stop` → `move_player` → 发弹（`try_r
 ### 2.3 删除清单
 
 - `world/player.rs`：`try_bomb`、`try_time_stop`、C 组 bomb 计时段。
-- `player.rs`：`PlayerState.bomb_phase`/`bomb_timer`/`time_stops`；`Loadout.time_stops`。
+- `player.rs`：`PlayerState.bomb_phase`/`bomb_timer`/`time_stops`；`Loadout.time_stops`
+  （连带 `timeline.rs` 回放头少 1 字节 ⇒ `LOG_FILE_VER` 1 → 2）。
+- `WorldBody::attract_all_items`：唯一生产调用方是 `try_bomb`，随之删（含 API 测试）；
+  follow-ups C12⑤ 里「`attract_all_items` 未进 ECL」一句同步删。
 - `tables.rs`：`BombCfg`/`BombField`/`BombOrigin`、`CharacterCfg.bomb`、其字节编解码与校验；
   表格式 version bump，`tables_v0.bin` 重烘（`bake-tables` → `verify-tables`）。
 - `spell.rs`：资格轮询去掉 `bomb_phase != 0` 一支（只剩 `life_state != ALIVE`）。
@@ -103,7 +106,7 @@ A 组调用序：`try_jump` → `try_stop` → `move_player` → 发弹（`try_r
 `Timeline::advance` 认领逻辑**一行不改**（恢复 `hit_frame − REWIND_DEPTH` 快照 → `rewind_landed`
 → 覆写环槽 → 截 log → 记 cut）。
 
-### 4.3 落地 `rewind_landed(i)`（签名不变 ⇒ `Cut`/`InputLog` 字节格式 v1 不变、`Playback` 不变）
+### 4.3 落地 `rewind_landed(i)`（签名不变 ⇒ `Cut` 结构与 `Playback` 不变；`InputLog` 仅因 §2.3 删 `Loadout.time_stops` 而 `LOG_FILE_VER` 1→2）
 
 快照是被弹前 30 帧的世界，残机/偏差值/符卡资格都是旧值——**代价全部在落地侧重算**：
 
