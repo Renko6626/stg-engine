@@ -188,6 +188,12 @@ impl TaskPool {
         None
     }
 
+    /// spawn 之后把实参写进新任务 `locals[0..args.len())`（`OP_SPAWN` 与 `spawn_enemy` 共用，
+    /// boss 换段刀）。新槽 locals 已由 [`Self::spawn`] 全零初始化，`args` 为空时 no-op。
+    pub(crate) fn write_args(&mut self, idx: u16, args: &[i32]) {
+        self.slots[idx as usize].locals[..args.len()].copy_from_slice(args);
+    }
+
     /// 按索引释放（清 alive 位 + 顺手清空存活子任务的 `parent` 引用）；越界属引擎 bug
     /// （P4-c debug 断言，release no-op）。
     ///

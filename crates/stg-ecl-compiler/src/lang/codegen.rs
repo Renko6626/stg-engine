@@ -467,7 +467,7 @@ impl<'p> Gen<'p> {
                 for a in &call.args {
                     match a {
                         CallArg::Val(e) => self.gen_expr(b, slots, e),
-                        CallArg::XformRef(_) | CallArg::SubRef(_) => {
+                        CallArg::XformRef(_) | CallArg::SubRef(_) | CallArg::SubRefArgs(..) => {
                             unreachable!("spawn 目标是 sub，参数恒 Val（typeck 已保证）")
                         }
                     }
@@ -697,7 +697,7 @@ impl<'p> Gen<'p> {
                             self.gen_expr(b, slots, e);
                             b.pop_l(param_slots[i]);
                         }
-                        CallArg::XformRef(_) | CallArg::SubRef(_) => {
+                        CallArg::XformRef(_) | CallArg::SubRef(_) | CallArg::SubRefArgs(..) => {
                             unreachable!("sub 调用参数恒 Val（typeck 已保证）")
                         }
                     }
@@ -762,12 +762,22 @@ impl<'p> Gen<'p> {
                         b.push_i(0);
                     }
                 },
-                (CallArg::SubRef(name_opt), ParamKind::SubRef) => match name_opt {
-                    Some(name) => {
-                        b.push_task_ref(Some(self.name_to_ref[name]));
+                (CallArg::SubRef(name_opt), ParamKind::SubRef) => {
+                    match name_opt {
+                        Some(name) => b.push_task_ref(Some(self.name_to_ref[name])),
+                        None => b.push_task_ref(None),
                     }
-                    None => b.push_task_ref(None),
-                },
+                    if bi.name == "spawn_enemy" {
+                        b.push_i(0); // argc = 0（syscall 210 调用约定，boss 换段刀）
+                    }
+                }
+                (CallArg::SubRefArgs(name, exprs), ParamKind::SubRef) => {
+                    b.push_task_ref(Some(self.name_to_ref[name]));
+                    for e in exprs {
+                        self.gen_expr(b, slots, e);
+                    }
+                    b.push_i(exprs.len() as i32); // argc（syscall 210 调用约定）
+                }
                 _ => unreachable!("typeck 已保证 CallArg 与 ParamKind 一一对应"),
             }
             i += 1;

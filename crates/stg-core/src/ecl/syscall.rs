@@ -106,6 +106,11 @@ pub const SYS_CREATE_BULLETS_BATCH: u16 = 201;
 /// v1 直参 5 个：`x, y, hp, drop_table, score`（appearance 敌表后补，见 follow-ups）；
 /// A5 乙案尾追 `sprite, task_script`。押**打包敌号**（[`pack_enemy_handle`]：含
 /// generation，恒非负）；池满 → **-1**。
+///
+/// **boss 换段刀（2026-09-14）调用约定变更**：压栈序追加实参与个数——
+/// `x, y, hp, drop_table, score, sprite, task_script, arg0 … arg(n−1), argc`（无参时 `argc = 0`）。
+/// 门禁全部先于建敌：argc 越 `[0, LOCALS]` 或栈不够 `argc + 7` → Fault(2)；task 为 none 却带参、
+/// 或 task sub 不在册 / 非 Async / 形参个数 ≠ argc → Fault(0)。实参写进新任务 `locals[0..argc)`。
 pub const SYS_SPAWN_ENEMY: u16 = 210;
 /// 3 参：`x, y, item_type`。
 pub const SYS_DROP_ITEM: u16 = 220;
@@ -1716,6 +1721,19 @@ fn sys_create_bullets_batch(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> 
 /// 零副作用，敌未建）；`main_task` 在敌句柄产出**之后**回填（任务的 owner 三元组需要敌
 /// index/gen，敌必须先于任务存在）；`death_script` 仍恒 0（脚本面缺口留 follow-ups）。
 fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    // boss 换段刀 spec §4.2：压栈序 `x,y,hp,drop,score,sprite,task_script, arg0..arg(n-1), argc`。
+    // 门禁全部先于建敌（任一门不过都零副作用）；argc/栈深口径同 `OP_SPAWN`。
+    let argc = usize::try_from(pop(task)?)
+        .ok()
+        .filter(|&n| n <= LOCALS)
+        .ok_or(FAULT_STACK)?;
+    if (task.sp as usize) < argc + 7 {
+        return Err(FAULT_STACK);
+    }
+    let mut args = [0i32; LOCALS];
+    for k in (0..argc).rev() {
+        args[k] = pop(task)?;
+    }
     let task_script = pop(task)?;
     let sprite = pop(task)?;
     let score = pop(task)?;
@@ -1724,15 +1742,19 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let y_raw = pop(task)?;
     let x_raw = pop(task)?;
 
-    // task 号先验后建（镜像 sys_create_bullet：坏号 FAULT_BAD_OP，敌未建；Async+零参白名单）。
+    // task 号先验后建（镜像 sys_create_bullet：坏号 FAULT_BAD_OP，敌未建）：在册 + Async +
+    // 形参个数 == argc；none 不许带参。
     let task_sub: Option<SubId> = if task_script >= 0 {
         let raw = u16::try_from(task_script).map_err(|_| FAULT_BAD_OP)?;
         let sub = ctx.ecl.sub_id(raw).ok_or(FAULT_BAD_OP)?;
         let meta = ctx.ecl.sub_meta(sub).ok_or(FAULT_BAD_OP)?;
-        if meta.kind() != SubKind::Async || ctx.ecl.param_types(sub).is_none_or(|p| !p.is_empty()) {
+        if meta.kind() != SubKind::Async || ctx.ecl.param_types(sub).is_none_or(|p| p.len() != argc)
+        {
             return Err(FAULT_BAD_OP);
         }
         Some(sub)
+    } else if argc > 0 {
+        return Err(FAULT_BAD_OP);
     } else {
         None
     };
@@ -1802,6 +1824,7 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
         let parent = ctx.self_index + 1;
         match ctx.tasks.spawn(sub, pc0, owner, parent, ctx.frame) {
             Some(slot) => {
+                ctx.tasks.write_args(slot, &args[..argc]);
                 ctx.body.enemies.main_task[handle.index as usize] = slot as u32 + 1;
             }
             None => {
@@ -3327,6 +3350,7 @@ mod tests {
             100,
             0,
             -1,
+            0, // argc（boss 换段刀：210 调用约定追加）
         ];
         assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
         let handle = task.stack[0];
@@ -3369,7 +3393,16 @@ mod tests {
                 "前提：开局 last_status 干净（表号 {bad}）"
             );
             // 正序：x,y,hp,drop_table,score,sprite,task(none=-1)
-            let args = [Fx::ZERO.raw(), Fx::from_int(80).raw(), 10, bad, 100, 0, -1];
+            let args = [
+                Fx::ZERO.raw(),
+                Fx::from_int(80).raw(),
+                10,
+                bad,
+                100,
+                0,
+                -1,
+                0,
+            ];
             assert!(
                 call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok(),
                 "越界表号不得 Fault（P4-b 降级，不是违约方的锅）"
@@ -3423,6 +3456,7 @@ mod tests {
             0,
             5,
             1,
+            0, // argc（boss 换段刀：210 调用约定追加）
         ];
         assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
         let eidx = enemy_slot(task.stack[0]) as u16;
@@ -3459,6 +3493,7 @@ mod tests {
             0,
             0,
             -1,
+            0, // argc（boss 换段刀：210 调用约定追加）
         ];
         assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
         let handle = task.stack[0];
@@ -3491,6 +3526,7 @@ mod tests {
             0,
             0,
             9999, // 不在册
+            0,    // argc（boss 换段刀：210 调用约定追加）
         ];
         let r = call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args);
         assert_eq!(r, Err(FAULT_BAD_OP));
@@ -3510,7 +3546,7 @@ mod tests {
         let mut w = World::new(1);
         let mut task = Task::default();
         // 正序参：x, y, hp, drop_table, score, sprite, task_script
-        let args = [0, 0, 100, 0, 0, 0, 65537]; // 65537 > u16::MAX，但截断后=1（在册）
+        let args = [0, 0, 100, 0, 0, 0, 65537, 0]; // 65537 > u16::MAX，但截断后=1（在册）
         let r = call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args);
         assert_eq!(r, Err(FAULT_BAD_OP));
         assert_eq!(
@@ -3528,7 +3564,7 @@ mod tests {
         let mut w = World::new(1);
         let mut task = Task::default();
         // 正序参：x, y, hp, drop_table, score, sprite, task_script
-        let args = [0, 0, 100, 0, 0, 0, 1]; // task_script=1，在册但 CallOnly
+        let args = [0, 0, 100, 0, 0, 0, 1, 0]; // task_script=1，在册但 CallOnly
         let r = call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args);
         assert_eq!(r, Err(FAULT_BAD_OP));
         assert_eq!(
@@ -3547,7 +3583,7 @@ mod tests {
         let mut w = World::new(1);
         let mut task = Task::default();
         // 正序参：x, y, hp, drop_table, score, sprite, task_script
-        let args = [0, 0, 100, 0, 0, 0, 1]; // task_script=1，在册、Async，但带参
+        let args = [0, 0, 100, 0, 0, 0, 1, 0]; // task_script=1，在册、Async，但带参
         let r = call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args);
         assert_eq!(r, Err(FAULT_BAD_OP));
         assert_eq!(
@@ -3590,6 +3626,7 @@ mod tests {
             0,
             0,
             1, // 在册但池满
+            0, // argc（boss 换段刀：210 调用约定追加）
         ];
         assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
         let handle = task.stack[0];
@@ -3634,6 +3671,7 @@ mod tests {
             0,
             0,
             1,
+            0, // argc（boss 换段刀：210 调用约定追加）
         ];
         assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
         let eidx = enemy_slot(task.stack[0]) as u16;
@@ -6796,6 +6834,7 @@ mod tests {
             100,
             0,
             -1,
+            0, // argc（boss 换段刀：210 调用约定追加）
         ];
         assert!(call(w, ecl, &mut t, SYS_SPAWN_ENEMY, &args).is_ok());
         t.stack[0]
@@ -7161,6 +7200,7 @@ mod tests {
             100,
             0,
             -1,
+            0, // argc（boss 换段刀：210 调用约定追加）
         ];
         assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
         let i = enemy_slot(task.stack[0]);
@@ -7397,5 +7437,68 @@ mod tests {
         assert!(call(&mut w2, &ecl, &mut stage2, SYS_CLEAR_BULLETS_AT, &args2).is_ok());
         let f2 = w2.body.fields.iter_alive().next().unwrap();
         assert_eq!(w2.body.fields.flags[f2], FIELD_CLEAR_BULLETS);
+    }
+
+    // ── boss 换段与敌人钩子刀 Task 4：spawn_enemy 带参（210 调用约定）──────────────
+
+    /// 1 参 Async sub（raw=1）的镜像——spawn_enemy 带参测试专用。
+    fn one_arg_async_image() -> EclImage {
+        use crate::ecl::image::EclValueType;
+        test_image(
+            vec![
+                crate::ecl::ops::OP_PUSHI as u32,
+                999,
+                crate::ecl::ops::OP_WAIT as u32,
+            ],
+            vec![
+                SubInit::new(0, SubKind::Root, vec![]),
+                SubInit::new(0, SubKind::Async, vec![EclValueType::Int]),
+            ],
+            vec![EntryInit::new("zako", 1)],
+            Some(0),
+        )
+    }
+
+    /// 带参生成（spec §4.2）：同一帧两只敌各拿自己的实参——globals 顶替做不到的判别腿。
+    #[test]
+    fn spawn_enemy_with_args_gives_each_task_its_own_args_same_frame() {
+        let ecl = one_arg_async_image();
+        let mut w = World::new(1);
+        let mut task = Task::default();
+        for v in [111, 222] {
+            let args = [0, Fx::from_int(80).raw(), 10, 0, 0, 0, 1, v, 1];
+            assert!(call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, &args).is_ok());
+        }
+        let got: Vec<i32> = (0..crate::ecl::task::TASK_CAP)
+            .filter(|&i| w.tasks.is_alive(i))
+            .map(|i| w.tasks.slots[i].locals[0])
+            .collect();
+        assert_eq!(got, vec![111, 222]);
+    }
+
+    /// 带参门禁：个数不符 / none 带参 → Fault(0) 且敌未建；argc 超 LOCALS 或栈不够 → Fault(2)。
+    #[test]
+    fn spawn_enemy_with_args_rejects_bad_arity_before_creating_enemy() {
+        let ecl = one_arg_async_image();
+        let cases: [(&[i32], u8); 4] = [
+            (&[0, 0, 10, 0, 0, 0, 1, 0], FAULT_BAD_OP), // 1 参 sub 给 0 参
+            (&[0, 0, 10, 0, 0, 0, -1, 7, 1], FAULT_BAD_OP), // none 带参
+            (&[0, 0, 10, 0, 0, 0, 1, 65], FAULT_STACK), // argc > LOCALS
+            (&[0, 0, 10, 0, 0, 0, 1, 3], FAULT_STACK),  // 栈里不够 argc+7
+        ];
+        for (args, fault) in cases {
+            let mut w = World::new(1);
+            let mut task = Task::default();
+            assert_eq!(
+                call(&mut w, &ecl, &mut task, SYS_SPAWN_ENEMY, args),
+                Err(fault),
+                "{args:?}"
+            );
+            assert_eq!(
+                w.body.enemies.iter_alive().count(),
+                0,
+                "{args:?}：敌不得建出"
+            );
+        }
     }
 }

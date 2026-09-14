@@ -1268,4 +1268,29 @@ sub main() {
             assert_eq!(view.diag().task_faults, 0);
         }
     }
+
+    /// 带参 spawn_enemy 端到端（boss 换段刀 spec §4）：同一帧生成两只，各自把实参写进
+    /// 不同 globals 槽；次帧首跑后两槽分别是各自的实参。
+    #[test]
+    fn spawn_enemy_with_args_end_to_end_same_frame() {
+        let src = "async sub zako(slot: int, v: int) {\n\
+                     set_global(slot, v);\n\
+                     loop { wait(1); }\n\
+                   }\n\
+                   sub main() {\n\
+                     _ = spawn_enemy(-50.0fx, 50.0fx, 10, 0, 0, 0, zako(20, 111));\n\
+                     _ = spawn_enemy(50.0fx, 50.0fx, 10, 0, 0, 0, zako(21, 222));\n\
+                     loop { wait(1); }\n\
+                   }";
+        let img = compile(src, "t.ecl").expect("应编译成功");
+        let t = &stg_core::tables::TABLES_V0;
+        let mut w = stg_core::step::World::new(1);
+        w.start_main(&img).expect("main 应能派生");
+        for f in 0..3 {
+            stg_core::step::step(&mut w, t, &img, &stg_core::input::InputFrame::empty(f));
+        }
+        let g = w.body.view().globals();
+        assert_eq!((g[20], g[21]), (111, 222));
+        assert_eq!(w.body.view().diag().task_faults, 0);
+    }
 }

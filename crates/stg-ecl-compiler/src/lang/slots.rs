@@ -254,6 +254,14 @@ fn call_args_depth(args: &[CallArg]) -> usize {
             CallArg::Val(t) => (expr_depth(t), 1),
             CallArg::XformRef(_) => (2, 2),
             CallArg::SubRef(_) => (1, 1),
+            // task 号 1 字 + 实参逐个驻留 + 末尾 argc 1 字（boss 换段刀，spawn_enemy 带参）。
+            CallArg::SubRefArgs(_, exprs) => {
+                let mut inner_peak = 1usize;
+                for (k, e) in exprs.iter().enumerate() {
+                    inner_peak = inner_peak.max(1 + k + expr_depth(e));
+                }
+                (inner_peak.max(exprs.len() + 2), exprs.len() + 2)
+            }
         };
         peak = peak.max(resident + d);
         resident += words;

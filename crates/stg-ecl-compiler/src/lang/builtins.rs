@@ -150,7 +150,7 @@ const BUILTINS: &[Builtin] = &[
             Sub,
         ],
         ret: Some(Int),
-        doc: "造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none(owner=新敌;敌死任务亡,任务跑完敌也亡——静默退场,不掉道具不发死亡事件);返敌号(不透明值,别猜数值/别做算术;两个敌号相等 ⇒ 同一只敌),失败 -1",
+        doc: "造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none,可写 name(实参…) 按签名带参(实参当帧求值拷进新任务 locals)(owner=新敌;敌死任务亡,任务跑完敌也亡——静默退场,不掉道具不发死亡事件);返敌号(不透明值,别猜数值/别做算术;两个敌号相等 ⇒ 同一只敌),失败 -1",
         param_names: &["x", "y", "hp", "drop_table", "score", "sprite", "task"],
     },
     Builtin {

@@ -23,6 +23,9 @@ pub enum CallArg {
     XformRef(Option<String>),
     /// `Some(name)` = 引用了该 sub；`None` = 字面量 `none`。
     SubRef(Option<String>),
+    /// `name(实参…)`：带参 sub 引用——**只由 `spawn_enemy` 的 task 位产生**（boss 换段刀 spec §4.1）。
+    /// 实参已按目标 async sub 签名判型；codegen 降低为「task 号, 实参…, argc」。
+    SubRefArgs(String, Vec<TypedExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,6 +163,6 @@ pub(crate) fn const_val(a: &CallArg) -> Option<i32> {
             TypedExprKind::IntLit(v) | TypedExprKind::ConstRef(v) => Some(*v),
             _ => None,
         },
-        CallArg::XformRef(_) | CallArg::SubRef(_) => None,
+        CallArg::XformRef(_) | CallArg::SubRef(_) | CallArg::SubRefArgs(..) => None,
     }
 }
