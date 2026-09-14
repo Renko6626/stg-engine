@@ -42,7 +42,7 @@ func _show_title() -> void:
 	flow = F.TITLE
 	play.set_shown(false)
 	menu.visible = true
-	menu.setup("東方時環譜", ["Start", "Practice", "Replay", "Quit"])
+	menu.setup("東方時環晷", ["Start", "Practice", "Replay", "Quit"])
 
 func _show_difficulty(mode: int, mark: int) -> void:
 	flow = F.DIFFICULTY

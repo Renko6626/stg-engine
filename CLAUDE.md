@@ -12,6 +12,8 @@ headless 高速模拟。核心性质是**确定性**——同一份 `(初始状�
 **权威设计文档（冲突时以后者为准）**：
 - `design_doc.md`（v0.3）—— 总纲：架构、断层线、确定性契约、ECL 层、网络、测试。
 - `stg-world-design.md`（v1.0）—— 世界层实施蓝图，经 20 轮评审拍板；与总纲冲突处以本文为准。
+- **玩法权威** `docs/gameplay-design.md`（2026-09-12 起）—— 三件时间工具规格 / 第 1 关 / 验证计划；
+  `docs/setting.md` 是设定集（世界观/剧情/美术/预算，原 `project_overview.md`），玩法冲突处以前者为准。
 
 ## 阶段优先级与 Phase 1 DoD
 
@@ -105,6 +107,11 @@ CLAUDE.md  README.md
 PROGRESS.md                      【进度入口】当前位置/下一步/里程碑史的唯一权威（milestone 收口必更）
 design_doc.md  stg-world-design.md   权威设计（勿轻改，改动过评审）
 docs/follow-ups.md               【接手先读】技术债与待办（复审判定可延后的，逐条核实过）
+docs/gameplay-design.md          【玩法权威】停止/観測→跳躍/死亡即遡行的数字规格 + 第 1 关可实施稿
+                     + 体验版验证计划 + 对 setting 的推翻清单 + 下一刀引擎改动入口（§10）
+docs/setting.md                  设定集（東方時環晷 世界观/剧情/Boss/美术/音乐/预算/合规；v0.5 原貌不回溯改）
+docs/architecture.md             一页架构地图（断层线/不变量/crate 表/相位流水线/接缝），构思下一步工程用
+docs/art-brief.md                美术交接包（画师直接看：风格圣经/咲夜·蕾米 brief/立绘与点阵规格/流程条款/验收），§9 内部备注交出去前删
 docs/superpowers/{specs,plans}/  brainstorm 产出的设计与实施计划（历史记录）
 docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
 docs/checksum-mechanism.md       校验和机制 + "新字段默认入校验" 保证
@@ -215,7 +222,7 @@ cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 
   表现契约 v2 刀 2026-09-07 改三层 + 敌人节点木偶 + fx 层，见 `docs/render-contract.md` §0/§7）
   全部落地——headless 可玩可验证一整段 demo 局（杂兵段 → 风铃卡 boss 战 → 挂牌结算）。
 - **M3 ✅**（2026-09-07，**时间机制内核刀**——原「环形快照 + 输入扰动 harness」按策划案
-  `docs/project_overview.md` 重定义，联机回滚是附带收益）`stg_core::timeline`（快照环 +
+  `docs/setting.md` 重定义，联机回滚是附带收益）`stg_core::timeline`（快照环 +
   遡行兑现 + 影子世界 + `InputLog` 回放）+ 核内 `LIFE_JUMPING` 缺席态/`BTN_JUMP`/`BTN_REWIND`
   + 桥 `preview`/`view_ring`/`replay_bytes` + 壳 観測/跳躍/遡行状态机；harness `replay` 闸。
   spec `docs/superpowers/specs/2026-09-07-timeline-observe-jump-rewind-design.md`。
