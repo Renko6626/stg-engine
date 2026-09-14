@@ -140,9 +140,6 @@ define_actions! {
     /// 観測（未来预览）**不进世界**——它是宿主侧影子世界的纯表现，两次按键协议由宿主管，
     /// 宿主只在第二下把本位送进来一帧。
     BTN_JUMP = 8, Edge;
-    /// 遡行请求（沿触发；消费者：`world/player.rs::try_rewind`）。只在决死窗口内被响应，
-    /// 世界只发 `EVT_REWIND_REQUESTED`，兑现归 `stg_core::timeline`。
-    BTN_REWIND = 9, Edge;
     /// 续关（沿触发；消费者：`world/player.rs::try_continue`）。壳子刀 2026-09-11：只在
     /// `LIFE_GAMEOVER` 下响应，世界内做续关（残机回默认、分数 = 续关次数、重生），可回放。
     BTN_CONTINUE = 10, Edge;
@@ -209,11 +206,11 @@ mod tests {
         assert_eq!(BTN_SLOW, 1 << 6);
         // 位 7 退役（旧 BTN_TIMESTOP，玩法刀）：不复用
         assert_eq!(BTN_JUMP, 1 << 8);
-        assert_eq!(BTN_REWIND, 1 << 9);
+        // 位 9 退役（旧 BTN_REWIND，玩法刀：死亡即遡行）：不复用
         assert_eq!(BTN_CONTINUE, 1 << 10);
     }
 
-    /// 容量哨兵可观测面：词表当前最高位 = 9（BTN_REWIND），且在 u32 容器内。
+    /// 容量哨兵可观测面：词表当前最高位 = 10（BTN_CONTINUE），且在 u32 容器内。
     /// （溢出情形无法用运行时测试压——那是编译失败，由宏内 const 断言把守。）
     #[test]
     fn max_bit_used_pinned() {
@@ -224,13 +221,13 @@ mod tests {
     /// `EDGE_MASK` = 全部沿触发位的并集；当前词表中 BOMB / TIMESTOP / JUMP / REWIND 是沿语义。
     #[test]
     fn edge_mask_is_exactly_the_edge_actions() {
-        assert_eq!(EDGE_MASK, BTN_BOMB | BTN_JUMP | BTN_REWIND | BTN_CONTINUE);
+        assert_eq!(EDGE_MASK, BTN_BOMB | BTN_JUMP | BTN_CONTINUE);
     }
 
     /// ACTIONS 描述表与位常量逐项一致（表即地图：名字/位/语义三列齐全、顺序按位号）。
     #[test]
     fn actions_table_matches_constants() {
-        let expected: [(&str, u32, ActionKind); 10] = [
+        let expected: [(&str, u32, ActionKind); 9] = [
             ("BTN_UP", BTN_UP, ActionKind::Level),
             ("BTN_DOWN", BTN_DOWN, ActionKind::Level),
             ("BTN_LEFT", BTN_LEFT, ActionKind::Level),
@@ -239,7 +236,6 @@ mod tests {
             ("BTN_BOMB", BTN_BOMB, ActionKind::Edge),
             ("BTN_SLOW", BTN_SLOW, ActionKind::Level),
             ("BTN_JUMP", BTN_JUMP, ActionKind::Edge),
-            ("BTN_REWIND", BTN_REWIND, ActionKind::Edge),
             ("BTN_CONTINUE", BTN_CONTINUE, ActionKind::Edge),
         ];
         assert_eq!(ACTIONS.len(), expected.len());
@@ -256,7 +252,7 @@ mod tests {
     fn vocab_hash_pinned() {
         // 壳子刀：加 BTN_CONTINUE=10（Edge），指纹随之变化（实测值，非手算）。
         // 前一次：时间机制内核刀加 BTN_JUMP=8 / BTN_REWIND=9 → 0x6433_59C3_B41F_121D。
-        // 玩法刀：删 BTN_TIMESTOP=7 → 0xD90F_AC2E_B23E_3A64；前一次壳子刀 0x0786_DE58_5E72_3383。
-        assert_eq!(actions_vocab_hash(), 0xD90F_AC2E_B23E_3A64); // 词表变更须有意识地更新此值
+        // 玩法刀：删 BTN_TIMESTOP=7 与 BTN_REWIND=9 → 0xFE04_C7CD_7FE1_0485；前一次壳子刀 0x0786_DE58_5E72_3383。
+        assert_eq!(actions_vocab_hash(), 0xFE04_C7CD_7FE1_0485); // 词表变更须有意识地更新此值
     }
 }

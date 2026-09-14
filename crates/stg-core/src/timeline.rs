@@ -2,7 +2,7 @@
 //! `docs/superpowers/specs/2026-09-07-timeline-observe-jump-rewind-design.md` §3）。
 //!
 //! 住 `step.rs` 同层（组装层之上）：快照环 + 遡行兑现 + 影子世界（観測）+ 输入日志/回放。
-//! **World 对它无知**（P1/P5）——世界侧只有 `try_rewind` 发请求、`rewind_landed` 收落地两个口，
+//! **World 对它无知**（P1/P5）——世界侧只有 `commit_death` 发请求、`rewind_landed` 收落地两个口，
 //! 本模块是那条请求的唯一认领者。无浮点、无 Godot、无时钟，harness 与桥共用。
 //!
 //! 三条基石（spec §1）：
@@ -718,7 +718,6 @@ impl InputLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::BTN_REWIND;
     use crate::math::Fx;
     use crate::player::{
         DEATHBOMB_WINDOW, JUMP_FRAMES, LIFE_ALIVE, LIFE_DEATHWINDOW, LIFE_JUMPING, REWIND_INVULN,
@@ -763,6 +762,17 @@ mod tests {
             t.world.body.players[0].y.raw() >> 16,
         );
         bullet_at(&mut t.world, x, y);
+    }
+
+    /// 中弹后空跑到决死窗口耗尽 → 返回 (请求帧, 遡行 cut)（玩法刀：死亡即遡行，无遡行键）。
+    fn die_and_rewind(t: &mut Timeline) -> (u32, Cut) {
+        for _ in 0..=DEATHBOMB_WINDOW {
+            let at = t.frame() + 1;
+            if let Some(c) = t.advance(&InputFrame::empty(0)).rewound {
+                return (at, c);
+            }
+        }
+        panic!("决死窗口耗尽必须遡行");
     }
 
     // ── 环 ──
@@ -923,16 +933,12 @@ mod tests {
         }
         let expect_to = 40 - REWIND_DEPTH;
         let snap_sum = t.ring_get(expect_to).unwrap().checksum();
+        let snap_lives = t.ring_get(expect_to).unwrap().body.players[0].lives;
         plant_hit(&mut t);
         t.advance(&InputFrame::empty(0)); // 帧 40 内中弹 → hit_frame=40
         assert_eq!(t.world().body.players[0].life_state, LIFE_DEATHWINDOW);
         assert_eq!(t.world().body.players[0].hit_frame, 40);
-        for _ in 0..2 {
-            t.advance(&InputFrame::empty(0));
-        }
-        let at = t.frame() + 1;
-        let adv = t.advance(&keys(BTN_REWIND));
-        let cut = adv.rewound.expect("必须遡行");
+        let (at, cut) = die_and_rewind(&mut t);
         assert_eq!(
             cut,
             Cut {
@@ -944,14 +950,28 @@ mod tests {
         assert_eq!(t.frame(), expect_to);
         assert_eq!(t.world().body.players[0].life_state, LIFE_ALIVE);
         assert_eq!(t.world().body.players[0].invuln, REWIND_INVULN);
-        // 落地写 = 快照 + invuln：把 invuln 还原后校验和须等于原快照
+        assert_eq!(
+            t.world().body.players[0].lives,
+            snap_lives - 1,
+            "残机从快照 −1"
+        );
+        assert_eq!(t.world().body.players[0].deaths, 1);
+        // 落地写 = 快照 + invuln/残机/偏差值：三者还原后校验和须等于原快照
         let mut probe = World::new(0);
         t.world().copy_into(&mut probe);
         probe.body.players[0].invuln = 0;
+        probe.body.players[0].lives += 1;
+        probe.body.players[0].deaths -= 1;
         assert_eq!(probe.checksum(), snap_sum, "恢复的是环里那一帧");
         assert_eq!(t.ring.newest(), Some(expect_to));
         assert!(t.ring_get(expect_to + 1).is_none(), "比落点新的槽作废");
-        assert_eq!(t.ring.oldest(), Some(0), "最老一帧不受作废槽影响");
+        // 请求帧 at 已存进环（死亡即遡行：窗口耗尽才请求，at=49 已超环深 48）——最老一帧
+        // 由请求帧决定，不受落地后作废槽影响。
+        assert_eq!(
+            t.ring.oldest(),
+            Some(at.saturating_sub(RING_DEPTH as u32 - 1)),
+            "最老一帧不受作废槽影响"
+        );
         let g = t
             .ring_get_discarded(at - 1)
             .expect("被丢弃分支在下一次 advance 前仍可倒放");
@@ -988,12 +1008,14 @@ mod tests {
         }
         plant_hit(&mut t);
         t.advance(&InputFrame::empty(0));
-        let adv = t.advance(&keys(BTN_REWIND));
-        assert_eq!(adv.rewound.map(|c| c.to), Some(0));
+        let (_, cut) = die_and_rewind(&mut t);
+        assert_eq!(cut.to, 0);
         assert_eq!(t.frame(), 0);
         let mut probe = World::new(0);
         t.world().copy_into(&mut probe);
         probe.body.players[0].invuln = 0;
+        probe.body.players[0].lives += 1;
+        probe.body.players[0].deaths -= 1;
         assert_eq!(probe.checksum(), init_sum);
     }
 
@@ -1012,22 +1034,53 @@ mod tests {
         }
         plant_hit(&mut t);
         t.advance(&InputFrame::empty(0)); // hit_frame = 55 → 想退到 25，钳到 50
-        let adv = t.advance(&keys(BTN_REWIND));
-        assert_eq!(adv.rewound.map(|c| c.to), Some(50));
+        let (_, cut) = die_and_rewind(&mut t);
+        assert_eq!(cut.to, 50);
         assert_eq!(t.log().frames.len(), 50, "log 仍是从头的线性历史");
     }
 
-    /// 决死窗口耗尽（没按遡行）→ 正常死亡，timeline 不插手。
+    /// 最后一条命：窗口耗尽 → GAMEOVER，timeline 不遡行（玩法刀 spec §4.2 ②）。
     #[test]
-    fn no_request_means_no_rewind() {
+    fn last_life_death_is_gameover_without_rewind() {
         let mut t = bare(7);
+        t.world.body.players[0].lives = 1;
         plant_hit(&mut t);
         t.advance(&InputFrame::empty(0));
-        let lives0 = t.world().body.players[0].lives;
         for _ in 0..DEATHBOMB_WINDOW {
             assert!(t.advance(&InputFrame::empty(0)).rewound.is_none());
         }
-        assert_eq!(t.world().body.players[0].lives, lives0 - 1);
+        assert_eq!(
+            t.world().body.players[0].life_state,
+            crate::player::LIFE_GAMEOVER
+        );
+        assert_eq!(t.world().body.players[0].deaths, 1);
+    }
+
+    /// 落地代价从快照重算 + 符卡失格 + 残机下限 1 的边缘（快照残机 1、死分支里奖命到 2 再死）。
+    #[test]
+    fn landing_recomputes_the_cost_from_the_snapshot() {
+        let mut t = bare(16);
+        let boss = crate::world::test_support::spawn_enemy(&mut t.world, 0, 100, 1000);
+        assert!(
+            t.world
+                .body
+                .spell_begin_internal(0, boss, 1, 3000, 1000, 0, 100)
+        );
+        t.world.body.players[0].lives = 1;
+        t.ring.push(&t.world);
+        while t.frame() < 40 {
+            t.advance(&InputFrame::empty(0));
+        }
+        t.world.body.players[0].lives = 2; // 死分支里「吃到奖命」（带外写，同 plant_hit）
+        plant_hit(&mut t);
+        t.advance(&InputFrame::empty(0));
+        let (_, cut) = die_and_rewind(&mut t);
+        assert_eq!(cut.to, 40 - REWIND_DEPTH);
+        let p = t.world().body.players[0];
+        assert_eq!(p.life_state, LIFE_ALIVE);
+        assert_eq!(p.lives, 1, "快照残机 1 − 1 → 钳 1");
+        assert_eq!(p.deaths, 1);
+        assert_eq!(t.world().body.spells[0].capture_ok, 0, "落地作废资格");
     }
 
     // ── 回放闸 ──
@@ -1045,6 +1098,8 @@ mod tests {
                 let (dx, dy) = crate::math::polar_to_vec(Fx::from_int(24), ang);
                 bullet_at(&mut t.world, dx.raw() >> 16, 384 + (dy.raw() >> 16));
             }
+            // 死亡即遡行（玩法刀）：给足命，免得随机走位打到 GAMEOVER
+            t.world.body.players[0].lives = 200;
             // 构造后的世界才是"初始状态"：环首帧要重存，否则环里是空场
             t.ring.push(&t.world);
             t
@@ -1054,7 +1109,7 @@ mod tests {
         let mut stream: Vec<(u32, u64)> = Vec::new(); // (frame, checksum) 只记存活下来的
         let mut rewinds = 0;
         let mut jumps = 0;
-        for _ in 0..400 {
+        for _ in 0..1400 {
             let st = live.world().body.players[0].life_state;
             let mut b = match rng.rand_range(4) {
                 0 => crate::input::BTN_LEFT,
@@ -1062,13 +1117,14 @@ mod tests {
                 2 => crate::input::BTN_UP,
                 _ => crate::input::BTN_DOWN,
             };
-            if st == LIFE_DEATHWINDOW {
-                b = BTN_REWIND;
-            } else if st == LIFE_ALIVE && live.frame() % 37 == 20 {
+            let try_jump = st == LIFE_ALIVE && live.frame() % 37 == 20;
+            if try_jump {
                 b = BTN_JUMP;
-                jumps += 1;
             }
             let adv = live.advance(&keys(b));
+            if try_jump && live.world().body.players[0].life_state == LIFE_JUMPING {
+                jumps += 1;
+            }
             if let Some(c) = adv.rewound {
                 rewinds += 1;
                 stream.retain(|(f, _)| *f <= c.to);

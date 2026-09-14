@@ -137,26 +137,27 @@ fn render_err(e: &ReplayError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stg_core::input::{
-        BTN_DOWN, BTN_JUMP, BTN_LEFT, BTN_REWIND, BTN_RIGHT, BTN_UP, InputFrame,
-    };
-    use stg_core::player::{LIFE_ALIVE, LIFE_DEATHWINDOW, Loadout};
+    use stg_core::input::{BTN_DOWN, BTN_JUMP, BTN_LEFT, BTN_RIGHT, BTN_UP, InputFrame};
+    use stg_core::player::{LIFE_ALIVE, LIFE_JUMPING, Loadout};
     use stg_core::timeline::Boot;
 
     const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../godot/ecl/game");
 
-    /// 真 ECL 整局（demo 目录）跑进 `Timeline`：随机走位 + 周期跳躍 + 进决死窗口就遡行，
+    /// 真 ECL 整局（demo 目录）跑进 `Timeline`：随机走位 + 周期跳躍 + 死了自动遡行，
     /// 录 log → `Timeline::replay` 末态逐位同 + 字节往返全等 + 采样流两条路径对拍。
     /// 这是 storm 闸的时间线版：任务池随快照往返、遡行落在 ECL 演出中途，都在这一条里。
     #[test]
     fn demo_run_replays_bitwise_through_bytes() {
         let (_, image, _) = crate::run::build_ecl_world(DEMO, 5, 2).expect("demo 编译");
-        let ld = Loadout::default();
+        let ld = Loadout {
+            lives: 200,
+            ..Loadout::default()
+        };
         let mut live = Timeline::new_game_at(5, 2, 0, ld, image.clone()).unwrap();
         let mut rng = stg_core::rng::Pcg32::new(5, 11);
         let mut rewinds = 0;
         let mut jumps = 0;
-        for _ in 0..900 {
+        for _ in 0..1500 {
             let st = live.world().view().players()[0].life_state;
             let mut b = match rng.rand_range(4) {
                 0 => BTN_LEFT,
@@ -164,19 +165,23 @@ mod tests {
                 2 => BTN_UP,
                 _ => BTN_DOWN,
             };
-            if st == LIFE_DEATHWINDOW {
-                b = BTN_REWIND;
-            } else if st == LIFE_ALIVE && live.frame() % 120 == 60 {
+            let try_jump = st == LIFE_ALIVE && live.frame() % 700 == 60;
+            if try_jump {
                 b = BTN_JUMP;
-                jumps += 1;
             }
             let mut f = InputFrame::empty(live.frame());
             f.actions[0].buttons = b;
             if live.advance(&f).rewound.is_some() {
                 rewinds += 1;
             }
+            if try_jump && live.world().view().players()[0].life_state == LIFE_JUMPING {
+                jumps += 1;
+            }
         }
-        assert!(jumps >= 3, "demo 局里必须跳过几次（实测 {jumps}）");
+        assert!(
+            jumps >= 2,
+            "demo 局里必须真的跳过（冷却 600，实测 {jumps}）"
+        );
         eprintln!(
             "demo replay gate: frames={} jumps={jumps} rewinds={rewinds}",
             live.frame()

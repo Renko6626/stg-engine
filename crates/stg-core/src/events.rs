@@ -61,11 +61,11 @@ pub const EVT_SPELL_FAILED: u8 = 8;
 /// 绰绰有余（对照 `EVT_FIELD_CLEARED` 那条——它必须聚合，因为弹池 8192 远超 events 512）。
 /// 擦弹另说：满屏擦弹频率高一个量级，真要发事件须单独评估聚合口径。
 pub const EVT_SHOT_HIT_ENEMY: u8 = 9;
-/// 自机在决死窗口内请求遡行（时间机制内核刀，相位 3 A 组 `try_rewind` 产出）：
+/// 自机死亡请求遡行（玩法刀 2026-09-14：相位 3 C 组 `commit_death` 在决死窗口耗尽且残机未尽时产出）：
 /// `a_index` = 自机号（`a_gen` 恒 0），`x`/`y` = 自机当帧位置，
 /// `data = [hit_frame, 0]`（进入决死窗口那一帧的帧号）。**世界只发请求不改状态**——
-/// 兑现（恢复快照 + `rewind_landed`）归 `stg_core::timeline`；World 之上没有 timeline
-/// 的宿主（如裸 harness）看到它就是一条无人认领的事实，决死窗口照常走完。
+/// 兑现（恢复快照 + `rewind_landed`）归 `stg_core::timeline`；无 timeline 的宿主（如裸
+/// harness）看到它就是一条无人认领的事实——世界已原地继续（`REWIND_INVULN` 无敌）。
 pub const EVT_REWIND_REQUESTED: u8 = 10;
 /// 关卡结束的**世界事实**（壳子刀 2026-09-07；脚本 `stage_clear(stage)` = `SYS_STAGE_CLEAR` 723
 /// 外加让出一帧）：`data = [stage, 0]`。宿主看见它就停拍画结算页、`seal_history()`，玩家确认

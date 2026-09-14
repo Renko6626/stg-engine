@@ -6,14 +6,14 @@ use crate::math::Fx;
 pub const LIFE_ABSENT: u8 = 0; // 全零默认 = 不在场
 pub const LIFE_ALIVE: u8 = 1;
 pub const LIFE_DEATHWINDOW: u8 = 2; // 决死窗口（中弹后可 bomb 救）
-pub const LIFE_RESPAWNING: u8 = 3; // 场底重生、无敌
+// 3 退役（原 LIFE_RESPAWNING 场底重生，玩法刀 2026-09-14：死亡即遡行）：值不复用。
 pub const LIFE_GAMEOVER: u8 = 4; // 命尽、不再重生
 /// 跳躍中（时间机制内核刀 2026-09-07）：自机**缺席**——不动、不射、不用能力、不碰撞、
 /// 不擦弹、不拾取、不可瞄；`state_timer` 从 `JUMP_FRAMES` 倒数到 0 回 ALIVE。
 /// 不复用 `LIFE_ABSENT`：那个态连 C 组计时都跳过，本态需要倒计时。
 pub const LIFE_JUMPING: u8 = 5;
 pub const DEATHBOMB_WINDOW: u16 = 8; // 决死窗口帧
-pub const RESPAWN_INVULN: u16 = 120; // 重生无敌帧（2 秒 @60Hz）
+pub const RESPAWN_INVULN: u16 = 120; // 续关无敌帧（2 秒 @60Hz；玩法刀起唯一消费者是 try_continue）
 
 /// 停止（时间停止）的固定时长（帧）。**引擎常量而非表数据**——它不在任何表里。若将来
 /// "每个自机时停时长不同"成为内容需求，再迁进 `CharacterCfg`。
@@ -32,7 +32,7 @@ pub const JUMP_FRAMES: u16 = 30;
 /// 跳躍冷却（帧，gameplay-design §2）：落地那帧写满，C 组逐帧减，`== 0` 才能再跳。
 pub const JUMP_COOLDOWN: u16 = 600;
 /// 遡行落地后的无敌帧（spec §2.3）——策划案 2.3「落点附加短暂无敌帧」那条退路的实现，
-/// 由 `WorldBody::rewind_landed` 写入。
+/// 由 `WorldBody::rewind_landed` 与 `commit_death`（无 timeline 宿主的原地继续）写入（玩法刀）。
 pub const REWIND_INVULN: u16 = 30;
 
 // ── 角色配置：M0-17 T3 起移速/半径五常量已迁 `crate::tables::CharacterCfg`
@@ -83,6 +83,9 @@ pub struct PlayerState {
     /// 续关次数（壳子刀 2026-09-11）：`try_continue` 饱和加一；`== 0` 通关 = 不续关通关
     /// （策划案 4.7 的 EX 解锁判据）。东方惯例续关后 `score = continues`。
     pub continues: u8,
+    /// 偏差值 = 本局死亡次数（玩法刀，gameplay-design §3）。纯叙事计数，不进任何战斗数值；
+    /// `commit_death` 与 `rewind_landed` 各加一（前者在死分支、后者在恢复出的世界），续关不清。
+    pub deaths: u8,
 }
 
 /// 开局装备面（整局流程刀 spec §2.2/§3）——回放/握手身份组成部分之一
@@ -130,6 +133,7 @@ impl PlayerState {
             jump_cd: 0,
             hit_frame: 0,
             continues: 0,
+            deaths: 0,
             shot_timer: 0,
             power: ld.power,
             lives: ld.lives,

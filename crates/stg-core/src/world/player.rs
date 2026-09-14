@@ -4,17 +4,14 @@
 //! 本模块是自机的**相位逻辑**。二者并存，路径区分。
 //!
 //! **生死状态机的触发与计时分家**：本相位（3）独占**全部计时**（决死窗口倒数 → `commit_death`
-//! → 重生 → 无敌耗尽 → Alive）；**中弹触发**（Alive → DeathWindow）在 settle（相位 7）。
+//! → 原地继续 + 遡行请求 / GAMEOVER，玩法刀）；**中弹触发**（Alive → DeathWindow）在 settle（相位 7）。
 //! 因相位 3 早于 7，中弹在帧尾定、窗口从次帧起数 —— 这 1 帧错位正是决死窗口的语义。
 
 use super::WorldBody;
 use crate::events::Event;
 use crate::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SLOW, BTN_UP};
 use crate::math::Fx;
-use crate::player::{
-    LIFE_ABSENT, LIFE_ALIVE, LIFE_DEATHWINDOW, LIFE_GAMEOVER, LIFE_JUMPING, LIFE_RESPAWNING,
-    RESPAWN_INVULN,
-};
+use crate::player::{LIFE_ABSENT, LIFE_ALIVE, LIFE_DEATHWINDOW, LIFE_GAMEOVER, LIFE_JUMPING};
 use crate::shots::ShotInit;
 use crate::tables::WorldTables;
 
@@ -78,14 +75,6 @@ impl WorldBody {
                             self.commit_death(i);
                         }
                     }
-                    LIFE_RESPAWNING => {
-                        if self.players[i].invuln > 0 {
-                            self.players[i].invuln -= 1;
-                        }
-                        if self.players[i].invuln == 0 {
-                            self.players[i].life_state = LIFE_ALIVE;
-                        }
-                    }
                     LIFE_JUMPING => {
                         // 跳躍倒计时（时间机制内核刀）：恰好 `JUMP_FRAMES` 帧后回 ALIVE。
                         // 计时归 C 组：场景冻结时不走——但 `try_jump` 门禁本就拒绝在冻结中
@@ -124,7 +113,6 @@ impl WorldBody {
                 continue;
             }
             self.try_stop(i);
-            self.try_rewind(i);
             self.move_player(i, tables);
             // 角色模块静态分发点（A8"shottype 类似物"）：现仅 character 0，将来各角色一臂。
             #[allow(clippy::single_match)]
@@ -135,28 +123,39 @@ impl WorldBody {
         }
     }
 
-    /// 决死窗口耗尽的死亡连带结算（世界侧固定，D6）：lives−1、PlayerDied、重生或 game over。
+    /// 决死窗口耗尽（玩法刀 spec §4.2）：死亡即遡行。扣残机 + 偏差值 + `EVT_PLAYER_DIED`；
+    /// 残机耗尽 → GAMEOVER（不遡行）；否则**原地**回 ALIVE、`REWIND_INVULN` 无敌，并发
+    /// `EVT_REWIND_REQUESTED`。有 timeline 的宿主据此恢复被弹前的快照，代价在
+    /// `rewind_landed` 从快照重算；无 timeline 的宿主（golden/storm/bench）到此为止 = 原地继续。
     fn commit_death(&mut self, i: usize) {
-        self.players[i].lives = self.players[i].lives.saturating_sub(1);
-        let ev = Event {
+        let p = &mut self.players[i];
+        p.lives = p.lives.saturating_sub(1);
+        p.deaths = p.deaths.saturating_add(1);
+        let (x, y, lives, hit_frame) = (p.x, p.y, p.lives, p.hit_frame);
+        self.push_event(Event {
             kind: crate::events::EVT_PLAYER_DIED,
             a_index: i as u16,
             a_gen: 0,
-            x: self.players[i].x,
-            y: self.players[i].y,
-            data: [self.players[i].lives as i32, 0],
-        };
-        self.push_event(ev);
-        // 掉 power / power 道具回撒 → 道具池切片（此处暂不动 power）。
-        if self.players[i].lives == 0 {
+            x,
+            y,
+            data: [lives as i32, 0],
+        });
+        if lives == 0 {
             self.players[i].life_state = LIFE_GAMEOVER;
-        } else {
-            self.players[i].life_state = LIFE_RESPAWNING;
-            self.players[i].x = Fx::ZERO; // 场底中心（与 spawn 一致）
-            self.players[i].y = Fx::from_int(384);
-            self.players[i].invuln = RESPAWN_INVULN;
-            self.players[i].state_timer = 0;
+            return;
         }
+        let p = &mut self.players[i];
+        p.life_state = LIFE_ALIVE;
+        p.state_timer = 0;
+        p.invuln = p.invuln.max(crate::player::REWIND_INVULN);
+        self.push_event(Event {
+            kind: crate::events::EVT_REWIND_REQUESTED,
+            a_index: i as u16,
+            a_gen: 0,
+            x,
+            y,
+            data: [hit_frame as i32, 0],
+        });
     }
 
     /// 停止触发（A 组，玩法刀 spec §2.2）：时停 + 触碰消弹合一，库存 = `bombs`。门禁四条：
@@ -182,7 +181,7 @@ impl WorldBody {
 
     /// 续关（壳子刀 spec §3）：`LIFE_GAMEOVER` 下响应上升沿——残机 / 停止库存回
     /// `Loadout::default()`，`score = continues + 1`（东方惯例：分数变成续关计数），
-    /// `continues` 饱和加一，走 `commit_death` 同款重生分支（场底中心 + `RESPAWN_INVULN`）。
+    /// `continues` 饱和加一，原地复活 + `RESPAWN_INVULN`（玩法刀：场底重生退役）；`deaths` 不清。
     /// power 不动。非 GAMEOVER 下按沿 = no-op（`update_players` 只在 GAMEOVER 臂调本函数）。
     fn try_continue(&mut self, i: usize) {
         if !self.pressed_edge(i, crate::input::BTN_CONTINUE) {
@@ -194,10 +193,8 @@ impl WorldBody {
         p.lives = ld.lives;
         p.bombs = ld.bombs;
         p.score = p.continues as u64;
-        p.life_state = LIFE_RESPAWNING;
-        p.x = Fx::ZERO;
-        p.y = Fx::from_int(384);
-        p.invuln = RESPAWN_INVULN;
+        p.life_state = LIFE_ALIVE;
+        p.invuln = crate::player::RESPAWN_INVULN;
         p.state_timer = 0;
     }
 
@@ -217,42 +214,20 @@ impl WorldBody {
         self.players[i].state_timer = crate::player::JUMP_FRAMES;
     }
 
-    /// 遡行请求（A 组，spec §2.3）：仅决死窗口内响应上升沿，**只发事件不改状态**——
-    /// `EVT_REWIND_REQUESTED{a_index=自机, data=[hit_frame,0]}`，兑现归 `crate::timeline`。
-    /// 与 deathbomb 的先后：同帧既按 bomb 又按遡行，`try_bomb` 先跑并把状态拨回 ALIVE，
-    /// 本函数门禁随之不过——**bomb 优先**。一切代价（将来的库存/偏差值）都在落地侧
-    /// （`rewind_landed`）付，请求本身零副作用，所以没有"请求了但没兑现要退款"的路径。
-    fn try_rewind(&mut self, i: usize) {
-        if !self.pressed_edge(i, crate::input::BTN_REWIND)
-            || self.players[i].life_state != LIFE_DEATHWINDOW
-        {
-            return;
-        }
-        let p = &self.players[i];
-        let ev = Event {
-            kind: crate::events::EVT_REWIND_REQUESTED,
-            a_index: i as u16,
-            a_gen: 0,
-            x: p.x,
-            y: p.y,
-            data: [p.hit_frame as i32, 0],
-        };
-        self.push_event(ev);
-    }
-
-    /// 遡行落地（写 API，spec §2.3）：timeline 把世界恢复到被弹前的快照后调它。写落点无敌帧
-    /// `invuln = max(invuln, REWIND_INVULN)`。**落点不一定是 ALIVE**（回放闸实测揪出来的）：
-    /// 被弹前 30 帧内自机可能正在跳躍（JUMPING）、刚重生（RESPAWNING，自带 120 无敌）——
-    /// 所以不断言状态，只取无敌帧的 max；JUMPING 下 C 组不减 invuln，落地回 ALIVE 后才开始数，
-    /// 等于"跳完再送 30 帧"，无害。**将来库存扣一、偏差值加一都从这一个口进**——"一切代价
-    /// 在落地侧付"。`i` 越界 = 调用方违约 → no-op + `contract_viol`（P4-b）。
+    /// 遡行落地（写 API，玩法刀 spec §4.3）：timeline 把世界恢复到被弹前的快照后调它。快照里的
+    /// 残机/偏差值/符卡资格都是旧值，**代价全部在这里重算**：偏差值 +1、残机 −1 且下限 1（致死
+    /// 与否只在死的那一刻由 `commit_death` 判，落地不再判死）、无敌取 max、active 卡失格。
+    /// 落点不一定是 ALIVE（可能正在跳躍），故不断言状态。`i` 越界 → no-op + `contract_viol`（P4-b）。
     pub fn rewind_landed(&mut self, i: usize) {
         if i >= crate::MAX_PLAYERS {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             return;
         }
         let p = &mut self.players[i];
+        p.deaths = p.deaths.saturating_add(1);
+        p.lives = p.lives.saturating_sub(1).max(1);
         p.invuln = p.invuln.max(crate::player::REWIND_INVULN);
+        self.void_spell_captures();
     }
 
     /// 移动（东方手感：方向 + 低速 + 对角归一 + 场界钳制）。移速三值读角色配置表
@@ -363,7 +338,7 @@ impl WorldBody {
 
 #[cfg(test)]
 mod tests {
-    use crate::input::{BTN_BOMB, BTN_JUMP, BTN_REWIND, InputFrame};
+    use crate::input::{BTN_BOMB, BTN_JUMP, InputFrame};
     use crate::player::{JUMP_FRAMES, LIFE_JUMPING, REWIND_INVULN};
     use crate::world::test_support::{bullet_at, step_t};
 
@@ -447,22 +422,16 @@ mod tests {
         assert_ne!(w.checksum(), c0);
     }
 
-    /// 门禁：DEATHWINDOW / RESPAWNING / 场景冻结 / 跳躍中再按 → 零变化。
+    /// 门禁：DEATHWINDOW / 场景冻结 / 跳躍中再按 → 零变化。
     #[test]
     fn jump_gate_rejects_non_alive_frozen_and_rejump() {
-        use crate::player::{DEATHBOMB_WINDOW, LIFE_DEATHWINDOW, LIFE_RESPAWNING};
+        use crate::player::{DEATHBOMB_WINDOW, LIFE_DEATHWINDOW};
         // DEATHWINDOW
         let mut w = crate::step::World::new(1);
         w.body.players[0].life_state = LIFE_DEATHWINDOW;
         w.body.players[0].state_timer = DEATHBOMB_WINDOW;
         step_t(&mut w, &keys(BTN_JUMP));
         assert_eq!(w.body.players[0].life_state, LIFE_DEATHWINDOW);
-        // RESPAWNING
-        let mut w = crate::step::World::new(1);
-        w.body.players[0].life_state = LIFE_RESPAWNING;
-        w.body.players[0].invuln = 60;
-        step_t(&mut w, &keys(BTN_JUMP));
-        assert_eq!(w.body.players[0].life_state, LIFE_RESPAWNING);
         // 场景冻结（玩家时停中）
         let mut w = crate::step::World::new(1);
         w.body.freeze_left[0] = 10;
@@ -534,62 +503,13 @@ mod tests {
         assert_eq!(run(true), (false, false, false), "缺席：不动/不射/不吃");
     }
 
-    /// 遡行请求：只在决死窗口内发事件，`data[0]` = 进入窗口那一帧的帧号；ALIVE 按下零事件。
-    #[test]
-    fn rewind_request_only_in_deathwindow_and_carries_hit_frame() {
-        use crate::events::EVT_REWIND_REQUESTED;
-        let mut w = crate::step::World::new(1);
-        // ALIVE 按下：零事件
-        step_t(&mut w, &keys(BTN_REWIND));
-        assert!(w.frame_events().is_empty(), "ALIVE 下遡行零事件");
-        step_t(&mut w, &InputFrame::empty(0)); // 松开
-        // 走到第 5 帧再中弹
-        while w.frame() < 5 {
-            step_t(&mut w, &InputFrame::empty(0));
-        }
-        bullet_at(&mut w, 0, 384);
-        step_t(&mut w, &InputFrame::empty(0)); // 帧 5 内中弹 → hit_frame = 5
-        assert_eq!(w.body.players[0].hit_frame, 5);
-        step_t(&mut w, &keys(BTN_REWIND));
-        let evs: Vec<_> = w
-            .frame_events()
-            .iter()
-            .filter(|e| e.kind == EVT_REWIND_REQUESTED)
-            .collect();
-        assert_eq!(evs.len(), 1);
-        assert_eq!(evs[0].a_index, 0);
-        assert_eq!(evs[0].data[0], 5, "载荷 = hit_frame");
-        // 请求不改状态
-        assert_eq!(
-            w.body.players[0].life_state,
-            crate::player::LIFE_DEATHWINDOW
-        );
-    }
-
-    /// 同帧 bomb + 遡行：bomb 先跑救人，遡行门禁不过 → 零事件（bomb 优先）。
-    #[test]
-    fn stop_wins_over_rewind_in_the_same_frame() {
-        use crate::events::EVT_REWIND_REQUESTED;
-        use crate::player::{DEATHBOMB_WINDOW, LIFE_ALIVE, LIFE_DEATHWINDOW};
-        let mut w = crate::step::World::new(1);
-        w.body.players[0].life_state = LIFE_DEATHWINDOW;
-        w.body.players[0].state_timer = DEATHBOMB_WINDOW;
-        step_t(&mut w, &keys(BTN_BOMB | BTN_REWIND));
-        assert_eq!(w.body.players[0].life_state, LIFE_ALIVE, "deathstop 救人");
-        assert!(
-            !w.frame_events()
-                .iter()
-                .any(|e| e.kind == EVT_REWIND_REQUESTED),
-            "停止优先，遡行不发"
-        );
-    }
-
     /// 续关判别：GAMEOVER 按沿 → 残机/雷/时停回默认、分数 = 续关数、计数 +1、重生无敌；
     /// ALIVE 按沿零变化；饱和不回绕。
     #[test]
     fn continue_restores_defaults_from_gameover_and_is_noop_otherwise() {
         use crate::input::BTN_CONTINUE;
-        use crate::player::{LIFE_GAMEOVER, LIFE_RESPAWNING, Loadout, RESPAWN_INVULN};
+        use crate::math::Fx;
+        use crate::player::{LIFE_ALIVE, LIFE_GAMEOVER, Loadout, RESPAWN_INVULN};
         let ld = Loadout::default();
         // 对照：ALIVE 下按沿零变化
         let mut w = crate::step::World::new(1);
@@ -611,9 +531,16 @@ mod tests {
         w.body.players[0].bombs = 0;
         w.body.players[0].score = 999_999;
         w.body.players[0].power = 250;
+        w.body.players[0].x = Fx::from_int(-40);
+        w.body.players[0].deaths = 3;
         step_t(&mut w, &keys(BTN_CONTINUE));
         let p = &w.body.players[0];
-        assert_eq!(p.life_state, LIFE_RESPAWNING);
+        assert_eq!(
+            p.life_state, LIFE_ALIVE,
+            "续关原地复活（玩法刀：RESPAWNING 退役）"
+        );
+        assert_eq!(p.x, Fx::from_int(-40), "位置不动");
+        assert_eq!(p.deaths, 3, "偏差值不因续关洗白");
         assert_eq!(p.continues, 1);
         assert_eq!(p.lives, ld.lives);
         assert_eq!(p.bombs, ld.bombs);
@@ -631,44 +558,84 @@ mod tests {
         assert_eq!(w.body.players[0].continues, u8::MAX);
     }
 
-    /// 落地写 API：写 `REWIND_INVULN`；越界自机号 → no-op + 违约计数（P4-b）。
+    /// 落地写 API（玩法刀 spec §4.3）：偏差值 +1、残机 −1 且下限 1、无敌取 max、active 卡失格；
+    /// 越界自机号 → no-op + 违约计数（P4-b）。
     #[test]
-    fn rewind_landed_writes_invuln_and_rejects_bad_index() {
+    fn rewind_landed_pays_the_death_and_floors_lives_at_one() {
         let mut w = crate::step::World::new(1);
+        let boss = crate::world::test_support::spawn_enemy(&mut w, 0, 100, 1000);
+        assert!(w.body.spell_begin_internal(0, boss, 1, 300, 1000, 0, 100));
+        w.body.players[0].lives = 3;
         w.body.rewind_landed(0);
-        assert_eq!(w.body.players[0].invuln, REWIND_INVULN);
+        let p = w.body.players[0];
+        assert_eq!((p.lives, p.deaths, p.invuln), (2, 1, REWIND_INVULN));
+        assert_eq!(w.body.spells[0].capture_ok, 0, "快照带回的资格被作废");
+        w.body.players[0].lives = 1;
+        w.body.rewind_landed(0);
+        assert_eq!(
+            w.body.players[0].lives, 1,
+            "下限 1：致死与否只在死的那一刻判"
+        );
+        assert_eq!(w.body.players[0].deaths, 2);
         let cv0 = w.body.diag.contract_viol;
         w.body.rewind_landed(crate::MAX_PLAYERS);
         assert_eq!(w.body.diag.contract_viol, cv0 + 1);
     }
 
+    /// 决死窗口耗尽（玩法刀 spec §4.2）：原地回 ALIVE、30 帧无敌、残机 −1、偏差值 +1，
+    /// 同帧发 `EVT_PLAYER_DIED` 与 `EVT_REWIND_REQUESTED{data[0]=hit_frame}`；N−1 帧仍在窗口。
     #[test]
-    fn deathwindow_expires_to_respawn_after_window() {
-        use crate::input::InputFrame;
-        use crate::player::{LIFE_ALIVE, LIFE_RESPAWNING};
+    fn deathwindow_expiry_continues_in_place_and_requests_rewind() {
+        use crate::events::{EVT_PLAYER_DIED, EVT_REWIND_REQUESTED};
+        use crate::math::Fx;
+        use crate::player::{DEATHBOMB_WINDOW, LIFE_ALIVE, LIFE_DEATHWINDOW};
         let mut w = crate::step::World::new(1);
-        // 手动置决死窗口（模拟已中弹）
-        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
-        w.body.players[0].state_timer = crate::player::DEATHBOMB_WINDOW;
+        w.body.players[0].life_state = LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = DEATHBOMB_WINDOW;
+        w.body.players[0].hit_frame = 7;
+        w.body.players[0].x = Fx::from_int(50);
+        w.body.players[0].y = Fx::from_int(300);
         let lives0 = w.body.players[0].lives;
-        // 跑够窗口帧数 → Dead → Respawning
-        for _ in 0..crate::player::DEATHBOMB_WINDOW {
-            crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        for _ in 0..(DEATHBOMB_WINDOW - 1) {
+            step_t(&mut w, &InputFrame::empty(0));
         }
-        assert_eq!(w.body.players[0].life_state, LIFE_RESPAWNING);
-        assert_eq!(w.body.players[0].lives, lives0 - 1);
-        assert!(w.body.players[0].invuln > 0);
-        // 再跑够无敌帧 → Alive
-        for _ in 0..crate::player::RESPAWN_INVULN {
-            crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
-        }
-        assert_eq!(w.body.players[0].life_state, LIFE_ALIVE);
+        assert_eq!(
+            w.body.players[0].life_state, LIFE_DEATHWINDOW,
+            "N−1 帧仍在窗口"
+        );
+        step_t(&mut w, &InputFrame::empty(0));
+        let p = w.body.players[0];
+        assert_eq!(p.life_state, LIFE_ALIVE);
+        assert_eq!(
+            (p.x, p.y),
+            (Fx::from_int(50), Fx::from_int(300)),
+            "原地，不回场底"
+        );
+        assert_eq!(p.lives, lives0 - 1);
+        assert_eq!(p.deaths, 1);
+        assert_eq!(p.invuln, REWIND_INVULN);
+        let evs = w.frame_events();
+        assert!(evs.iter().any(|e| e.kind == EVT_PLAYER_DIED));
+        let req: Vec<_> = evs
+            .iter()
+            .filter(|e| e.kind == EVT_REWIND_REQUESTED)
+            .collect();
+        assert_eq!(req.len(), 1);
+        assert_eq!((req[0].a_index, req[0].data[0]), (0, 7), "载荷 = hit_frame");
+    }
+
+    #[test]
+    fn deaths_enters_the_checksum() {
+        let mut w = crate::step::World::new(1);
+        let c0 = w.checksum();
+        w.body.players[0].deaths = 1;
+        assert_ne!(w.checksum(), c0);
     }
 
     /// 命尽 → GAMEOVER（而非重生），且 GAMEOVER 后自机冻结（不移动、不发弹）。
     ///
     /// 金向量压不到这条路径 —— M0-9 复审实测：它的自机只死 2 次、`lives` 最低停在 1，
-    /// `commit_death` 的 GAMEOVER 分支一次都没跑过。上面那个测试走的是 3→2 的 RESPAWNING 臂。
+    /// `commit_death` 的 GAMEOVER 分支一次都没跑过。上面那个测试走的是 3→2 的原地继续臂。
     /// 这里把 `lives` 设成 1，逼出 `lives==0` 那一支，并连同它的两个守卫一起钉住：
     /// `match` 的 `LIFE_GAMEOVER => continue` 臂，以及 `commit_death` 之后的 GAMEOVER 复查。
     #[test]
@@ -681,12 +648,19 @@ mod tests {
         w.body.players[0].state_timer = DEATHBOMB_WINDOW;
         let x0 = w.body.players[0].x;
 
-        // 窗口耗尽 → commit_death → lives 0 → GAMEOVER（不是 RESPAWNING）
+        // 窗口耗尽 → commit_death → lives 0 → GAMEOVER（不遡行）
+        let mut requested = false;
         for f in 0..DEATHBOMB_WINDOW as u32 {
             crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+            requested |= w
+                .frame_events()
+                .iter()
+                .any(|e| e.kind == crate::events::EVT_REWIND_REQUESTED);
         }
         assert_eq!(w.body.players[0].life_state, LIFE_GAMEOVER);
         assert_eq!(w.body.players[0].lives, 0);
+        assert!(!requested, "残机耗尽不遡行");
+        assert_eq!(w.body.players[0].deaths, 1, "最后一条命也计偏差值");
 
         // GAMEOVER 后：给足输入也不该动、不该发弹
         let mut f = InputFrame::empty(100);

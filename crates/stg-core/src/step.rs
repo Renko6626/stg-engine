@@ -2308,6 +2308,10 @@ mod tests {
         // 8 对齐 padding；D20 盲区的反向）。两值不变。四件套：① 整块 Copy 无需同步；
         // ② checksum/④ SaveBytes derive 自动少这三字段 ⇒ wire format 变，`ENGINE_VER` 在
         // 玩法刀 Task 6 统一 bump；③ 非池。
+        // 2026-09-14（玩法刀 Task 4/5）：`PlayerState` 加 `jump_cd: u16`（插在 `invuln` 后）、
+        // `deaths: u8`（追在 `continues` 后）——逻辑 +3 B，恰好落进 Task 1 释出的 padding，
+        // **实测 size_of 仍 72**，两值不变（D20 盲区，哨兵不响）。判别面改由
+        // `jump_cd_enters_the_checksum` / `deaths_enters_the_checksum` 两条押。四件套同 Task 1。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
         const EXPECTED: (usize, usize) = (1035256, 1195056);

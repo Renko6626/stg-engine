@@ -115,12 +115,10 @@ impl WorldBridge {
     const BTN_BOMB: i64 = stg_core::input::BTN_BOMB as i64;
     #[constant]
     const BTN_SLOW: i64 = stg_core::input::BTN_SLOW as i64;
-    // 时间机制内核刀(2026-09-07):跳躍/遡行两个沿触发位 + 缺席态 + 两个帧数常量。観測不进
+    // 时间机制内核刀(2026-09-07):跳躍沿触发位(遡行键玩法刀退役:死亡即遡行)+ 缺席态 + 两个帧数常量。観測不进
     // 世界——两次按键协议归壳,壳只在第二下把 BTN_JUMP 送进来一帧。
     #[constant]
     const BTN_JUMP: i64 = stg_core::input::BTN_JUMP as i64;
-    #[constant]
-    const BTN_REWIND: i64 = stg_core::input::BTN_REWIND as i64;
     #[constant]
     const LIFE_JUMPING: i64 = stg_core::player::LIFE_JUMPING as i64;
     #[constant]
