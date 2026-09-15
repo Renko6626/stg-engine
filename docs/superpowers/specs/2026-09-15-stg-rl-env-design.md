@@ -49,7 +49,7 @@
 ```python
 import stg_rl
 
-img = stg_rl.compile_dir(stg_rl.bundled_content("game"))        # 或 compile_sources([(name, src), ...])
+img = stg_rl.compile_bundled("game")                            # 或 compile_sources([(name, src), ...])
 buf = stg_rl.alloc_buffers(num_envs=512, bullets_cap=1024, pin=True)   # dict[str, torch.Tensor]
 env = stg_rl.VecEnv(
     num_envs=512, threads=32, buffers=buf,
@@ -69,8 +69,8 @@ stg_rl.build_info()          # {"version", "engine_ver", "tables_hash", "git_sha
 
 - 编译错误抛 `stg_rl.CompileError`（消息 = 带文件名行列的渲染文本）；配置错误（未知镜像名、mark 查无、
   rank 越界、缓冲形状不符）抛 `ValueError`，**在构造期**抛，不在 step 里抛。
-- 可选 `stg_rl.gym.VectorEnv`：把整个 `VecEnv` 包成**一个** `gymnasium.vector.VectorEnv` 子类
-  （gymnasium 为可选依赖）。文档写明：禁止再套 `AsyncVectorEnv` / `SubprocVecEnv` / `make_vec_env`。
+- **不做** `gymnasium` 适配（Ruling 4）：训练仓尚未定框架，适配层按框架写才不白写。文档写明：
+  禁止再套 `AsyncVectorEnv` / `SubprocVecEnv` / `make_vec_env`——那会把整个 env 复制进子进程、吃掉全部性能。
 
 ### 3.1 缓冲布局（`alloc_buffers` 产出，调用方持有）
 
@@ -204,7 +204,7 @@ bit4 可碰撞 ← `flags & (ENEMY_NO_BODY | ENEMY_DYING) == 0`；`id` ← `pack
 ## 10. 分发
 
 - `crates/stg-py/pyproject.toml`（maturin 构建后端），包名 `stg_rl`，`abi3-py310`。
-- 默认内容：构建时把 `godot/ecl/game/*.ecl` 拷进包数据；`stg_rl.bundled_content("game")` 返回包内该目录的文件系统路径（wheel 安装即为普通文件）。
+- 默认内容：build.rs 把 `godot/ecl/game/*.ecl` 按文件名排序以 `include_str!` 嵌进 `stg-rl`；`stg_rl.bundled_sources("game")` 返回 `[(文件名, 源码)]`、`stg_rl.compile_bundled("game")` 直接译成镜像（免去 wheel 包数据拷贝，离线可用性相同；Ruling 1）。
 - `.github/workflows/wheels.yml`，触发 = 推 `rl-v*` tag：
   - `manylinux_2_28 x86_64`（maturin-action docker）+ `windows x86_64`；
   - 构建后在干净 venv 装 wheel 跑 `pytest crates/stg-py/tests`；
@@ -250,3 +250,15 @@ Python（`pytest crates/stg-py/tests`，CI 与 wheel 冒烟共用）：
 - 非目标：训练代码 / 特征化 / reward（训练仓）；**训练作业包**（容器镜像 + 入口 + 输出目录约定，选定作业平台后另开子项目；
   本刀为它提供无交互安装、离线内容、`build_info()`）；`.stglog` 写出；`.stgr` 回放 → 训练轨迹导出器；
   async env；跨死亡 episode；终局前最后一帧观测；非 x86_64 Linux / Windows 以外的 wheel。
+
+## 13. 实施偏差
+
+写计划（`docs/superpowers/plans/2026-09-15-stg-rl-env.md` §Rulings）时对本文档的裁定，逐条落在此：
+
+| # | 偏差 | 理由 |
+|---|---|---|
+| 1 | 内置内容改用 `stg-rl` 的 build.rs 以 `include_str!` 嵌入（按文件名排序），Python 暴露 `bundled_sources("game")` / `compile_bundled("game")`，替代 §3/§10 的 `bundled_content()` 返回文件系统路径 | 免去 wheel 包数据拷贝，离线可用性相同；`EclImage` 由源码每次编译，无镜像格式冻结债 |
+| 2 | `stg-py` 不进主 workspace（根 `Cargo.toml` `exclude` + 自带 `[workspace]`/`Cargo.lock`） | PyO3 cdylib 进 `cargo test --workspace` 会要求 CI 有 libpython，破坏现有三平台闸门 |
+| 3 | `pack_enemy_handle` 搬到 `stg_core::enemy::pack_handle` 并公开，syscall 调用它 | enemies `id` 编码（§5）需要同一打包公式，复制一份会漂移 |
+| 4 | §3 的可选 `gymnasium` 适配 **v1 不做** | 训练仓尚未定框架，适配层按框架写才不白写；文档写明「禁止套 subprocess vector wrapper」即可 |
+

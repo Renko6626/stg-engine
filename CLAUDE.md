@@ -162,7 +162,12 @@ crates/
                     /codegen(含 mark 垫片降低+锚点自动补偿)/units(多文件编译单元,目录整取按名排序)
                     —— .ecl 源码启动时编译成 EclImage；lib.rs builder = codegen 后端
   stg-harness/      CLI：golden 两段金向量（scenes/rainbow.ecl 符卡）+ bench 基线 + 烘焙表 bake/verify（允许浮点）
-                    + replay（重放 .stgr 输入日志，storm 的时间线版）
+                    + replay（重放 .stgr 输入日志，storm 的时间线版）+ rl-bench（批量 env 吞吐）
+  stg-rl/           【M5 起步】RL 批量 env 核心（断层线以上）：layout(proto v1 表布局) / encode(行编码，按 proto
+                    字段名/偏移) / env(单 env：起点加权采样/种子流/开机模板缓存+reseed/随机预热/events 8 列
+                    /done 0-3) / vec_env(专属 rayon 池批量 step 释放 GIL + 17 缓冲 + CSR 压实)
+  stg-py/           【M5 起步】PyO3 abi3 wheel `stg_rl`（薄壳；独立 workspace，见 stg-rl 计划 Ruling 2）：
+                    python/stg_rl/__init__.py + tests/test_smoke.py；maturin 构建，wheels.yml tag 出包挂 Release
   stg-godot/        M2 桥：WorldBridge gdext cdylib（boot/frame/puppets/save 纯模块+壳；smoke/ headless 冒烟；
                     表现契约 v2 起三层 MultiMesh + 敌人木偶喂料 + vanished/entity_pos 读口）
 godot/            真 Godot 工程（场景刀）：场景树/三层 MultiMesh + 敌人节点木偶 + fx 层/分类分发器/HUD/
@@ -194,6 +199,12 @@ cargo run -p stg-harness -- replay <f.stgr> --ecl <f.ecl|目录>   # 重放输�
 cargo run -p stg-harness -- serve [--ecl f]  # WebSocket 查看器(默认风铃卡;--ecl 跑自己的脚本,
                                              # 每次连接重编 ⇒ 刷新浏览器即热重载。ssh -L 转发)
 cargo run --release -p stg-harness -- storm      # 恢复重演风暴闸(存档正确性)
+cargo run --release -p stg-harness -- rl-bench   # stg-rl 批量 env 吞吐:steps/s × threads × envs(追加 bench-baseline)
+# stg-py 本地构建/测试(PyO3 abi3 wheel;独立 workspace;离线 venv 三条):
+#   cd crates/stg-py && python3 -m venv .venv && . .venv/bin/activate
+#   pip install --no-cache-dir --no-index --find-links <wheels> maturin numpy pytest
+#   maturin build --release -o dist && pip install --no-deps --force-reinstall dist/stg_rl-*.whl
+#   (cd .venv && python -m pytest -q -p no:cacheprovider ../tests)   # 4 passed;装 stgagent 后含解码对拍那条
 bash crates/stg-godot/smoke/run-smoke.sh     # 桥级冒烟(桥面回归)
 bash godot/smoke/run-smoke.sh                # 真工程冒烟(demo 局两次开机:正常/中段)
 DISPLAY=:2 LIBGL_ALWAYS_SOFTWARE=1 godot --rendering-driver opengl3 --path godot -- --shots
@@ -227,10 +238,12 @@ cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 
   + 桥 `preview`/`view_ring`/`replay_bytes` + 壳 観測/跳躍/遡行状态机；harness `replay` 闸。
   spec `docs/superpowers/specs/2026-09-07-timeline-observe-jump-rewind-design.md`。
 - **M4** `stg-net`（UDP + 会话/重同步）—— **phase 2 起点**。
-- **M5** `stg-py`（PyO3 headless 并行 env）。
+- **M5**（起步：**stg-rl env 刀**，2026-09-15）`stg-rl`（proto v1 观测编码 / 机体 1 / 专属 rayon
+  批量 env）+ `stg-py`（PyO3 abi3 wheel `stg_rl`，`wheels.yml` tag 出包）；训练代码 / 特征化 /
+  reward / 训练作业包在训练仓（本刀非目标，spec §12）。
 
-> 本仓当前建 Phase 1 三 crate + stg-derive + `stg-godot` + `godot/`（M2 全落地）；py/net
-> 到各自 milestone 再加。
+> 本仓当前建 Phase 1 三 crate + stg-derive + `stg-godot` + `godot/`（M2 全落地）+ `stg-rl`/`stg-py`
+> （M5 起步）；`stg-net`（M4）到 phase 2 再加。
 
 ## 开发工作流（全流程）
 
