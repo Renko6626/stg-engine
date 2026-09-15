@@ -698,7 +698,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: None,
-        doc: "增减停止库存:delta 允许负,双边钳 [0,STOP_STOCK_MAX=5] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_",
+        doc: "增减 X 键库存(時環晷机体=停止,经典机体=bomb):delta 允许负,双边钳 [0,STOP_STOCK_MAX=5] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_",
         param_names: &["delta"],
     },
     Builtin {

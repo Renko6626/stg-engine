@@ -459,7 +459,7 @@ SoA，**105 B/敌**（实测），256 敌 ≈ 26.8 KB（含 gen/alive；敌人�
 | 判定 | `hit_radius: Fx, graze_radius: Fx`（角色配置拷入；graze 圈兼道具拾取圈） |
 | 输入 | `input: u16`（相位 2 译码写入的动作位） |
 | 生死状态机 | `life_state: u8, state_timer: u16, invuln: u16` |
-| ~~bomb 状态机~~ | 〔2026-09-14 玩法刀退役：`bomb_phase/bomb_timer` 已删；新增 `jump_cd: u16`（跳躍冷却）、`deaths: u8`（偏差值）；`LIFE_RESPAWNING` 退役，死亡即遡行〕 |
+| ~~bomb 状态机~~ | 〔2026-09-14 玩法刀退役：`bomb_phase/bomb_timer` 已删；新增 `jump_cd: u16`（跳躍冷却）、`deaths: u8`（偏差值）；`LIFE_RESPAWNING` 退役，死亡即遡行〕；经典机体刀恢复 `bomb_timer: u16`（仅 Classic 用） |
 | 火力 | `shot_timer: u16`（M0-17：持按累进/松手清零，替换原 `shot_cd` 冷却）, `power: u16`（定点百分制 0–400 = 0.00–4.00） |
 | 账本 | `lives: u8, bombs: u8, life_pieces: u8, bomb_pieces: u8, score: u64, graze: u32`（**score u64**：东方真实分数上千亿，u32 溢出） |
 
@@ -474,6 +474,11 @@ Alive ──中弹(趟二)──► DeathWindow（决死窗口, DEATHBOMB_WINDOW
   │                        │
   └── invuln 耗尽 ◄── Respawning（场底飞入, 无敌）
 ```
+
+> **规则套件 `Kit`（经典机体刀 2026-09-15）**：`CharacterCfg.kit` 按机体分派三处——A 组 X 键
+> （`Chronos` → `try_stop` / `Classic(BombCfg)` → `try_bomb`）、A 组 C 键（Chronos → `try_jump` /
+> Classic 无）、`commit_death`（Chronos 原地 + `EVT_REWIND_REQUESTED` / Classic 场底 `(0,384)` +
+> `RESPAWN_INVULN`）。bomb 状态单一字段 `bomb_timer: u16`（C 组计时）。机体 1 = RL 训练机体。
 
 - **死亡连带结算世界侧固定**（掉 power、power 道具回撒规则）：它是账本公平性的一部分，与中弹判定同级，不容每个关卡脚本重写；ECL 只收 `PlayerDied` 事件做演出。
 - **bomb 触发仲裁世界侧**（触发帧立即无敌——决死救人的帧精确性不依赖任何脚本/模块延迟）；bomb **效果**由角色模块经 `bomb_phase/bomb_timer` 状态机逐帧驱动（铺 Field、发演出请求），晚一帧铺开在演出上不可见。〔2026-09-14 玩法刀：bomb 退役；停止（`try_stop`）同为世界侧仲裁，触发帧即冻结〕

@@ -120,7 +120,7 @@ InputFrame ──► step ──► [相位 0-10 演化 World] ──► 通道A
 | **M2 表现层** ✅ | 通道 A `WorldView` + 通道 B `RenderReq` + WorldBridge + 真 Godot 工程 + GameFlow 壳（标题/难度/练习/回放）全落地 | 表现小件 F15/F16/F21/F22/F23 |
 | **M3 时间机制** ✅ | `stg_core::timeline`：快照环 + 遡行兑现（`try_rewind`→`EVT_REWIND_REQUESTED`→`rewind_landed`）+ 影子世界 `preview` + `InputLog` 回放 + 壳 観測/跳躍/遡行状态机。原「回滚 netcode harness」按玩法设计重定义，联机回滚是附带收益 | **玩法刀**（[gameplay-design §10](gameplay-design.md)）：停止合并 + 触碰消弹 / 跳躍冷却 / 死亡即遡行 / 偏差值 / harness `probe-jump` |
 | **M4 网络** | lockstep+rollback 模型；K=20 采样对拍；`engine_ver`/内容哈希握手 | `stg-net`（UDP + 会话/重同步）起 phase 2 |
-| **M5 headless 并行** | 单 world 单线程、并行只在 world 之间（P3）；无外部依赖 | `stg-py`（PyO3 env） |
+| **M5 headless 并行** | 单 world 单线程、并行只在 world 之间（P3）；无外部依赖 | `stg-py`（PyO3 env）；训练机体 = 机体 1（`Kit::Classic`，经典机体刀） |
 | 玩法小刀 | `FieldPool` 消弹区就位（bomb 首租户）；`Shooter.flags` bit0 预留 homing | bomb 铺一个 field；homing 转向率存放待拍 |
 
 > 未做但已记档的技术债/扩展点见 [`docs/follow-ups.md`](follow-ups.md)（开工前先读）。

@@ -2390,8 +2390,11 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            21,
-            "bump 必须是有意识决定(评审 + 改本测试)——20→21：boss 换段与敌人钩子刀(2026-09-14)。\
+            22,
+            "bump 必须是有意识决定(评审 + 改本测试)——21→22：经典机体刀(2026-09-15)。\
+             PlayerState 加 bomb_timer u16(存档 wire format 变);WorldTables 加 CharacterCfg.kit 规则套件、\
+             characters 变长(TABLE_VERSION 6,content_hash 变);机体 1 = Kit::Classic(bomb/场底重生/无跳躍),机体 0 行为不变。\
+             ——前一次 20→21：boss 换段与敌人钩子刀(2026-09-14)。\
              syscall 新增 026 self_enemy/131 spell_result/440-443 敌判定族/531 kill_all_enemies/541 clear_bullets_at;\
              210 spawn_enemy 调用约定追加实参与 argc;WorldBody.spell_last_result [u8;2] 进校验和/存档;\
              碰撞行 3 跳过 ENEMY_NO_BODY;EVT_PHASE_ENDED=12;符卡结算:非符段、超时钉血、超时清弹不给星。\

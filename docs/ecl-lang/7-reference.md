@@ -152,7 +152,7 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `clear_bullets()` — 全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧
 - `clear_bullets_at(x: fx, y: fx, r: fx, stars: int)` — 圆形清弹:以 (x,y) 为心、半径 r 铺存活 1 帧的清弹区;stars=0 不转星星,非 0 同 clear_bullets 转星;扩张消弹波就每帧调一次加大 r;owner 无限制
 - `add_lives(delta: int)` — 增减残机:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
-- `add_bombs(delta: int)` — 增减停止库存:delta 允许负,双边钳 [0,STOP_STOCK_MAX=5] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
+- `add_bombs(delta: int)` — 增减 X 键库存(時環晷机体=停止,经典机体=bomb):delta 允许负,双边钳 [0,STOP_STOCK_MAX=5] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_
 - `add_power(delta: int)` — 增减火力:delta 允许负,双边钳 [0,POWER_MAX=400](即显示 4.00,不是 u16::MAX);开局初值走 Loadout
 - `drop_clear()` — 清空自身待掉落计数;self 必须是敌
 - `drop_add(type: int, n: int)` — 自身待掉落计数增量加 n 颗 type(只增不减,要清空用 drop_clear);计数上限 255 饱和
