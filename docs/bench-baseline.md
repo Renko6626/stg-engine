@@ -349,3 +349,42 @@ owner 门禁/预算分账。**推论：把任务池填满不是性能问题**，
 **结论**：峰值 **1 622 732 env-steps/s（32 线程）**，与 T6 表（107万~144万）在共享机噪声内同量级、
 曲线形状一致（1→32 线程单调上升到峰值，64 线程回落）。三列观测仍逐位相同（12.5 / 0 / 6656），
 继续佐证低弹量 workload 下 `compact` 与线程数无关。本条即 `PROGRESS.md`「rl-bench 峰值」的出处。
+
+## stg-rl 密弹 workload + 编码提速（2026-09-15，rl-bench，release）
+
+> 机器：`nproc = 112` 的共享服务器（Xeon Gold 6330；实测时 load ≈ 23~31，绝对值只信量级）。
+> 新 workload：`--workload dense --density K`（`crates/stg-harness/scenes/rl_dense.ecl`：每帧 K 颗米弹从左右场边
+> 以水平 ±15° 横穿上半区，4px/帧；bench 只按 SHOT 不移动，自机不死不 reset ⇒ 稳态 ≈112·K 弹）。
+> `--profile`：单 env 单线程分段计时（µs/env-step）。
+> **A/B 口径**：before = 提交 `bad0385` 的 core `atan2`（分支 CORDIC）+ `encode`（逐弹现算），after = 本刀
+> （无分支 `atan2` + `BulletScratch` 派生量逐槽记忆）；两者跑**同一份新场景**、交替两轮（下表取第 2 轮，第 1 轮同量级）。
+
+### 单 env 分段（µs/env-step）
+
+| workload | 弹/步 | env.step | bullets encode before → after | total before → after | 单线程 env-steps/s before → after |
+|---|---|---|---|---|---|
+| default（game mark 15） | 12.5 | 2.5 | 1.09 → 0.53 | 3.80 → 3.12 | 26.3万 → 32.1万 |
+| dense 3 | 339 | 7.2 | 19.25 → 4.34 | 26.64 → 11.65 | 3.75万 → 8.58万 |
+| dense 9 | 1017 | 17.5 | 66.14 → 12.56 | 84.08 → 30.11 | 1.19万 → 3.32万 |
+| dense 12（超 cap 1024） | 1356 | 22.8 | 116.76 → 50.37 | 139.90 → 73.28 | 0.71万 → 1.36万 |
+
+**归因**（微基准，每调用，同机）：`atan2` 分支版随机方向 77ns / 全同向 24ns，无分支版两者均 44ns；
+`isqrt`（std `u64::isqrt`）20~30ns ⇒ 旧编码每弹 ≈55~100ns 几乎全在这两次派生量调用上。直线弹速度帧间不变，
+记忆命中后只剩一次键比较；density 12 超 cap，`len_sq` + `select_nth_unstable` + 按索引排序成为新热点（D23#11 余项）。
+> 注：密弹场景最初是纯 0°/180° 横飞，分支 CORDIC 走向全可预测（该场景下旧编码 dense3 只要 18µs），低估真实弹幕代价，故改为 ±15° 散布后才做本表 A/B。
+
+### 吞吐（envs 512，`threads envs steps env_steps_per_s bullets_total_per_env bullets_dropped_sum resets`）
+
+| threads | dense3 before | dense3 after | dense9 before | dense9 after |
+|---|---|---|---|---|
+| 1 | 19 846 | 64 698 | 7 635 | 23 222 |
+| 2 | 36 886 | 119 593 | 13 098 | 47 448 |
+| 4 | 74 380 | 253 210 | 25 404 | 86 018 |
+| 8 | 143 270 | 359 942 | 48 875 | 123 545 |
+| 16 | 210 994 | 669 604 | 90 895 | 256 067 |
+| 32 | 392 123 | **989 309** | 142 269 | **367 141** |
+| 64 | 561 550 | 897 006 | 237 125 | 351 550 |
+
+观测列两侧逐位相同（dense3：338.9 / 0 / 0；dense9：1016.7 / 136 / 0）——编码改动不改输出的旁证（逐字节等价另由
+`stg-rl` 压实对拍测试与 `bullet_scratch_memo_never_serves_stale_derived` 押运）。**32 核训练机估算**：密弹（~340 弹）
+≈ 100 万 env-steps/s、~1000 弹 ≈ 35~40 万（本机 32 线程读数；共享负载下偏保守）。

@@ -741,7 +741,7 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
 8. **非 x86_64 Linux / Windows 以外的 wheel**（无 macOS / aarch64 wheel）。触发点：训练机或部署端出现这两类机器。
 9. **部署侧复刻胶水**：特征化与「最近 K 颗」住 Python 胶水，th06nc / TH18 DLL 跑 ONNX 时须在 C 侧同样实现。触发点：迁移到目标作时，靠对拍测试守一致。
 10. **训练分布无激光**：引擎无激光池 ⇒ HELLO 恒发空 lasers 表。触发点：迁移验证显示激光是主要差距；届时引擎激光池另开刀（world-design §709）。
-11. **`rl-bench` 默认 workload 不代表密弹**（每 env ~12.5 弹、2000 步 6656 次 reset）；需加密弹档位（预热到弹幕展开 / 高 rank / 不死动作）才能测到编码与压实真实开销，并区分 T6 修复后 32/64 线程回落是负载噪声还是并行 scatter 开销。触发点：训练吞吐成为瓶颈时。
+11. ~~**`rl-bench` 默认 workload 不代表密弹**~~ **已销（2026-09-15）**：`rl-bench --workload dense --density K`（`scenes/rl_dense.ecl`，上半区 ±15° 横飞、自机不死，稳态 ≈112·K 弹）+ `--profile` 单 env 分段计时。实测密弹瓶颈是**弹行编码**（density 3 下 21µs vs env.step 7µs），逐弹现算 `atan2`+`isqrt` 为主因 ⇒ 同刀修：core `atan2` 改无分支 CORDIC（逐位等价测试押运）+ `encode::BulletScratch` 派生量逐槽记忆，编码 4.8×、dense3 32 线程 39万→99万 env-steps/s（`docs/bench-baseline.md`「密弹 workload」节）。**余项**：弹数超 `cap` 时的 `len_sq`+`select_nth_unstable`+按索引排序成为新热点（density 12 编码仍 50µs）；触发点：训练确需 >cap 弹场景的吞吐时。
 12. **`VecEnv::step` / `reset` 每步现场 `collect` 一个 `Vec<Work>`**（~N 项引用结构，`build_work`）：串行段内的小分配，默认 workload 下占比可忽略；复用它要处理跨步借用的生命周期，改动面大于收益。触发点：密弹档位基准（第 11 条）显示串行段成为瓶颈时。
 
 ## F. 长期预留（M0-18 性能审记档，均不动现刀）

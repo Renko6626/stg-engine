@@ -182,7 +182,7 @@ fn bullets_rows_flags_state_type_and_derived() {
     bullet(&mut w, 10, 100, 3, 4, 7, 0, 1, 77); // 可碰撞、已擦；x/y/vx/vy/radius 互异非零
     bullet(&mut w, -20, 50, 0, -2, 9, 5, 0, 88); // 延迟中、未擦
     let mut rows = vec![0u8; 8 * 30];
-    let mut scratch = Vec::new();
+    let mut scratch = BulletScratch::new();
     let st = write_bullets(&w, 8, &mut rows, &mut scratch);
     assert_eq!((st.count, st.total, st.dropped), (2, 2, 0));
     let r0 = &rows[0..30];
@@ -225,7 +225,7 @@ fn bullets_derived_speed_angle_over_axis_zero_and_negative_vectors() {
         bullet(&mut w, (k + 1) as i32, 10, vx, vy, 3, 0, 0, k as u16);
     }
     let mut rows = vec![0u8; 4 * 30];
-    write_bullets(&w, 4, &mut rows, &mut Vec::new());
+    write_bullets(&w, 4, &mut rows, &mut BulletScratch::new());
     for (k, &(vx, vy)) in vecs.iter().enumerate() {
         let r = &rows[k * 30..(k + 1) * 30];
         let (vxf, vyf) = (Fx::from_int(vx), Fx::from_int(vy));
@@ -243,6 +243,41 @@ fn bullets_derived_speed_angle_over_axis_zero_and_negative_vectors() {
     }
 }
 
+/// 派生量记忆绝不供陈旧值：同一份 `BulletScratch` 先喂世界 A、再喂世界 B（同池槽、不同速度），
+/// B 的 speed/angle 必须等于现算。判别力：记忆若按槽身份（而非 `(vx,vy)` 值）命中，B 会读到 A 的结果立刻红；
+/// 再喂回 A 验证回切也对。零向量 `(0,0)` 覆盖记忆初值格。
+#[test]
+fn bullet_scratch_memo_never_serves_stale_derived() {
+    let sets: [[(i32, i32); 3]; 3] = [
+        [(3, 4), (0, 0), (-5, 2)],
+        [(-3, 4), (1, 0), (-5, -2)],
+        [(3, 4), (0, 0), (-5, 2)],
+    ];
+    let mut scratch = BulletScratch::new();
+    for vecs in sets {
+        let mut w = World::new(1);
+        for (k, &(vx, vy)) in vecs.iter().enumerate() {
+            bullet(&mut w, k as i32, 10, vx, vy, 3, 0, 0, k as u16);
+        }
+        let mut rows = vec![0u8; 3 * 30];
+        write_bullets(&w, 3, &mut rows, &mut scratch);
+        for (k, &(vx, vy)) in vecs.iter().enumerate() {
+            let r = &rows[k * 30..(k + 1) * 30];
+            let (vxf, vyf) = (Fx::from_int(vx), Fx::from_int(vy));
+            assert_eq!(
+                rd_i32(r, off::bullet::SPEED),
+                stg_core::math::isqrt(stg_core::math::len_sq(vxf, vyf) as u64) as i32,
+                "v=({vx},{vy}) speed"
+            );
+            assert_eq!(
+                rd_u16(r, off::bullet::ANGLE),
+                stg_core::math::atan2(vyf, vxf).raw(),
+                "v=({vx},{vy}) angle"
+            );
+        }
+    }
+}
+
 #[test]
 fn bullets_overflow_keeps_nearest_in_pool_order() {
     let mut w = World::new(1);
@@ -252,7 +287,7 @@ fn bullets_overflow_keeps_nearest_in_pool_order() {
         bullet(&mut w, 0, *y, 0, 0, 3, 0, 0, i as u16);
     }
     let mut rows = vec![0u8; 4 * 30];
-    let st = write_bullets(&w, 4, &mut rows, &mut Vec::new());
+    let st = write_bullets(&w, 4, &mut rows, &mut BulletScratch::new());
     assert_eq!((st.count, st.total, st.dropped), (4, 10, 6));
     let types: Vec<u16> = (0..4)
         .map(|i| rd_u16(&rows[i * 30..], off::bullet::TYPE))
@@ -271,7 +306,7 @@ fn bullets_overflow_tie_breaks_by_pool_index() {
         bullet(&mut w, 0, 300, 0, 0, 3, 0, 0, i); // 三颗等距
     }
     let mut rows = vec![0u8; 2 * 30];
-    write_bullets(&w, 2, &mut rows, &mut Vec::new());
+    write_bullets(&w, 2, &mut rows, &mut BulletScratch::new());
     assert_eq!(
         (
             rd_u16(&rows, off::bullet::TYPE),
@@ -289,7 +324,7 @@ fn write_bullets_rejects_zero_cap() {
     let mut w = World::new(1);
     bullet(&mut w, 0, 0, 1, 0, 3, 0, 0, 0);
     let mut rows = [0u8; 30];
-    let _ = write_bullets(&w, 0, &mut rows, &mut Vec::new());
+    let _ = write_bullets(&w, 0, &mut rows, &mut BulletScratch::new());
 }
 
 #[test]

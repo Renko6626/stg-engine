@@ -1,6 +1,7 @@
 //! World → proto v1 行字节（spec §5）。只读 `w.view()` 与公开读口；每行全部字节显式写满。
 
 use crate::layout::{ENEMIES_CAP, ITEMS_CAP, off};
+use stg_core::bullets::BulletPool;
 use stg_core::enemy::{ENEMY_DYING, ENEMY_NO_BODY, EnemyHandle, pack_handle};
 use stg_core::items::{MAGNET_NONE, MAGNET_PICKED};
 use stg_core::math::{atan2, isqrt, len_sq};
@@ -77,9 +78,53 @@ pub struct BulletStats {
     pub dropped: usize,
 }
 
+/// 派生量记忆的一格：`(vx, vy)` 为键，`(speed, angle)` 为其现算值。
+#[derive(Clone, Copy)]
+struct Kin {
+    vx: i32,
+    vy: i32,
+    speed: i32,
+    angle: u16,
+}
+
+/// `write_bullets` 的调用方复用暂存：选弹缓冲 + 派生量逐槽记忆。每 env 一份，跨步复用。
+///
+/// **派生量记忆**：`speed = isqrt(len_sq(vx,vy))`、`angle = atan2(vy,vx)` 是 `(vx, vy)` 的纯函数，
+/// 而直线弹（绝大多数弹幕）速度帧间不变——逐池槽记下上次的 `(vx, vy)` 与结果，键值全等才复用。
+/// 键比的是**值**不是槽身份，所以槽被复用、弹转向、跨世界混用都不会读到陈旧结果（逐位等价于现算，
+/// 由 `tests/encode.rs::bullet_scratch_memo_never_serves_stale_derived` 押运）。命中省掉 atan2
+/// （16 轮 CORDIC）+ isqrt 两次调用；未命中只多一次比较。初值全 0 格 = `(0,0) → (0, 0)`，本身即正确映射。
+pub struct BulletScratch {
+    sel: Vec<(i64, u16)>,
+    kin: Vec<Kin>,
+}
+
+impl BulletScratch {
+    pub fn new() -> BulletScratch {
+        BulletScratch {
+            sel: Vec::new(),
+            kin: vec![
+                Kin {
+                    vx: 0,
+                    vy: 0,
+                    speed: 0,
+                    angle: 0,
+                };
+                BulletPool::CAP
+            ],
+        }
+    }
+}
+
+impl Default for BulletScratch {
+    fn default() -> BulletScratch {
+        BulletScratch::new()
+    }
+}
+
 /// 敌弹行编码：按「离自机最近」选至多 `cap` 颗，输出按池索引升序（I4）。
 ///
-/// `scratch` 由调用方复用，避免每步堆分配；每帧先 `clear`，函数返回时其内容无意义。
+/// `scratch` 由调用方复用（每 env 一份），避免每步堆分配并承载派生量记忆（见 [`BulletScratch`]）。
 ///
 /// # Panics
 ///
@@ -89,7 +134,7 @@ pub fn write_bullets(
     w: &World,
     cap: usize,
     rows: &mut [u8],
-    scratch: &mut Vec<(i64, u16)>,
+    scratch: &mut BulletScratch,
 ) -> BulletStats {
     assert!(
         cap >= 1,
@@ -98,34 +143,40 @@ pub fn write_bullets(
     let v = w.view();
     let b = v.bullets();
     let p = &v.players()[0];
+    let BulletScratch { sel, kin } = scratch;
     let total = b.iter_alive().count();
-    scratch.clear();
+    sel.clear();
     if total <= cap {
-        scratch.extend(b.iter_alive().map(|i| (0, i as u16)));
+        sel.extend(b.iter_alive().map(|i| (0, i as u16)));
     } else {
-        scratch.extend(
+        sel.extend(
             b.iter_alive()
                 .map(|i| (len_sq(b.x()[i] - p.x, b.y()[i] - p.y), i as u16)),
         );
-        scratch.select_nth_unstable(cap - 1); // 全序键 (距离², 池索引) ⇒ 结果确定
-        scratch.truncate(cap);
-        scratch.sort_unstable_by_key(|&(_, i)| i);
+        sel.select_nth_unstable(cap - 1); // 全序键 (距离², 池索引) ⇒ 结果确定
+        sel.truncate(cap);
+        sel.sort_unstable_by_key(|&(_, i)| i);
     }
-    for (k, &(_, i)) in scratch.iter().enumerate() {
+    for (k, &(_, i)) in sel.iter().enumerate() {
         let i = i as usize;
         let r = &mut rows[k * 30..(k + 1) * 30];
         r.fill(0);
         let (vx, vy) = (b.vx()[i], b.vy()[i]);
+        let m = &mut kin[i];
+        if m.vx != vx.raw() || m.vy != vy.raw() {
+            *m = Kin {
+                vx: vx.raw(),
+                vy: vy.raw(),
+                speed: isqrt(len_sq(vx, vy) as u64).min(i32::MAX as u32) as i32,
+                angle: atan2(vy, vx).raw(),
+            };
+        }
         put_i32(r, off::bullet::X, b.x()[i].raw());
         put_i32(r, off::bullet::Y, b.y()[i].raw());
         put_i32(r, off::bullet::VX, vx.raw());
         put_i32(r, off::bullet::VY, vy.raw());
-        put_i32(
-            r,
-            off::bullet::SPEED,
-            isqrt(len_sq(vx, vy) as u64).min(i32::MAX as u32) as i32,
-        );
-        put_u16(r, off::bullet::ANGLE, atan2(vy, vx).raw());
+        put_i32(r, off::bullet::SPEED, m.speed);
+        put_u16(r, off::bullet::ANGLE, m.angle);
         put_i32(r, off::bullet::RADIUS, b.radius()[i].raw());
         let delay = b.delay()[i];
         r[off::bullet::FLAGS] =
@@ -133,7 +184,7 @@ pub fn write_bullets(
         r[off::bullet::STATE] = u8::from(delay == 0);
         put_u16(r, off::bullet::TYPE, b.sprite()[i]);
     }
-    let count = scratch.len();
+    let count = sel.len();
     BulletStats {
         count,
         total,

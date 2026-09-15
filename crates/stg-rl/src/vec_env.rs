@@ -166,7 +166,7 @@ struct Slot {
     env: Env,
     bullets: Vec<u8>,
     items: Vec<u8>,
-    sel: Vec<(i64, u16)>,
+    sel: encode::BulletScratch,
     nb: usize,
     ni: usize,
 }
@@ -219,7 +219,7 @@ impl VecEnv {
                 env: Env::new(cfg.clone(), i as u32, cache.clone()),
                 bullets: vec![0u8; cap * 30],
                 items: vec![0u8; ITEMS_CAP * 18],
-                sel: Vec::with_capacity(cap),
+                sel: encode::BulletScratch::new(),
                 nb: 0,
                 ni: 0,
             })

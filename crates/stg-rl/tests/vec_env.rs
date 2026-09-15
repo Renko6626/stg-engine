@@ -183,7 +183,7 @@ fn compacted_rows_match_direct_encode() {
         .map(|i| Env::new(cfg.clone(), i as u32, Arc::new(BootCache::new())))
         .collect();
 
-    let mut scratch: Vec<(i64, u16)> = Vec::new();
+    let mut scratch = encode::BulletScratch::new();
     let mut bullet_rows = vec![0u8; cap * 30];
     let mut item_rows = vec![0u8; ITEMS_CAP * 18];
 
