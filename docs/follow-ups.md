@@ -731,7 +731,7 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
 ### D23. stg-rl env 刀的非目标（spec §12 记档，2026-09-15）
 
 本刀只交付「Rust 批量 env + PyO3 wheel + 分发 workflow」。以下未做，**触发点**各自写明：
-1. **训练代码 / 特征化 / reward** 住训练仓（reward 含拟人项），不进 wheel。触发点：训练仓立项（框架定了才有形状，故 Ruling 4 连 `gymnasium` 适配都不做）。
+1. **已由训练仓承接（2026-09-15，stg-rl-train 第一刀）**：**训练代码 / 特征化 / reward** 住训练仓（reward 含拟人项），不进 wheel。触发点：训练仓立项（框架定了才有形状，故 Ruling 4 连 `gymnasium` 适配都不做）。
 2. **训练作业包**（容器镜像 + 入口 + 输出目录约定）。触发点：选定作业平台（AutoDL 等）后另开子项目；本刀只备好无交互安装、离线内容、`build_info()`。
 3. **`.stglog` 写出**。触发点：训练需要落轨迹做离线分析 / 模仿学习时。
 4. **`.stgr` 回放 → 训练轨迹导出器**。触发点：要用真人回放喂 RL / 行为克隆时。
@@ -743,6 +743,41 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
 10. **训练分布无激光**：引擎无激光池 ⇒ HELLO 恒发空 lasers 表。触发点：迁移验证显示激光是主要差距；届时引擎激光池另开刀（world-design §709）。
 11. ~~**`rl-bench` 默认 workload 不代表密弹**~~ **已销（2026-09-15）**：`rl-bench --workload dense --density K`（`scenes/rl_dense.ecl`，上半区 ±15° 横飞、自机不死，稳态 ≈112·K 弹）+ `--profile` 单 env 分段计时。实测密弹瓶颈是**弹行编码**（density 3 下 21µs vs env.step 7µs），逐弹现算 `atan2`+`isqrt` 为主因 ⇒ 同刀修：core `atan2` 改无分支 CORDIC（逐位等价测试押运）+ `encode::BulletScratch` 派生量逐槽记忆，编码 4.8×、dense3 32 线程 39万→99万 env-steps/s（`docs/bench-baseline.md`「密弹 workload」节）。**余项**：弹数超 `cap` 时的 `len_sq`+`select_nth_unstable`+按索引排序成为新热点（density 12 编码仍 50µs）；触发点：训练确需 >cap 弹场景的吞吐时。
 12. **`VecEnv::step` / `reset` 每步现场 `collect` 一个 `Vec<Work>`**（~N 项引用结构，`build_work`）：串行段内的小分配，默认 workload 下占比可忽略；复用它要处理跨步借用的生命周期，改动面大于收益。触发点：密弹档位基准（第 11 条）显示串行段成为瓶颈时。
+
+### D24. stg-rl-train 第一刀遗留（2026-09-15）
+
+训练仓 `Renko6626/stg-rl-train`（最终提交 `8bc1745`）全分支终审后 PARK 的次要项——都是「代价小、已记档」的已知不精确/边界情况，未随第一刀修复。触发点均为**首次 GPU 验收或长跑暴露时**，除非另注：
+
+1. **密度图 float32 边界舍入非逐位镜像精确**：`approach` 通道两趟 scatter 的浮点加法顺序不同导致镜像后非逐位相等（docstring 用词过强）；`|x| ≥ 64` 附近 float32 舍入会把本不在格线上的坐标吸到格线；密度边界判定用浮点相等（当前定点坐标下成立，非通用）。
+2. **`requires()` 只是回显 spec**：`check_compat` 因此抓不住特征化器缺键，缺键会在 `__init__` 里以 `KeyError` 报出而非清晰的兼容性错误。
+3. **配置类型校验报错粗糙**：`meta.toml` ranks 写错类型 / `num_minibatches=0` 等非法值给出 `ZeroDivisionError`、区间长度不对等底层异常，而非友好校验信息。
+4. **`dump_toml` 丢空表、不给 key 加引号**：往返序列化对含空表或需转义 key 的配置不安全。
+5. **`conftest.py` 用 `from conftest import` 依赖 pytest 的 prepend import 模式**；`test_registry` 里一处 `match="a"` 断言过弱。
+6. **弹表之外的敌人解码字段缺测试覆盖**：`x`/`y`/`hit_w`/`boss`/镜像后 `enemies.x` 未在测试里断言。
+7. **超过 `enemies_count` 的行未清零**：下游靠 mask 遮盖，但原始张量里是脏数据，直接读取会读到陈旧值。
+8. **CUDA 专属：`reset()` 缺 `synchronize`**：`env.reset()` 覆写 pinned 缓冲前没等 GPU 用完；今天只在首次 `reset` 前调用，暂不触发，但接口不安全。
+9. **CPU 路径 player/enemies 缓冲被拷贝两次**（纯性能项，无正确性影响）。
+10. **提前死亡的未完成段按 `reach_cap` 满值计入到达用时**，使评测中位数偏悲观。
+11. **`in_r`/`edge` 等命中比例的分母排除终局步但 `steps` 计数不排除**，引入约 `1/steps` 的系统偏差。
+12. **`EpisodeTracker._pending` 每步克隆整个 N×C 张量并搬到 CPU**：`pop` 一直不调用时无界增长（性能/内存项，非泄漏到磁盘）。
+13. **`prev_buttons` 在 `done` 时重置为 0**：新局开局那一步会把 `SHOT` 计成一次新按下，系数默认 0 时无影响。
+14. **`hold`/`in_r` 按 step 计数而非按帧**：`frame_skip = 1`（当前默认）时等价，`frame_skip > 1` 时会低估。
+15. **`metrics.jsonl` 以追加模式打开、`wall` 在续训追加时从 0 重记**：复用同一个 `run_dir` 续训会保留旧行且挂钟时间口径不连续（续训场景下预期但未加提示）。
+16. **`plots.main` 按 basename 给 run 分组**（同名不同路径的 run 会撞）；名为 `update`/`env_steps`/`wall` 的自定义标量会覆盖坐标轴列。
+17. **`perf_summary` 续训后只统计续训段**，`env.json` 里的机器信息在 `--resume` 时不刷新。
+18. **`run.sh` 内部 `cd` 改变了相对路径的基准目录**：传相对路径参数（如 config）时可能解析到非预期位置。
+19. **`--resume` 忽略额外传入的 config 参数**（续训按 checkpoint 记录的配置走，不合并命令行新参数，无告警）。
+20. **CPU 冒烟从不跑完一整局**（48 帧 < 卡池骨架卡 1800 帧的刷新段），因此没有 `ep.png` 出图路径的覆盖。
+21. **`Categorical.logits`/`probs` 的 setter 描述符补丁不做缓存**，每次访问都重算（Task 10 为修 torch 2.14 只读 property 崩溃引入，正确但非最优）。
+22. **`TORCHDYNAMO_INLINE_INBUILT_NN_MODULES` 环境变量在 torch 2.14 上是空操作**，留着无害但不再生效。
+23. **checkpoint 保存 `os.replace` 前无 `fsync`**：保存过程中断电/被杀，`.tmp` 文件可能残留半写状态。
+24. **GAE 优势计算是 eager 逐步循环**，未编译/未向量化（纯性能项）。
+25. **评测 warmup 阈值测试改为 `frames_mean > 150`**（计划原定 `> 250`，因 warmup 帧不计入 `ep_frames`，实测 222）：阈值留有余量但比原计划宽松。
+26. **gpucheck 每次比对用相同输入重放 25 次**：测得出 CUDA 图冻结旧图/丢梯度类问题，测不出「忽略新输入、总返回同一结果」这类重放 bug（addendum §13 表 12 已记同一盲区）。
+27. **`truncate_after` 遇到 JSON 最后一行不是对象（如被截断的半行）会抛 `TypeError`** 而非跳过/清晰报错。
+28. **`LoadSampler.add` 会跳过 numpy 标量**（只认 Python 原生数值类型），采样点静默丢失而非报错。
+
+来源：`.superpowers/sdd/2026-09-15-stg-rl-train/progress.md` 「Ruling: final whole-branch review」PARK 列表（1–26）+ 「Final fix wave re-review」两条 minors（27–28）。
 
 ## F. 长期预留（M0-18 性能审记档，均不动现刀）
 

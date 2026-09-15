@@ -1,6 +1,6 @@
 # stg-rl-train 第一刀 —— 躲弹小模型的训练仓（设计，2026-09-15）
 
-> 状态：**设计已拍板，待写计划**。
+> 状态：**第一刀已落地**（训练仓 `Renko6626/stg-rl-train`；实施计划 `docs/superpowers/plans/2026-09-15-stg-rl-train.md`）。GPU 验收（§8）待首次上 Vast.ai 回填。
 > 来源：RL 路线 A 的训练侧。前置：stg-rl env 刀（spec `2026-09-15-stg-rl-env-design.md`，wheel `rl-v0.1.0`）、
 > `stg-agent-proto` `v0.1.0`、RL 卡池写作指南 `docs/rl-card-pool.md`。
 > 本文暂住 stg-engine；训练仓 `stg-rl-train` 建立后迁入其 `docs/`（迁移提交注明本文最后一个 stg-engine commit）。
@@ -162,7 +162,7 @@ plots/*.png
 | `edge_hug` | 距场界 < 16 px 的帧 +1（负系数即惩罚） | 0.0 |
 
 - 终局步不计塑形的理由：势函数塑形惯例令终态 Φ = 0，那样离点越远死掉反而白赚 `d/448`；直接置 0 并让 `death` 远大于塑形量级。
-- 防自杀：塑形项远离指令点时为负，但一局内累计的负值受势函数差限定（≤ `follow_shaping × 1.1`），死亡能「躲开」的也不超过这个量。配置校验断言 `death ≥ 5 × follow_shaping × 1.1`。
+- 防自杀：塑形项远离指令点时为负，但一局内累计的负值受势函数差限定（≤ `follow_shaping × 567/448 ≈ 1.27`，567 px 为场内最远两点距离），死亡能「躲开」的也不超过这个量。配置校验断言 `death ≥ 5 × follow_shaping × 1.1`（5 倍余量覆盖上式）。
 - `R` 默认 24 px。
 
 ## 4. 注册表与接口契约
@@ -304,3 +304,25 @@ terms = { death = 10.0, follow_shaping = 1.0, hold = 0.01 }
 - 小版本约每 2–3 个月一次破坏性变更，`torchrl` 与 `tensordict` 须成对锁版本，C++ 扩展须匹配 torch。
 - 可单独借用而不引入框架的部分：`tensordict.nn.CudaGraphModule`（本刀采用）。
 - LeanRL 实测（其 README）：PPO Atari 从 CleanRL 1022 fps 到 compile + CUDA 图 6809 fps——小网络 RL 的瓶颈在 CPU 调度开销，手写循环同样能拿到。
+
+## 13. 实施偏差
+
+写计划（`docs/superpowers/plans/2026-09-15-stg-rl-train.md` §Rulings）时对本文的裁定：
+
+| # | 偏差 | 理由 |
+|---|---|---|
+| 1 | 刷新步的遵从塑形不置 0，用旧指令点精确计算；只保留「终局步记 0」 | reward 在刷新之前算、两个距离都对 `prev.target_xy`，本就没有目标突变的跳变；§3.5 表格与 §8 对应单测按此理解 |
+| 2 | 到达用时：每局记各刷新段到达帧数的均值（未到达记 `interval` 上限），评测汇总取各局中位数 | 逐段中位数需要在设备上维护变长列表，收益不抵复杂度 |
+| 3 | 新增 `cards.py` / `episodes.py` / `bench.py` / `gpucheck.py` | 卡池、逐局统计、测速、GPU 验收各自独立成文件，训练与评测共用逐局统计 |
+| 4 | 打包在 `train.py` 里用 `tarfile` 完成，`run.sh` 只装依赖 + 调入口 | 便于测试 |
+| 5 | 评测每个 (卡, rank) 开一个 `num_envs = episodes` 的 VecEnv，每个 env 只取第一局 | VecEnv 按权重随机抽起点，无法保证每组恰好 N 局 |
+| 6 | 训练仓不加 LICENSE；`ppo.py` 头部保留 LeanRL MIT 许可全文 | stg-engine 同样无 LICENSE，由作者另定 |
+| 7 | 续训时 env 种子 = `run.seed + 起始更新号 − 1` | 避免续训重放同一批局（§5 已声明非逐字节续训） |
+| 8 | `envwrap._fx` 先压平再 `view(int32)`，存储偏移不整除 4 时 clone | 单行 / 空张量在 PyTorch 看来「连续」，`.contiguous()` 不拷贝，size-1 维步长与偏移 22（bullets `radius`）让 `view` 崩溃；审阅复现后修复 |
+| 9 | 密度图：弹恰在内部格线上时左右两格各计一半 | 原 `floor` 分箱让 `density(mirror(obs))` 不等于左右翻转，x = 0 的弹每步都有；这是唯一对称规则（浮点舍入下仍非逐位严格，记待办） |
+| 10 | `ppo.py`：LeanRL 的 `Categorical.logits/probs` 只读 property 补丁改为带 setter 的描述符；`agent_inference.requires_grad_(False)` | torch 2.14 下只读 property 让 `Categorical.__init__` 抛错；tensordict 0.14 `to_module` 保留 requires_grad，第二个 minibatch 反向报「图已释放」 |
+| 11 | `PPO.load_state_dict` 保留优化器 lr 张量身份 | `Optimizer.load_state_dict` 深拷贝 param_groups，CUDA 图续训时 lr 退火静默失效 |
+| 12 | gpucheck：lr = 0、单 minibatch、调用 25 次（> CudaGraphModule warmup 20）后比对；绝对 + 相对混合容差；另比对 grad norm 与策略 entropy / value | 原「1e-4 纯相对误差、32 次 Adam 累积」对正确实现也会失败；剩余盲区：每次输入相同，测不出忽略新输入的重放 |
+| 13 | 续训：先截掉 checkpoint 之后的 metrics / perf 行，TensorBoard `purge_step = env_steps + 1`；`best` 优先取 `best.pt`；`total_updates` 不大于 checkpoint 时报错 | 中断后续训会重复写日志行、曲线回跳；purge 取 `env_steps` 会误删 checkpoint 那一步的点 |
+| 14 | 负载采样器改流式汇总、停止后不写；评测组局数不足即报错；bench 设 torch 线程数并对线程网格去重；pytest 屏蔽「CUDA 驱动过旧」告警 | 长跑内存无界增长（约 300–400 MB/天）；静默少局；bench 推荐与训练条件一致 |
+| 15 | 本刀 `.ecl` 训练卡池仍为空，`cards/` 只有 README；测试卡在 `tests/fixtures/cards/` | 写卡在另一会话进行；GPU 验收前先放至少一张卡 |

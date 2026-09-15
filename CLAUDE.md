@@ -239,8 +239,9 @@ cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 
   spec `docs/superpowers/specs/2026-09-07-timeline-observe-jump-rewind-design.md`。
 - **M4** `stg-net`（UDP + 会话/重同步）—— **phase 2 起点**。
 - **M5**（起步：**stg-rl env 刀**，2026-09-15）`stg-rl`（proto v1 观测编码 / 机体 1 / 专属 rayon
-  批量 env）+ `stg-py`（PyO3 abi3 wheel `stg_rl`，`wheels.yml` tag 出包）；训练代码 / 特征化 /
-  reward / 训练作业包在训练仓（本刀非目标，spec §12）。
+  批量 env）+ `stg-py`（PyO3 abi3 wheel `stg_rl`，`wheels.yml` tag 出包）；
+  训练代码 / 特征化 / reward 在训练仓 `Renko6626/stg-rl-train`（第一刀 2026-09-15，spec `2026-09-15-stg-rl-train-design.md`）；
+  训练作业包（Vast.ai 自动化）是其第二刀。
 
 > 本仓当前建 Phase 1 三 crate + stg-derive + `stg-godot` + `godot/`（M2 全落地）+ `stg-rl`/`stg-py`
 > （M5 起步）；`stg-net`（M4）到 phase 2 再加。

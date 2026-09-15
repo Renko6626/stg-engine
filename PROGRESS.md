@@ -6,20 +6,23 @@
 
 ## 现在（2026-09-15）
 
-- **位置**：**stg-rl env 刀落地**（spec `docs/superpowers/specs/2026-09-15-stg-rl-env-design.md`）——proto v1 观测契约的第二个生产者：
-  `stg-rl`（`layout`/`encode`/`env`/`vec_env`：专属 rayon 池批量 step、17 缓冲 + CSR 压实、线程数无关确定性）
-  + `stg-py`（PyO3 abi3 wheel `stg_rl`：GIL 释放批量 step、缓冲校验、内置 `game` 包）+ `.github/workflows/wheels.yml`（`rl-v*` tag 出包挂 Release）。核唯一改动 `World::reseed`（不 bump `ENGINE_VER`）。
-- **实证**：核 722 + 编译器 333 + 桥 17 + harness 47 + stg-rl 32 全绿；fmt/clippy/test/verify-tables 全绿；
-  金向量 md5 `54b5c5a3…`（与 base 相同）；stg-py pytest 9 passed + 1 skipped（torch 路径本机无 torch，`importorskip`；含 `stgagent` 解码对拍与别名/只读/非连续/负数负例）；
-  rl-bench 峰值 **162 万 env-steps/s**（512 env × 32 线程，出处 `docs/bench-baseline.md` 收口复测表）。两冒烟由控制者复核。
-- **下一步**：`stg-agent-proto` 推 GitHub → 首个 `rl-v0.1.0` tag → 训练仓胶水（特征化 / reward / 「最近 K 颗」）
-  + 训练作业包；与**第 1 关内容刀**（gameplay-design §6）并列 → 探针刀 → 验证 V1–V7。
-- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)（本刀新记 D23：十项非目标）。
+- **位置**：**stg-rl-train 第一刀落地**（新仓 `Renko6626/stg-rl-train`；spec `docs/superpowers/specs/2026-09-15-stg-rl-train-design.md`，计划 `docs/superpowers/plans/2026-09-15-stg-rl-train.md`）——
+  躲弹小模型训练仓：意图点胶水 / 动作表 v1 / 危险度 top-K 特征化 / 势函数遵从 reward / 注册表可切换模型 /
+  LeanRL 底本 PPO（compile + CUDA 图）/ 固定评测集 / metrics + TensorBoard + 出图 / 开销记录 + `--bench` / `run.sh` 一条命令。
+  依赖钉 `stg_rl` `rl-v0.1.0` wheel + `stgagent` `v0.1.0`。RL 卡池写作约束 `docs/rl-card-pool.md`（写卡另开会话）。
+- **实证**：训练仓 CPU 上 `pytest` 80 passed（含端到端训练→评测→续训→出图→打包冒烟），输出无告警；GitHub CI 绿（最终提交 `8bc1745`）。
+  实施为 12 个任务，外部 dsh-flash（deepseek-flash）worker 承担、每 2–3 个任务一次 opus 批量复审、控制者本人做全分支终审；
+  终审 + 复审抓到 3 处计划要求的缺陷（`_fx` 单行崩溃、密度图边界镜像不对称、gpucheck 容差过严），另修 CI `setup-uv@v10` 标签（钉 `v10.1.0`）与 TensorBoard 清除 off-by-one。GPU 路径未验。
+- **下一步**：首次上 Vast.ai 做 GPU 验收（spec §8：bench / gpucheck / 1 小时训练 / 打断续训）→ 卡池交付后正式训练 →
+  第二刀 Vast.ai 自动化 → 第三刀 ONNX 导出与 C 侧对拍；与**第 1 关内容刀**（gameplay-design §6）并列。
+  `rl-v0.1.0` wheel 的 `build_info()["git_sha"]` 为 `unknown`，修复后发 `rl-v0.1.1`。
+- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-09-15 | **stg-rl-train 第一刀（训练仓）** | 新仓 `Renko6626/stg-rl-train`（spec `2026-09-15-stg-rl-train-design.md`，Ruling 1–7 见 §13）：uv 钉版本、注册表（模型/特征化器/意图/reward 项）、`envwrap`（CSR 铺定长、镜像、意图刷新）、`danger_topk_v1`、reward 七项、`set_attn_v1`、LeanRL 底本 PPO + 自描述 checkpoint、固定评测集、metrics/plots/perf、`train`/`bench`/`gpucheck`/`run.sh`。CPU pytest 全绿 + CI 绿；GPU 验收待 Vast.ai。 |
 | 2026-09-15 | **stg-rl env 刀（RL 批量 env + `stg_rl` wheel）** | proto v1 观测契约的第二个生产者（spec `2026-09-15-stg-rl-env-design.md`；Ruling 1–4 见 §13）。核唯一改动 `World::reseed`（spec §8，不 bump `ENGINE_VER`，模板缓存等价已绿）。`stg-rl`：`layout`（proto v1 表布局 + `hello_json` 对拍 C 夹具）/ `encode`（player·phase·bullets·enemies·items 行编码，弹溢出按平方距离保最近 cap 颗）/ `env`（起点加权采样 / 种子流 / 开机模板缓存 + `reseed` / 随机预热重试 / events 8 列 / done 0–3 自动 reset）/ `vec_env`（专属 rayon 池 17 缓冲批量 step + 两阶段 CSR 压实；1 vs 8 线程逐字节相同）。`stg-py`：PyO3 abi3 薄壳（`py.detach` 释放 GIL、numpy 视图 dtype/C 连续校验、`CompileError`）+ Python 包 `stg_rl`（`hello`/`OFFSETS`/`STRIDES`/`alloc_buffers`/`compile_bundled`/`VecEnv`）+ `tests/test_smoke.py` + `.github/workflows/wheels.yml`（推 `rl-v*` tag → manylinux_2_28/Windows wheel → Release）；独立 workspace 不进主 workspace（Ruling 2）。测试：核 721→**722** + 编译器 333 + 桥 17 + harness 47 + **stg-rl 32**；`stg-py` pytest **9 passed + 1 skipped**（torch 本机无，`importorskip`；含 `stgagent.schema` 解码对拍与别名/只读/非连续/负数负例）。`rl-bench` 峰值 **162 万 env-steps/s**（512 env × 32 线程，出处 `docs/bench-baseline.md` 收口复测表）。闸门 fmt/clippy/test/verify-tables 全绿，金向量 md5 `54b5c5a3…` 与 base 相同；两冒烟由控制者复核。新记 follow-ups D23（十一项非目标）。 |
 | 2026-09-15 | **经典机体刀（规则套件 `Kit`）** | 按机体数据分派的规则套件 `Kit`（spec `2026-09-15-classic-kit-design.md`）。表：`CharacterCfg.kit`（`Chronos` / `Classic(BombCfg)`；`BombCfg`/`BombField`/`BombOrigin` 从 `633c3f1^` 捞回）+ `characters` 定长 1 改变长 + 机体 1（与机体 0 逐字段同移速/判定/擦弹/shot，Classic bomb 取旧 v0 数值）+ `TABLE_VERSION` 5→6、`tables_v0.bin` 重烘。行为：`PlayerState.bomb_timer: u16`（C 组计时，`try_bomb` 触发写 `cfg.frames`）；`try_bomb`（deathbomb 救人、无敌、按声明序铺 `BombField`、吸道具、触发点 `void_spell_captures`）；`try_stop`/`try_jump`/`commit_death` 三处穷尽 `match` 按 `kit` 分派——`Chronos` 逐字节不变，`Classic` 场底 `(0,384)` 重生不遡行、C 无、机体 1 复用机体 0 火力（发弹分派 `0 \| 1 =>`，T2 附加项）。`ENGINE_VER` 21→22（布局 + 表格式两重），金向量 md5 `54b5c5a3db4d78934c942e735d190070`。测试：核 721 + 编译器 333 + 桥 17 + harness 47。闸门 fmt/clippy/test/storm/verify-tables 全绿；两冒烟 SMOKE OK；机体 0 行为对拍（`run godot/ecl/game` 3000 帧 vs base 7639cbc）逐字相同。新记 follow-ups D22（六条非目标）；spec §8 记三条实施偏差。 |
 | 2026-09-14 | **boss 换段与敌人钩子刀** | 来源 TH18 原版 22 个 ECL 的迁移差距评估（A 类）。核：`SPELL_NONSPELL` 非符段 + `settle_one_spell(slot, cause)` 按结束方式分派（超时 `hp = min(hp, 血线)`、超时清弹带新位 `FIELD_NO_STAR`）+ `WorldBody.spell_last_result` + `EVT_PHASE_ENDED=12`；敌 `flags` 新位 `ENEMY_NO_BODY`（碰撞行 3 跳过）/`ENEMY_KILLALL_EXEMPT`；syscall 新增 026/131/440–443/531/541，210 `spawn_enemy` 调用约定追加实参+argc（与 `OP_SPAWN` 共用 `write_args`）；注入 `SPELL_*`/`ENEMY_*`/`KILL_*` 十常量；`ENGINE_VER` 20→21，金向量 md5 `de70b473ff557cbfb219df78f8f0b495`。编译器：`CallArg::SubRefArgs`（仅 `spawn_enemy` task 位）、7 条内建 + `phase_begin` 糖（与手写逐字节相同）+ `$self_enemy`。桥：`EVT_PHASE_ENDED`/`SPELL_NONSPELL`；壳 HUD 非符段只显示倒计时。文档：ecl 手册 3/6/7、ecl-ops、ZUN 迁移对照表、world-design D8/D12、follow-ups D21。闸门全绿（fmt/clippy/test 695+333+17+47/storm/verify-tables/两冒烟）。 |
