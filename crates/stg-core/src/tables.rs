@@ -1333,6 +1333,7 @@ mod tests {
         assert_eq!(b.fields[0].origin, BombOrigin::FieldCenter);
         assert_eq!(b.fields[0].radius, crate::field::FIELD_RADIUS_FULLSCREEN);
         assert_eq!(b.fields[0].flags, crate::field::FIELD_CLEAR_BULLETS);
+        assert_eq!(b.fields[0].dmg_per_frame, 0, "全屏消弹圆不得带伤害");
         assert_eq!(b.fields[1].origin, BombOrigin::PlayerAtCast);
         assert_eq!(b.fields[1].radius, Fx::from_int(120));
         assert_eq!(b.fields[1].flags, crate::field::FIELD_DAMAGE);

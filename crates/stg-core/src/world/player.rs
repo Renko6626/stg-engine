@@ -13,7 +13,7 @@ use crate::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SLOW, BTN_UP};
 use crate::math::Fx;
 use crate::player::{LIFE_ABSENT, LIFE_ALIVE, LIFE_DEATHWINDOW, LIFE_GAMEOVER, LIFE_JUMPING};
 use crate::shots::ShotInit;
-use crate::tables::WorldTables;
+use crate::tables::{BombCfg, BombOrigin, Kit, WorldTables};
 
 impl WorldBody {
     /// **沿检测的滚存点**：`prev_input` 必须在这里、在覆写 `input` 之前滚存旧值——本相位
@@ -63,6 +63,11 @@ impl WorldBody {
                 if self.players[i].jump_cd > 0 {
                     self.players[i].jump_cd -= 1;
                 }
+                // 经典 bomb 计时（经典机体刀）：C 组、任何 life_state 下都数；触发帧的写入在 A 组，
+                // 故不被自己减掉。
+                if self.players[i].bomb_timer > 0 {
+                    self.players[i].bomb_timer -= 1;
+                }
                 match self.players[i].life_state {
                     LIFE_DEATHWINDOW => {
                         // deathstop 挂点：窗口内按 X 会在 A 组 `try_stop` 里拨回 LIFE_ALIVE 并清
@@ -111,16 +116,22 @@ impl WorldBody {
             if self.players[i].life_state == LIFE_JUMPING {
                 continue;
             }
-            self.try_jump(i);
-            if self.players[i].life_state == LIFE_JUMPING {
-                continue;
+            // 规则套件分派（经典机体刀）：X/C 键行为按机体数据走，穷尽 match。
+            match &tables.characters[self.players[i].character_id as usize].kit {
+                Kit::Chronos => {
+                    self.try_jump(i);
+                    if self.players[i].life_state == LIFE_JUMPING {
+                        continue;
+                    }
+                    self.try_stop(i);
+                }
+                Kit::Classic(bomb) => self.try_bomb(i, bomb),
             }
-            self.try_stop(i);
             self.move_player(i, tables);
-            // 角色模块静态分发点（A8"shottype 类似物"）：现仅 character 0，将来各角色一臂。
-            #[allow(clippy::single_match)]
+            // 角色模块静态分发点（A8"shottype 类似物"）：机体 1 复用机体 0 的 shottype 表
+            // （经典机体刀 spec §2.4），将来各角色再各自一臂。
             match self.players[i].character_id {
-                0 => self.char0_update_shot(i, tables),
+                0 | 1 => self.char0_update_shot(i, tables),
                 _ => {}
             }
         }
@@ -178,6 +189,49 @@ impl WorldBody {
         if self.players[i].life_state == LIFE_DEATHWINDOW {
             self.players[i].life_state = LIFE_ALIVE;
             self.players[i].state_timer = 0;
+        }
+        self.void_spell_captures();
+    }
+
+    /// 经典 bomb（`Kit::Classic`，经典机体刀 spec §3.1）。门禁：上升沿、库存 > 0、未在 bomb 中、
+    /// ALIVE 或决死窗口（deathbomb；命没扣，无退款）。效果顺序固定：扣库存 → 计时 → 救窗口
+    /// → 无敌 → 按声明序铺 field（I4）→ 吸道具（此时已 ALIVE）→ 触发点失格（与 `try_stop` 同口径）。
+    /// `cfg` 借自 `tables`（与 `self` 不同对象）；按索引取 field 免得迭代器横跨 `create_field`。
+    fn try_bomb(&mut self, i: usize, cfg: &BombCfg) {
+        if !self.pressed_edge(i, crate::input::BTN_BOMB)
+            || self.players[i].bombs == 0
+            || self.players[i].bomb_timer != 0
+            || !matches!(self.players[i].life_state, LIFE_ALIVE | LIFE_DEATHWINDOW)
+        {
+            return;
+        }
+        let p = &mut self.players[i];
+        p.bombs -= 1;
+        p.bomb_timer = cfg.frames;
+        if p.life_state == LIFE_DEATHWINDOW {
+            p.life_state = LIFE_ALIVE;
+            p.state_timer = 0;
+        }
+        p.invuln = cfg.invuln;
+        let (px, py) = (p.x, p.y);
+        for k in 0..cfg.fields.len() {
+            let f = cfg.fields[k];
+            let (x, y) = match f.origin {
+                BombOrigin::FieldCenter => (Fx::ZERO, Fx::from_int(super::FIELD_HEIGHT / 2)),
+                BombOrigin::PlayerAtCast => (px, py),
+            };
+            self.create_field(crate::field::FieldInit {
+                x,
+                y,
+                radius: f.radius,
+                dmg_per_frame: f.dmg_per_frame,
+                life: f.life,
+                owner: i as u8,
+                flags: f.flags,
+            });
+        }
+        if cfg.attract_items {
+            self.attract_all_items(i);
         }
         self.void_spell_captures();
     }
@@ -1078,5 +1132,266 @@ mod tests {
         w.body.spells[1].capture_ok = 1; // active == 0 的槽
         w.body.void_spell_captures();
         assert_eq!(w.body.spells[1].capture_ok, 1);
+    }
+
+    // ── 经典机体（经典机体刀 2026-09-15）：机体 1 = Kit::Classic ────────────────
+
+    /// 机体 1 世界：自机换成 `spawn(1, …)`，其余同 `World::new`。
+    fn classic_world() -> Box<crate::step::World> {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0] =
+            crate::player::PlayerState::spawn(1, &crate::tables::TABLES_V0.characters[1]);
+        w
+    }
+
+    fn classic_bomb() -> &'static crate::tables::BombCfg {
+        match &crate::tables::TABLES_V0.characters[1].kit {
+            crate::tables::Kit::Classic(b) => b,
+            crate::tables::Kit::Chronos => unreachable!("机体 1 必须是 Classic"),
+        }
+    }
+
+    /// 机体 1 复用机体 0 的火力（spec §2.4）：按住 SHOT 一帧出弹数与机体 0 相同且 > 0。
+    #[test]
+    fn classic_character_fires_the_same_shots_as_character_0() {
+        let count = |mut w: Box<crate::step::World>| {
+            press(&mut w, crate::input::BTN_SHOT);
+            w.body.shots.iter_alive().count()
+        };
+        let (c0, c1) = (count(crate::step::World::new(1)), count(classic_world()));
+        assert!(c0 > 0, "前提：机体 0 按下当帧出弹");
+        assert_eq!(c1, c0, "机体 1 必须与机体 0 同样出弹");
+    }
+
+    /// ①② 成对：窗口内能救且不扣命；窗口耗尽后按 X 救不回、不扣 bomb。
+    #[test]
+    fn classic_deathbomb_inside_the_window_revives_without_costing_a_life() {
+        let mut w = classic_world();
+        w.body.players[0].bombs = 1;
+        let lives0 = w.body.players[0].lives;
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = crate::player::DEATHBOMB_WINDOW;
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.players[0].life_state, crate::player::LIFE_ALIVE);
+        assert_eq!(w.body.players[0].lives, lives0, "决死救人不扣命");
+        assert_eq!(w.body.players[0].state_timer, 0);
+        assert_eq!(w.body.players[0].bombs, 0);
+        assert_eq!(w.body.players[0].bomb_timer, classic_bomb().frames);
+    }
+
+    #[test]
+    fn classic_bomb_after_the_window_closed_cannot_undo_the_death() {
+        let mut w = classic_world();
+        w.body.players[0].bombs = 1;
+        let lives0 = w.body.players[0].lives;
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = 1;
+        press(&mut w, 0); // 窗口耗尽 → commit_death
+        assert_eq!(w.body.players[0].lives, lives0 - 1, "已经扣命");
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.players[0].lives, lives0 - 1, "命不会退");
+        assert_eq!(w.body.players[0].deaths, 1);
+    }
+
+    /// 伤害圆几何判别：圈内敌掉血、圈外不掉；圆心 = 起爆点 (0,200) ≠ 场心 (0,224)。
+    #[test]
+    fn classic_bomb_damage_field_is_at_the_cast_point_and_hits_only_inside() {
+        use crate::math::Fx;
+        let mut w = classic_world();
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(200);
+        w.body.players[0].bombs = 1;
+        let near = crate::world::test_support::spawn_enemy(&mut w, 0, 240, 1000); // 距 40
+        let far = crate::world::test_support::spawn_enemy(&mut w, 0, 40, 1000); // 距 160 > 120+16
+        let (ni, fi) = (
+            w.body.enemies.get(near).unwrap(),
+            w.body.enemies.get(far).unwrap(),
+        );
+        let (nhp, fhp) = (w.body.enemies.hp[ni], w.body.enemies.hp[fi]);
+        press(&mut w, BTN_BOMB);
+        let f = w
+            .body
+            .fields
+            .iter_alive()
+            .find(|&i| w.body.fields.flags[i] & crate::field::FIELD_DAMAGE != 0)
+            .expect("应铺了伤害 field");
+        assert_eq!(
+            (w.body.fields.x[f], w.body.fields.y[f]),
+            (Fx::ZERO, Fx::from_int(200))
+        );
+        press(&mut w, 0);
+        assert!(w.body.enemies.hp[ni] < nhp, "圈内敌必须掉血");
+        assert_eq!(w.body.enemies.hp[fi], fhp, "圈外敌不得掉血");
+    }
+
+    /// 持续消弹：起爆后第 60 帧新来的弹也被消掉（`life = 1` 的错实现会红）。
+    #[test]
+    fn classic_bomb_clear_field_keeps_clearing_for_its_whole_duration() {
+        let mut w = classic_world();
+        w.body.players[0].bombs = 1;
+        press(&mut w, BTN_BOMB);
+        for _ in 0..59 {
+            press(&mut w, 0);
+        }
+        bullet_at(&mut w, 0, 200);
+        press(&mut w, 0);
+        assert_eq!(
+            w.body.bullets.iter_alive().count(),
+            0,
+            "整段期间新弹也该被消掉"
+        );
+    }
+
+    /// 沿检测三件：按住不连环 / 结束后真沿再发 / 进行中再按 no-op 不扣不刷新。
+    #[test]
+    fn classic_holding_the_bomb_key_does_not_chain_bomb() {
+        let mut w = classic_world();
+        w.body.players[0].bombs = 3;
+        let frames = classic_bomb().frames;
+        for _ in 0..=(2 * frames + 4) {
+            press(&mut w, BTN_BOMB);
+        }
+        assert_eq!(w.body.players[0].bombs, 2, "全程按住只该起爆一次");
+    }
+
+    #[test]
+    fn classic_genuine_second_bomb_after_release_fires_again() {
+        let mut w = classic_world();
+        w.body.players[0].bombs = 2;
+        press(&mut w, BTN_BOMB);
+        for _ in 0..classic_bomb().frames {
+            press(&mut w, 0);
+        }
+        assert_eq!(w.body.players[0].bomb_timer, 0, "本段应已结束");
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.players[0].bombs, 0, "新的真沿必须照常起爆");
+    }
+
+    #[test]
+    fn classic_pressing_bomb_while_one_is_active_is_a_free_noop() {
+        let mut w = classic_world();
+        w.body.players[0].bombs = 2;
+        press(&mut w, BTN_BOMB);
+        press(&mut w, 0);
+        let left = w.body.players[0].bomb_timer;
+        assert!(left > 0);
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.players[0].bombs, 1, "效果中再按不得扣");
+        assert!(w.body.players[0].bomb_timer < left, "不得刷新计时");
+    }
+
+    /// 计时恰好 `frames` 帧归零：触发帧不被自己减，第 frames−1 帧仍 >0，第 frames 帧 ==0。
+    #[test]
+    fn classic_bomb_timer_runs_out_exactly_after_frames() {
+        let mut w = classic_world();
+        w.body.players[0].bombs = 1;
+        let frames = classic_bomb().frames;
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.players[0].bomb_timer, frames, "触发当帧不被自己减掉");
+        for k in 1..frames {
+            press(&mut w, 0);
+            assert_ne!(w.body.players[0].bomb_timer, 0, "第 {k} 帧仍应在效果中");
+        }
+        press(&mut w, 0);
+        assert_eq!(w.body.players[0].bomb_timer, 0);
+    }
+
+    /// 门禁：无库存无效；ECL 演出冻结（A 组）发不出、不扣。
+    #[test]
+    fn classic_bomb_gates_stock_and_actor_freeze() {
+        let mut w = classic_world();
+        w.body.players[0].bombs = 0;
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.players[0].bomb_timer, 0);
+        assert_eq!(w.body.fields.iter_alive().count(), 0, "不得铺任何作用区");
+        let mut w = classic_world();
+        w.body.players[0].bombs = 2;
+        w.body.freeze_left = [0, 10];
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.players[0].bomb_timer, 0, "被定住期间不得发动");
+        assert_eq!(w.body.players[0].bombs, 2);
+    }
+
+    /// 空 `fields` 合法：不铺区，但扣库存、进效果段、给无敌（触发帧不被自减）。
+    #[test]
+    fn classic_bomb_with_no_fields_still_grants_invulnerability() {
+        let mut t = crate::tables::build_tables_v0();
+        let crate::tables::Kit::Classic(b) = &mut t.characters[1].kit else {
+            unreachable!()
+        };
+        b.fields = Box::new([]);
+        let invuln = b.invuln;
+        let mut w = crate::step::World::new_with_tables(1, &t);
+        w.body.players[0] = crate::player::PlayerState::spawn(1, &t.characters[1]);
+        w.body.players[0].bombs = 1;
+        let mut input = InputFrame::empty(w.frame());
+        input.actions[0].buttons = BTN_BOMB;
+        crate::step::step(&mut w, &t, &crate::ecl::image::EclImage::empty(), &input);
+        assert_eq!(w.body.players[0].bombs, 0);
+        assert_ne!(w.body.players[0].bomb_timer, 0);
+        assert_eq!(w.body.fields.iter_alive().count(), 0);
+        assert_eq!(w.body.players[0].invuln, invuln);
+    }
+
+    /// 起爆当帧全屏吸道具 + 当帧符卡失格。
+    #[test]
+    fn classic_bomb_attracts_items_and_voids_the_spell_capture() {
+        let mut w = classic_world();
+        let boss = crate::world::test_support::spawn_enemy(&mut w, 0, 100, 1000);
+        assert!(w.body.spell_begin_internal(0, boss, 1, 300, 1000, 0, 100));
+        let h = w.body.drop_item(
+            crate::math::Fx::ZERO,
+            crate::math::Fx::from_int(60),
+            crate::items::ITEM_POWER,
+            &crate::tables::TABLES_V0,
+        );
+        let ii = w.body.items.get(h).unwrap();
+        w.body.players[0].bombs = 1;
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.items.magnet_to[ii], 0, "起爆当帧应全场上锁到自机 0");
+        assert_eq!(w.body.spells[0].capture_ok, 0, "起爆后本卡不予收卡");
+    }
+
+    /// 跨套件判别（X 键）：同一按键在机体 0 = 停止、机体 1 = bomb。防分派接反/写死一边。
+    #[test]
+    fn x_key_dispatches_by_kit() {
+        let mut chronos = crate::step::World::new(1);
+        chronos.body.players[0].bombs = 1;
+        press(&mut chronos, BTN_BOMB);
+        assert_eq!(chronos.body.freeze_left[0], crate::player::TIMESTOP_FRAMES);
+        assert_eq!(chronos.body.players[0].bomb_timer, 0);
+        assert_eq!(chronos.body.fields.iter_alive().count(), 0);
+
+        let mut classic = classic_world();
+        classic.body.players[0].bombs = 1;
+        press(&mut classic, BTN_BOMB);
+        assert_eq!(classic.body.freeze_left[0], 0, "Classic 不得停止");
+        assert_eq!(classic.body.players[0].bomb_timer, classic_bomb().frames);
+        assert_eq!(classic.body.fields.iter_alive().count(), 2);
+    }
+
+    /// `bomb_timer` 进校验和（P6）。
+    #[test]
+    fn bomb_timer_enters_the_checksum() {
+        let mut w = classic_world();
+        let c0 = w.checksum();
+        w.body.players[0].bomb_timer = 1;
+        assert_ne!(w.checksum(), c0);
+    }
+
+    /// 容量闸：rank-3 峰值 814 弹下起 bomb 跑满整段，道具池不溢出。若变红**不要现场调池 cap**，记录实测留给人裁定。
+    #[test]
+    fn classic_bomb_at_rank3_peak_bullet_count_does_not_overflow_item_pool() {
+        use crate::world::POOL_ITEM;
+        let mut w = classic_world();
+        w.body.players[0].bombs = 1;
+        for _ in 0..814 {
+            bullet_at(&mut w, 0, 224);
+        }
+        press(&mut w, BTN_BOMB);
+        for _ in 1..classic_bomb().frames {
+            press(&mut w, 0);
+        }
+        assert_eq!(w.body.diag.pool_full[POOL_ITEM], 0);
     }
 }
