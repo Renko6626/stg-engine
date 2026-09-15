@@ -98,6 +98,16 @@ pub(crate) struct Peaks {
     pub tasks: Peak,
 }
 
+// ── 段结束事件（RL 卡池验收用：时限到 / 收卡 / 关底 是 env done=2 的来源）──────────
+
+/// `seg_ends` 下标 → (事件码, 打印名)。
+const SEG_EVENTS: [(u8, &str); 4] = [
+    (stg_core::events::EVT_PHASE_ENDED, "PHASE_ENDED"),
+    (stg_core::events::EVT_SPELL_CAPTURED, "SPELL_CAPTURED"),
+    (stg_core::events::EVT_SPELL_FAILED, "SPELL_FAILED"),
+    (stg_core::events::EVT_STAGE_CLEARED, "STAGE_CLEARED"),
+];
+
 /// 一条 `EVT_TASK_FAULT`（`a_index` = 任务池索引，`data = [fault_code, script]`）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct FaultRec {
@@ -140,6 +150,8 @@ pub(crate) struct RunReport {
     pub last: Counts,
     pub peaks: Peaks,
     pub faults: Vec<FaultRec>,
+    /// 各类段结束事件的**首次**出现帧（下标 = `SEG_EVENTS` 行序）；未出现为 `None`。
+    pub seg_ends: [Option<u32>; 4],
     pub diag: DiagCounters,
     pub at: Option<(u32, Vec<BulletRow>, Vec<EnemyRow>)>,
 }
@@ -257,6 +269,7 @@ pub(crate) fn run_scene(
     let mut rows: Vec<Counts> = Vec::new();
     let mut peaks = Peaks::default();
     let mut faults: Vec<FaultRec> = Vec::new();
+    let mut seg_ends: [Option<u32>; 4] = [None; 4];
     let mut at_dump: Option<(u32, Vec<BulletRow>, Vec<EnemyRow>)> = None;
 
     // 帧号去重：`--frames` 恰好是 stride 整数倍时末帧会被推两次。
@@ -280,6 +293,11 @@ pub(crate) fn run_scene(
 
         // fault 事件当帧就得摘走——`events` 是帧内私有缓冲，下一帧 begin 清空。
         for ev in w.frame_events() {
+            for (k, (code, _)) in SEG_EVENTS.iter().enumerate() {
+                if ev.kind == *code && seg_ends[k].is_none() {
+                    seg_ends[k] = Some(f);
+                }
+            }
             if ev.kind == stg_core::events::EVT_TASK_FAULT {
                 faults.push(FaultRec {
                     frame: f,
@@ -315,6 +333,7 @@ pub(crate) fn run_scene(
         last,
         peaks,
         faults,
+        seg_ends,
         diag: w.view().diag(),
         at: at_dump,
     }
@@ -377,6 +396,16 @@ fn print_report(path: &str, r: &RunReport) {
         "末帧 {}：弹 {} · 敌 {} · 任务 {} · 道具 {} · 自机弹 {}",
         r.last.frame, r.last.bullets, r.last.enemies, r.last.tasks, r.last.items, r.last.shots
     );
+    // 固定格式（训练仓 stgtranscribe.validate 按此解析）：各类首次出现帧，未出现记 —。
+    let segs: Vec<String> = SEG_EVENTS
+        .iter()
+        .zip(r.seg_ends.iter())
+        .map(|((_, name), at)| match at {
+            Some(f) => format!("{name}@{f}"),
+            None => format!("{name} —"),
+        })
+        .collect();
+    println!("段结束：{}", segs.join(" · "));
 
     // 诊断：非零的才列，零的一行带过——好让"有东西不对"一眼跳出来。
     let d = &r.diag;
@@ -830,6 +859,34 @@ sub main() { _ = spawn_enemy(0.0fx, 96.0fx, 500, 1, 1000, 1, shoot); loop { wait
         }
         // 越界码不 panic、退化成短名占位（不是"未知 fault 码"那种会漂的措辞）
         assert_eq!(fault_name(200), "?");
+    }
+
+    /// **判别式：段结束帧来自世界事件，不是常数。** 时限 120 的非符段必须报出 PHASE_ENDED
+    /// 的首帧（落在时限附近），其余三类为空；空场四类全空。对调事件码或写死 None 均红。
+    #[test]
+    fn segment_end_frames_reported() {
+        // 下标与 `SEG_EVENTS` 表的行序一致。
+        const SEG_PHASE_ENDED: usize = 0;
+        const SEG_SPELL_CAPTURED: usize = 1;
+        const SEG_SPELL_FAILED: usize = 2;
+        const SEG_STAGE_CLEARED: usize = 3;
+        assert_eq!(SEG_EVENTS[SEG_PHASE_ENDED].1, "PHASE_ENDED");
+        assert_eq!(SEG_EVENTS[SEG_STAGE_CLEARED].1, "STAGE_CLEARED");
+        let src = "async sub pat() { loop { wait(1); } }\n\
+                   async sub boss() { set_invuln(65535); phase_begin(0, pat, 120, 0); wait_spell(); loop { wait(1); } }\n\
+                   sub main() { _ = spawn_enemy(0.0fx, 100.0fx, 1000, 0, 0, 1, boss); loop { wait(1); } }";
+        let r = run_src(src, 300, None);
+        let phase = r.seg_ends[SEG_PHASE_ENDED].expect("时限到应发 PHASE_ENDED");
+        assert!(
+            (120..=130).contains(&phase),
+            "PHASE_ENDED 首帧 {phase} 应在时限 120 附近"
+        );
+        assert_eq!(r.seg_ends[SEG_SPELL_CAPTURED], None);
+        assert_eq!(r.seg_ends[SEG_SPELL_FAILED], None);
+        assert_eq!(r.seg_ends[SEG_STAGE_CLEARED], None);
+
+        let quiet = run_src(EMPTY, 300, None);
+        assert_eq!(quiet.seg_ends, [None; 4]);
     }
 
     /// 逐池名字表的**池号互异且落在数组内**——错位会让 `run` 把"道具池满"印成"敌池满"，

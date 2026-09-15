@@ -98,7 +98,8 @@ notes = ""
 cargo run -p stg-harness -- check <卡目录>                              # 编译
 cargo run -p stg-harness -- run <卡目录> --frames <time_limit+300> --rank 0
 cargo run -p stg-harness -- run <卡目录> --frames <time_limit+300> --rank 4
-# 看三样：退出码 0（无 fault）/ 弹峰值 / 时限帧之后弹数归零（说明段结束了、模式任务已随段退场）
+# 看四样：退出码 0（无 fault）/ 弹峰值 / 「段结束：」行里 PHASE_ENDED 或 SPELL_* 的帧在时限附近
+#        / 时限帧之后弹数归零（说明模式任务已随段退场）
 cargo run -p stg-harness -- serve --ecl <卡目录>                         # 浏览器试玩（ssh -L 转发端口 8611）
 ```
 
