@@ -6,6 +6,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# stg-py 为 PyO3 扩展（maturin 构建，Task 7 加入）；其原生 link 需专用构建路径，
+# 不作为普通 workspace member。
+exclude = ["crates/stg-py"]
 
 [workspace.package]
 edition      = "2024"
@@ -16,6 +19,7 @@ authors      = ["Renko6626 <108311284+Renko6626@users.noreply.github.com>"]
 stg-core         = { path = "crates/stg-core" }
 stg-derive       = { path = "crates/stg-derive" }
 stg-ecl-compiler = { path = "crates/stg-ecl-compiler" }
+stg-rl           = { path = "crates/stg-rl" }
 
 # 发布构建默认打开优化；确定性来自整数运算与烘焙表，与优化等级无关，
 # 但 8192 弹满池 < 0.5ms 的性能指标（design_doc.md §0）依赖 release。

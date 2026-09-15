@@ -1,0 +1,364 @@
+{
+    "proto": 1,
+    "backend": "fixture",
+    "policy": "builtin",
+    "obs_timing": "prev-frame-final",
+    "tick_hz": 60,
+    "field": {
+        "half_w": 192,
+        "height": 448,
+        "origin": "center-top",
+        "move_area": {
+            "xmin": -192,
+            "xmax": 192,
+            "ymin": 0,
+            "ymax": 448
+        }
+    },
+    "number": {
+        "fx": "q16.16-i32-le",
+        "angle": "bam-u16-le"
+    },
+    "actions": [
+        {
+            "bit": 0,
+            "name": "UP"
+        },
+        {
+            "bit": 1,
+            "name": "DOWN"
+        },
+        {
+            "bit": 2,
+            "name": "LEFT"
+        },
+        {
+            "bit": 3,
+            "name": "RIGHT"
+        },
+        {
+            "bit": 4,
+            "name": "SHOT"
+        },
+        {
+            "bit": 5,
+            "name": "BOMB"
+        },
+        {
+            "bit": 6,
+            "name": "SLOW"
+        }
+    ],
+    "tables": [
+        {
+            "id": 1,
+            "name": "player",
+            "cap": 1,
+            "stride": 36,
+            "fields": [
+                {
+                    "name": "x",
+                    "type": "fx",
+                    "off": 0
+                },
+                {
+                    "name": "y",
+                    "type": "fx",
+                    "off": 4
+                },
+                {
+                    "name": "hit_radius",
+                    "type": "fx",
+                    "off": 8
+                },
+                {
+                    "name": "speed",
+                    "type": "fx",
+                    "off": 12
+                },
+                {
+                    "name": "speed_focus",
+                    "type": "fx",
+                    "off": 16
+                },
+                {
+                    "name": "focus",
+                    "type": "u8",
+                    "off": 20
+                },
+                {
+                    "name": "state",
+                    "type": "u8",
+                    "off": 21
+                },
+                {
+                    "name": "lives",
+                    "type": "u8",
+                    "off": 22
+                },
+                {
+                    "name": "bombs",
+                    "type": "u8",
+                    "off": 23
+                },
+                {
+                    "name": "life_frags",
+                    "type": "u8",
+                    "off": 24
+                },
+                {
+                    "name": "bomb_frags",
+                    "type": "u8",
+                    "off": 25
+                },
+                {
+                    "name": "power",
+                    "type": "u16",
+                    "off": 26
+                },
+                {
+                    "name": "score",
+                    "type": "u32",
+                    "off": 28
+                },
+                {
+                    "name": "graze",
+                    "type": "u32",
+                    "off": 32
+                }
+            ]
+        },
+        {
+            "id": 2,
+            "name": "bullets",
+            "cap": 640,
+            "stride": 30,
+            "fields": [
+                {
+                    "name": "x",
+                    "type": "fx",
+                    "off": 0
+                },
+                {
+                    "name": "y",
+                    "type": "fx",
+                    "off": 4
+                },
+                {
+                    "name": "vx",
+                    "type": "fx",
+                    "off": 8
+                },
+                {
+                    "name": "vy",
+                    "type": "fx",
+                    "off": 12
+                },
+                {
+                    "name": "speed",
+                    "type": "fx",
+                    "off": 16
+                },
+                {
+                    "name": "angle",
+                    "type": "angle",
+                    "off": 20
+                },
+                {
+                    "name": "radius",
+                    "type": "fx",
+                    "off": 22
+                },
+                {
+                    "name": "flags",
+                    "type": "u8",
+                    "off": 26
+                },
+                {
+                    "name": "state",
+                    "type": "u8",
+                    "off": 27
+                },
+                {
+                    "name": "type",
+                    "type": "u16",
+                    "off": 28
+                }
+            ]
+        },
+        {
+            "id": 3,
+            "name": "enemies",
+            "cap": 256,
+            "stride": 38,
+            "fields": [
+                {
+                    "name": "x",
+                    "type": "fx",
+                    "off": 0
+                },
+                {
+                    "name": "y",
+                    "type": "fx",
+                    "off": 4
+                },
+                {
+                    "name": "hurt_w",
+                    "type": "fx",
+                    "off": 8
+                },
+                {
+                    "name": "hurt_h",
+                    "type": "fx",
+                    "off": 12
+                },
+                {
+                    "name": "hit_w",
+                    "type": "fx",
+                    "off": 16
+                },
+                {
+                    "name": "hit_h",
+                    "type": "fx",
+                    "off": 20
+                },
+                {
+                    "name": "hp",
+                    "type": "i32",
+                    "off": 24
+                },
+                {
+                    "name": "hp_max",
+                    "type": "i32",
+                    "off": 28
+                },
+                {
+                    "name": "flags",
+                    "type": "u16",
+                    "off": 32
+                },
+                {
+                    "name": "id",
+                    "type": "u32",
+                    "off": 34
+                }
+            ]
+        },
+        {
+            "id": 4,
+            "name": "lasers",
+            "cap": 64,
+            "stride": 48,
+            "fields": [
+                {
+                    "name": "x",
+                    "type": "fx",
+                    "off": 0
+                },
+                {
+                    "name": "y",
+                    "type": "fx",
+                    "off": 4
+                },
+                {
+                    "name": "angle",
+                    "type": "angle",
+                    "off": 8
+                },
+                {
+                    "name": "start",
+                    "type": "fx",
+                    "off": 10
+                },
+                {
+                    "name": "end",
+                    "type": "fx",
+                    "off": 14
+                },
+                {
+                    "name": "start_len",
+                    "type": "fx",
+                    "off": 18
+                },
+                {
+                    "name": "speed",
+                    "type": "fx",
+                    "off": 22
+                },
+                {
+                    "name": "half_h",
+                    "type": "fx",
+                    "off": 26
+                },
+                {
+                    "name": "omega",
+                    "type": "fx",
+                    "off": 30
+                },
+                {
+                    "name": "vx",
+                    "type": "fx",
+                    "off": 34
+                },
+                {
+                    "name": "vy",
+                    "type": "fx",
+                    "off": 38
+                },
+                {
+                    "name": "t_active",
+                    "type": "i32",
+                    "off": 42
+                },
+                {
+                    "name": "state",
+                    "type": "u8",
+                    "off": 46
+                },
+                {
+                    "name": "type",
+                    "type": "u8",
+                    "off": 47
+                }
+            ]
+        },
+        {
+            "id": 5,
+            "name": "items",
+            "cap": 1024,
+            "stride": 18,
+            "fields": [
+                {
+                    "name": "x",
+                    "type": "fx",
+                    "off": 0
+                },
+                {
+                    "name": "y",
+                    "type": "fx",
+                    "off": 4
+                },
+                {
+                    "name": "vx",
+                    "type": "fx",
+                    "off": 8
+                },
+                {
+                    "name": "vy",
+                    "type": "fx",
+                    "off": 12
+                },
+                {
+                    "name": "kind",
+                    "type": "u8",
+                    "off": 16
+                },
+                {
+                    "name": "flags",
+                    "type": "u8",
+                    "off": 17
+                }
+            ]
+        }
+    ]
+}
