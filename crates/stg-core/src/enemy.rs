@@ -70,7 +70,9 @@ define_pool! {
     }
 }
 
-// ── 敌号编解码（敌句柄打包刀 2026-07-31；六处产/消口共用，别各写各的）──────────
+// ── 敌号编解码（敌句柄打包刀 2026-07-31）──────────────────────────────────
+// 编码约定唯一持有者是本函数的 `pack_handle`（下方）；解码 `resolve_enemy_handle` 仍在
+// `ecl::syscall`。六处产/消口共用这一对约定，任何一侧改编码都必须同步另一侧。
 
 /// 敌号（脚本视角）的**打包编码**：`((gen & 0x7FFF) << 16) | index`。
 ///
@@ -87,6 +89,7 @@ define_pool! {
 ///
 /// 2026-09-15 公开：stg-rl 观测编码（spec §5 enemies `id`）需要同一打包约定，
 /// 函数从 `ecl::syscall` 搬到本模块并 `pub`（原私有 `pack_enemy_handle`）。
+#[inline]
 pub fn pack_handle(h: EnemyHandle) -> i32 {
     (((h.generation & 0x7FFF) as i32) << 16) | (h.index as i32)
 }
