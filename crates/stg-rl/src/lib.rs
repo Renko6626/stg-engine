@@ -4,6 +4,7 @@
 pub mod encode;
 pub mod env;
 pub mod layout;
+pub mod vec_env;
 
 // 编译期断言（spec §7）：`Env` 可跨线程搬（rayon 批量 step）；`Image` 可跨线程共享
 // （`Arc<EnvConfig>` 要求 `EnvConfig: Send + Sync`）。
