@@ -4,7 +4,7 @@
 //! 本模块是自机的**相位逻辑**。二者并存，路径区分。
 //!
 //! **生死状态机的触发与计时分家**：本相位（3）独占**全部计时**（决死窗口倒数 → `commit_death`
-//! → 原地继续 + 遡行请求 / GAMEOVER，玩法刀）；**中弹触发**（Alive → DeathWindow）在 settle（相位 7）。
+//! → 按 Kit：原地继续 + 遡行请求 / 场底重生 / GAMEOVER）；**中弹触发**（Alive → DeathWindow）在 settle（相位 7）。
 //! 因相位 3 早于 7，中弹在帧尾定、窗口从次帧起数 —— 这 1 帧错位正是决死窗口的语义。
 
 use super::WorldBody;
@@ -77,7 +77,7 @@ impl WorldBody {
                             self.players[i].state_timer -= 1;
                         }
                         if self.players[i].state_timer == 0 {
-                            self.commit_death(i);
+                            self.commit_death(i, tables);
                             // 死亡帧 A 组整段不跑（玩法刀复审）：`commit_death` 已原地复活，否则同帧
                             // 按 X 会在扣命之后再白扣一发停止（无 timeline 宿主可见）。
                             continue;
@@ -137,11 +137,14 @@ impl WorldBody {
         }
     }
 
-    /// 决死窗口耗尽（玩法刀 spec §4.2）：死亡即遡行。扣残机 + 偏差值 + `EVT_PLAYER_DIED`；
-    /// 残机耗尽 → GAMEOVER（不遡行）；否则**原地**回 ALIVE、`REWIND_INVULN` 无敌，并发
-    /// `EVT_REWIND_REQUESTED`。有 timeline 的宿主据此恢复被弹前的快照，代价在
-    /// `rewind_landed` 从快照重算；无 timeline 的宿主（golden/storm/bench）到此为止 = 原地继续。
-    fn commit_death(&mut self, i: usize) {
+    /// 决死窗口耗尽。共用：扣残机 + 偏差值 + `EVT_PLAYER_DIED`；残机耗尽 → GAMEOVER。
+    /// 之后按规则套件分派（经典机体刀）：
+    /// - `Chronos`（玩法刀 spec §4.2，死亡即遡行）：**原地**回 ALIVE、`REWIND_INVULN`，发
+    ///   `EVT_REWIND_REQUESTED`。有 timeline 的宿主据此恢复被弹前的快照，代价在 `rewind_landed`
+    ///   从快照重算；无 timeline 的宿主到此为止 = 原地继续。
+    /// - `Classic`（东方原作语义）：瞬移场底 `(0, 384)`、ALIVE、`RESPAWN_INVULN`，**不发**请求——
+    ///   挂 timeline 也不会遡行。不新增生命态（旧 `LIFE_RESPAWNING` 期间 A 组本就照跑，与 ALIVE+无敌同）。
+    fn commit_death(&mut self, i: usize, tables: &WorldTables) {
         let p = &mut self.players[i];
         p.lives = p.lives.saturating_sub(1);
         p.deaths = p.deaths.saturating_add(1);
@@ -161,15 +164,28 @@ impl WorldBody {
         let p = &mut self.players[i];
         p.life_state = LIFE_ALIVE;
         p.state_timer = 0;
-        p.invuln = p.invuln.max(crate::player::REWIND_INVULN);
-        self.push_event(Event {
-            kind: crate::events::EVT_REWIND_REQUESTED,
-            a_index: i as u16,
-            a_gen: 0,
-            x,
-            y,
-            data: [hit_frame as i32, 0],
-        });
+        let cid = p.character_id as usize;
+        // 各臂内重新取 `self.players[i]`：Chronos 臂要调 `self.push_event`，不能跨调用持有 `p`。
+        match &tables.characters[cid].kit {
+            Kit::Chronos => {
+                let p = &mut self.players[i];
+                p.invuln = p.invuln.max(crate::player::REWIND_INVULN);
+                self.push_event(Event {
+                    kind: crate::events::EVT_REWIND_REQUESTED,
+                    a_index: i as u16,
+                    a_gen: 0,
+                    x,
+                    y,
+                    data: [hit_frame as i32, 0],
+                });
+            }
+            Kit::Classic(_) => {
+                let p = &mut self.players[i];
+                p.x = Fx::ZERO;
+                p.y = Fx::from_int(384);
+                p.invuln = p.invuln.max(crate::player::RESPAWN_INVULN);
+            }
+        }
     }
 
     /// 停止触发（A 组，玩法刀 spec §2.2）：时停 + 触碰消弹合一，库存 = `bombs`。门禁四条：
@@ -1163,7 +1179,7 @@ mod tests {
         assert_eq!(c1, c0, "机体 1 必须与机体 0 同样出弹");
     }
 
-    /// ①② 成对：窗口内能救且不扣命；窗口耗尽后按 X 救不回、不扣 bomb。
+    /// ①② 成对：窗口内能救且不扣命；窗口耗尽后按 X 救不回（自机此时已重生，合法起爆照扣 bomb）。
     #[test]
     fn classic_deathbomb_inside_the_window_revives_without_costing_a_life() {
         let mut w = classic_world();
@@ -1393,5 +1409,111 @@ mod tests {
             press(&mut w, 0);
         }
         assert_eq!(w.body.diag.pool_full[POOL_ITEM], 0);
+    }
+
+    /// Classic 死亡：窗口耗尽 → 场底 (0,384)、ALIVE、RESPAWN_INVULN、残机 −1、偏差 +1、**无遡行请求**。
+    #[test]
+    fn classic_death_respawns_at_field_bottom_without_rewind_request() {
+        use crate::math::Fx;
+        let mut w = classic_world();
+        w.body.players[0].x = Fx::from_int(-100);
+        w.body.players[0].y = Fx::from_int(150);
+        let lives0 = w.body.players[0].lives;
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = 1;
+        press(&mut w, 0);
+        let p = w.body.players[0];
+        assert_eq!((p.x, p.y), (Fx::ZERO, Fx::from_int(384)), "场底中心");
+        assert_eq!(p.life_state, crate::player::LIFE_ALIVE);
+        assert_eq!(p.invuln, crate::player::RESPAWN_INVULN);
+        assert_eq!((p.lives, p.deaths), (lives0 - 1, 1));
+        assert!(
+            w.frame_events()
+                .iter()
+                .any(|e| e.kind == crate::events::EVT_PLAYER_DIED),
+            "照发 PlayerDied"
+        );
+        assert!(
+            !w.frame_events()
+                .iter()
+                .any(|e| e.kind == crate::events::EVT_REWIND_REQUESTED),
+            "Classic 不得发遡行请求"
+        );
+    }
+
+    #[test]
+    fn classic_last_life_death_enters_gameover() {
+        let mut w = classic_world();
+        w.body.players[0].lives = 1;
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = 1;
+        press(&mut w, 0);
+        assert_eq!(w.body.players[0].life_state, crate::player::LIFE_GAMEOVER);
+    }
+
+    /// 跨套件判别（死亡）：机体 0 原地 + REWIND_INVULN + 请求；机体 1 场底 + RESPAWN_INVULN + 无请求。
+    #[test]
+    fn death_dispatches_by_kit() {
+        use crate::math::Fx;
+        let die = |mut w: Box<crate::step::World>| {
+            w.body.players[0].x = Fx::from_int(-100);
+            w.body.players[0].y = Fx::from_int(150);
+            w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
+            w.body.players[0].state_timer = 1;
+            press(&mut w, 0);
+            let asked = w
+                .frame_events()
+                .iter()
+                .any(|e| e.kind == crate::events::EVT_REWIND_REQUESTED);
+            (
+                w.body.players[0].x,
+                w.body.players[0].y,
+                w.body.players[0].invuln,
+                asked,
+            )
+        };
+        assert_eq!(
+            die(crate::step::World::new(1)),
+            (Fx::from_int(-100), Fx::from_int(150), REWIND_INVULN, true)
+        );
+        assert_eq!(
+            die(classic_world()),
+            (
+                Fx::ZERO,
+                Fx::from_int(384),
+                crate::player::RESPAWN_INVULN,
+                false
+            )
+        );
+    }
+
+    /// Classic 按 C：永不进 JUMPING、`jump_cd` 不动；同帧 X 照常 bomb（C 不吞 X）。
+    #[test]
+    fn classic_c_key_is_a_noop() {
+        let mut w = classic_world();
+        w.body.players[0].bombs = 1;
+        for _ in 0..(JUMP_FRAMES + 2) {
+            press(&mut w, BTN_JUMP);
+            assert_ne!(w.body.players[0].life_state, LIFE_JUMPING);
+        }
+        assert_eq!(w.body.players[0].jump_cd, 0);
+        press(&mut w, 0);
+        press(&mut w, BTN_JUMP | BTN_BOMB);
+        assert_eq!(w.body.players[0].bombs, 0, "C+X 同帧 X 照常起爆");
+    }
+
+    /// 窗口耗尽那一帧按 X：死亡已结算（C 组先于 A 组，死亡帧 A 组跳过），不得扣 bomb、不得起爆。
+    #[test]
+    fn classic_bomb_on_the_expiry_frame_is_too_late_and_free() {
+        let mut w = classic_world();
+        w.body.players[0].bombs = 1;
+        let lives0 = w.body.players[0].lives;
+        w.body.players[0].life_state = crate::player::LIFE_DEATHWINDOW;
+        w.body.players[0].state_timer = 1;
+        press(&mut w, BTN_BOMB);
+        assert_eq!(w.body.players[0].lives, lives0 - 1, "耗尽帧已扣命");
+        assert_eq!(w.body.players[0].deaths, 1);
+        assert_eq!(w.body.players[0].bombs, 1, "死亡帧 A 组不跑，不扣 bomb");
+        assert_eq!(w.body.players[0].bomb_timer, 0, "也不起爆");
     }
 }

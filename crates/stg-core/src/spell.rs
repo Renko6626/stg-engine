@@ -91,8 +91,8 @@ fn hp_ratio(hp: i32, hp_start: i32, hp_threshold: i32) -> Fx {
 impl WorldBody {
     /// settle 符卡趟（相位 7 settle 尾调用，spec §3 五步，按槽升序；`_tables` 现未消费，
     /// 签名与其余相位函数对齐，供将来符卡配置搬进表时零成本扩展）。
-    /// 全部 active 符卡槽当场失格（玩法刀）。两个调用点：`try_stop`（冻结期间轮询不跑）、
-    /// `rewind_landed`（快照带回了被弹前的资格）。
+    /// 全部 active 符卡槽当场失格（玩法刀）。三个调用点：`try_stop`（冻结期间轮询不跑）、
+    /// `try_bomb`（Classic 起爆）、`rewind_landed`（快照带回了被弹前的资格）。
     pub(crate) fn void_spell_captures(&mut self) {
         for s in self.spells.iter_mut() {
             if s.active != 0 {
@@ -106,8 +106,8 @@ impl WorldBody {
             if self.spells[slot].active == 0 {
                 continue;
             }
-            // 1. 资格轮询作废（先于一切）：中弹入决死窗 → capture_ok 清 0。停止不在这里——
-            //    冻结期间 settle 不跑，由 `try_stop` 触发点调 `void_spell_captures`（玩法刀）。
+            // 1. 资格轮询作废（先于一切）：中弹入决死窗 → capture_ok 清 0。停止/起爆不在这里——
+            //    冻结期间 settle 不跑，由 `try_stop` / `try_bomb` 触发点调 `void_spell_captures`（玩法刀）。
             if self.players[0].life_state != LIFE_ALIVE {
                 self.spells[slot].capture_ok = 0;
             }

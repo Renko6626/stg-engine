@@ -1303,4 +1303,29 @@ mod tests {
             "落地后覆写环槽"
         );
     }
+
+    /// Classic 机体挂 Timeline：被弹致死不遡行，帧号连续，落在场底（经典机体刀 spec §3.3）。
+    #[test]
+    fn classic_death_under_timeline_does_not_rewind() {
+        let mut w = World::new(1);
+        w.body.players[0] =
+            crate::player::PlayerState::spawn(1, &crate::tables::TABLES_V0.characters[1]);
+        // 先挪离出生点：出生点就是 (0,384)，不挪的话「落在场底」断言对重生是瞎的。
+        w.body.players[0].x = crate::math::Fx::from_int(-100);
+        w.body.players[0].y = crate::math::Fx::from_int(200);
+        let mut t =
+            Timeline::from_world(w, EclImage::empty(), Boot::Snapshot { world_checksum: 0 });
+        plant_hit(&mut t);
+        for _ in 0..=(DEATHBOMB_WINDOW as u32 + 2) {
+            let before = t.frame();
+            assert_eq!(
+                t.advance(&InputFrame::empty(0)).rewound,
+                None,
+                "Classic 不得遡行"
+            );
+            assert_eq!(t.frame(), before + 1, "帧号连续");
+        }
+        assert_eq!(t.world.body.players[0].deaths, 1, "确实死过一次");
+        assert_eq!(t.world.body.players[0].y, crate::math::Fx::from_int(384));
+    }
 }
