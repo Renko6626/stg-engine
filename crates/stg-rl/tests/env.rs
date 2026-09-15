@@ -86,6 +86,18 @@ fn validate_rejects_bad_config() {
     let mut c = good.clone();
     c.starts[0].weight = 0.0;
     assert!(validate(&c).is_err());
+    let mut c = good.clone();
+    c.max_frames = 0;
+    assert!(validate(&c).is_err());
+    let mut c = good.clone();
+    c.starts.clear();
+    assert!(validate(&c).is_err());
+    let mut c = good.clone();
+    c.starts[0].weight = f64::NAN;
+    assert!(validate(&c).is_err());
+    let mut c = good.clone();
+    c.starts[0].weight = f64::INFINITY;
+    assert!(validate(&c).is_err());
     assert!(
         compile(&[("bad.ecl".into(), "sub main( {".into())])
             .unwrap_err()
@@ -199,10 +211,29 @@ fn warmup_retries_are_bounded_and_deterministic() {
         .map(|o| o.warmup_retries)
         .collect();
     assert_eq!(ra, rb);
+    assert!(ra.iter().any(|&r| r > 0), "SHOOTER 预热期应触发重试");
     assert!(
         ra.iter()
             .all(|&r| (0..=MAX_WARMUP_RETRIES as i32).contains(&r))
     );
+}
+
+#[test]
+fn reset_does_not_allocate_new_world_box() {
+    // SHOOTER + 大 warmup_max ⇒ 预热期几乎必死，reset 内部反复从模板 copy_into；
+    // 同一 Box 复用 ⇒ 地址整局存活期不变（不再每次 reset `World::new`）。
+    let mut c = cfg(vec![img(SHOOTER)], vec![]);
+    c.warmup_max = 400;
+    let mut env = Env::new(Arc::new(c), 0, Arc::new(BootCache::new()));
+    let addr = env.world() as *const _ as usize;
+    for i in 0..3 {
+        env.reset();
+        assert_eq!(
+            env.world() as *const _ as usize,
+            addr,
+            "第 {i} 次 reset 换了新 World Box"
+        );
+    }
 }
 
 #[test]

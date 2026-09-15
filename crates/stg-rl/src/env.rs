@@ -22,8 +22,8 @@ use stg_core::tables::TABLES_V0;
 
 use crate::layout::{ACTION_MASK, BULLETS_CAP_MAX};
 
-/// events 列数（spec §6；列序与 `layout::EVENT_COLUMNS` 一致）。
-pub const EVENTS: usize = 8;
+/// events 列数（spec §6）。单一来源 = `layout::EVENT_COLUMNS`，列序与长度都随它走。
+pub const EVENTS: usize = crate::layout::EVENT_COLUMNS.len();
 /// done 码（spec §4.4）：继续。
 pub const DONE_NONE: u8 = 0;
 /// done 码：决死窗口耗尽后死亡（bomb 救回不算）。
@@ -197,12 +197,25 @@ fn warmup_walk(world: &mut World, image: &EclImage, seed: u64, k: u64) -> bool {
     true
 }
 
-/// 开机模板缓存（spec §4.2）：键 = (镜像, mark, rank)，首次用到时 `new_game_at(0,…)` 生成
-/// 并缓存，之后 `copy_into` 出新世界再 `reseed`。`reseed` 等价已在 Task 1 验证为绿。
+/// 缓存模板的共享句柄：`Box` 把 ~1MB 的 `World` 留在堆上（不经过栈），`Arc` 让各 env 零拷贝共享。
 ///
-/// `HashMap` 只做键查找、不参与遍历序（断层线以上允许）。
+/// `#[allow(redundant_allocation)]`：clippy 建议直接 `Arc<World>`，但由 `Box<World>` 转
+/// `Arc<World>` 会把整个大对象再搬一次；这里刻意保留双层指针，只共享 Box 本身。
+#[allow(clippy::redundant_allocation)]
+type Template = Arc<Box<World>>;
+/// 模板表：`HashMap` 只做键查找、不参与遍历序（断层线以上允许）。
+type TemplateMap = Mutex<HashMap<(usize, i32, i32), Template>>;
+
+/// 开机模板缓存（spec §4.2）：键 = (镜像下标, mark, rank)，首次用到时 `new_game_at(0,…)` 生成
+/// 并缓存，之后 `copy_into` 覆盖调用方自有的 `World` 再 `reseed`。`reseed` 等价已在 Task 1 验证为绿。
+///
+/// **契约**：键为 `(镜像下标, mark, rank)`，不含镜像内容身份——**一个 cache 只能配一份
+/// `EnvConfig`**（`VecEnv` 内部独享一份 `Arc<BootCache>`；同下标不同镜像共享 cache 会取错模板）。
+///
+/// 值为 `Arc<Box<World>>`：锁内只做「未命中则生成 + clone Arc」并**立即放锁**，命中零拷贝；
+/// 那份 ~1MB 的 `copy_into` 由各 env 在锁外对自己的 `Box<World>` 完成，故并发 reset 不再被锁串行化。
 pub struct BootCache {
-    templates: Mutex<HashMap<(usize, i32, i32), Box<World>>>,
+    templates: TemplateMap,
 }
 
 impl Default for BootCache {
@@ -227,27 +240,32 @@ impl BootCache {
         self.len() == 0
     }
 
-    /// 取该起点的模板副本；未命中则用 `new_game_at(0, rank, mark, Loadout{character:1,..},
-    /// image)` 生成并缓存。调用方须已 `validate`（rank/mark/image 合法），否则 panic。
-    fn template(&self, cfg: &EnvConfig, start: &Start) -> Box<World> {
+    /// 取该起点的模板（`Arc` 共享，零拷贝）；未命中则用
+    /// `new_game_at(0, rank, mark, Loadout{character:1,..}, image)` 生成并缓存。
+    ///
+    /// **锁内只做「查找 / 未命中生成 / clone Arc」，随即放锁**；调用方须已 `validate`
+    /// （rank/mark/image 合法），否则 panic。
+    fn template(&self, cfg: &EnvConfig, start: &Start) -> Template {
         let key = (start.image, start.mark, start.rank);
-        let mut map = self.templates.lock().unwrap();
-        let src = map.entry(key).or_insert_with(|| {
-            World::new_game_at(
-                0,
-                start.rank,
-                start.mark,
-                Loadout {
-                    character: 1,
-                    ..Default::default()
-                },
-                cfg.images[start.image].0.as_ref(),
-            )
-            .expect("new_game_at 失败：EnvConfig 未通过 validate()")
-        });
-        let mut out = World::new(0);
-        src.copy_into(&mut out);
-        out
+        {
+            let mut map = self.templates.lock().unwrap();
+            let tmpl = map.entry(key).or_insert_with(|| {
+                Arc::new(
+                    World::new_game_at(
+                        0,
+                        start.rank,
+                        start.mark,
+                        Loadout {
+                            character: 1,
+                            ..Default::default()
+                        },
+                        cfg.images[start.image].0.as_ref(),
+                    )
+                    .expect("new_game_at 失败：EnvConfig 未通过 validate()"),
+                )
+            });
+            Arc::clone(tmpl)
+        }
     }
 }
 
@@ -289,8 +307,18 @@ impl Env {
         env
     }
 
-    /// 课程学习：改起点采样权重（下一次 `reset` 生效；长度须等于起点数，由调用方校验）。
+    /// 课程学习：改起点采样权重（下一次 `reset` 生效）。
+    ///
+    /// # Panics
+    /// `w.len() != cfg.starts.len()` 时 panic（权重按起点下标采样，长度不符会越界）。
     pub fn set_weights(&mut self, w: Arc<Vec<f64>>) {
+        assert_eq!(
+            w.len(),
+            self.cfg.starts.len(),
+            "set_weights: 权重长度 {} != 起点数 {}",
+            w.len(),
+            self.cfg.starts.len()
+        );
         self.weights = w;
     }
 
@@ -325,24 +353,25 @@ impl Env {
         let start = self.cfg.starts[chosen].clone();
         let image = &self.cfg.images[start.image].0;
 
-        let mut accepted: Option<(Box<World>, u32)> = None;
+        let mut retry_ok = 0u32;
         for retry in 0..=MAX_WARMUP_RETRIES {
             let seed = splitmix64(s ^ (retry as u64 + 2));
-            let mut world = self.cache.template(&self.cfg, &start);
-            world.reseed(seed);
+            // 每轮都从模板锁外 `copy_into` 覆盖 env 自有的 Box：绝不在失败世界上续跑，
+            // 也不再每轮 `World::new`（~1MB alloc）——Box 地址整局存活期不变。
+            let tmpl = self.cache.template(&self.cfg, &start);
+            tmpl.copy_into(&mut self.world);
+            self.world.reseed(seed);
             let k = if retry == MAX_WARMUP_RETRIES {
                 0
             } else {
                 splitmix64(seed ^ 0xA5) % (self.cfg.warmup_max as u64 + 1)
             };
-            if warmup_walk(&mut world, image, seed, k) {
-                accepted = Some((world, retry));
+            if warmup_walk(&mut self.world, image, seed, k) {
+                retry_ok = retry;
                 break;
             }
         }
-        let (world, retry) = accepted.expect("末轮 k=0 必然接受");
-        self.world = world;
-        self.warmup_retries = retry;
+        self.warmup_retries = retry_ok;
         self.ep_frames = 0;
         let (graze, score, bombs) = {
             let v = self.world.view();
@@ -360,14 +389,14 @@ impl Env {
         let mut ev = [0i32; EVENTS];
         let mut done = DONE_NONE;
         let mut seg_hit = false;
-        let image = self.cfg.images[self.cfg.starts[self.start_index].image]
-            .0
-            .clone();
+        // 借 `self.cfg` 的镜像（不再每步 clone 一次 `Arc<EclImage>`）；与 `&mut self.world`
+        // 是不同字段，借用不冲突。
+        let image = &self.cfg.images[self.cfg.starts[self.start_index].image].0;
 
         for _ in 0..self.cfg.frame_skip {
             let mut input = InputFrame::empty(self.world.frame());
             input.actions[0].buttons = action & ACTION_MASK;
-            core_step(&mut self.world, &TABLES_V0, &image, &input);
+            core_step(&mut self.world, &TABLES_V0, image, &input);
             self.ep_frames += 1;
 
             for e in self.world.frame_events() {
