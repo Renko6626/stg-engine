@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use numpy::{Element, PyReadonlyArray1, PyReadwriteArray1};
+use numpy::{Element, PyArray1, PyArrayMethods, PyReadwriteArray1};
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
@@ -26,7 +26,14 @@ create_exception!(_native, CompileError, PyException);
 #[pyclass]
 struct Image(env::Image);
 
-/// 从 dict 按固定键取一个可写一维数组；缺失 / dtype 不符 ⇒ `ValueError`（消息含键名）。
+/// 从 dict 按固定键取一个可写一维数组；缺失 / dtype 不符 / 只读 / 已被借用 ⇒ `ValueError`
+/// （消息含键名）。
+///
+/// **不得**改回 `extract::<PyReadwriteArray1>()`：其内部 `readwrite()` =
+/// `try_readwrite().unwrap()`，只读或同一数组挂两个键时会 Rust panic，以 `PanicException`
+/// （`BaseException` 子类，`except Exception` 抓不住）穿透到 Python。这里先转成 `PyArray1`
+/// （纯类型转换，不 panic），再用 `try_readwrite()` 把 `NotWriteable` / `AlreadyBorrowed`
+/// 映射成 `ValueError`。
 fn take<'py, T: Element>(
     bufs: &Bound<'py, PyDict>,
     key: &str,
@@ -34,7 +41,10 @@ fn take<'py, T: Element>(
     let obj = bufs
         .get_item(key)?
         .ok_or_else(|| PyValueError::new_err(format!("buffers 缺少键 {key:?}")))?;
-    obj.extract::<PyReadwriteArray1<'py, T>>()
+    let arr = obj
+        .extract::<Bound<'py, PyArray1<T>>>()
+        .map_err(|e| PyValueError::new_err(format!("buffer {key:?}: {e}")))?;
+    arr.try_readwrite()
         .map_err(|e| PyValueError::new_err(format!("buffer {key:?}: {e}")))
 }
 
@@ -180,9 +190,13 @@ impl NativeVecEnv {
     fn step(
         &mut self,
         py: Python<'_>,
-        actions: PyReadonlyArray1<'_, u32>,
+        actions: Bound<'_, PyArray1<u32>>,
         bufs: &Bound<'_, PyDict>,
     ) -> PyResult<()> {
+        // 先 `try_readonly()` 再 `as_slice()`：不依赖会 panic 的 `PyReadonlyArray1` 提取。
+        let actions = actions
+            .try_readonly()
+            .map_err(|e| PyValueError::new_err(format!("actions: {e}")))?;
         let actions = actions
             .as_slice()
             .map_err(|_| PyValueError::new_err("actions: 需要 C 连续 uint32 数组"))?;

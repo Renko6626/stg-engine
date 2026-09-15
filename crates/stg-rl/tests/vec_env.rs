@@ -242,6 +242,9 @@ fn compacted_rows_match_direct_encode() {
     let mut bullet_rows = vec![0u8; cap * 30];
     let mut item_rows = vec![0u8; ITEMS_CAP * 18];
 
+    // 两侧都「构造即 reset + 再显式 reset」：这份**双 reset 的对称是刻意的**——`VecEnv::reset`
+    // 与 `Env::new` 的组合同样会让每个 env 的 counter +1。改动任一侧须同步，否则 counter 错位、
+    // 种子流分叉，本对拍会红（见 crate::vec_env::VecEnv::reset 文档）。
     ve.reset(&mut buf.view()).unwrap();
     for e in direct.iter_mut() {
         e.reset();

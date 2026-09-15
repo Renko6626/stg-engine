@@ -178,9 +178,11 @@ bit4 可碰撞 ← `flags & (ENEMY_NO_BODY | ENEMY_DYING) == 0`；`id` ← `pack
 ## 7. 并行与性能
 
 - `VecEnv` 持**专属** `rayon::ThreadPool`（`threads` 显式，默认 `min(available_parallelism, N)`），不用全局池。
-- `step` 内 `py.allow_threads` 释放 GIL；env 与各自缓冲切片是不相交 `&mut`，`par_chunks_mut` 按
-  `with_min_len(ceil(N / threads))` 分块（单 env step ~6µs，逐 env 派发调度开销会反客为主）。
-- CSR 写入：各 env 先写入自己的定长暂存区（`bullets_cap` 行），并行结束后单线程按 env 序 memcpy 压实并写 `offsets`。
+- `step` 内 `py.detach` 释放 GIL；`build_work` 把缓冲切成互不相交的逐 env 分片后
+  `into_par_iter().with_min_len(ceil(N / threads))` 并行（单 env step ~6µs，逐 env 派发调度开销会反客为主）。
+- CSR 写入：各 env 先写入自己的定长暂存区（`bullets_cap` 行）；压实分两阶段——串行前缀和算 `offsets`
+  → `split_at_mut` 把目标缓冲切成互不相交的片 → 专属池并行 `copy_from_slice`。确定性依据：offsets
+  由 env 序串行算出，目标区间冻结，故最终字节与线程数/调度无关。
 - 文档要求训练侧设 `torch.set_num_threads`，避免与 rayon 抢核。
 - 不做 CPU/GPU 流水线重叠（async env），基准显示 GPU 等 CPU 时再议。
 - harness 新子命令 `rl-bench`：steps/s × threads（1/2/4/…/64）× num_envs，结果追加 `docs/bench-baseline.md`。
@@ -261,4 +263,8 @@ Python（`pytest crates/stg-py/tests`，CI 与 wheel 冒烟共用）：
 | 2 | `stg-py` 不进主 workspace（根 `Cargo.toml` `exclude` + 自带 `[workspace]`/`Cargo.lock`） | PyO3 cdylib 进 `cargo test --workspace` 会要求 CI 有 libpython，破坏现有三平台闸门 |
 | 3 | `pack_enemy_handle` 搬到 `stg_core::enemy::pack_handle` 并公开，syscall 调用它 | enemies `id` 编码（§5）需要同一打包公式，复制一份会漂移 |
 | 4 | §3 的可选 `gymnasium` 适配 **v1 不做** | 训练仓尚未定框架，适配层按框架写才不白写；文档写明「禁止套 subprocess vector wrapper」即可 |
+| 5 | `BootCache` 模板值改 `Arc<Box<World>>`，锁内只 `Arc::clone`；`Env::reset` 改为把模板 `copy_into` 进 env 自有的 `Box<World>`（不再锁内 alloc+copy） | 原实现每次 reset 在全局锁内做 `World::new`（~1MB alloc）＋ `copy_into`（~1MB memcpy），512 env 的 reset 被锁串行化，吞吐平台卡在 2 线程；修复后 8~64 线程抬到 91万~168万 env-steps/s（见 `docs/bench-baseline.md`） |
+| 6 | `compact` 由「单线程 memcpy 压实」改为「串行前缀和 + 并行 scatter」（§7 已改写） | 结构性移除最坏 `O(N·cap)` 的串行段；默认 rl-bench（每 env ~12.5 弹）测不出收益，弹满 `cap` 的密弹 workload 才兑现 |
+| 7 | reseed 等价测试落 `crates/stg-ecl-compiler/tests/reseed.rs` | `stg-core` 不能依赖编译器，而等价判定需要编译 `.ecl`；改为抽样比对并覆盖 `mark`（`new_game_at` 中段启动） |
+| 8 | rl-bench 输出新增三列计时区观测：`bullets_total` 每 env 每步平均 / `bullets_dropped` 总和 / 自动 reset 次数 | 判断计时区是否长期跑在 cap 溢出态，及低弹量 workload 的取证 |
 

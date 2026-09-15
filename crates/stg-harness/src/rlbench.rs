@@ -188,7 +188,8 @@ fn run(args: &[String]) -> Result<(), String> {
         let mut buf = Buf::new(envs, cap);
         ve.reset(&mut buf.view())
             .map_err(|e| format!("reset: {e}"))?;
-        // 预热 100 步（不记账），把弹幕打到稳态。动作缓冲在计时区外预分配。
+        // 预热 100 步（不记账），让各 env 离开开局（随机动作下死亡频繁、弹量低，见观测列）。
+        // 动作缓冲在计时区外预分配。
         let mut act = vec![0u32; envs];
         for s in 0..100u32 {
             for (i, a) in act.iter_mut().enumerate() {
@@ -198,7 +199,8 @@ fn run(args: &[String]) -> Result<(), String> {
                 .map_err(|e| format!("warmup step: {e}"))?;
         }
         // 计时区：动作缓冲已预分配，区内只原地重填，计时主体是 `VecEnv::step`。
-        // 同时累计观测口径：bullets_total 每 env 平均、bullets_dropped 总和、自动 reset 次数。
+        // 计时区含每步三列观测统计（512×3 次求和，量小）；累计 `bullets_total` 每 env 平均、
+        // `bullets_dropped` 总和、自动 reset 次数。
         let mut bullets_total_sum: u64 = 0;
         let mut bullets_dropped_sum: u64 = 0;
         let mut resets: u64 = 0;

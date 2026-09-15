@@ -45,3 +45,6 @@ stg_rl.build_info()                              # {"version","engine_ver","tabl
   **在构造期**抛，不在 `step` 里抛。
 - 缓冲一律**一维**（多维形状由 Python 包装层 `reshape` 出视图），Rust 只见扁平切片。
   `test_smoke.py` 用 `stgagent.schema` 的 dtype 解码 CSR 行，与按 `OFFSETS` 手切结果对拍。
+- `step(actions)` 的 torch 张量须在 **CPU**（CUDA 张量先 `.cpu()`；`.numpy()` 只支持 CPU 张量）。
+- `step` 期间**不得有其他 Python 线程写同一组缓冲**：`step` 释放 GIL 且 Rust 借走全部切片；
+  多线程采样请各自持有 `VecEnv` 与缓冲。

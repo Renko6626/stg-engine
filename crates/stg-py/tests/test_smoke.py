@@ -63,3 +63,74 @@ def test_errors():
         stg_rl.VecEnv(2, 1, {"game": img}, [stg_rl.Start("game", mark=15)], bullets_cap=256, buffers=bad)
     with pytest.raises(ValueError):
         stg_rl.hello(0)
+
+
+def test_writes_land_in_caller_buffer():
+    """正常分配的缓冲：step 后写入必须落到调用方缓冲（非全零）。"""
+    env = make()
+    b = env.reset()
+    for _ in range(10):
+        env.step(np.zeros(4, dtype=np.uint32))
+    assert np.any(b["player"] != 0), "player 写入应落到调用方缓冲"
+
+
+def test_readonly_buffer_raises_valueerror():
+    """只读缓冲 ⇒ ValueError（不是 PanicException；PanicException 继承 BaseException，抓不住）。"""
+    img = stg_rl.compile_bundled("game")
+    bad = stg_rl.alloc_buffers(2, 256, backend="numpy")
+    bad["done"].setflags(write=False)
+    env = stg_rl.VecEnv(2, 1, {"game": img}, [stg_rl.Start("game", mark=15)],
+                        bullets_cap=256, buffers=bad)
+    with pytest.raises(ValueError):
+        env.reset()
+
+
+def test_aliased_buffers_raise_valueerror():
+    """两个键指向同一数组 ⇒ ValueError（numpy 动态借用检查以 ValueError 表现，不 panic）。"""
+    img = stg_rl.compile_bundled("game")
+    bad = stg_rl.alloc_buffers(2, 256, backend="numpy")
+    bad["phase"] = bad["frame"]  # 同一 uint32 数组挂两个键
+    env = stg_rl.VecEnv(2, 1, {"game": img}, [stg_rl.Start("game", mark=15)],
+                        bullets_cap=256, buffers=bad)
+    with pytest.raises(ValueError):
+        env.reset()
+
+
+def test_noncontiguous_buffer_raises_valueerror():
+    """行跨步（非 C 连续）缓冲区 ⇒ 构造期 ValueError，绝不静默拷贝。"""
+    img = stg_rl.compile_bundled("game")
+    n = 2
+    bad = stg_rl.alloc_buffers(n, 256, backend="numpy")
+    bad["player"] = np.zeros((2 * n, 36), np.uint8)[::2]  # 形状/dtype/size 都对，但非连续
+    with pytest.raises(ValueError):
+        stg_rl.VecEnv(n, 1, {"game": img}, [stg_rl.Start("game", mark=15)],
+                      bullets_cap=256, buffers=bad)
+
+
+def test_negative_args_raise_valueerror():
+    """负数 usize/u64 参数 ⇒ ValueError（包装层拦截，而非 Rust 的 OverflowError）。"""
+    with pytest.raises(ValueError):
+        stg_rl.hello(-1)
+    img = stg_rl.compile_bundled("game")
+    with pytest.raises(ValueError):
+        stg_rl.VecEnv(-1, 1, {"game": img}, [stg_rl.Start("game", mark=15)])
+
+
+def test_torch_backend_matches_numpy():
+    """torch 缓冲（CPU、pin=False）与 numpy 路径逐缓冲一致，且写入落在调用方张量。"""
+    pytest.importorskip("torch")
+    img = stg_rl.compile_bundled("game")
+    starts = [stg_rl.Start("game", mark=15)]
+    tb = stg_rl.alloc_buffers(4, 256, backend="torch", pin=False)
+    nb = stg_rl.alloc_buffers(4, 256, backend="numpy")
+    te = stg_rl.VecEnv(4, 2, {"game": img}, starts, bullets_cap=256, seed=3, buffers=tb)
+    ne = stg_rl.VecEnv(4, 2, {"game": img}, starts, bullets_cap=256, seed=3, buffers=nb)
+    te.reset()
+    ne.reset()
+    acts = np.zeros(4, dtype=np.uint32)
+    for _ in range(40):
+        te.step(acts)
+        ne.step(acts)
+    for key in ("frame", "phase", "done", "bullets_offsets", "player", "bullets"):
+        assert np.array_equal(tb[key].numpy(), nb[key]), key
+    assert tb["player"].abs().sum().item() > 0, "写入应落在调用方 torch 张量"

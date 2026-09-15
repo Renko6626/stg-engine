@@ -3,8 +3,9 @@
 //! 观测写入按 env 分片并行（每 env 写自己的 `Slot` 暂存区与调用方缓冲中自己那一段）。
 //!
 //! **偏离 spec §7 的说明（2026-09-15，控制者裁定）**：spec §7 原写「CSR 单线程压实」，
-//! 但压实最多要串行 memcpy `N*cap` 行、源是 N 个彼此分离的 `cap*30` 暂存区，是吞吐平台的
-//! 主因（见 `docs/bench-baseline.md` 的 rl-bench 记账），故把 `compact` 拆成两阶段：
+//! 故把 `compact` 拆成两阶段：这是**结构性移除最坏 `O(N*cap)` 的串行段**；在默认 rl-bench
+//! （每 env ~12.5 弹）下测不出收益，弹满 `cap` 的密弹 workload 才兑现。吞吐平台的实际主因
+//! 是**已修复的 `BootCache` 锁**（锁内 alloc+copy 串行化 reset），见 `docs/bench-baseline.md`。
 //!
 //! 1. **串行前缀和**：按 env 索引序累计 `nb/ni` 并写入 `*_offsets`——这是唯一决定
 //!    「哪个 env 的行落在哪个 CSR 区间」的地方，只依赖各 `Slot` 的数据，与线程数/调度无关；
@@ -213,6 +214,9 @@ impl VecEnv {
     }
 
     /// 全员新一局：并行 `reset` + 写观测，随后 CSR 压实；统计列清零。
+    ///
+    /// 构造时 `Env::new` 已 reset 过（构造即 reset）；此处会**再开一局**（每 env 的 counter +1、
+    /// 多一次随机预热）。这是既定行为，确定性测试与 rl-bench 基线都依赖现状，不要「优化」掉。
     pub fn reset(&mut self, buf: &mut BufferSet<'_>) -> Result<(), String> {
         self.check(buf)?;
         let pool = &self.pool;
@@ -282,6 +286,9 @@ impl VecEnv {
     }
 
     /// 课程学习：改起点采样权重（长度须等于起点数、全部有限 ≥ 0、总和 > 0；下一次 reset 生效）。
+    ///
+    /// **运行期口径**：允许单个起点 `weight == 0`（课程学习把某起点置零）；唯一硬约束是总和 > 0。
+    /// 与构造期 `validate` 要求每个起点 `weight > 0` 不同。
     pub fn set_start_weights(&mut self, w: Vec<f64>) -> Result<(), String> {
         if w.len() != self.n_starts {
             return Err(format!(

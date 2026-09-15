@@ -84,6 +84,8 @@ pub struct EnvConfig {
 /// 构造期配置校验（spec §3 的 Python 侧错误在构造期抛，不在 step 里抛）。
 ///
 /// `mark == 0`（从头开局）例外——它不查镜像标记表。
+/// **起点权重口径：构造期要求每个起点 `weight > 0`**（不允许某起点从出生就被排除；
+/// 运行期课程学习置零走 `set_start_weights`，见其文档）。
 pub fn validate(cfg: &EnvConfig) -> Result<(), String> {
     if cfg.starts.is_empty() {
         return Err("starts 不能为空".to_string());
@@ -286,7 +288,8 @@ pub struct Env {
 }
 
 impl Env {
-    /// `env_index` 进种子流（同 config 的不同 env 各自独立）。构造即 reset。
+    /// `env_index` 进种子流（同 config 的不同 env 各自独立）。**构造即 reset**；
+    /// `VecEnv::reset` 会再开一局（counter +1、多一次预热），见 `VecEnv::reset` 文档。
     pub fn new(cfg: Arc<EnvConfig>, env_index: u32, cache: Arc<BootCache>) -> Env {
         let weights = Arc::new(cfg.starts.iter().map(|s| s.weight).collect::<Vec<f64>>());
         let mut env = Env {
