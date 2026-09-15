@@ -193,7 +193,7 @@ pub const SYS_CLEAR_BULLETS_AT: u16 = 541;
 /// 别把这族"补全"成 `set_lives`/`set_bombs`/`set_power` 四件套——多一条写路径就多一处
 /// 与 `Loadout` 抢开局初值的歧义。
 pub const SYS_ADD_LIVES: u16 = 510;
-/// 停止库存增量（B20；玩法刀起钳 `[0, STOP_STOCK_MAX]`）。语义同 [`SYS_ADD_LIVES`]；增量形态同为人类裁定。
+/// X 键库存增量（Chronos 停止 / Classic bomb 共用，钳 `[0, STOP_STOCK_MAX]`；B20）。语义同 [`SYS_ADD_LIVES`]；增量形态同为人类裁定。
 pub const SYS_ADD_BOMBS: u16 = 511;
 /// 火力增量（B20）。语义同 [`SYS_ADD_LIVES`]，但上钳是 [`crate::items::POWER_MAX`]（400，
 /// = 显示 4.00）**而非 `u16::MAX`**——越过它 `power_tier` 索引就 OOB（见

@@ -213,6 +213,8 @@ impl WorldBody {
     /// ALIVE 或决死窗口（deathbomb；命没扣，无退款）。效果顺序固定：扣库存 → 计时 → 救窗口
     /// → 无敌 → 按声明序铺 field（I4）→ 吸道具（此时已 ALIVE）→ 触发点失格（与 `try_stop` 同口径）。
     /// `cfg` 借自 `tables`（与 `self` 不同对象）；按索引取 field 免得迭代器横跨 `create_field`。
+    /// 门禁不查场景冻结 `freeze_left[0]`：Classic 没有该冻结的生产者（ECL 演出冻结走 `freeze_left[1]`，
+    /// A 组门禁已挡）；将来混搭套件或给 Classic 加场景冻结时须补门禁。
     fn try_bomb(&mut self, i: usize, cfg: &BombCfg) {
         if !self.pressed_edge(i, crate::input::BTN_BOMB)
             || self.players[i].bombs == 0
