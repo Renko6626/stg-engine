@@ -106,8 +106,9 @@ impl WorldBody {
             if self.spells[slot].active == 0 {
                 continue;
             }
-            // 1. 资格轮询作废（先于一切）：中弹入决死窗 → capture_ok 清 0。停止/起爆不在这里——
-            //    冻结期间 settle 不跑，由 `try_stop` / `try_bomb` 触发点调 `void_spell_captures`（玩法刀）。
+            // 1. 资格轮询作废（先于一切）：中弹入决死窗 → capture_ok 清 0。另外三处由触发点直接调
+            //    `void_spell_captures`，本轮询看不到它们：`try_stop`（冻结期间 settle 不跑）、
+            //    `try_bomb`（起爆不改生命态）、`rewind_landed`（快照带回了被弹前的资格）。
             if self.players[0].life_state != LIFE_ALIVE {
                 self.spells[slot].capture_ok = 0;
             }

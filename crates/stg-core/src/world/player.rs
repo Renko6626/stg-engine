@@ -1207,6 +1207,7 @@ mod tests {
         press(&mut w, BTN_BOMB);
         assert_eq!(w.body.players[0].lives, lives0 - 1, "命不会退");
         assert_eq!(w.body.players[0].deaths, 1);
+        assert_eq!(w.body.players[0].bombs, 0, "重生后合法起爆照扣 bomb");
     }
 
     /// 伤害圆几何判别：圈内敌掉血、圈外不掉；圆心 = 起爆点 (0,200) ≠ 场心 (0,224)。
