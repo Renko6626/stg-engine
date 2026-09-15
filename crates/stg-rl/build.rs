@@ -15,9 +15,9 @@ fn main() {
     for p in &files {
         println!("cargo:rerun-if-changed={}", p.display());
         let name = p.file_name().unwrap().to_str().unwrap();
+        let rel = format!("/../../godot/ecl/game/{name}");
         out.push_str(&format!(
-            "    ({name:?}, include_str!({:?})),\n",
-            p.canonicalize().unwrap()
+            "    ({name:?}, include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), {rel:?}))),\n"
         ));
     }
     out.push_str("];\n");

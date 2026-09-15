@@ -1,6 +1,7 @@
 //! stg-rl —— 强化学习批量 env 核心（spec `docs/superpowers/specs/2026-09-15-stg-rl-env-design.md`）。
 //! 断层线以上：允许线程 / rayon；stg-core 语义不变。
 
+pub mod encode;
 pub mod layout;
 
 pub mod bundled {

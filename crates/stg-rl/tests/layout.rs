@@ -45,19 +45,118 @@ fn header_fields() {
     assert_eq!(caps, vec![1, 777, 256, 64, 1024]);
 }
 
+/// 显式「字段名 → off 常量」映射：逐字段核对 `off::*` 与表内 `off` 相等。
+/// 映射长度与表字段数互查，防漏；末段保留原「字段不出 stride」的口径。
+fn assert_offsets(t: &stg_rl::layout::TableDef, map: &[(&str, usize)]) {
+    assert_eq!(map.len(), t.fields.len(), "{}: 映射须覆盖全字段", t.name);
+    for (name, off) in map {
+        let f = t
+            .fields
+            .iter()
+            .find(|f| f.name == *name)
+            .unwrap_or_else(|| panic!("{}: 缺字段 {name}", t.name));
+        assert_eq!(f.off, *off, "{}.{name} off 常量与表不符", t.name);
+    }
+    for f in t.fields {
+        assert!(
+            map.iter().any(|(n, _)| *n == f.name),
+            "{}.{} 未在映射中",
+            t.name,
+            f.name
+        );
+        assert!(f.off + f.ty.size() <= t.stride, "{}.{}", t.name, f.name);
+    }
+}
+
 #[test]
 fn offset_consts_agree_with_field_tables() {
     use stg_rl::layout::*;
-    let find = |t: &TableDef, n: &str| t.fields.iter().find(|f| f.name == n).unwrap().off;
-    assert_eq!(find(&PLAYER, "score"), off::player::SCORE);
-    assert_eq!(find(&BULLETS, "type"), off::bullet::TYPE);
-    assert_eq!(find(&ENEMIES, "id"), off::enemy::ID);
-    assert_eq!(find(&ITEMS, "flags"), off::item::FLAGS);
-    for t in TABLES {
-        for f in t.fields {
-            assert!(f.off + f.ty.size() <= t.stride, "{}.{}", t.name, f.name);
-        }
-    }
+    assert_offsets(
+        &PLAYER,
+        &[
+            ("x", off::player::X),
+            ("y", off::player::Y),
+            ("hit_radius", off::player::HIT_R),
+            ("speed", off::player::SPEED),
+            ("speed_focus", off::player::SPEED_F),
+            ("focus", off::player::FOCUS),
+            ("state", off::player::STATE),
+            ("lives", off::player::LIVES),
+            ("bombs", off::player::BOMBS),
+            ("life_frags", off::player::LFRAG),
+            ("bomb_frags", off::player::BFRAG),
+            ("power", off::player::POWER),
+            ("score", off::player::SCORE),
+            ("graze", off::player::GRAZE),
+        ],
+    );
+    assert_offsets(
+        &BULLETS,
+        &[
+            ("x", off::bullet::X),
+            ("y", off::bullet::Y),
+            ("vx", off::bullet::VX),
+            ("vy", off::bullet::VY),
+            ("speed", off::bullet::SPEED),
+            ("angle", off::bullet::ANGLE),
+            ("radius", off::bullet::RADIUS),
+            ("flags", off::bullet::FLAGS),
+            ("state", off::bullet::STATE),
+            ("type", off::bullet::TYPE),
+        ],
+    );
+    assert_offsets(
+        &ENEMIES,
+        &[
+            ("x", off::enemy::X),
+            ("y", off::enemy::Y),
+            ("hurt_w", off::enemy::HURT_W),
+            ("hurt_h", off::enemy::HURT_H),
+            ("hit_w", off::enemy::HIT_W),
+            ("hit_h", off::enemy::HIT_H),
+            ("hp", off::enemy::HP),
+            ("hp_max", off::enemy::HP_MAX),
+            ("flags", off::enemy::FLAGS),
+            ("id", off::enemy::ID),
+        ],
+    );
+    assert_offsets(
+        &LASERS,
+        &[
+            ("x", off::laser::X),
+            ("y", off::laser::Y),
+            ("angle", off::laser::ANGLE),
+            ("start", off::laser::START),
+            ("end", off::laser::END),
+            ("start_len", off::laser::START_LEN),
+            ("speed", off::laser::SPEED),
+            ("half_h", off::laser::HALF_H),
+            ("omega", off::laser::OMEGA),
+            ("vx", off::laser::VX),
+            ("vy", off::laser::VY),
+            ("t_active", off::laser::T_ACTIVE),
+            ("state", off::laser::STATE),
+            ("type", off::laser::TYPE),
+        ],
+    );
+    assert_offsets(
+        &ITEMS,
+        &[
+            ("x", off::item::X),
+            ("y", off::item::Y),
+            ("vx", off::item::VX),
+            ("vy", off::item::VY),
+            ("kind", off::item::KIND),
+            ("flags", off::item::FLAGS),
+        ],
+    );
+
+    assert_eq!(FieldType::U8.size(), 1);
+    assert_eq!(FieldType::U16.size(), 2);
+    assert_eq!(FieldType::Angle.size(), 2);
+    assert_eq!(FieldType::Fx.size(), 4);
+    assert_eq!(FieldType::U32.size(), 4);
+    assert_eq!(FieldType::I32.size(), 4);
 }
 
 #[test]
