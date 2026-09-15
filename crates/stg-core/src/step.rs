@@ -292,6 +292,14 @@ impl World {
         self.seed
     }
 
+    /// 训练用重设种子（stg-rl env 刀 spec §8）：只写 RNG 与 `seed` 字段。配合开机模板缓存：
+    /// `new_game_at(0,…)` 快照 + `reseed(s)` ≡ `new_game_at(s,…)`（等价测试押运）。回放 / 握手身份仍以开机
+    /// seed 为准，`Timeline` 不调用本函数。不改布局、不改演化。
+    pub fn reseed(&mut self, seed: u64) {
+        self.body.rng = Pcg32::new(seed, RNG_SEQ);
+        self.seed = seed;
+    }
+
     /// 本世界绑定的表 `content_hash`（回放头/日志头用；与 `save_bytes` 写进头里的是同一个值）。
     pub fn tables_hash(&self) -> u64 {
         self.tables_hash

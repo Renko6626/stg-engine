@@ -22,3 +22,5 @@ stg-ecl-compiler.workspace = true
 # serve 子命令（WebSocket 查看器，断层线以上）—— stg-core 决不可依赖它（防火墙见
 # `cargo tree -p stg-core`）。
 tungstenite = "0.30.0"
+# RL env 吞吐基准（rl-bench）：stg-rl 在断层线【以上】，可用 rayon/浮点。
+stg-rl.workspace = true

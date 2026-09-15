@@ -11,6 +11,8 @@
 //!                         **有 task fault 即退非零码**（写完 .ecl 之后的观测出口）
 //!   gen-ecl-meta          生成 editors/vscode/stg-ecl/ecl-meta.json + 刷新 docs/ecl-lang/7-reference.md
 //!                       生成段（单一真相源=builtins::all()，两个 sink 同一次生成）
+//!   rl-bench [--envs N] [--steps S] [--threads T] [--warmup W] [--cap C] [--workload default|dense] [--mark M] [--rank R] [--density K] [--profile]  stg-rl VecEnv 吞吐 / 单线程开销分解（spec §7）
+//!                         （--threads T 夹到 min(T, envs)，缺省自动 1,2,4,…）
 //!
 //! 本 crate 在断层线【以上】，可用浮点；stg-core 只消费 commit 的表字节。
 
@@ -18,6 +20,7 @@ use std::process::ExitCode;
 
 mod eclmeta;
 mod replay;
+mod rlbench;
 mod run;
 mod storm;
 mod tables;
@@ -36,10 +39,11 @@ fn main() -> ExitCode {
         Some("check") => cmd_check(&args[2..]),
         Some("run") => run::cmd_run(&args[2..]),
         Some("replay") => replay::cmd_replay(&args[2..]),
+        Some("rl-bench") => rlbench::cmd_rl_bench(&args[2..]),
         Some("gen-ecl-meta") => eclmeta::cmd_gen(),
         _ => {
             eprintln!(
-                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] [--ecl PATH] | dump --out FILE [--frames N] [--seed S] [--ecl PATH] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl|目录> | run <file.ecl|目录> [--frames N] [--seed S] [--rank R] [--at F] | replay <log.stgr> --ecl <file.ecl|目录> [--every N] | gen-ecl-meta>"
+                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] [--ecl PATH] | dump --out FILE [--frames N] [--seed S] [--ecl PATH] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl|目录> | run <file.ecl|目录> [--frames N] [--seed S] [--rank R] [--at F] | replay <log.stgr> --ecl <file.ecl|目录> [--every N] | rl-bench [--envs N] [--steps S] [--threads T (夹到 min(T,envs))] [--warmup W] [--cap C] [--workload default|dense] [--mark M] [--rank R] [--density K(每帧发弹数,dense)] [--profile] | gen-ecl-meta>"
             );
             ExitCode::FAILURE
         }

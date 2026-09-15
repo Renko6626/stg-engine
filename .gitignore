@@ -21,3 +21,13 @@
 # 操作系统
 .DS_Store
 Thumbs.db
+
+# stg-py（独立 workspace 的本地 venv / wheel / 构建产物；Cargo.lock 仍提交锁版本）
+crates/stg-py/.venv/
+crates/stg-py/dist/
+crates/stg-py/target/
+
+# Python 字节码 / pytest 缓存（stg-py 冒烟）
+__pycache__/
+*.pyc
+crates/stg-py/.pytest_cache/

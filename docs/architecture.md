@@ -45,7 +45,7 @@
 
 ```
   stg-godot(gdext) ─┐   [M2]         stg-ecl-compiler ──产出 EclImage──┐
-  stg-py(PyO3)     ─┼── 依赖 ─► stg-core ◄──────────────────────────────┘
+  stg-py ─► stg-rl  ─┼── 依赖 ─► stg-core ◄──────────────────────────────┘
   stg-harness(CLI) ─┘   [M5]   （确定性内核）      stg-derive（proc-macro，被 core 依赖）
 ```
 
@@ -66,7 +66,9 @@
 | `stg-ecl-compiler` | `.ecl` 表层语言（lex/parse/typeck/slots/codegen）→ EclImage；离线编译 | ✅ M1.9 | [ecl-lang](ecl-lang.md) |
 | `stg-harness` | CLI：金向量对拍 + bench 基线 + 烘焙表 bake/verify + serve WebSocket 查看器(通道 A/B 首个交互消费者) | ✅ M0 | [bench-baseline](bench-baseline.md) |
 | `stg-godot` + `godot/` | gdext WorldBridge（boot/frame/puppets/save/timeline）+ 真工程（三层 MultiMesh + 敌人木偶 + fx + HUD + GameFlow 壳） | ✅ M2 + 壳子刀 | [render-contract](render-contract.md) / [bridge-adaptation-notes](bridge-adaptation-notes.md) |
-| `stg-net` / `stg-py` | UDP 会话/重同步 / PyO3 headless 并行 env | ⏳ M4/M5 未建 | design_doc §7 |
+| `stg-rl` | RL 批量 env 核心（断层线以上）：`layout`（proto v1 表布局）/`encode`（行编码）/`env`（单 env 生命周期）/`vec_env`（专属 rayon 池批量 step + CSR 压实） | ✅ M5 起步 | spec `2026-09-15-stg-rl-env-design.md` |
+| `stg-py` | PyO3 abi3 wheel `stg_rl`（`stg-rl` 的 Python 薄壳；独立 workspace）：`hello`/`OFFSETS`/`alloc_buffers`/`VecEnv`/`compile_bundled` | ✅ M5 起步 | 同 spec / `crates/stg-py/README.md` |
+| `stg-net` | UDP 会话/重同步（rollback 联机） | ⏳ M4 未建 | design_doc §7 |
 
 ## step 流水线（相位 0–10，顺序即宪法，PhaseGuard 押运）
 
@@ -120,7 +122,7 @@ InputFrame ──► step ──► [相位 0-10 演化 World] ──► 通道A
 | **M2 表现层** ✅ | 通道 A `WorldView` + 通道 B `RenderReq` + WorldBridge + 真 Godot 工程 + GameFlow 壳（标题/难度/练习/回放）全落地 | 表现小件 F15/F16/F21/F22/F23 |
 | **M3 时间机制** ✅ | `stg_core::timeline`：快照环 + 遡行兑现（`try_rewind`→`EVT_REWIND_REQUESTED`→`rewind_landed`）+ 影子世界 `preview` + `InputLog` 回放 + 壳 観測/跳躍/遡行状态机。原「回滚 netcode harness」按玩法设计重定义，联机回滚是附带收益 | **玩法刀**（[gameplay-design §10](gameplay-design.md)）：停止合并 + 触碰消弹 / 跳躍冷却 / 死亡即遡行 / 偏差值 / harness `probe-jump` |
 | **M4 网络** | lockstep+rollback 模型；K=20 采样对拍；`engine_ver`/内容哈希握手 | `stg-net`（UDP + 会话/重同步）起 phase 2 |
-| **M5 headless 并行** | 单 world 单线程、并行只在 world 之间（P3）；无外部依赖 | `stg-py`（PyO3 env）；训练机体 = 机体 1（`Kit::Classic`，经典机体刀） |
+| **M5 headless 并行** ✅ 起步 | `stg-rl`（proto v1 观测编码 + 机体 1 + 专属 rayon 池批量 step）+ `stg-py`（PyO3 abi3 wheel `stg_rl`）+ `wheels.yml` tag 出包；单 world 单线程、并行只在 world 之间（P3） | 训练作业包 / 特征化胶水（训练仓） |
 | 玩法小刀 | `FieldPool` 消弹区就位（bomb 首租户）；`Shooter.flags` bit0 预留 homing | bomb 铺一个 field；homing 转向率存放待拍 |
 
 > 未做但已记档的技术债/扩展点见 [`docs/follow-ups.md`](follow-ups.md)（开工前先读）。

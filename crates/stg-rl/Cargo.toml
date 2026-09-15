@@ -1,0 +1,16 @@
+[package]
+name         = "stg-rl"
+version      = "0.1.0"
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+publish      = false
+description  = "强化学习批量 env 核心（断层线以上）：接收 ECL、机体 1、proto 表观测、rayon 批量 step"
+
+[dependencies]
+stg-core.workspace = true
+stg-ecl-compiler.workspace = true
+rayon = "1.12"
+
+[dev-dependencies]
+serde_json = "1"

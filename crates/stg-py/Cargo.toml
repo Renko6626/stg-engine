@@ -1,0 +1,22 @@
+[package]
+name         = "stg-py"
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.94"
+publish      = false
+description  = "stg_rl Python 扩展（PyO3 abi3，薄壳；不进主 workspace，见 stg-rl 计划 Ruling 2）"
+
+[workspace]
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+stg-rl   = { path = "../stg-rl" }
+stg-core = { path = "../stg-core" }
+pyo3     = { version = "0.29.2", features = ["abi3-py310"] }
+numpy    = "0.29"

@@ -728,6 +728,22 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
 5. `STOP_STOCK_MAX` 两套件共用（原作 bomb 上限常为 8）。触发点：同上。
 6. 发弹分派仍按 `character_id` 硬分支（`world/player.rs` `0 | 1 =>`），不在表里。触发点：加第 3 个机体——漏改会静默不开火；届时考虑把 shot 解释器选择挪进 `CharacterCfg`。
 
+### D23. stg-rl env 刀的非目标（spec §12 记档，2026-09-15）
+
+本刀只交付「Rust 批量 env + PyO3 wheel + 分发 workflow」。以下未做，**触发点**各自写明：
+1. **训练代码 / 特征化 / reward** 住训练仓（reward 含拟人项），不进 wheel。触发点：训练仓立项（框架定了才有形状，故 Ruling 4 连 `gymnasium` 适配都不做）。
+2. **训练作业包**（容器镜像 + 入口 + 输出目录约定）。触发点：选定作业平台（AutoDL 等）后另开子项目；本刀只备好无交互安装、离线内容、`build_info()`。
+3. **`.stglog` 写出**。触发点：训练需要落轨迹做离线分析 / 模仿学习时。
+4. **`.stgr` 回放 → 训练轨迹导出器**。触发点：要用真人回放喂 RL / 行为克隆时。
+5. **async env（CPU/GPU 流水线重叠）**。触发点：基准显示 GPU 等 CPU——本刀 `rl-bench` 平台期见 `docs/bench-baseline.md`，先不动。
+6. **跨死亡 episode**。触发点：训练目标从「单段生存」升级为整关（需与玩法刀的遡行/偏差值语义对齐）。
+7. **终局前最后一帧观测**（v1 的 `done != 0` 缓冲已是新局第一帧）。触发点：loss/credit assignment 需要 death frame 时。
+8. **非 x86_64 Linux / Windows 以外的 wheel**（无 macOS / aarch64 wheel）。触发点：训练机或部署端出现这两类机器。
+9. **部署侧复刻胶水**：特征化与「最近 K 颗」住 Python 胶水，th06nc / TH18 DLL 跑 ONNX 时须在 C 侧同样实现。触发点：迁移到目标作时，靠对拍测试守一致。
+10. **训练分布无激光**：引擎无激光池 ⇒ HELLO 恒发空 lasers 表。触发点：迁移验证显示激光是主要差距；届时引擎激光池另开刀（world-design §709）。
+11. ~~**`rl-bench` 默认 workload 不代表密弹**~~ **已销（2026-09-15）**：`rl-bench --workload dense --density K`（`scenes/rl_dense.ecl`，上半区 ±15° 横飞、自机不死，稳态 ≈112·K 弹）+ `--profile` 单 env 分段计时。实测密弹瓶颈是**弹行编码**（density 3 下 21µs vs env.step 7µs），逐弹现算 `atan2`+`isqrt` 为主因 ⇒ 同刀修：core `atan2` 改无分支 CORDIC（逐位等价测试押运）+ `encode::BulletScratch` 派生量逐槽记忆，编码 4.8×、dense3 32 线程 39万→99万 env-steps/s（`docs/bench-baseline.md`「密弹 workload」节）。**余项**：弹数超 `cap` 时的 `len_sq`+`select_nth_unstable`+按索引排序成为新热点（density 12 编码仍 50µs）；触发点：训练确需 >cap 弹场景的吞吐时。
+12. **`VecEnv::step` / `reset` 每步现场 `collect` 一个 `Vec<Work>`**（~N 项引用结构，`build_work`）：串行段内的小分配，默认 workload 下占比可忽略；复用它要处理跨步借用的生命周期，改动面大于收益。触发点：密弹档位基准（第 11 条）显示串行段成为瓶颈时。
+
 ## F. 长期预留（M0-18 性能审记档，均不动现刀）
 
 ### F1. 嵌入式画像三条（单片机移植预留）
