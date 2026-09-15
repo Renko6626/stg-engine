@@ -86,6 +86,9 @@ notes = ""
 - **难度要有梯度**：同一类弹型出易、中、难几档，方便做课程学习。
 - **转写原作时**把 `origin` 写准（作品 / 关卡 / 卡名 / 难度），ZUN 指令对照见
   [`zun-ecl-v2-reference.md`](zun-ecl-v2-reference.md)。
+  **东方红魔乡（TH06）有现成的批量转写流水线**：训练仓 `transcribe/`（TH06 → 本引擎的逐指令对照表
+  `transcribe/th06/mapping.md`、4 张手转范例卡、dsh worker 契约、验收器 `python -m stgtranscribe.validate`），
+  转 TH06 的卡别手写，走流水线。
 
 ## 4. 弹型标签（`tags`，可多选，缺了再加）
 
