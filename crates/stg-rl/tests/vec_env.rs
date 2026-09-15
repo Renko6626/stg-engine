@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
+use stg_rl::encode;
 use stg_rl::env::*;
+use stg_rl::layout::ITEMS_CAP;
 use stg_rl::vec_env::*;
 
 struct Owned {
@@ -82,6 +86,7 @@ impl Owned {
             &self.enemies_count,
             &self.bullets_offsets,
             &self.items_offsets,
+            &self.lasers_count,
             &self.bullets_total,
             &self.bullets_dropped,
             &self.events,
@@ -196,6 +201,9 @@ fn csr_offsets_are_consistent() {
     let mut e = VecEnv::new(game_cfg(9), n, 4).unwrap();
     let mut buf = Owned::new(n, 256);
     e.reset(&mut buf.view()).unwrap();
+    // 判别力：全 0 行的退化压实也能满足下面所有「单调 / 上界 / total-dropped」断言，
+    // 故必须有一处正面积压断言。记录首次非空步，跑满 200 步后再断言（不 flaky）。
+    let mut first_nonempty: Option<u32> = None;
     for s in 0..200 {
         e.step(&actions(s, n), &mut buf.view()).unwrap();
         assert_eq!(buf.bullets_offsets[0], 0);
@@ -206,7 +214,79 @@ fn csr_offsets_are_consistent() {
             assert!(buf.items_offsets[i + 1] >= buf.items_offsets[i]);
             assert_eq!(buf.lasers_count[i], 0);
         }
+        if first_nonempty.is_none() && buf.bullets_offsets[n] > 0 {
+            first_nonempty = Some(s);
+        }
     }
+    assert!(
+        first_nonempty.is_some(),
+        "200 步内 mark 10/15 段应有弹被压实（实测首次非空步: {first_nonempty:?}）"
+    );
+}
+
+#[test]
+fn compacted_rows_match_direct_encode() {
+    let n = 3usize;
+    let cap = 256usize;
+    let cfg = game_cfg(7);
+    let mut ve = VecEnv::new(cfg.clone(), n, 2).unwrap();
+    let mut buf = Owned::new(n, cap);
+
+    // 3 个独立 Env：相同 EnvConfig、env_index 0/1/2、各自 BootCache。
+    let cfg = Arc::new(cfg);
+    let mut direct: Vec<Env> = (0..n)
+        .map(|i| Env::new(cfg.clone(), i as u32, Arc::new(BootCache::new())))
+        .collect();
+
+    let mut scratch: Vec<(i64, u16)> = Vec::new();
+    let mut bullet_rows = vec![0u8; cap * 30];
+    let mut item_rows = vec![0u8; ITEMS_CAP * 18];
+
+    ve.reset(&mut buf.view()).unwrap();
+    for e in direct.iter_mut() {
+        e.reset();
+    }
+
+    let mut saw_rows = false;
+    for s in 0..200usize {
+        let act = actions(s as u32, n);
+        ve.step(&act, &mut buf.view()).unwrap();
+        for (i, e) in direct.iter_mut().enumerate() {
+            let _ = e.step(act[i]);
+            let bs = encode::write_bullets(e.world(), cap, &mut bullet_rows, &mut scratch);
+            let ni = encode::write_items(e.world(), &mut item_rows);
+
+            let b0 = buf.bullets_offsets[i] as usize;
+            let b1 = buf.bullets_offsets[i + 1] as usize;
+            let i0 = buf.items_offsets[i] as usize;
+            let i1 = buf.items_offsets[i + 1] as usize;
+            assert_eq!(
+                b1 - b0,
+                bs.count,
+                "env {i} step {s}: 压实行数 != 直接编码行数"
+            );
+            assert_eq!(
+                i1 - i0,
+                ni,
+                "env {i} step {s}: item 压实行数 != 直接编码行数"
+            );
+            assert_eq!(
+                &buf.bullets[b0 * 30..b1 * 30],
+                &bullet_rows[..bs.count * 30],
+                "env {i} step {s}: bullet 压实字节 != 直接编码"
+            );
+            assert_eq!(
+                &buf.items[i0 * 18..i1 * 18],
+                &item_rows[..ni * 18],
+                "env {i} step {s}: item 压实字节 != 直接编码"
+            );
+            saw_rows |= bs.count > 0 || ni > 0;
+        }
+    }
+    assert!(
+        saw_rows,
+        "200 步内应至少有一 env 某步压实行数 > 0（否则本测试对压实内容是瞎的）"
+    );
 }
 
 #[test]

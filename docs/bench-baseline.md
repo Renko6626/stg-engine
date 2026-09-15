@@ -302,3 +302,29 @@ owner 门禁/预算分账。**推论：把任务池填满不是性能问题**，
 `Env::reset` 在**全局 `Mutex` 内**做 `World::new`（~1MB `alloc_zeroed`）+ `copy_into`（~1MB memcpy），
 512 个 env 的 reset 被这把锁串行化；新实现命中路径锁内只 clone `Arc`，1MB 拷贝移到锁外各 env 自己完成。
 
+### T6 compact 并行化后复测（2026-09-15）
+
+> 同一台机器、同一命令（`nproc = 112`；实测时 `uptime` load ≈ 36.2，与上一轮 ≈ 41.9 同量级）。
+> 改动：`compact` 由「单线程 memcpy」改为「串行前缀和 + 并行 scatter（`split_at_mut` 分片）」；
+> rl-bench 计时区不再每步分配动作 `Vec`（改为区外预分配、区内原地填写）；并新增三列**计时区观测**：
+> `bullets_total` 每 env 每步平均、`bullets_dropped` 总和、自动 reset（`done != 0`）次数。**旧表未改。**
+> 命令：`cargo run --release -p stg-harness -- rl-bench --envs 512 --steps 2000`
+> 输出列：`threads envs steps env_steps_per_s bullets_total_per_env bullets_dropped_sum resets`
+
+| threads | envs | steps | env_steps_per_s（T6 fix1） | bullets_total/env | bullets_dropped | resets | （对照）T5 修复后 |
+|---|---|---|---|---|---|---|---|
+| 1 | 512 | 2000 | 153 659 | 12.5 | 0 | 6656 | 147 291 |
+| 2 | 512 | 2000 | 352 557 | 12.5 | 0 | 6656 | 326 193 |
+| 4 | 512 | 2000 | 570 061 | 12.5 | 0 | 6656 | 572 933 |
+| 8 | 512 | 2000 | 878 340 | 12.5 | 0 | 6656 | 914 389 |
+| 16 | 512 | 2000 | 1 319 579 | 12.5 | 0 | 6656 | 1 140 691 |
+| 32 | 512 | 2000 | 1 071 439 | 12.5 | 0 | 6656 | 1 624 751 |
+| 64 | 512 | 2000 | 1 442 772 | 12.5 | 0 | 6656 | 1 676 066 |
+
+**结论**：三列观测在所有线程档位（1~64）**逐位相同**（avg 12.5 / dropped 0 / resets 6656）——既是
+逐帧输出与线程数无关的确定性旁证，也**证伪了「CSR 压实带宽是平台瓶颈」的推断**：`cap=1024` 下
+`bullets_dropped` 全 0、每 env 每步平均仅 12.5 颗弹，串行 memcpy 量极小，故并行化后吞吐与 T5 表
+（14.7万~168万）在共享机噪声内基本持平（16 线程 132万 vs 114万，32/64 线程反低属 load≈36 的波动）。
+`compact` 并行化因此是**结构性改进**：把最坏 `O(N·cap)` 的串行段移出关键路径，只有在弹幕真正打满
+`cap` 的 workload 下才会兑现吞吐，本基准的低弹量场景测不出收益（需换含 bomb/密弹的观测分布复测）。
+

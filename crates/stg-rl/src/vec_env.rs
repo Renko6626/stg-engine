@@ -1,8 +1,20 @@
-//! 批量 env（spec §3.1 / §7）：专属 rayon 池、不相交 `&mut` 切片并行、CSR 单线程压实。
+//! 批量 env（spec §3.1 / §7）：专属 rayon 池、不相交 `&mut` 切片并行、CSR 压实。
 //!
-//! 观测写入按 env 分片并行（每 env 写自己的 `Slot` 暂存区与调用方缓冲中自己那一段），
-//! 结束后单线程按 env 索引序把 bullets/items 暂存区 memcpy 进 CSR 缓冲并写 `offsets`——
-//! 并行区的写入互不相交，CSR 的最终字节只由 env 索引序决定 ⇒ 与线程数 / 调度无关。
+//! 观测写入按 env 分片并行（每 env 写自己的 `Slot` 暂存区与调用方缓冲中自己那一段）。
+//!
+//! **偏离 spec §7 的说明（2026-09-15，控制者裁定）**：spec §7 原写「CSR 单线程压实」，
+//! 但压实最多要串行 memcpy `N*cap` 行、源是 N 个彼此分离的 `cap*30` 暂存区，是吞吐平台的
+//! 主因（见 `docs/bench-baseline.md` 的 rl-bench 记账），故把 `compact` 拆成两阶段：
+//!
+//! 1. **串行前缀和**：按 env 索引序累计 `nb/ni` 并写入 `*_offsets`——这是唯一决定
+//!    「哪个 env 的行落在哪个 CSR 区间」的地方，只依赖各 `Slot` 的数据，与线程数/调度无关；
+//! 2. **并行 scatter**：用 `split_at_mut` 链把目标缓冲按 offsets 切成 N 个**互不相交**的片，
+//!    与各 `Slot` 的暂存区一一配对后，在专属池里 `copy_from_slice`。
+//!
+//! 确定性依据：目标区间由阶段 1 的串行前缀和冻结，各分片按 env 索引序一一对应、互不重叠，
+//! 故最终字节只由 env 索引序决定 ⇒ 与线程数、调度无关。
+//! `tests/vec_env.rs::deterministic_across_thread_counts`（1 vs 8 线程逐步 digest）与
+//! `compacted_rows_match_direct_encode`（压实字节 vs 直接编码）共同押运这一点。
 //!
 //! 断层线以上（`stg-rl`）：允许 rayon / 浮点。`Env` 的随机性全部来自 `episode_seed`，
 //! 多线程不引入任何共享可变状态。
@@ -291,27 +303,66 @@ impl VecEnv {
         Ok(())
     }
 
-    /// 单线程按 env 索引序把各 `Slot` 暂存区压实进 CSR 缓冲并写 `offsets`（spec §7）。
+    /// 两阶段 CSR 压实（见模块文档对 spec §7 的偏离说明）：
+    ///
+    /// 1. 串行按 env 索引序算 bullets/items 前缀和（写入 `*_offsets`）；
+    /// 2. 并行 scatter：`split_at_mut` 链把目标缓冲切成 N 个互不相交的片，与各 `Slot` 的
+    ///    暂存区配对后在专属池里 `copy_from_slice`。
+    ///
+    /// 结果字节只由 env 索引序与各 `Slot.nb/ni` 决定，与线程数/调度无关。
     fn compact(&self, buf: &mut BufferSet<'_>) {
         buf.lasers_count.fill(0);
 
-        let mut off = 0usize;
+        // 阶段 1（串行）：前缀和。offsets 冻结后，每个 env 的目标区间即确定。
+        let n = self.slots.len();
+        let mut total_bullets = 0usize;
         buf.bullets_offsets[0] = 0;
         for (i, s) in self.slots.iter().enumerate() {
-            let nb = s.nb;
-            buf.bullets[off * 30..(off + nb) * 30].copy_from_slice(&s.bullets[..nb * 30]);
-            off += nb;
-            buf.bullets_offsets[i + 1] = off as i32;
+            total_bullets += s.nb;
+            buf.bullets_offsets[i + 1] = total_bullets as i32;
         }
-
-        let mut off = 0usize;
+        let mut total_items = 0usize;
         buf.items_offsets[0] = 0;
         for (i, s) in self.slots.iter().enumerate() {
-            let ni = s.ni;
-            buf.items[off * 18..(off + ni) * 18].copy_from_slice(&s.items[..ni * 18]);
-            off += ni;
-            buf.items_offsets[i + 1] = off as i32;
+            total_items += s.ni;
+            buf.items_offsets[i + 1] = total_items as i32;
         }
+
+        // 阶段 2（并行）：目标分片互不相交。源切片用 `&[u8]`（`Sync`），目标用 `&mut [u8]`。
+        let mut rest = &mut buf.bullets[..total_bullets * 30];
+        let mut bullet_dst: Vec<&mut [u8]> = Vec::with_capacity(n);
+        for s in &self.slots {
+            let len = s.nb * 30;
+            let (head, tail) = rest.split_at_mut(len);
+            bullet_dst.push(head);
+            rest = tail;
+        }
+        let bullet_src: Vec<&[u8]> = self.slots.iter().map(|s| &s.bullets[..s.nb * 30]).collect();
+
+        let mut rest = &mut buf.items[..total_items * 18];
+        let mut item_dst: Vec<&mut [u8]> = Vec::with_capacity(n);
+        for s in &self.slots {
+            let len = s.ni * 18;
+            let (head, tail) = rest.split_at_mut(len);
+            item_dst.push(head);
+            rest = tail;
+        }
+        let item_src: Vec<&[u8]> = self.slots.iter().map(|s| &s.items[..s.ni * 18]).collect();
+
+        let pool = &self.pool;
+        let min_len = self.min_len;
+        pool.install(|| {
+            bullet_dst
+                .into_par_iter()
+                .zip(bullet_src)
+                .with_min_len(min_len)
+                .for_each(|(dst, src)| dst.copy_from_slice(src));
+            item_dst
+                .into_par_iter()
+                .zip(item_src)
+                .with_min_len(min_len)
+                .for_each(|(dst, src)| dst.copy_from_slice(src));
+        });
     }
 }
 

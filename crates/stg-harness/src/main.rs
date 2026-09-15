@@ -12,6 +12,7 @@
 //!   gen-ecl-meta          生成 editors/vscode/stg-ecl/ecl-meta.json + 刷新 docs/ecl-lang/7-reference.md
 //!                       生成段（单一真相源=builtins::all()，两个 sink 同一次生成）
 //!   rl-bench [--envs N] [--steps S] [--threads T] [--mark M] [--rank R]  stg-rl VecEnv 吞吐（spec §7）
+//!                         （--threads T 夹到 min(T, envs)，缺省自动 1,2,4,…）
 //!
 //! 本 crate 在断层线【以上】，可用浮点；stg-core 只消费 commit 的表字节。
 
@@ -42,7 +43,7 @@ fn main() -> ExitCode {
         Some("gen-ecl-meta") => eclmeta::cmd_gen(),
         _ => {
             eprintln!(
-                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] [--ecl PATH] | dump --out FILE [--frames N] [--seed S] [--ecl PATH] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl|目录> | run <file.ecl|目录> [--frames N] [--seed S] [--rank R] [--at F] | replay <log.stgr> --ecl <file.ecl|目录> [--every N] | rl-bench [--envs N] [--steps S] [--threads T] [--mark M] [--rank R] | gen-ecl-meta>"
+                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] [--ecl PATH] | dump --out FILE [--frames N] [--seed S] [--ecl PATH] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl|目录> | run <file.ecl|目录> [--frames N] [--seed S] [--rank R] [--at F] | replay <log.stgr> --ecl <file.ecl|目录> [--every N] | rl-bench [--envs N] [--steps S] [--threads T (夹到 min(T,envs))] [--mark M] [--rank R] | gen-ecl-meta>"
             );
             ExitCode::FAILURE
         }

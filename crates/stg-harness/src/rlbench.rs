@@ -1,8 +1,14 @@
 //! `rl-bench [--envs N] [--steps S] [--threads T] [--mark M] [--rank R]`：stg-rl VecEnv 吞吐（spec §7）。
 //!
-//! 不给 `--threads` ⇒ 依次 1,2,4,…（≤ `available_parallelism`、≤ envs）。输出每行：
-//! `threads envs steps env_steps_per_s`。动作只含移动/射击/低速（不 bomb），让整段基准
-//! 稳定在「boss 段满屏弹」的稳态；`max_frames` 设大以免计时区内发生 reset。
+//! 不给 `--threads` ⇒ 依次 1,2,4,…（≤ `available_parallelism`、≤ envs）；显式 `--threads`
+//! 夹到 `min(T, envs)`。输出每行：
+//! `threads envs steps env_steps_per_s bullets_total_per_env bullets_dropped_sum resets`。
+//! 后三列是**计时区**内 `bullets_total` 的每 env 每步平均、`bullets_dropped` 总和、自动 reset
+//! （`done != 0`）总次数——用于判断计时区是否长期跑在 cap 溢出态。
+//!
+//! 动作只含移动/射击/低速（不 bomb）；动作缓冲在计时区外预分配、区内原地填写，故计时区基本
+//! 只含 `VecEnv::step` 本体。`max_frames` 设大只挡住**超时** reset（`done=3`）；死亡
+//! （`done=1`）与段落结束（`done=2`）仍会在计时区内触发自动 reset。
 
 use std::process::ExitCode;
 use std::time::Instant;
@@ -165,7 +171,7 @@ fn run(args: &[String]) -> Result<(), String> {
         .unwrap_or(1);
     let list: Vec<usize> = match threads {
         Some(0) => return Err("--threads 必须 > 0".to_string()),
-        Some(t) => vec![t],
+        Some(t) => vec![t.min(envs)],
         None => {
             let mut v = Vec::new();
             let mut t = 1usize;
@@ -182,22 +188,35 @@ fn run(args: &[String]) -> Result<(), String> {
         let mut buf = Buf::new(envs, cap);
         ve.reset(&mut buf.view())
             .map_err(|e| format!("reset: {e}"))?;
-        // 预热 100 步（不记账），把弹幕打到稳态。
+        // 预热 100 步（不记账），把弹幕打到稳态。动作缓冲在计时区外预分配。
+        let mut act = vec![0u32; envs];
         for s in 0..100u32 {
-            let act: Vec<u32> = (0..envs).map(|i| action(s, i)).collect();
+            for (i, a) in act.iter_mut().enumerate() {
+                *a = action(s, i);
+            }
             ve.step(&act, &mut buf.view())
                 .map_err(|e| format!("warmup step: {e}"))?;
         }
-        // 计时区。
+        // 计时区：动作缓冲已预分配，区内只原地重填，计时主体是 `VecEnv::step`。
+        // 同时累计观测口径：bullets_total 每 env 平均、bullets_dropped 总和、自动 reset 次数。
+        let mut bullets_total_sum: u64 = 0;
+        let mut bullets_dropped_sum: u64 = 0;
+        let mut resets: u64 = 0;
         let start = Instant::now();
         for s in 0..steps as u32 {
-            let act: Vec<u32> = (0..envs).map(|i| action(100 + s, i)).collect();
+            for (i, a) in act.iter_mut().enumerate() {
+                *a = action(100 + s, i);
+            }
             ve.step(&act, &mut buf.view())
                 .map_err(|e| format!("step: {e}"))?;
+            bullets_total_sum += buf.bullets_total.iter().map(|&x| x as u64).sum::<u64>();
+            bullets_dropped_sum += buf.bullets_dropped.iter().map(|&x| x as u64).sum::<u64>();
+            resets += buf.done.iter().filter(|&&d| d != 0).count() as u64;
         }
         let secs = start.elapsed().as_secs_f64();
         let eps = envs as f64 * steps as f64 / secs;
-        println!("{t} {envs} {steps} {eps:.0}");
+        let avg_total = bullets_total_sum as f64 / (steps as f64 * envs as f64);
+        println!("{t} {envs} {steps} {eps:.0} {avg_total:.1} {bullets_dropped_sum} {resets}");
     }
     Ok(())
 }
