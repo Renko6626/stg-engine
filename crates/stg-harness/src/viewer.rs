@@ -121,15 +121,17 @@ const INDEX_HTML: &str = include_str!("../viewer/index.html");
 /// 不给就维持现状跑 `rainbow.ecl`。
 ///
 /// **加旁路、不改主路**：`build_rainbow_world` 一个字不动——golden 场景 2 依赖它，
-/// 改它就是改金向量。rank 固定 2（`RANK_HARD`，同 rainbow 建场），viewer 不开难度旋钮。
+/// 改它就是改金向量。rank 默认 2（`RANK_HARD`，同 rainbow 建场）；`serve --rank` 可覆盖，
+/// 只作用于 `--ecl` 场景（试玩 RL 卡池各档用），rainbow 恒 2。
 const VIEWER_RANK: i32 = 2;
 
 fn build_viewer_world(
     ecl: Option<&str>,
     seed: u64,
+    rank: i32,
 ) -> Result<(Box<World>, stg_core::ecl::image::EclImage), String> {
     match ecl {
-        Some(p) => crate::run::build_ecl_world(p, seed, VIEWER_RANK).map(|(w, i, _n)| (w, i)),
+        Some(p) => crate::run::build_ecl_world(p, seed, rank).map(|(w, i, _n)| (w, i)),
         None => {
             let (w, i, _boss) = crate::build_rainbow_world(seed);
             Ok((w, i))
@@ -175,7 +177,7 @@ pub(crate) fn cmd_dump(rest: &[String]) -> ExitCode {
         eprintln!("dump: 缺 --out FILE");
         return ExitCode::from(2);
     };
-    let (mut w, image) = match build_viewer_world(ecl.as_deref(), seed) {
+    let (mut w, image) = match build_viewer_world(ecl.as_deref(), seed, VIEWER_RANK) {
         Ok(t) => t,
         Err(msg) => {
             eprintln!("{msg}");
@@ -208,7 +210,7 @@ pub(crate) fn cmd_dump(rest: &[String]) -> ExitCode {
     }
 }
 
-/// `serve [--port 8611] [--seed 1] [--ecl PATH]`——单端口：HTTP GET 回内嵌页，WS 升级进
+/// `serve [--port 8611] [--seed 1] [--ecl PATH] [--rank R]`——单端口：HTTP GET 回内嵌页，WS 升级进
 /// 60Hz 游戏循环。单客户端串行伺候；断开/刷新 = 下一局新 World（天然 restart）。
 ///
 /// `--ecl` 跑自己的脚本（不给则维持现状跑 `rainbow.ecl`）。**每次连接都重新编译**——
@@ -216,6 +218,7 @@ pub(crate) fn cmd_dump(rest: &[String]) -> ExitCode {
 /// 起服前先编一次做 fail-fast，免得对着一个永远连不上的端口猜。
 pub(crate) fn cmd_serve(rest: &[String]) -> ExitCode {
     let mut port: u16 = 8611;
+    let mut rank: i32 = VIEWER_RANK;
     let mut seed: u64 = 1;
     let mut ecl: Option<String> = None;
     let mut i = 0;
@@ -233,14 +236,24 @@ pub(crate) fn cmd_serve(rest: &[String]) -> ExitCode {
                 ecl = Some(v.clone());
                 i += 2;
             }
+            ("--rank", Some(v)) => {
+                rank = match v.parse::<i32>() {
+                    Ok(r) if (0..=4).contains(&r) => r,
+                    _ => {
+                        eprintln!("serve: --rank 要 0..=4，收到 {v}");
+                        return ExitCode::from(2);
+                    }
+                };
+                i += 2;
+            }
             (a, _) => {
-                eprintln!("serve: 未知参数 {a}（支持 --port/--seed/--ecl）");
+                eprintln!("serve: 未知参数 {a}（支持 --port/--seed/--ecl/--rank）");
                 return ExitCode::from(2);
             }
         }
     }
     if let Some(p) = ecl.as_deref()
-        && let Err(msg) = build_viewer_world(Some(p), seed)
+        && let Err(msg) = build_viewer_world(Some(p), seed, rank)
     {
         eprintln!("{msg}");
         return ExitCode::from(2);
@@ -256,13 +269,13 @@ pub(crate) fn cmd_serve(rest: &[String]) -> ExitCode {
         "viewer 就绪：http://localhost:{port}   （远程盒子上用 `ssh -L {port}:localhost:{port} <box>` 转发）"
     );
     match ecl.as_deref() {
-        Some(p) => eprintln!("场景：{p}（每次连接重编，刷新浏览器即热重载）"),
+        Some(p) => eprintln!("场景：{p} · rank {rank}（每次连接重编，刷新浏览器即热重载）"),
         None => eprintln!("场景：内建 rainbow.ecl（`--ecl <file|目录>` 跑自己的脚本）"),
     }
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
-                if let Err(e) = handle_conn(s, seed, ecl.as_deref()) {
+                if let Err(e) = handle_conn(s, seed, ecl.as_deref(), rank) {
                     eprintln!("serve: 连接结束（{e}），等待下一个……");
                 }
             }
@@ -303,6 +316,7 @@ fn handle_conn(
     mut stream: TcpStream,
     seed: u64,
     ecl: Option<&str>,
+    rank: i32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !is_ws_upgrade(&stream) {
         // 读走请求（尽力而为）再回页，部分浏览器不读完请求就写会 RST
@@ -321,7 +335,7 @@ fn handle_conn(
     ws.get_ref()
         .set_read_timeout(Some(Duration::from_millis(1)))?;
 
-    let (mut w, image) = match build_viewer_world(ecl, seed) {
+    let (mut w, image) = match build_viewer_world(ecl, seed, rank) {
         Ok(t) => t,
         // 编译坏了不该拖垮服务：打诊断、关这条连接，改好脚本再刷新即可。
         Err(msg) => {
@@ -543,13 +557,14 @@ mod tests {
         let p = dir.join("empty.ecl");
         std::fs::write(&p, "sub main() { loop { wait(1); } }").unwrap();
 
-        let (w_ecl, _i) = super::build_viewer_world(Some(p.to_str().unwrap()), 1).unwrap();
+        let (w_ecl, _i) =
+            super::build_viewer_world(Some(p.to_str().unwrap()), 1, super::VIEWER_RANK).unwrap();
         assert_eq!(
             w_ecl.view().enemies().iter_alive().count(),
             0,
             "空场脚本开局零敌"
         );
-        let (w_rb, _i) = super::build_viewer_world(None, 1).unwrap();
+        let (w_rb, _i) = super::build_viewer_world(None, 1, super::VIEWER_RANK).unwrap();
         assert_eq!(
             w_rb.view().enemies().iter_alive().count(),
             1,
@@ -557,7 +572,9 @@ mod tests {
         );
         // 编译错误不 panic，成"已渲染诊断"回给调用方
         std::fs::write(&p, "sub main() { int x = 5; }").unwrap();
-        assert!(super::build_viewer_world(Some(p.to_str().unwrap()), 1).is_err());
+        assert!(
+            super::build_viewer_world(Some(p.to_str().unwrap()), 1, super::VIEWER_RANK).is_err()
+        );
     }
 
     #[test]
@@ -568,7 +585,7 @@ mod tests {
         let addr = l.local_addr().unwrap();
         let t = std::thread::spawn(move || {
             let (s, _) = l.accept().unwrap();
-            super::handle_conn(s, 1, None).unwrap();
+            super::handle_conn(s, 1, None, super::VIEWER_RANK).unwrap();
         });
         let mut c = TcpStream::connect(addr).unwrap();
         c.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")

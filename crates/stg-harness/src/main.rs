@@ -43,7 +43,7 @@ fn main() -> ExitCode {
         Some("gen-ecl-meta") => eclmeta::cmd_gen(),
         _ => {
             eprintln!(
-                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] [--ecl PATH] | dump --out FILE [--frames N] [--seed S] [--ecl PATH] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl|目录> | run <file.ecl|目录> [--frames N] [--seed S] [--rank R] [--at F] | replay <log.stgr> --ecl <file.ecl|目录> [--every N] | rl-bench [--envs N] [--steps S] [--threads T (夹到 min(T,envs))] [--warmup W] [--cap C] [--workload default|dense] [--mark M] [--rank R] [--density K(每帧发弹数,dense)] [--profile] | gen-ecl-meta>"
+                "usage: stg-harness <golden [--out FILE] | bench [--frames N] | bake-tables | verify-tables | serve [--port 8611] [--seed 1] [--ecl PATH] [--rank R] | dump --out FILE [--frames N] [--seed S] [--ecl PATH] | storm [--frames N] [--saves K] [--seed S] | check <file.ecl|目录> | run <file.ecl|目录> [--frames N] [--seed S] [--rank R] [--at F] | replay <log.stgr> --ecl <file.ecl|目录> [--every N] | rl-bench [--envs N] [--steps S] [--threads T (夹到 min(T,envs))] [--warmup W] [--cap C] [--workload default|dense] [--mark M] [--rank R] [--density K(每帧发弹数,dense)] [--profile] | gen-ecl-meta>"
             );
             ExitCode::FAILURE
         }
