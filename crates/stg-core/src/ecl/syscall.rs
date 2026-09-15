@@ -89,7 +89,7 @@ pub const SYS_SPELL_TIMER: u16 = 130;
 /// （0 还没结束过 / 1 血线 / 2 超时 / 3 手动）；`slot ∉ [0, MAX_BOSSES)` → 押 0 + 违约。
 pub const SYS_SPELL_RESULT: u16 = 131;
 /// 查敌读口(A5 补遗):活敌返 hp,其余 -1。1 参 `handle` = **打包敌号**(含 generation,
-/// 见 [`pack_enemy_handle`])。P4-b:越界/死槽/**gen 不符**/负值一律 -1,不 Fault
+/// 见 [`crate::enemy::pack_handle`])。P4-b:越界/死槽/**gen 不符**/负值一律 -1,不 Fault
 /// ——stage 编排等 boss 死的轮询原语。
 ///
 /// **槽复用可辨(敌句柄打包刀 2026-07-31)**:敌死、槽被回收、另一只敌落进同一个槽之后,
@@ -104,7 +104,7 @@ pub const SYS_CREATE_BULLET: u16 = 200;
 /// 9 参：`appearance, x, y, n_angle, angle0, angle_step, n_speed, speed0, speed_step`（无 xform）。
 pub const SYS_CREATE_BULLETS_BATCH: u16 = 201;
 /// v1 直参 5 个：`x, y, hp, drop_table, score`（appearance 敌表后补，见 follow-ups）；
-/// A5 乙案尾追 `sprite, task_script`。押**打包敌号**（[`pack_enemy_handle`]：含
+/// A5 乙案尾追 `sprite, task_script`。押**打包敌号**（[`crate::enemy::pack_handle`]：含
 /// generation，恒非负）；池满 → **-1**。
 ///
 /// **boss 换段刀（2026-09-14）调用约定变更**：压栈序追加实参与个数——
@@ -587,22 +587,9 @@ fn sys_spell_timer(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
 }
 
 // ── 敌号编解码（敌句柄打包刀 2026-07-31；六处产/消口共用，别各写各的）──────────
-
-/// 敌号（脚本视角）的**打包编码**：`((gen & 0x7FFF) << 16) | index`。
-///
-/// 这不是新机制——[`EnemyHandle`] 本来就带 `generation`（`nearest_enemy` 的世界侧返的
-/// 就是完整句柄），只是 syscall 边界此前把它丢了、只押 `index`，于是槽复用后旧句柄静默
-/// 指向另一只敌（ABA）。本函数把已有的信息接上。
-///
-/// **只押 generation 的低 15 位** ⇒ 打包值恒**非负**，`-1` 因此仍是唯一的"无效/没有"
-/// 哨兵，与 `enemy_hp`/`nearest_enemy` 的既有降级取值不冲突。代价是 ABA 检测周期从
-/// 65536 次同槽复用降到 32768（远超实际用量；记在 `docs/follow-ups.md`）。
-///
-/// 脚本侧应把敌号当**不透明值**：别猜数值、别和字面量比、别做算术；唯一有意义的取值是
-/// `-1`。反过来，**两个敌号相等 ⇒ 同一只敌**（打包前只保证"同一个槽"）。
-fn pack_enemy_handle(h: EnemyHandle) -> i32 {
-    (((h.generation & 0x7FFF) as i32) << 16) | (h.index as i32)
-}
+//
+// 打包编码 [`crate::enemy::pack_handle`] 2026-09-15 起公开于 `enemy` 模块（stg-rl
+// 观测编码复用同一约定），本文件只保留解码侧 `resolve_enemy_handle`。
 
 /// 打包敌号 → 活槽索引；`None` = 无效（负值哨兵 / 越界 / 死槽 / **generation 不符**）。
 ///
@@ -724,7 +711,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_SELF_ENEMY => {
             // 非敌押 -1 而非 0：打包敌号 0 合法（spec §5.2），与族内其它变量「非敌读 0」有意不同。
             let v = if task.owner_kind == OWNER_ENEMY {
-                pack_enemy_handle(EnemyHandle {
+                crate::enemy::pack_handle(EnemyHandle {
                     index: task.owner_index,
                     generation: task.owner_gen,
                 })
@@ -783,7 +770,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
             let x = pop(task)?;
             // 世界侧返的本来就是**完整句柄**——打包刀之前这里只押 `h.index`、把 gen 丢了。
             let handle = match ctx.body.nearest_enemy(Fx::from_raw(x), Fx::from_raw(y)) {
-                Some(h) => pack_enemy_handle(h),
+                Some(h) => crate::enemy::pack_handle(h),
                 None => -1,
             };
             push(task, handle)
@@ -1815,7 +1802,7 @@ fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     if handle == EnemyHandle::NULL {
         return push(task, -1);
     }
-    push(task, pack_enemy_handle(handle))?;
+    push(task, crate::enemy::pack_handle(handle))?;
 
     if let Some(sub) = task_sub {
         // entry 已在上面校验过在册；池满 → 静默计数（P4-a），敌已建、句柄已押，不 Fault。
@@ -2034,7 +2021,7 @@ fn sys_fx_at(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
 
 /// 依附一次性演出（[`SYS_FX_ON`]=722）：2 参逆序弹出；self-only（非敌 → Fault）。
 /// 布局钉死为 `REQ_FX_ATTACHED, [index, gen, kind, param, 0, 0]`——**裸 index/gen 两位**，
-/// 不用 `pack_enemy_handle` 的打包形态（那是脚本值域内的敌号；请求载荷给壳侧，两位分开
+/// 不用 `crate::enemy::pack_handle` 的打包形态（那是脚本值域内的敌号；请求载荷给壳侧，两位分开
 /// 免得壳侧再拆包）。
 fn sys_fx_on(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let h = self_enemy_handle(task)?;
@@ -2648,7 +2635,7 @@ mod tests {
 
     /// 打包敌号 → 池槽索引（敌句柄打包刀 2026-07-31）。`spawn_enemy` 押的不再是裸 index，
     /// 想拿"哪个槽"去戳池内存的测试走这里；想拿"敌号"喂读口的测试用
-    /// [`super::pack_enemy_handle`]。
+    /// [`crate::enemy::pack_handle`]。
     fn enemy_slot(packed: i32) -> usize {
         (packed & 0xFFFF) as usize
     }
@@ -3715,7 +3702,7 @@ mod tests {
                 &ecl,
                 &mut task,
                 SYS_ENEMY_HP,
-                &[pack_enemy_handle(eh)]
+                &[crate::enemy::pack_handle(eh)]
             )
             .is_ok()
         );
@@ -3729,7 +3716,7 @@ mod tests {
                 &ecl,
                 &mut task,
                 SYS_ENEMY_HP,
-                &[pack_enemy_handle(eh)]
+                &[crate::enemy::pack_handle(eh)]
             )
             .is_ok()
         );
@@ -6531,7 +6518,7 @@ mod tests {
         assert_eq!(t.sp, 1, "nearest_enemy 押一个返回值");
         assert_eq!(
             t.stack[0],
-            pack_enemy_handle(near),
+            crate::enemy::pack_handle(near),
             "查询点 (0,0) 附近的是近敌"
         );
 
@@ -6547,7 +6534,7 @@ mod tests {
             )
             .is_ok()
         );
-        assert_eq!(t.stack[0], pack_enemy_handle(far));
+        assert_eq!(t.stack[0], crate::enemy::pack_handle(far));
     }
 
     /// 空场 → -1（同 `enemy_hp` 的"查不到押 -1"口径，不 Fault）。
@@ -6567,7 +6554,16 @@ mod tests {
         let (mut w, ecl) = fresh();
         let h = crate::world::test_support::spawn_enemy(&mut w, 30, -70, 5);
         let mut t = Task::default();
-        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_X, &[pack_enemy_handle(h)]).is_ok());
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut t,
+                SYS_ENEMY_X,
+                &[crate::enemy::pack_handle(h)]
+            )
+            .is_ok()
+        );
         assert_eq!(t.sp, 1, "enemy_x 押一个返回值");
         assert_eq!(
             t.stack[0],
@@ -6576,7 +6572,16 @@ mod tests {
         );
 
         t.sp = 0;
-        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_Y, &[pack_enemy_handle(h)]).is_ok());
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut t,
+                SYS_ENEMY_Y,
+                &[crate::enemy::pack_handle(h)]
+            )
+            .is_ok()
+        );
         assert_eq!(
             t.stack[0],
             Fx::from_int(-70).raw(),
@@ -6607,7 +6612,7 @@ mod tests {
         w.body.enemies.free(h);
         for (no, name) in [(SYS_ENEMY_X, "enemy_x"), (SYS_ENEMY_Y, "enemy_y")] {
             t.sp = 0;
-            assert!(call(&mut w, &ecl, &mut t, no, &[pack_enemy_handle(h)]).is_ok());
+            assert!(call(&mut w, &ecl, &mut t, no, &[crate::enemy::pack_handle(h)]).is_ok());
             assert_eq!(t.stack[0], 0, "{name}：死槽降级返 0");
         }
         assert_eq!(
@@ -6624,10 +6629,28 @@ mod tests {
         let h = crate::world::test_support::spawn_enemy(&mut w, 30, -70, 5);
         w.body.enemies.flags[h.index as usize] |= crate::enemy::ENEMY_DYING;
         let mut t = Task::default();
-        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_X, &[pack_enemy_handle(h)]).is_ok());
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut t,
+                SYS_ENEMY_X,
+                &[crate::enemy::pack_handle(h)]
+            )
+            .is_ok()
+        );
         assert_eq!(t.stack[0], Fx::from_int(30).raw(), "dying 的敌坐标仍读得到");
         t.sp = 0;
-        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_Y, &[pack_enemy_handle(h)]).is_ok());
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut t,
+                SYS_ENEMY_Y,
+                &[crate::enemy::pack_handle(h)]
+            )
+            .is_ok()
+        );
         assert_eq!(t.stack[0], Fx::from_int(-70).raw());
     }
 
@@ -6640,7 +6663,16 @@ mod tests {
             owner_kind: OWNER_STAGE,
             ..Task::default()
         };
-        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_X, &[pack_enemy_handle(h)]).is_ok());
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut t,
+                SYS_ENEMY_X,
+                &[crate::enemy::pack_handle(h)]
+            )
+            .is_ok()
+        );
         assert_eq!(t.stack[0], Fx::from_int(30).raw());
     }
 
@@ -6661,7 +6693,7 @@ mod tests {
                 &ecl,
                 &mut t,
                 SYS_ENEMY_ALIVE,
-                &[pack_enemy_handle(h)]
+                &[crate::enemy::pack_handle(h)]
             )
             .is_ok()
         );
@@ -6684,7 +6716,7 @@ mod tests {
                 &ecl,
                 &mut t,
                 SYS_ENEMY_ALIVE,
-                &[pack_enemy_handle(h)]
+                &[crate::enemy::pack_handle(h)]
             )
             .is_ok()
         );
@@ -6717,7 +6749,7 @@ mod tests {
                 &ecl,
                 &mut t,
                 SYS_ENEMY_ALIVE,
-                &[pack_enemy_handle(h)]
+                &[crate::enemy::pack_handle(h)]
             )
             .is_ok()
         );
@@ -6727,7 +6759,16 @@ mod tests {
         );
 
         t.sp = 0;
-        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_X, &[pack_enemy_handle(h)]).is_ok());
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut t,
+                SYS_ENEMY_X,
+                &[crate::enemy::pack_handle(h)]
+            )
+            .is_ok()
+        );
         assert_eq!(
             t.stack[0],
             Fx::from_int(30).raw(),
@@ -6751,7 +6792,16 @@ mod tests {
 
         // ① 缝本身：活敌的 hp 恰好撞上降级哨兵 −1。
         w.body.enemies.hp[h.index as usize] = -1;
-        assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_HP, &[pack_enemy_handle(h)]).is_ok());
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut t,
+                SYS_ENEMY_HP,
+                &[crate::enemy::pack_handle(h)]
+            )
+            .is_ok()
+        );
         assert_eq!(t.stack[0], -1, "旧探针的盲区：活敌 hp 与降级值不可辨");
         t.sp = 0;
         assert!(
@@ -6760,7 +6810,7 @@ mod tests {
                 &ecl,
                 &mut t,
                 SYS_ENEMY_ALIVE,
-                &[pack_enemy_handle(h)]
+                &[crate::enemy::pack_handle(h)]
             )
             .is_ok()
         );
@@ -6771,7 +6821,7 @@ mod tests {
         for (handle, name) in [
             (-1i32, "负句柄"),
             (9999, "越界"),
-            (pack_enemy_handle(h), "死槽"),
+            (crate::enemy::pack_handle(h), "死槽"),
         ] {
             t.sp = 0;
             assert!(call(&mut w, &ecl, &mut t, SYS_ENEMY_ALIVE, &[handle]).is_ok());
@@ -6798,7 +6848,7 @@ mod tests {
                 &ecl,
                 &mut t,
                 SYS_ENEMY_ALIVE,
-                &[pack_enemy_handle(h)]
+                &[crate::enemy::pack_handle(h)]
             )
             .is_ok()
         );
@@ -6815,7 +6865,7 @@ mod tests {
             ..Task::default()
         };
         assert!(call(&mut w, &ecl, &mut t, SYS_NEAREST_ENEMY, &[0, 0]).is_ok());
-        assert_eq!(t.stack[0], pack_enemy_handle(h));
+        assert_eq!(t.stack[0], crate::enemy::pack_handle(h));
     }
 
     // ── 敌句柄打包 generation（敌句柄打包刀 2026-07-31）─────────────────────────
@@ -7308,7 +7358,7 @@ mod tests {
         let (mut w, ecl) = fresh();
         let (eh, mut task) = enemy_owner_task(&mut w, 100, 0);
         assert!(call(&mut w, &ecl, &mut task, SYS_SELF_ENEMY, &[]).is_ok());
-        assert_eq!(task.stack[0], pack_enemy_handle(eh));
+        assert_eq!(task.stack[0], crate::enemy::pack_handle(eh));
         let mut stage = Task::default();
         assert!(call(&mut w, &ecl, &mut stage, SYS_SELF_ENEMY, &[]).is_ok());
         assert_eq!(stage.stack[0], -1);

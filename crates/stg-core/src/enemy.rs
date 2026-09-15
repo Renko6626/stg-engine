@@ -70,6 +70,27 @@ define_pool! {
     }
 }
 
+// ── 敌号编解码（敌句柄打包刀 2026-07-31；六处产/消口共用，别各写各的）──────────
+
+/// 敌号（脚本视角）的**打包编码**：`((gen & 0x7FFF) << 16) | index`。
+///
+/// 这不是新机制——[`EnemyHandle`] 本来就带 `generation`（`nearest_enemy` 的世界侧返的
+/// 就是完整句柄），只是 syscall 边界此前把它丢了、只押 `index`，于是槽复用后旧句柄静默
+/// 指向另一只敌（ABA）。本函数把已有的信息接上。
+///
+/// **只押 generation 的低 15 位** ⇒ 打包值恒**非负**，`-1` 因此仍是唯一的"无效/没有"
+/// 哨兵，与 `enemy_hp`/`nearest_enemy` 的既有降级取值不冲突。代价是 ABA 检测周期从
+/// 65536 次同槽复用降到 32768（远超实际用量；记在 `docs/follow-ups.md`）。
+///
+/// 脚本侧应把敌号当**不透明值**：别猜数值、别和字面量比、别做算术；唯一有意义的取值是
+/// `-1`。反过来，**两个敌号相等 ⇒ 同一只敌**（打包前只保证"同一个槽"）。
+///
+/// 2026-09-15 公开：stg-rl 观测编码（spec §5 enemies `id`）需要同一打包约定，
+/// 函数从 `ecl::syscall` 搬到本模块并 `pub`（原私有 `pack_enemy_handle`）。
+pub fn pack_handle(h: EnemyHandle) -> i32 {
+    (((h.generation & 0x7FFF) as i32) << 16) | (h.index as i32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +154,30 @@ mod tests {
     #[test]
     fn enemy_pool_new_deterministic() {
         assert_eq!(EnemyPool::new().checksum(), EnemyPool::new().checksum());
+    }
+
+    /// 打包约定钉死：只押 gen 低 15 位，恒非负。
+    #[test]
+    fn pack_handle_masks_generation_to_15_bits() {
+        assert_eq!(
+            pack_handle(EnemyHandle {
+                index: 3,
+                generation: 1
+            }),
+            (1 << 16) | 3
+        );
+        assert_eq!(
+            pack_handle(EnemyHandle {
+                index: 255,
+                generation: 0xF00D
+            }),
+            (0x700D << 16) | 255
+        );
+        assert!(
+            pack_handle(EnemyHandle {
+                index: 255,
+                generation: 0xFFFF
+            }) >= 0
+        );
     }
 }
