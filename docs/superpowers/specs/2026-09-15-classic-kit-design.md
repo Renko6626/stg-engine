@@ -170,5 +170,5 @@ behavior（捞回并改写旧 bomb 测试组，一律用机体 1 世界；另加
 | # | 偏差 | 处置 / 现状 |
 |---|---|---|
 | ① | **机体 1 发弹分派**：计划 §3 只列了 X 键 / C 键 / `commit_death` 三处分派，漏写 `update_players` 里的**发弹角色分派**——不补则机体 1 选出来不开火。T1 审阅发现。 | T2 修：发弹分支改为 `0 \| 1 =>`，机体 1 复用机体 0 火力（`player.rs`）。 |
-| ② | **冒烟与行为对拍**：brief Step 5 的两条 `run-smoke.sh`（`crates/stg-godot/smoke`、`godot/smoke`）与「`git worktree` 对拍 base 7639cbc」需在沙箱外写文件。 | 本任务只跑核内闸门（fmt/clippy/test/storm/verify-tables/golden）；两冒烟与机体 0 行为对拍由**收口复核**执行。 |
+| ② | **冒烟与行为对拍**：brief Step 5 的两条 `run-smoke.sh`（`crates/stg-godot/smoke`、`godot/smoke`）与「`git worktree` 对拍 base 7639cbc」需在沙箱外写文件。 | 本任务只跑核内闸门（fmt/clippy/test/storm/verify-tables/golden）；两冒烟与机体 0 行为对拍由**收口复核**执行——结果：两冒烟 SMOKE OK；`run godot/ecl/game` 3000 帧 base 7639cbc 与本刀输出逐字相同（无输入局，自机路径由 Chronos 单测兜底）。 |
 | ③ | **`void_spell_captures` 调用点口径**：计划/spec 正文只提 `try_stop` / `try_bomb` 两处，实际现有**三个**调用点。 | T3 审阅统一注释与文档为三处：`try_stop`（冻结期间 settle 不跑）、`try_bomb`（起爆不改生命态）、`rewind_landed`（快照带回了被弹前的资格）。 |
