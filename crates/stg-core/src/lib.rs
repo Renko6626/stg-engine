@@ -206,7 +206,12 @@ extern crate self as stg_core;
 /// 进校验和与存档（对齐可能吞掉、D20，已直测）；④ 碰撞行 3 跳过 `ENEMY_NO_BODY`；⑤ `EVT_PHASE_ENDED = 12`；
 /// ⑥ 符卡结算：`SPELL_NONSPELL` 非符段、所有超时把绑定 boss 的 hp 钉到血线、超时自动清弹不转星星（`FIELD_NO_STAR`）。
 /// 金向量：风铃卡时限 3600 > 600 帧窗口，行为不走超时；新字段恒 0 但进哈希 ⇒ 预期改变，实测为准。
-pub const ENGINE_VER: u32 = 21;
+///
+/// **21 → 22**（经典机体刀，2026-09-15）：**布局 + 表格式两重**。① `PlayerState.bomb_timer: u16`
+/// 进校验和与存档；② `WorldTables` 加 `CharacterCfg.kit: Kit`（`Chronos` / `Classic(BombCfg)`）、
+/// `characters` 由定长 1 改变长（`TABLE_VERSION` 6）⇒ 表 `content_hash` 变。行为：机体 0 零改动；
+/// 机体 1（RL 训练机体）X = bomb、C 无、死亡场底重生不遡行。**金向量预期改变**（表哈希进校验和），实测为准。
+pub const ENGINE_VER: u32 = 22;
 
 pub use stg_derive::define_pool;
 

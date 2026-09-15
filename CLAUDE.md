@@ -138,7 +138,7 @@ crates/
     src/checksum.rs  vendored FNV-1a 64（D11）
     src/rng.rs       vendored PCG32（I3）
     src/{bullets,shots,enemy,field,items,player}.rs  实体数据模块（前五个是 define_pool! 实例；池即层）
-    src/{boss,tables}.rs  boss 公告板（A2）/ WorldTables 静态数据层（shottype+道具+角色参数+appearance；
+    src/{boss,tables}.rs  boss 公告板（A2）/ WorldTables 静态数据层（shottype+道具+角色参数+规则套件 Kit+appearance；
                      &'static 参数穿线不进 World，M0-15/17）
     src/xform.rs      变换段池（D4；手写特例，段即分配单位）
     src/{input,events,reqs}.rs                 输入抽象 / hits+events 缓冲 / 通道 B 请求（RenderReq）

@@ -225,7 +225,7 @@ WorldTables 清单（v1）：
 
 - `PlayerState.character_id` 在相位 4 **静态分发**（`match`，编译进引擎的角色模块——不是函数指针，零 P5/I7 冲突）到各角色的 `update_shot / update_bomb / steer_shots` Rust 函数；
 - **世界管"身体与账本"**（角色无关的公共骨架）：移动积分、低速切换、场界钳制、中弹判定、决死窗口状态机、死亡/复活/无敌计时、bomb 触发仲裁（查库存、消库存、**触发帧立即无敌**）、残机/bomb/power/graze/score 账本；
-- **角色模块管"火力与个性"**：发弹模式（读 `players[i].input` 动作位）、homing 弹转向（逐帧扫最近敌人，转率为角色常量）、bomb 效果时间线（`bomb_phase/bomb_timer` 小状态机驱动，铺 Field 实体、发演出请求）〔2026-09-14 玩法刀：bomb 退役，X = 停止（时停 + 触碰消弹，碰撞行 8），`bomb_phase/bomb_timer`/`BombCfg` 已删〕；
+- **角色模块管"火力与个性"**：发弹模式（读 `players[i].input` 动作位）、homing 弹转向（逐帧扫最近敌人，转率为角色常量）、bomb 效果时间线（`bomb_phase/bomb_timer` 小状态机驱动，铺 Field 实体、发演出请求）〔2026-09-14 玩法刀：bomb 退役，X = 停止（时停 + 触碰消弹，碰撞行 8），`bomb_phase` 已删（玩法刀）；`BombCfg`/`bomb_timer` 经经典机体刀（2026-09-15）回归，仅 `Kit::Classic` 使用〕；
   > **M0-17 修订**：发弹已从"角色模块硬编码"改为 **shottype 表驱动**——相位 3 通用解释器按
   > `[power_tier][focus]` 查 `WorldTables` 的 shooterset 逐 shooter 发射（`shot_timer` 持按
   > 累进/松手清零）；"角色模块静态分发"构想保留给 bomb 效果时间线与 homing 等真个性逻辑，
@@ -459,7 +459,7 @@ SoA，**105 B/敌**（实测），256 敌 ≈ 26.8 KB（含 gen/alive；敌人�
 | 判定 | `hit_radius: Fx, graze_radius: Fx`（角色配置拷入；graze 圈兼道具拾取圈） |
 | 输入 | `input: u16`（相位 2 译码写入的动作位） |
 | 生死状态机 | `life_state: u8, state_timer: u16, invuln: u16` |
-| ~~bomb 状态机~~ | 〔2026-09-14 玩法刀退役：`bomb_phase/bomb_timer` 已删；新增 `jump_cd: u16`（跳躍冷却）、`deaths: u8`（偏差值）；`LIFE_RESPAWNING` 退役，死亡即遡行〕 |
+| ~~bomb 状态机~~ | 〔2026-09-14 玩法刀退役：`bomb_phase/bomb_timer` 已删；新增 `jump_cd: u16`（跳躍冷却）、`deaths: u8`（偏差值）；`LIFE_RESPAWNING` 退役，死亡即遡行〕；经典机体刀恢复 `bomb_timer: u16`（仅 Classic 用） |
 | 火力 | `shot_timer: u16`（M0-17：持按累进/松手清零，替换原 `shot_cd` 冷却）, `power: u16`（定点百分制 0–400 = 0.00–4.00） |
 | 账本 | `lives: u8, bombs: u8, life_pieces: u8, bomb_pieces: u8, score: u64, graze: u32`（**score u64**：东方真实分数上千亿，u32 溢出） |
 
@@ -475,8 +475,13 @@ Alive ──中弹(趟二)──► DeathWindow（决死窗口, DEATHBOMB_WINDOW
   └── invuln 耗尽 ◄── Respawning（场底飞入, 无敌）
 ```
 
+> **规则套件 `Kit`（经典机体刀 2026-09-15）**：`CharacterCfg.kit` 按机体分派三处——A 组 X 键
+> （`Chronos` → `try_stop` / `Classic(BombCfg)` → `try_bomb`）、A 组 C 键（Chronos → `try_jump` /
+> Classic 无）、`commit_death`（Chronos 原地 + `EVT_REWIND_REQUESTED` / Classic 场底 `(0,384)` +
+> `RESPAWN_INVULN`）。bomb 状态单一字段 `bomb_timer: u16`（C 组计时）。机体 1 = RL 训练机体。
+
 - **死亡连带结算世界侧固定**（掉 power、power 道具回撒规则）：它是账本公平性的一部分，与中弹判定同级，不容每个关卡脚本重写；ECL 只收 `PlayerDied` 事件做演出。
-- **bomb 触发仲裁世界侧**（触发帧立即无敌——决死救人的帧精确性不依赖任何脚本/模块延迟）；bomb **效果**由角色模块经 `bomb_phase/bomb_timer` 状态机逐帧驱动（铺 Field、发演出请求），晚一帧铺开在演出上不可见。〔2026-09-14 玩法刀：bomb 退役；停止（`try_stop`）同为世界侧仲裁，触发帧即冻结〕
+- **bomb 触发仲裁世界侧**（触发帧立即无敌——决死救人的帧精确性不依赖任何脚本/模块延迟）；bomb **效果**（Classic）：`try_bomb` 触发当帧按声明序铺 `BombField`，`bomb_timer` 只做 C 组倒计时（进行中门禁的单一真相源）。〔2026-09-14 玩法刀：bomb 退役；停止（`try_stop`）同为世界侧仲裁，触发帧即冻结〕
 
 **FieldPool**（通用圆形作用区原语，碰撞矩阵行 6/7 的主动方；`define_pool!` 第 4 个实例）：cap 16，
 字段 `x y: Fx, radius: Fx, dmg_per_frame: u16, life: u16, owner: u8, flags: u8`。任何持有

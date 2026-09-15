@@ -18,8 +18,8 @@ pub type DropTable = Box<[(u8, u8)]>;
 pub struct WorldTables {
     /// 内容哈希：组 B 起 LIVE（`from_bytes` 算 body 的 FNV-1a64 并自校）；组 A 恒 0。
     pub content_hash: u64,
-    /// v0 一个角色；定长数组（引擎固定计数，多角色=未来）。
-    pub characters: [CharacterCfg; 1],
+    /// v0 两个机体（0 = 時環晷咲夜 Chronos，1 = 经典训练机体 Classic）；≥1 条，`validate` 押。
+    pub characters: Box<[CharacterCfg]>,
     pub item_cfg: [ItemTypeCfg; ITEM_TYPE_COUNT],
     pub drop_tables: Box<[DropTable]>,
     pub item_gravity: Fx,
@@ -61,6 +61,61 @@ pub struct CharacterCfg {
     pub hit_radius: Fx,
     pub graze_radius: Fx,
     pub shot: ShotTypeCfg,
+    /// 规则套件；机体 0 Chronos / 机体 1 Classic。
+    pub kit: Kit,
+}
+
+/// 机体规则套件（经典机体刀 2026-09-15）：X 键 / C 键 / 死亡三处行为打包成一个值。
+/// 分派点（`world/player.rs` 的 A 组按键、`commit_death`）一律穷尽 `match`——加变体忘了
+/// 处理任何一处 ⇒ 编译不过（D18 手法）。打包而非三个正交字段：可用组合只有两种（YAGNI）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kit {
+    /// 東方時環晷：X = 停止，C = 跳躍，死亡 = 原地继续 + `EVT_REWIND_REQUESTED`。
+    Chronos,
+    /// 东方原作语义（RL 训练机体）：X = bomb，C = 无，死亡 = 场底重生。
+    Classic(BombCfg),
+}
+
+/// 一发 bomb 的完整描述（**静态数据**，住 `Kit::Classic` 里、不进 `World`——与
+/// `ShotTypeCfg` 同构，M0-17 立下的先例）。把"铺哪些 field / 多久 / 吸不吸道具"做成
+/// 数据而非代码，是为了让将来的 bomb 变体成为**换表**而不是改引擎；这不违反 P5
+/// （数据不是回调）。
+///
+/// ⚠️ **数据变不出新形状**：`FieldPool` 只有圆。"锁定敌人的 bomb"只需加一个
+/// [`BombOrigin`] 变体（跟随 = 上层每帧重铺 `life = 1`，是 `FieldPool` 设计时就写好的
+/// 用法）；但"激光形状的 bomb"必须给 field 加形状字段并改碰撞行 6/7 —— 那是**改碰撞
+/// 矩阵**，过评审、另开一刀（spec §13）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BombCfg {
+    /// 效果时长（帧）= `PlayerState.bomb_timer` 初值。
+    pub frames: u16,
+    /// 无敌帧。**允许 > `frames`**：那正是"防炸完立刻死"的旋钮。
+    pub invuln: u16,
+    /// 起爆当帧是否全屏吸道具。
+    pub attract_items: bool,
+    /// 起爆时铺的作用区，**按声明序**（I4）。合法可空（"只给无敌"）。
+    pub fields: Box<[BombField]>,
+}
+
+/// bomb 铺的一条作用区。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BombField {
+    pub origin: BombOrigin,
+    pub radius: Fx,
+    /// `FIELD_CLEAR_BULLETS` | `FIELD_DAMAGE` 的组合。
+    pub flags: u8,
+    pub dmg_per_frame: u16,
+    pub life: u16,
+}
+
+/// 作用区圆心的来源。**用枚举而非 bool**，并在起爆处以穷尽 `match` 消费：加变体而忘了
+/// 处理 ⇒ **编译不过**（D18 立下的押运手法）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BombOrigin {
+    /// 场心 `(0, FIELD_HEIGHT/2)`（全屏效果用）。
+    FieldCenter,
+    /// **起爆那一帧**的自机位置，之后不动。
+    PlayerAtCast,
 }
 
 /// shottype 表：5 档 × 2 焦点 = 10 槽。owned 化后每槽独立 `Box`（**去 `Copy`、留 `Clone`**）。
@@ -239,16 +294,45 @@ pub fn build_tables_v0() -> WorldTables {
         Box::new([(ITEM_POWER, 2u8), (ITEM_POINT, 1u8)]) as DropTable,
     ]);
 
+    let c0 = CharacterCfg {
+        high_speed: CHAR0_HIGH_SPEED,
+        low_speed: CHAR0_LOW_SPEED,
+        inv_sqrt2: CHAR0_INV_SQRT2,
+        hit_radius: CHAR0_HIT_RADIUS,
+        graze_radius: CHAR0_GRAZE_RADIUS,
+        shot,
+        kit: Kit::Chronos,
+    };
+    let c1 = CharacterCfg {
+        kit: Kit::Classic(BombCfg {
+            frames: 120,
+            invuln: 120,
+            attract_items: true,
+            fields: Box::new([
+                // ① 全屏消弹：life = frames ⇒ 整段期间逐帧消掉新飞进来的弹（保护时长天然成立）。
+                BombField {
+                    origin: BombOrigin::FieldCenter,
+                    radius: crate::field::FIELD_RADIUS_FULLSCREEN,
+                    flags: crate::field::FIELD_CLEAR_BULLETS,
+                    dmg_per_frame: 0,
+                    life: 120,
+                },
+                // ② 起爆点伤害圆（不跟随）：120 帧 × 4 ≈ 480 伤害。
+                BombField {
+                    origin: BombOrigin::PlayerAtCast,
+                    radius: Fx::from_int(120),
+                    flags: crate::field::FIELD_DAMAGE,
+                    dmg_per_frame: 4,
+                    life: 120,
+                },
+            ]),
+        }),
+        ..c0.clone()
+    };
+
     WorldTables {
         content_hash: 0,
-        characters: [CharacterCfg {
-            high_speed: CHAR0_HIGH_SPEED,
-            low_speed: CHAR0_LOW_SPEED,
-            inv_sqrt2: CHAR0_INV_SQRT2,
-            hit_radius: CHAR0_HIT_RADIUS,
-            graze_radius: CHAR0_GRAZE_RADIUS,
-            shot,
-        }],
+        characters: Box::new([c0, c1]),
         item_cfg: ITEM_CFG_V0,
         drop_tables,
         item_gravity: ITEM_GRAVITY_V0,
@@ -308,6 +392,9 @@ impl WorldTables {
         if !self.appearances.iter().all(|a| radius_in_range(a.radius)) {
             return false;
         }
+        if self.characters.is_empty() {
+            return false;
+        }
         for c in &self.characters {
             if !radius_in_range(c.hit_radius) || !radius_in_range(c.graze_radius) {
                 return false;
@@ -325,6 +412,21 @@ impl WorldTables {
                         if shooter.option != 0 && shooter.option as usize > opt_len {
                             return false;
                         }
+                    }
+                }
+            }
+            if let Kit::Classic(b) = &c.kit {
+                if b.frames == 0 {
+                    return false;
+                }
+                for f in b.fields.iter() {
+                    if f.life == 0
+                        || f.flags
+                            & !(crate::field::FIELD_CLEAR_BULLETS | crate::field::FIELD_DAMAGE)
+                            != 0
+                        || !radius_in_range(f.radius)
+                    {
+                        return false;
                     }
                 }
             }
@@ -384,7 +486,7 @@ pub enum TableLoadError {
         expected: usize,
         actual: usize,
     },
-    /// 枚举判别值超出已定义范围（如 `bomb_origin` 读到 2）。坏字节不得静默变默认值。
+    /// 枚举判别值超出已定义范围（如 `kit` / `bomb_origin` 读到 2）。坏字节不得静默变默认值。
     BadDiscriminant {
         field: &'static str,
         value: u8,
@@ -454,9 +556,62 @@ fn read_shooter(r: &mut Reader) -> Result<Shooter, TableLoadError> {
     })
 }
 
+/// 读 kit 段（v6）。坏判别字节一律拒（`BadDiscriminant`），不得静默变默认值。
+fn read_kit(r: &mut Reader) -> Result<Kit, TableLoadError> {
+    let tag = r.u8()?;
+    match tag {
+        0 => Ok(Kit::Chronos),
+        1 => {
+            let frames = r.u16()?;
+            let invuln = r.u16()?;
+            let attract_items = match r.u8()? {
+                0 => false,
+                1 => true,
+                v => {
+                    return Err(TableLoadError::BadDiscriminant {
+                        field: "attract_items",
+                        value: v,
+                    });
+                }
+            };
+            let n = r.u32()? as usize;
+            let mut fields = Vec::with_capacity(n.min(64));
+            for _ in 0..n {
+                let origin = match r.u8()? {
+                    0 => BombOrigin::FieldCenter,
+                    1 => BombOrigin::PlayerAtCast,
+                    v => {
+                        return Err(TableLoadError::BadDiscriminant {
+                            field: "bomb_origin",
+                            value: v,
+                        });
+                    }
+                };
+                fields.push(BombField {
+                    origin,
+                    radius: r.fx()?,
+                    flags: r.u8()?,
+                    dmg_per_frame: r.u16()?,
+                    life: r.u16()?,
+                });
+            }
+            Ok(Kit::Classic(BombCfg {
+                frames,
+                invuln,
+                attract_items,
+                fields: fields.into_boxed_slice(),
+            }))
+        }
+        v => Err(TableLoadError::BadDiscriminant {
+            field: "kit",
+            value: v,
+        }),
+    }
+}
+
 /// 头 16B：magic(4) + version(2) + reserved(2) + content_hash(8)。body = 其后全部字节。
 const TABLE_MAGIC: &[u8; 4] = b"STGT";
-const TABLE_VERSION: u16 = 5;
+const TABLE_VERSION: u16 = 6;
 const TABLE_HEADER: usize = 16;
 
 impl WorldTables {
@@ -517,6 +672,27 @@ impl WorldTables {
                 for &(x, y) in op.iter() {
                     out.extend_from_slice(&x.raw().to_le_bytes());
                     out.extend_from_slice(&y.raw().to_le_bytes());
+                }
+            }
+            // kit 段（经典机体刀，v6）：tag + Classic 载荷。写入顺序 = 读出顺序。
+            match &c.kit {
+                Kit::Chronos => out.push(0),
+                Kit::Classic(b) => {
+                    out.push(1);
+                    out.extend_from_slice(&b.frames.to_le_bytes());
+                    out.extend_from_slice(&b.invuln.to_le_bytes());
+                    out.push(u8::from(b.attract_items));
+                    out.extend_from_slice(&(b.fields.len() as u32).to_le_bytes());
+                    for f in b.fields.iter() {
+                        out.push(match f.origin {
+                            BombOrigin::FieldCenter => 0,
+                            BombOrigin::PlayerAtCast => 1,
+                        });
+                        out.extend_from_slice(&f.radius.raw().to_le_bytes());
+                        out.push(f.flags);
+                        out.extend_from_slice(&f.dmg_per_frame.to_le_bytes());
+                        out.extend_from_slice(&f.life.to_le_bytes());
+                    }
                 }
             }
         }
@@ -600,50 +776,56 @@ impl WorldTables {
         }
 
         let nc = r.u32()? as usize;
-        if nc != 1 {
+        if nc == 0 {
             return Err(TableLoadError::ArityMismatch {
                 field: "characters",
                 expected: 1,
-                actual: nc,
+                actual: 0,
             });
         }
-        let high_speed = r.fx()?;
-        let low_speed = r.fx()?;
-        let inv_sqrt2 = r.fx()?;
-        let hit_radius = r.fx()?;
-        let graze_radius = r.fx()?;
-        let mut sets: [[Box<[Shooter]>; 2]; 5] =
-            std::array::from_fn(|_| std::array::from_fn(|_| Box::default()));
-        for tier_sets in sets.iter_mut() {
-            for slot in tier_sets.iter_mut() {
-                let n = r.u32()? as usize;
-                let mut v = Vec::with_capacity(n);
-                for _ in 0..n {
-                    v.push(read_shooter(&mut r)?);
+        let mut characters = Vec::with_capacity(nc.min(16));
+        for _ in 0..nc {
+            let high_speed = r.fx()?;
+            let low_speed = r.fx()?;
+            let inv_sqrt2 = r.fx()?;
+            let hit_radius = r.fx()?;
+            let graze_radius = r.fx()?;
+            let mut sets: [[Box<[Shooter]>; 2]; 5] =
+                std::array::from_fn(|_| std::array::from_fn(|_| Box::default()));
+            for tier_sets in sets.iter_mut() {
+                for slot in tier_sets.iter_mut() {
+                    let n = r.u32()? as usize;
+                    let mut v = Vec::with_capacity(n);
+                    for _ in 0..n {
+                        v.push(read_shooter(&mut r)?);
+                    }
+                    *slot = v.into_boxed_slice();
+                }
+            }
+            let mut option_pos: [Box<[(Fx, Fx)]>; 5] = std::array::from_fn(|_| Box::default());
+            for slot in option_pos.iter_mut() {
+                let m = r.u32()? as usize;
+                let mut v = Vec::with_capacity(m);
+                for _ in 0..m {
+                    v.push((r.fx()?, r.fx()?));
                 }
                 *slot = v.into_boxed_slice();
             }
-        }
-        let mut option_pos: [Box<[(Fx, Fx)]>; 5] = std::array::from_fn(|_| Box::default());
-        for slot in option_pos.iter_mut() {
-            let m = r.u32()? as usize;
-            let mut v = Vec::with_capacity(m);
-            for _ in 0..m {
-                v.push((r.fx()?, r.fx()?));
-            }
-            *slot = v.into_boxed_slice();
-        }
-
-        let t = WorldTables {
-            content_hash: stored,
-            characters: [CharacterCfg {
+            let kit = read_kit(&mut r)?;
+            characters.push(CharacterCfg {
                 high_speed,
                 low_speed,
                 inv_sqrt2,
                 hit_radius,
                 graze_radius,
                 shot: ShotTypeCfg { sets, option_pos },
-            }],
+                kit,
+            });
+        }
+
+        let t = WorldTables {
+            content_hash: stored,
+            characters: characters.into_boxed_slice(),
             item_cfg,
             drop_tables: drops.into_boxed_slice(),
             item_gravity,
@@ -1118,5 +1300,165 @@ mod tests {
                 actual: 3
             })
         );
+    }
+
+    /// v0 机体 1 = 机体 0 的移速/判定/shot + Classic；bomb 数值钉旧 v0（改内容要有意识地改本测试）。
+    #[test]
+    fn v0_character_1_is_character_0_plus_classic_kit() {
+        let (c0, c1) = (&TABLES_V0.characters[0], &TABLES_V0.characters[1]);
+        assert_eq!(TABLES_V0.characters.len(), 2);
+        assert_eq!(c0.kit, Kit::Chronos);
+        assert_eq!(
+            (
+                c1.high_speed,
+                c1.low_speed,
+                c1.inv_sqrt2,
+                c1.hit_radius,
+                c1.graze_radius
+            ),
+            (
+                c0.high_speed,
+                c0.low_speed,
+                c0.inv_sqrt2,
+                c0.hit_radius,
+                c0.graze_radius
+            )
+        );
+        assert_eq!(c1.shot, c0.shot);
+        let Kit::Classic(b) = &c1.kit else {
+            panic!("机体 1 必须是 Classic")
+        };
+        assert_eq!((b.frames, b.invuln, b.attract_items), (120, 120, true));
+        assert_eq!(b.fields.len(), 2);
+        assert_eq!(b.fields[0].origin, BombOrigin::FieldCenter);
+        assert_eq!(b.fields[0].radius, crate::field::FIELD_RADIUS_FULLSCREEN);
+        assert_eq!(b.fields[0].flags, crate::field::FIELD_CLEAR_BULLETS);
+        assert_eq!(b.fields[0].dmg_per_frame, 0, "全屏消弹圆不得带伤害");
+        assert_eq!(b.fields[1].origin, BombOrigin::PlayerAtCast);
+        assert_eq!(b.fields[1].radius, Fx::from_int(120));
+        assert_eq!(b.fields[1].flags, crate::field::FIELD_DAMAGE);
+        assert_eq!(b.fields[1].dmg_per_frame, 4);
+        assert!(b.fields.iter().all(|f| f.life == b.frames));
+    }
+
+    /// 往返：Classic 段逐字段相等。判别力：漏写/错序任一字段都红。互异非零值（S1 纪律）。
+    #[test]
+    fn classic_kit_survives_a_bytes_roundtrip() {
+        let mut t = build_tables_v0();
+        t.characters[1].kit = Kit::Classic(BombCfg {
+            frames: 77,
+            invuln: 91,
+            attract_items: false,
+            fields: Box::new([
+                BombField {
+                    origin: BombOrigin::PlayerAtCast,
+                    radius: Fx::from_int(33),
+                    flags: crate::field::FIELD_DAMAGE,
+                    dmg_per_frame: 9,
+                    life: 5,
+                },
+                BombField {
+                    origin: BombOrigin::FieldCenter,
+                    radius: Fx::from_int(44),
+                    flags: crate::field::FIELD_CLEAR_BULLETS,
+                    dmg_per_frame: 0,
+                    life: 6,
+                },
+                BombField {
+                    origin: BombOrigin::PlayerAtCast,
+                    radius: Fx::from_int(55),
+                    flags: crate::field::FIELD_CLEAR_BULLETS | crate::field::FIELD_DAMAGE,
+                    dmg_per_frame: 2,
+                    life: 7,
+                },
+            ]),
+        });
+        let back = WorldTables::from_bytes(&t.to_bytes()).expect("往返应成功");
+        assert_eq!(back.characters, t.characters);
+    }
+
+    /// validate：Classic 四条坏行各自被拒（radius 越界 / 未定义 flags 位 / frames==0 / life==0）；
+    /// 空角色表被拒。只测一条的话其余三条漏写也绿。
+    #[test]
+    fn classic_kit_validate_rejects_bad_rows() {
+        let mk = |mutate: &dyn Fn(&mut BombCfg)| {
+            let mut t = build_tables_v0();
+            let Kit::Classic(b) = &mut t.characters[1].kit else {
+                unreachable!()
+            };
+            mutate(b);
+            t
+        };
+        assert!(
+            !mk(&|b| b.fields[0].radius = Fx::from_int(-1)).validate(),
+            "radius 越界须拒"
+        );
+        assert!(
+            !mk(&|b| b.fields[0].flags = 0x80).validate(),
+            "未定义 flags 位须拒"
+        );
+        assert!(!mk(&|b| b.frames = 0).validate(), "frames==0 须拒");
+        assert!(!mk(&|b| b.fields[0].life = 0).validate(), "life==0 须拒");
+        let mut empty = build_tables_v0();
+        empty.characters = Box::new([]);
+        assert!(!empty.validate(), "空角色表须拒");
+        assert!(build_tables_v0().validate(), "内建表本身必须合法");
+    }
+
+    /// 造一份「哈希自洽但某字节非法」的表：`from_bytes` 的 FNV 自校先于解析，必须重算回填。
+    fn tamper(mut bytes: Vec<u8>, at: usize, v: u8) -> Vec<u8> {
+        use crate::checksum::Fnv1a64;
+        bytes[at] = v;
+        let mut h = Fnv1a64::new();
+        h.write_bytes(&bytes[TABLE_HEADER..]);
+        bytes[8..TABLE_HEADER].copy_from_slice(&h.finish().to_le_bytes());
+        bytes
+    }
+
+    /// 唯一定位一段字节模式（模式若不唯一当场红，别悄悄改错地方）。
+    fn find_unique(bytes: &[u8], pat: &[u8]) -> usize {
+        let hits: Vec<usize> = bytes
+            .windows(pat.len())
+            .enumerate()
+            .filter(|(_, w)| *w == pat)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(hits.len(), 1, "定位模式必须唯一");
+        hits[0]
+    }
+
+    /// 三个判别值字节各自被拒，不静默变默认值。定位：机体 1 的 Classic 段头 =
+    /// `kit_tag=1` ⧺ `frames=120 (78 00)` ⧺ `invuln=120 (78 00)` ⧺ `attract=1` ⧺ `n_fields=2 (02 00 00 00)`
+    /// ⧺ 首条 `origin=0`。
+    #[test]
+    fn classic_kit_rejects_unknown_discriminants() {
+        const HEAD: [u8; 11] = [
+            0x01, 0x78, 0x00, 0x78, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let base = build_tables_v0().to_bytes();
+        let at = find_unique(&base, &HEAD);
+        for (off, field) in [(0usize, "kit"), (5, "attract_items"), (10, "bomb_origin")] {
+            match WorldTables::from_bytes(&tamper(base.clone(), at + off, 7)) {
+                Err(TableLoadError::BadDiscriminant { field: f, value }) => {
+                    assert_eq!((f, value), (field, 7))
+                }
+                other => panic!("{field} 坏判别值须被拒，实得 {other:?}"),
+            }
+        }
+    }
+
+    /// 角色计数 0 → ArityMismatch（空表不得开机）。直接序列化一份 `characters = []` 的表
+    /// （`to_bytes` 不跑 validate，哈希自洽），解析在 validate 之前就该拒。
+    #[test]
+    fn zero_characters_is_an_arity_error() {
+        let mut t = build_tables_v0();
+        t.characters = Box::new([]);
+        match WorldTables::from_bytes(&t.to_bytes()) {
+            Err(TableLoadError::ArityMismatch {
+                field: "characters",
+                ..
+            }) => {}
+            other => panic!("空角色表须 ArityMismatch，实得 {other:?}"),
+        }
     }
 }

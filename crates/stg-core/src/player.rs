@@ -13,7 +13,7 @@ pub const LIFE_GAMEOVER: u8 = 4; // 命尽、不再重生
 /// 不复用 `LIFE_ABSENT`：那个态连 C 组计时都跳过，本态需要倒计时。
 pub const LIFE_JUMPING: u8 = 5;
 pub const DEATHBOMB_WINDOW: u16 = 8; // 决死窗口帧
-pub const RESPAWN_INVULN: u16 = 120; // 续关无敌帧（2 秒 @60Hz；玩法刀起唯一消费者是 try_continue）
+pub const RESPAWN_INVULN: u16 = 120; // 续关 + Classic 场底重生的无敌帧（2 秒 @60Hz）
 
 /// 停止（时间停止）的固定时长（帧）。**引擎常量而非表数据**——它不在任何表里。若将来
 /// "每个自机时停时长不同"成为内容需求，再迁进 `CharacterCfg`。
@@ -64,6 +64,9 @@ pub struct PlayerState {
     pub invuln: u16,
     /// 跳躍冷却剩余帧（玩法刀）。落地写 `JUMP_COOLDOWN`，C 组计时（停止冻结期间不走）。
     pub jump_cd: u16,
+    /// 经典 bomb 剩余帧（经典机体刀）。`Kit::Classic` 的 `try_bomb` 写 `BombCfg.frames`，C 组逐帧减
+    /// （场景冻结不走）；`!= 0` 即「bomb 进行中」，是二次起爆门禁的单一真相源。Chronos 机体恒 0。
+    pub bomb_timer: u16,
     /// 发弹相位计时器（M0-17 T4：取代旧 `shot_cd` 倒计时）：持 SHOT 逐帧 `wrapping_add(1)`，
     /// 松手清零；相位 3 解释器用**自增前**的值判 `shot_timer % interval == delay % interval`
     /// （先判后加——见 `world/player.rs::char0_update_shot` 钉死注记 + 判别测试
@@ -131,6 +134,7 @@ impl PlayerState {
             state_timer: 0,
             invuln: 0,
             jump_cd: 0,
+            bomb_timer: 0,
             hit_frame: 0,
             continues: 0,
             deaths: 0,
