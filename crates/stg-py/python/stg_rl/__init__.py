@@ -20,7 +20,8 @@ from ._native import CompileError, Image, build_info, bundled_sources, event_col
 EVENT_COLUMNS = tuple(event_columns())
 STRIDES = {name: stride for name, stride, _ in _native.layout_tables()}
 OFFSETS = {name: {f: (off, ty) for f, off, ty in fields} for name, _, fields in _native.layout_tables()}
-ENEMIES_CAP, ITEMS_CAP = 256, 1024
+CAPS = dict(_native.caps())
+ENEMIES_CAP, ITEMS_CAP = CAPS["enemies"], CAPS["items"]
 _END_ON = ("phase_ended", "spell_captured", "spell_failed", "stage_cleared")
 
 
@@ -56,13 +57,18 @@ class Start:
 
 
 def _layout(n: int, cap: int):
-    """(键, 扁平长度, dtype, 视图形状)。与 Rust vec_env::buffer_sizes 一一对应。"""
+    """(键, 扁平长度, dtype, 视图形状)。与 Rust vec_env::buffer_sizes 一一对应；
+    stride 与容量一律取自 `_native`（STRIDES / CAPS），不在 Python 侧各写一份。"""
+    _S = STRIDES
     return [
         ("frame", n, np.uint32, (n,)), ("phase", n, np.uint32, (n,)),
-        ("player", n * 36, np.uint8, (n, 36)),
-        ("enemies", n * ENEMIES_CAP * 38, np.uint8, (n, ENEMIES_CAP, 38)), ("enemies_count", n, np.int32, (n,)),
-        ("bullets", n * cap * 30, np.uint8, (n * cap, 30)), ("bullets_offsets", n + 1, np.int32, (n + 1,)),
-        ("items", n * ITEMS_CAP * 18, np.uint8, (n * ITEMS_CAP, 18)), ("items_offsets", n + 1, np.int32, (n + 1,)),
+        ("player", n * _S["player"], np.uint8, (n, _S["player"])),
+        ("enemies", n * ENEMIES_CAP * _S["enemies"], np.uint8, (n, ENEMIES_CAP, _S["enemies"])),
+        ("enemies_count", n, np.int32, (n,)),
+        ("bullets", n * cap * _S["bullets"], np.uint8, (n * cap, _S["bullets"])),
+        ("bullets_offsets", n + 1, np.int32, (n + 1,)),
+        ("items", n * ITEMS_CAP * _S["items"], np.uint8, (n * ITEMS_CAP, _S["items"])),
+        ("items_offsets", n + 1, np.int32, (n + 1,)),
         ("lasers_count", n, np.int32, (n,)), ("bullets_total", n, np.int32, (n,)), ("bullets_dropped", n, np.int32, (n,)),
         ("events", n * len(EVENT_COLUMNS), np.int32, (n, len(EVENT_COLUMNS))), ("done", n, np.uint8, (n,)),
         ("ep_frames", n, np.int32, (n,)), ("warmup_retries", n, np.int32, (n,)), ("start_index", n, np.int32, (n,)),

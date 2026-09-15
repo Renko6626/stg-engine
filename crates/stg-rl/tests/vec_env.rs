@@ -5,70 +5,15 @@ use stg_rl::env::*;
 use stg_rl::layout::ITEMS_CAP;
 use stg_rl::vec_env::*;
 
-struct Owned {
-    frame: Vec<u32>,
-    phase: Vec<u32>,
-    player: Vec<u8>,
-    enemies: Vec<u8>,
-    enemies_count: Vec<i32>,
-    bullets: Vec<u8>,
-    bullets_offsets: Vec<i32>,
-    items: Vec<u8>,
-    items_offsets: Vec<i32>,
-    lasers_count: Vec<i32>,
-    bullets_total: Vec<i32>,
-    bullets_dropped: Vec<i32>,
-    events: Vec<i32>,
-    done: Vec<u8>,
-    ep_frames: Vec<i32>,
-    warmup_retries: Vec<i32>,
-    start_index: Vec<i32>,
+/// 测试用缓冲 = 公开的 `OwnedBuffers`（与 harness rl-bench 共用，不再各写一份）。
+type Owned = OwnedBuffers;
+
+/// 测试专用的规范化快照（扩展 trait：`OwnedBuffers` 是外部类型，不能加固有方法）。
+trait Digest {
+    fn digest(&self) -> Vec<u8>;
 }
 
-impl Owned {
-    fn new(n: usize, cap: usize) -> Owned {
-        let s = buffer_sizes(n, cap);
-        Owned {
-            frame: vec![0; s.frame],
-            phase: vec![0; s.phase],
-            player: vec![0; s.player],
-            enemies: vec![0; s.enemies],
-            enemies_count: vec![0; s.enemies_count],
-            bullets: vec![0; s.bullets],
-            bullets_offsets: vec![0; s.bullets_offsets],
-            items: vec![0; s.items],
-            items_offsets: vec![0; s.items_offsets],
-            lasers_count: vec![0; s.lasers_count],
-            bullets_total: vec![0; s.bullets_total],
-            bullets_dropped: vec![0; s.bullets_dropped],
-            events: vec![0; s.events],
-            done: vec![0; s.done],
-            ep_frames: vec![0; s.ep_frames],
-            warmup_retries: vec![0; s.warmup_retries],
-            start_index: vec![0; s.start_index],
-        }
-    }
-    fn view(&mut self) -> BufferSet<'_> {
-        BufferSet {
-            frame: &mut self.frame,
-            phase: &mut self.phase,
-            player: &mut self.player,
-            enemies: &mut self.enemies,
-            enemies_count: &mut self.enemies_count,
-            bullets: &mut self.bullets,
-            bullets_offsets: &mut self.bullets_offsets,
-            items: &mut self.items,
-            items_offsets: &mut self.items_offsets,
-            lasers_count: &mut self.lasers_count,
-            bullets_total: &mut self.bullets_total,
-            bullets_dropped: &mut self.bullets_dropped,
-            events: &mut self.events,
-            done: &mut self.done,
-            ep_frames: &mut self.ep_frames,
-            warmup_retries: &mut self.warmup_retries,
-            start_index: &mut self.start_index,
-        }
-    }
+impl Digest for Owned {
     /// 有效数据的规范化快照：CSR 只比前缀（后缀是暂存区残留，不属于输出）。
     fn digest(&self) -> Vec<u8> {
         let nb = *self.bullets_offsets.last().unwrap() as usize * 30;

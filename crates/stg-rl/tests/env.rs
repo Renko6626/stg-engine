@@ -258,3 +258,28 @@ fn stg_rl_game() -> Image {
         .collect();
     compile(&units).unwrap()
 }
+
+/// done 优先级判别（spec §4.4）：死亡 > 段落结束 > 超时；三者两两并存的组合逐一钉死。
+#[test]
+fn done_priority_died_over_segment_over_timeout() {
+    assert_eq!(decide_done(false, false, 10, 100), DONE_NONE);
+    assert_eq!(decide_done(true, false, 10, 100), DONE_DIED);
+    assert_eq!(decide_done(false, true, 10, 100), DONE_SEGMENT);
+    assert_eq!(decide_done(false, false, 100, 100), DONE_TIMEOUT);
+    assert_eq!(
+        decide_done(true, true, 10, 100),
+        DONE_DIED,
+        "同帧死亡 + 段落结束 ⇒ 死亡优先"
+    );
+    assert_eq!(
+        decide_done(true, false, 100, 100),
+        DONE_DIED,
+        "死亡恰逢超时帧 ⇒ 死亡"
+    );
+    assert_eq!(
+        decide_done(false, true, 100, 100),
+        DONE_SEGMENT,
+        "段落结束恰逢超时帧 ⇒ 段落结束"
+    );
+    assert_eq!(decide_done(true, true, 100, 100), DONE_DIED);
+}

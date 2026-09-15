@@ -134,3 +134,13 @@ def test_torch_backend_matches_numpy():
     for key in ("frame", "phase", "done", "bullets_offsets", "player", "bullets"):
         assert np.array_equal(tb[key].numpy(), nb[key]), key
     assert tb["player"].abs().sum().item() > 0, "写入应落在调用方 torch 张量"
+
+
+def test_caps_and_strides_come_from_native():
+    """Python 缓冲布局的容量与 stride 取自原生模块（不与 Rust 常量各写一份）。"""
+    assert stg_rl.CAPS == {"enemies": 256, "lasers": 64, "items": 1024,
+                           "bullets_default": 1024, "bullets_max": 8192}
+    b = stg_rl.alloc_buffers(3, 128, backend="numpy")
+    assert b["enemies"].shape == (3, stg_rl.CAPS["enemies"], stg_rl.STRIDES["enemies"])
+    assert b["items"].shape == (3 * stg_rl.CAPS["items"], stg_rl.STRIDES["items"])
+    assert b["bullets"].shape == (3 * 128, stg_rl.STRIDES["bullets"])

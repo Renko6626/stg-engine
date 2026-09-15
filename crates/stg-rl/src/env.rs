@@ -136,6 +136,20 @@ pub struct StepOut {
     pub start_index: i32,
 }
 
+/// done 判定（spec §4.4），抽成纯函数以便直测优先级：**死亡 > 段落结束 > 超时**。
+/// 同帧死亡与段落结束并存 ⇒ `DONE_DIED`；段落结束恰逢超时帧 ⇒ `DONE_SEGMENT`。
+pub fn decide_done(died: bool, segment_hit: bool, ep_frames: u32, max_frames: u32) -> u8 {
+    if died {
+        DONE_DIED
+    } else if segment_hit {
+        DONE_SEGMENT
+    } else if ep_frames >= max_frames {
+        DONE_TIMEOUT
+    } else {
+        DONE_NONE
+    }
+}
+
 /// splitmix64 终混（spec §4.1 种子流；常量钉死）。
 pub fn splitmix64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -435,14 +449,7 @@ impl Env {
             self.prev_score = score;
             self.prev_bombs = bombs;
 
-            // 同帧死亡与段落结束并存 ⇒ 1 优先（spec §4.4）。
-            if ev[0] > 0 {
-                done = DONE_DIED;
-            } else if seg_hit {
-                done = DONE_SEGMENT;
-            } else if self.ep_frames >= self.cfg.max_frames {
-                done = DONE_TIMEOUT;
-            }
+            done = decide_done(ev[0] > 0, seg_hit, self.ep_frames, self.cfg.max_frames);
             if done != DONE_NONE {
                 break;
             }

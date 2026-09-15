@@ -204,7 +204,7 @@ cargo run --release -p stg-harness -- rl-bench   # stg-rl 批量 env 吞吐:step
 #   cd crates/stg-py && python3 -m venv .venv && . .venv/bin/activate
 #   pip install --no-cache-dir --no-index --find-links <wheels> maturin numpy pytest
 #   maturin build --release -o dist && pip install --no-deps --force-reinstall dist/stg_rl-*.whl
-#   (cd .venv && python -m pytest -q -p no:cacheprovider ../tests)   # 4 passed;装 stgagent 后含解码对拍那条
+#   (cd .venv && python -m pytest -q -p no:cacheprovider ../tests)   # 冒烟 + 缓冲负例;装 stgagent 才跑解码对拍,无 torch 跳 1 条
 bash crates/stg-godot/smoke/run-smoke.sh     # 桥级冒烟(桥面回归)
 bash godot/smoke/run-smoke.sh                # 真工程冒烟(demo 局两次开机:正常/中段)
 DISPLAY=:2 LIBGL_ALWAYS_SOFTWARE=1 godot --rendering-driver opengl3 --path godot -- --shots

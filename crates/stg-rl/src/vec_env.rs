@@ -92,6 +92,75 @@ pub struct BufferSet<'a> {
     pub start_index: &'a mut [i32],
 }
 
+/// Rust 侧自持的扁平缓冲（harness `rl-bench` 与测试共用；Python 侧由 `stg_rl.alloc_buffers` 分配）。
+/// 字段即 [`BufferSizes`]，按 [`buffer_sizes`] 分配，[`OwnedBuffers::view`] 借成 [`BufferSet`]。
+pub struct OwnedBuffers {
+    pub frame: Vec<u32>,
+    pub phase: Vec<u32>,
+    pub player: Vec<u8>,
+    pub enemies: Vec<u8>,
+    pub enemies_count: Vec<i32>,
+    pub bullets: Vec<u8>,
+    pub bullets_offsets: Vec<i32>,
+    pub items: Vec<u8>,
+    pub items_offsets: Vec<i32>,
+    pub lasers_count: Vec<i32>,
+    pub bullets_total: Vec<i32>,
+    pub bullets_dropped: Vec<i32>,
+    pub events: Vec<i32>,
+    pub done: Vec<u8>,
+    pub ep_frames: Vec<i32>,
+    pub warmup_retries: Vec<i32>,
+    pub start_index: Vec<i32>,
+}
+
+impl OwnedBuffers {
+    pub fn new(num_envs: usize, bullets_cap: usize) -> OwnedBuffers {
+        let s = buffer_sizes(num_envs, bullets_cap);
+        OwnedBuffers {
+            frame: vec![0; s.frame],
+            phase: vec![0; s.phase],
+            player: vec![0; s.player],
+            enemies: vec![0; s.enemies],
+            enemies_count: vec![0; s.enemies_count],
+            bullets: vec![0; s.bullets],
+            bullets_offsets: vec![0; s.bullets_offsets],
+            items: vec![0; s.items],
+            items_offsets: vec![0; s.items_offsets],
+            lasers_count: vec![0; s.lasers_count],
+            bullets_total: vec![0; s.bullets_total],
+            bullets_dropped: vec![0; s.bullets_dropped],
+            events: vec![0; s.events],
+            done: vec![0; s.done],
+            ep_frames: vec![0; s.ep_frames],
+            warmup_retries: vec![0; s.warmup_retries],
+            start_index: vec![0; s.start_index],
+        }
+    }
+
+    pub fn view(&mut self) -> BufferSet<'_> {
+        BufferSet {
+            frame: &mut self.frame,
+            phase: &mut self.phase,
+            player: &mut self.player,
+            enemies: &mut self.enemies,
+            enemies_count: &mut self.enemies_count,
+            bullets: &mut self.bullets,
+            bullets_offsets: &mut self.bullets_offsets,
+            items: &mut self.items,
+            items_offsets: &mut self.items_offsets,
+            lasers_count: &mut self.lasers_count,
+            bullets_total: &mut self.bullets_total,
+            bullets_dropped: &mut self.bullets_dropped,
+            events: &mut self.events,
+            done: &mut self.done,
+            ep_frames: &mut self.ep_frames,
+            warmup_retries: &mut self.warmup_retries,
+            start_index: &mut self.start_index,
+        }
+    }
+}
+
 /// 单 env 的私有状态：世界 + 本 env 的定长观测暂存区（CSR 压实前）。
 struct Slot {
     env: Env,

@@ -14,75 +14,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use stg_rl::env::{EndOn, EnvConfig, Start, compile};
-use stg_rl::vec_env::{BufferSet, VecEnv, buffer_sizes};
-
-/// 调用方持有的扁平缓冲（结构同 `tests/vec_env.rs::Owned`，就地复制一份）。
-struct Buf {
-    frame: Vec<u32>,
-    phase: Vec<u32>,
-    player: Vec<u8>,
-    enemies: Vec<u8>,
-    enemies_count: Vec<i32>,
-    bullets: Vec<u8>,
-    bullets_offsets: Vec<i32>,
-    items: Vec<u8>,
-    items_offsets: Vec<i32>,
-    lasers_count: Vec<i32>,
-    bullets_total: Vec<i32>,
-    bullets_dropped: Vec<i32>,
-    events: Vec<i32>,
-    done: Vec<u8>,
-    ep_frames: Vec<i32>,
-    warmup_retries: Vec<i32>,
-    start_index: Vec<i32>,
-}
-
-impl Buf {
-    fn new(n: usize, cap: usize) -> Buf {
-        let s = buffer_sizes(n, cap);
-        Buf {
-            frame: vec![0; s.frame],
-            phase: vec![0; s.phase],
-            player: vec![0; s.player],
-            enemies: vec![0; s.enemies],
-            enemies_count: vec![0; s.enemies_count],
-            bullets: vec![0; s.bullets],
-            bullets_offsets: vec![0; s.bullets_offsets],
-            items: vec![0; s.items],
-            items_offsets: vec![0; s.items_offsets],
-            lasers_count: vec![0; s.lasers_count],
-            bullets_total: vec![0; s.bullets_total],
-            bullets_dropped: vec![0; s.bullets_dropped],
-            events: vec![0; s.events],
-            done: vec![0; s.done],
-            ep_frames: vec![0; s.ep_frames],
-            warmup_retries: vec![0; s.warmup_retries],
-            start_index: vec![0; s.start_index],
-        }
-    }
-
-    fn view(&mut self) -> BufferSet<'_> {
-        BufferSet {
-            frame: &mut self.frame,
-            phase: &mut self.phase,
-            player: &mut self.player,
-            enemies: &mut self.enemies,
-            enemies_count: &mut self.enemies_count,
-            bullets: &mut self.bullets,
-            bullets_offsets: &mut self.bullets_offsets,
-            items: &mut self.items,
-            items_offsets: &mut self.items_offsets,
-            lasers_count: &mut self.lasers_count,
-            bullets_total: &mut self.bullets_total,
-            bullets_dropped: &mut self.bullets_dropped,
-            events: &mut self.events,
-            done: &mut self.done,
-            ep_frames: &mut self.ep_frames,
-            warmup_retries: &mut self.warmup_retries,
-            start_index: &mut self.start_index,
-        }
-    }
-}
+use stg_rl::vec_env::{OwnedBuffers, VecEnv};
 
 /// 动作：移动位（UP/DOWN）+ SHOT + SLOW，不含 BOMB（`0x53`）。
 fn action(step: u32, i: usize) -> u32 {
@@ -185,7 +117,7 @@ fn run(args: &[String]) -> Result<(), String> {
 
     for t in list {
         let mut ve = VecEnv::new(cfg.clone(), envs, t).map_err(|e| format!("VecEnv::new: {e}"))?;
-        let mut buf = Buf::new(envs, cap);
+        let mut buf = OwnedBuffers::new(envs, cap);
         ve.reset(&mut buf.view())
             .map_err(|e| format!("reset: {e}"))?;
         // 预热 100 步（不记账），让各 env 离开开局（随机动作下死亡频繁、弹量低，见观测列）。

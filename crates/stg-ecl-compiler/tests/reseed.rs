@@ -18,8 +18,10 @@ use stg_core::tables::TABLES_V0;
 /// 后续帧的分歧在相同确定性 step 下持续存在，必被下一次抽样或末帧捕获。
 #[test]
 fn reseed_after_template_equals_direct_boot() {
-    // `mark(10)` 落点之后 main 仍每帧 `rand(100)` 真消费 RNG，覆盖中段启动路径（spec §8）。
-    let src = "sub main() { mark(10) { } loop { var b: int = rand(100); wait(1); } }";
+    // mark 之前有一段**带副作用的前缀**（消费 RNG + 等帧），从头开局会执行、`mark(10)` 中段
+    // 启动会跳过；补偿块也消费一次 RNG（只在跳入时执行）。两种开局都与 reseed 等价，
+    // 覆盖「跳过有副作用前缀」的 landing 形态（spec §8）。落点之后 main 仍每帧 `rand(100)`。
+    let src = "sub main() { _ = rand(7); wait(3); mark(10) { _ = rand(5); } loop { var b: int = rand(100); wait(1); } }";
     let image = stg_ecl_compiler::lang::compile(src, "t.ecl").expect("probe 脚本必须编过");
     for &(seed, rank, mark) in &[(1u64, 0i32, 0i32), (0xDEAD_BEEF, 2, 10), (u64::MAX, 3, 0)] {
         let ld = Loadout {

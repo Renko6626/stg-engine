@@ -244,6 +244,18 @@ fn layout_tables() -> Vec<LayoutTable> {
         .collect()
 }
 
+/// 表容量常量（Python 包装层据此算缓冲长度，避免与 Rust 常量各写一份）。
+#[pyfunction]
+fn caps() -> HashMap<&'static str, usize> {
+    HashMap::from([
+        ("enemies", layout::ENEMIES_CAP),
+        ("lasers", layout::LASERS_CAP),
+        ("items", layout::ITEMS_CAP),
+        ("bullets_default", layout::BULLETS_CAP_DEFAULT),
+        ("bullets_max", layout::BULLETS_CAP_MAX),
+    ])
+}
+
 /// events 列名（列序即契约）。
 #[pyfunction]
 fn event_columns() -> Vec<&'static str> {
@@ -289,6 +301,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeVecEnv>()?;
     m.add_function(wrap_pyfunction!(hello, m)?)?;
     m.add_function(wrap_pyfunction!(layout_tables, m)?)?;
+    m.add_function(wrap_pyfunction!(caps, m)?)?;
     m.add_function(wrap_pyfunction!(event_columns, m)?)?;
     m.add_function(wrap_pyfunction!(build_info, m)?)?;
     m.add_function(wrap_pyfunction!(bundled_sources, m)?)?;

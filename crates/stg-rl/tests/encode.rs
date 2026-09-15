@@ -451,3 +451,16 @@ fn phase_bits_frozen_player_not_controllable() {
         "冻结中不可控"
     );
 }
+
+/// phase 位的字面值钉死（proto SPEC §1 phase 位表 / c/world.h `AP_PHASE_*`）：
+/// 其它 phase 测试的期望都复用同组常量，改常量数值它们不会红——这条防的就是这个。
+#[test]
+fn phase_bit_literals_match_proto() {
+    assert_eq!(PHASE_IN_GAME, 0x01, "AP_PHASE_IN_GAME = 1<<0");
+    assert_eq!(PHASE_BOMB_ACTIVE, 0x10, "AP_PHASE_BOMB_ACTIVE = 1<<4");
+    assert_eq!(PHASE_SPELL_ACTIVE, 0x20, "AP_PHASE_SPELL_ACTIVE = 1<<5");
+    assert_eq!(
+        PHASE_PLAYER_CONTROLLABLE, 0x40,
+        "AP_PHASE_PLAYER_CONTROLLABLE = 1<<6"
+    );
+}
