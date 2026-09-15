@@ -28,6 +28,13 @@ fn put_u16(b: &mut [u8], o: usize, v: u16) {
     b[o..o + 2].copy_from_slice(&v.to_le_bytes());
 }
 
+/// 结算分从 `u64` 落到 proto 的 `U32` 字段：**饱和**到 `u32::MAX`，不回绕。
+/// 抽成独立函数以便直测（公开途径造不出 `score > u32::MAX` 的世界，见 `tests/encode.rs`）。
+#[inline]
+fn saturate_score(score: u64) -> u32 {
+    score.min(u32::MAX as u64) as u32
+}
+
 pub fn phase_bits(w: &World) -> u32 {
     let v = w.view();
     let p = &v.players()[0];
@@ -60,7 +67,7 @@ pub fn write_player(w: &World, tables: &WorldTables, row: &mut [u8]) {
     row[off::player::LFRAG] = p.life_pieces;
     row[off::player::BFRAG] = p.bomb_pieces;
     put_u16(row, off::player::POWER, p.power);
-    put_u32(row, off::player::SCORE, p.score.min(u32::MAX as u64) as u32);
+    put_u32(row, off::player::SCORE, saturate_score(p.score));
     put_u32(row, off::player::GRAZE, p.graze);
 }
 
@@ -70,12 +77,24 @@ pub struct BulletStats {
     pub dropped: usize,
 }
 
+/// 敌弹行编码：按「离自机最近」选至多 `cap` 颗，输出按池索引升序（I4）。
+///
+/// `scratch` 由调用方复用，避免每步堆分配；每帧先 `clear`，函数返回时其内容无意义。
+///
+/// # Panics
+///
+/// - `cap == 0`：`cap` 必须 `>= 1`（plan Global Constraints `1..=8192`，由 HELLO 校验）。
+/// - `rows.len() < cap * 30`：每行 30 字节，越界切片会 panic。
 pub fn write_bullets(
     w: &World,
     cap: usize,
     rows: &mut [u8],
     scratch: &mut Vec<(i64, u16)>,
 ) -> BulletStats {
+    assert!(
+        cap >= 1,
+        "bullets cap 必须 >= 1（plan Global Constraints: 1..=8192，由 HELLO 校验）"
+    );
     let v = w.view();
     let b = v.bullets();
     let p = &v.players()[0];
@@ -125,12 +144,6 @@ pub fn write_bullets(
 pub fn write_enemies(w: &World, rows: &mut [u8]) -> usize {
     let v = w.view();
     let e = v.enemies();
-    let bosses: Vec<EnemyHandle> = v
-        .boss_ui()
-        .iter()
-        .filter(|s| s.active != 0)
-        .map(|s| s.enemy)
-        .collect();
     let mut k = 0;
     for i in e.iter_alive().take(ENEMIES_CAP) {
         let r = &mut rows[k * 38..(k + 1) * 38];
@@ -147,7 +160,8 @@ pub fn write_enemies(w: &World, rows: &mut [u8]) -> usize {
         put_i32(r, off::enemy::HIT_H, e.radius()[i].raw());
         put_i32(r, off::enemy::HP, e.hp()[i]);
         put_i32(r, off::enemy::HP_MAX, e.hp_max()[i]);
-        let boss = bosses.contains(&h);
+        // 免分配：boss_ui 槽数很小，直接在敌循环里查，避免每步一次 `Vec` 堆分配。
+        let boss = v.boss_ui().iter().any(|s| s.active != 0 && s.enemy == h);
         let collidable = e.flags()[i] & (ENEMY_NO_BODY | ENEMY_DYING) == 0;
         put_u16(
             r,
@@ -164,6 +178,9 @@ pub fn write_items(w: &World, rows: &mut [u8]) -> usize {
     let it = w.view().items();
     let mut k = 0;
     for i in it.iter_alive() {
+        // MAGNET_PICKED（0xFE）只在同帧相位 7→9 之间短暂存在：相位 7 `settle` 标它并
+        // 入账，相位 9 `cleanup` 回收全槽。`step` 返回后它已不在存活集里，故此分支纯属
+        // 防御性——但保留它才能保证行数 = proto 侧可见道具数这条契约在相位中途也成立。
         if k == ITEMS_CAP || it.magnet_to()[i] == MAGNET_PICKED {
             continue;
         }
@@ -181,4 +198,21 @@ pub fn write_items(w: &World, rows: &mut [u8]) -> usize {
         k += 1;
     }
     k
+}
+
+#[cfg(test)]
+mod tests {
+    use super::saturate_score;
+
+    /// `score` 是 `u64`，proto 字段是 `U32` —— 溢出必须饱和、不得回绕。
+    /// 判别力：任何 `as u32`（截断）或 `+1` 回绕实现都会让 0x1_0000_0001 变成 1，测试红。
+    #[test]
+    fn saturate_score_clamps_to_u32_max() {
+        assert_eq!(saturate_score(0), 0);
+        assert_eq!(saturate_score(123), 123);
+        assert_eq!(saturate_score(u32::MAX as u64), u32::MAX);
+        assert_eq!(saturate_score(0x1_0000_0000), u32::MAX, "u32::MAX + 1");
+        assert_eq!(saturate_score(0x1_0000_0001), u32::MAX, "u32::MAX + 2");
+        assert_eq!(saturate_score(u64::MAX), u32::MAX);
+    }
 }
