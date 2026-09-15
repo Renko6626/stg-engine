@@ -2716,7 +2716,7 @@ mod tests {
             ..crate::player::Loadout::default()
         };
         let err = World::new_game_at(7, 2, 0, bad_character, &image)
-            .expect_err("character=9 越 TABLES_V0.characters.len()==1");
+            .expect_err("character=9 越 TABLES_V0.characters.len()==2");
         assert_eq!(err, TaskStartError::InvalidCharacter(9));
     }
 
