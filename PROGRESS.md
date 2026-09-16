@@ -6,10 +6,12 @@
 
 ## 现在（2026-09-16）
 
-- **位置**：**RL 卡池内容源——TH06 批量转写流水线建成**（训练仓分支 `th06-transcribe`，spec 训练仓
-  `docs/2026-09-16-th06-transcribe-design.md`）：TH06 → 本引擎逐指令对照表 + 4 张手转范例卡 + dsh 切分 / 转写 / 审核契约
-  + 四层验收器 + 断点续跑驱动 + `transcribe/play.sh` 一键试玩。本仓配套：harness `run` 输出「段结束」行、`serve --rank`。
-  第 1 关冒烟：dsh 切分一次过、3 个转写单元首派即过验收。opus 抽检为额度暂停；**全作批量由用户之后开**。
+- **位置**：**RL 卡池第一批入库——TH06 第 1–3 关 45 张转写卡**（训练仓 `cards/`，`c2fdaf7`）：dsh 切分 / 转写 / 审核全派，
+  37/38 首派过验收、首轮审核 5 张返工后全 pass；`eval/splits.toml` 分层留出 9 张（rank 2 × 32 局），训练侧 rank 2 起点 32 个。
+  分诊修了对照表 §4.3 自动射击停火边界 off-by-one（`>` → `>=`，3 张卡返工）；`th06_s3_w12` H/L 弹峰值超 1024（TH06 靠 640 弹池上限压画面）只收 E/N。
+  opus 抽检仍暂停。细节见训练仓转写 spec §13.4。
+- **再上一位置**：**TH06 批量转写流水线建成**（训练仓 `transcribe/`）：对照表 + 4 张手转范例 + dsh 三份契约 + 四层验收器 + 断点续跑驱动 + `play.sh`；
+  本仓配套 harness `run` 段结束行、`serve --rank`。
 - **上一位置**：**stg-rl-train 第一刀落地**（新仓 `Renko6626/stg-rl-train`；spec `docs/superpowers/specs/2026-09-15-stg-rl-train-design.md`，计划 `docs/superpowers/plans/2026-09-15-stg-rl-train.md`）——
   躲弹小模型训练仓：意图点胶水 / 动作表 v1 / 危险度 top-K 特征化 / 势函数遵从 reward / 注册表可切换模型 /
   LeanRL 底本 PPO（compile + CUDA 图）/ 固定评测集 / metrics + TensorBoard + 出图 / 开销记录 + `--bench` / `run.sh` 一条命令。
@@ -17,7 +19,8 @@
 - **实证**：训练仓 CPU 上 `pytest` 80 passed（含端到端训练→评测→续训→出图→打包冒烟），输出无告警；GitHub CI 绿（最终提交 `8bc1745`）。
   实施为 12 个任务，外部 dsh-flash（deepseek-flash）worker 承担、每 2–3 个任务一次 opus 批量复审、控制者本人做全分支终审；
   终审 + 复审抓到 3 处计划要求的缺陷（`_fx` 单行崩溃、密度图边界镜像不对称、gpucheck 容差过严），另修 CI `setup-uv@v10` 标签（钉 `v10.1.0`）与 TensorBoard 清除 off-by-one。GPU 路径未验。
-- **下一步**：首次上 Vast.ai 做 GPU 验收（spec §8：bench / gpucheck / 1 小时训练 / 打断续训）→ 卡池交付后正式训练 →
+- **下一步**：卡池到位后回到训练侧——4090 探测 run（`runs/v4090`，只跑 14.6 分钟、6 张卡）判定 reward 暂不改，
+  下一次上机候选是 `frame_skip` 1/2/3 扫描（治 shift 高频切换 + 约 1.7× 有效吞吐）或长基线；TH06 第 4–7 关批量另排。原计划：首次上 Vast.ai 做 GPU 验收（spec §8：bench / gpucheck / 1 小时训练 / 打断续训）→ 卡池交付后正式训练 →
   第二刀 Vast.ai 自动化 → 第三刀 ONNX 导出与 C 侧对拍；与**第 1 关内容刀**（gameplay-design §6）并列。
   `rl-v0.1.0` wheel 的 `build_info()["git_sha"]` 为 `unknown`，修复后发 `rl-v0.1.1`。
 - **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
@@ -26,6 +29,7 @@
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-09-16 | **RL 卡池第一批（TH06 第 1–3 关 45 张）** | 训练仓 `cards/` 45 张（9/13/23）+ `eval/splits.toml` 留出 9 张；dsh 全派，主会话分诊：对照表 §4.3 停火边界 `>=`（3 张返工）、s3_w12 只收 E/N（弹峰值超限）、dsh 并发启动撞配置（单机单 pipeline）。opus 抽检未做。 |
 | 2026-09-16 | **TH06 批量转写流水线（训练仓 transcribe/）** | 对照表（覆盖全作 123 个指令名、片段真编译）+ 4 张范例 + dsh 三份契约 + 验收器（编译 / 各档 run / 卡池 lint / 段结束帧 / 开场安全）+ pipeline 状态机 + play.sh；本仓 harness `run` 段结束行、`serve --rank`。第 1 关冒烟通过，批量待开。 |
 | 2026-09-15 | **stg-rl-train 第一刀（训练仓）** | 新仓 `Renko6626/stg-rl-train`（spec `2026-09-15-stg-rl-train-design.md`，Ruling 1–7 见 §13）：uv 钉版本、注册表（模型/特征化器/意图/reward 项）、`envwrap`（CSR 铺定长、镜像、意图刷新）、`danger_topk_v1`、reward 七项、`set_attn_v1`、LeanRL 底本 PPO + 自描述 checkpoint、固定评测集、metrics/plots/perf、`train`/`bench`/`gpucheck`/`run.sh`。CPU pytest 全绿 + CI 绿；GPU 验收待 Vast.ai。 |
 | 2026-09-15 | **stg-rl env 刀（RL 批量 env + `stg_rl` wheel）** | proto v1 观测契约的第二个生产者（spec `2026-09-15-stg-rl-env-design.md`；Ruling 1–4 见 §13）。核唯一改动 `World::reseed`（spec §8，不 bump `ENGINE_VER`，模板缓存等价已绿）。`stg-rl`：`layout`（proto v1 表布局 + `hello_json` 对拍 C 夹具）/ `encode`（player·phase·bullets·enemies·items 行编码，弹溢出按平方距离保最近 cap 颗）/ `env`（起点加权采样 / 种子流 / 开机模板缓存 + `reseed` / 随机预热重试 / events 8 列 / done 0–3 自动 reset）/ `vec_env`（专属 rayon 池 17 缓冲批量 step + 两阶段 CSR 压实；1 vs 8 线程逐字节相同）。`stg-py`：PyO3 abi3 薄壳（`py.detach` 释放 GIL、numpy 视图 dtype/C 连续校验、`CompileError`）+ Python 包 `stg_rl`（`hello`/`OFFSETS`/`STRIDES`/`alloc_buffers`/`compile_bundled`/`VecEnv`）+ `tests/test_smoke.py` + `.github/workflows/wheels.yml`（推 `rl-v*` tag → manylinux_2_28/Windows wheel → Release）；独立 workspace 不进主 workspace（Ruling 2）。测试：核 721→**722** + 编译器 333 + 桥 17 + harness 47 + **stg-rl 32**；`stg-py` pytest **9 passed + 1 skipped**（torch 本机无，`importorskip`；含 `stgagent.schema` 解码对拍与别名/只读/非连续/负数负例）。`rl-bench` 峰值 **162 万 env-steps/s**（512 env × 32 线程，出处 `docs/bench-baseline.md` 收口复测表）。闸门 fmt/clippy/test/verify-tables 全绿，金向量 md5 `54b5c5a3…` 与 base 相同；两冒烟由控制者复核。新记 follow-ups D23（十一项非目标）。 |
