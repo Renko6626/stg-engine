@@ -740,6 +740,10 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
 7. **终局前最后一帧观测**（v1 的 `done != 0` 缓冲已是新局第一帧）。触发点：loss/credit assignment 需要 death frame 时。
 8. **非 x86_64 Linux / Windows 以外的 wheel**（无 macOS / aarch64 wheel）。触发点：训练机或部署端出现这两类机器。
 9. **部署侧复刻胶水**：特征化与「最近 K 颗」住 Python 胶水，th06nc / TH18 DLL 跑 ONNX 时须在 C 侧同样实现。触发点：迁移到目标作时，靠对拍测试守一致。
+   **补（2026-09-17）出生中的弹**：训练卡池是 TH06 转写，但**有意不模拟**原作的出生特效（ECL `flags` 2/4/8：出生后 10/16/32 帧
+   以 ×1/2、×1/2.5、×1/3 速度移动且**无判定**，训练仓 `transcribe/th06/mapping.md` §4）。真游戏内存里这类弹存的是全速 `velocity`，
+   直接喂特征化会按全速外推、把还打不到人的弹当成威胁（敌人贴近自机开火时最明显）。C 侧读弹表时须识别出生状态
+   （TH06 `BULLET_STATE_SPAWNING_*`），要么先不喂、要么按实际倍率缩放速度；对拍测试覆盖这一分支。
 10. **训练分布无激光**：引擎无激光池 ⇒ HELLO 恒发空 lasers 表。触发点：迁移验证显示激光是主要差距；届时引擎激光池另开刀（world-design §709）。
 11. ~~**`rl-bench` 默认 workload 不代表密弹**~~ **已销（2026-09-15）**：`rl-bench --workload dense --density K`（`scenes/rl_dense.ecl`，上半区 ±15° 横飞、自机不死，稳态 ≈112·K 弹）+ `--profile` 单 env 分段计时。实测密弹瓶颈是**弹行编码**（density 3 下 21µs vs env.step 7µs），逐弹现算 `atan2`+`isqrt` 为主因 ⇒ 同刀修：core `atan2` 改无分支 CORDIC（逐位等价测试押运）+ `encode::BulletScratch` 派生量逐槽记忆，编码 4.8×、dense3 32 线程 39万→99万 env-steps/s（`docs/bench-baseline.md`「密弹 workload」节）。**余项**：弹数超 `cap` 时的 `len_sq`+`select_nth_unstable`+按索引排序成为新热点（density 12 编码仍 50µs）；触发点：训练确需 >cap 弹场景的吞吐时。
 12. **`VecEnv::step` / `reset` 每步现场 `collect` 一个 `Vec<Work>`**（~N 项引用结构，`build_work`）：串行段内的小分配，默认 workload 下占比可忽略；复用它要处理跨步借用的生命周期，改动面大于收益。触发点：密弹档位基准（第 11 条）显示串行段成为瓶颈时。
