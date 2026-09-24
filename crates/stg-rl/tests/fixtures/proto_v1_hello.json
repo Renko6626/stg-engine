@@ -190,7 +190,7 @@
             "id": 3,
             "name": "enemies",
             "cap": 256,
-            "stride": 38,
+            "stride": 46,
             "fields": [
                 {
                     "name": "x",
@@ -241,6 +241,16 @@
                     "name": "id",
                     "type": "u32",
                     "off": 34
+                },
+                {
+                    "name": "vx",
+                    "type": "fx",
+                    "off": 38
+                },
+                {
+                    "name": "vy",
+                    "type": "fx",
+                    "off": 42
                 }
             ]
         },

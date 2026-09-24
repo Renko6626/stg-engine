@@ -32,6 +32,19 @@ impl WorldBody {
             self.integrate_enemies();
             self.integrate_items(tables);
             self.integrate_fields();
+        } else {
+            // 场景冻结：phase 5 不跑，敌人本帧无实际位移——dx/dy 必须归零（不能残留上一帧的
+            // 非零值），否则 Tier 0 敌人行在时停帧会假报速度。按池索引升序遍历存活敌人（I4）。
+            let nw = self.enemies.alive.len();
+            for w in 0..nw {
+                let mut bits = self.enemies.alive[w];
+                while bits != 0 {
+                    let i = w * 64 + bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    self.enemies.dx[i] = Fx::ZERO;
+                    self.enemies.dy[i] = Fx::ZERO;
+                }
+            }
         }
     }
 
@@ -108,6 +121,7 @@ impl WorldBody {
             while bits != 0 {
                 let i = w * 64 + bits.trailing_zeros() as usize;
                 bits &= bits - 1;
+                let (x0, y0) = (self.enemies.x[i], self.enemies.y[i]);
                 // ① 速度插值恒跑（分层：它只改速度，不决定位置归谁）
                 if self.enemies.vel_active[i] != 0 {
                     self.tick_enemy_vel(i);
@@ -156,6 +170,8 @@ impl WorldBody {
                     self.enemies.x[i] = self.enemies.x[i] + self.enemies.vx[i];
                     self.enemies.y[i] = self.enemies.y[i] + self.enemies.vy[i];
                 }
+                self.enemies.dx[i] = self.enemies.x[i] - x0;
+                self.enemies.dy[i] = self.enemies.y[i] - y0;
                 if self.enemies.invuln[i] > 0 {
                     self.enemies.invuln[i] -= 1;
                 }
@@ -1371,5 +1387,59 @@ mod tests {
         assert_eq!(w.body.diag.contract_viol, cv0 + 2);
         assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
         assert_eq!(w.body.enemies.mv_active[i2], 0, "拒绝即 no-op");
+    }
+
+    /// dx/dy = 本帧 phase 5 的实际位移：匀速积分、move_to 插值、到站吸附。
+    #[test]
+    fn enemy_dxdy_is_phase5_displacement() {
+        let mut w = crate::step::World::new(1);
+        let mut init = crate::enemy::tests::enemy_at(0, 100, 10);
+        init.vx = Fx::from_int(2);
+        let h = w.body.create_enemy(init);
+        let i = h.index as usize;
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        assert_eq!(
+            (w.body.enemies.dx[i], w.body.enemies.dy[i]),
+            (Fx::from_int(2), Fx::ZERO),
+            "匀速"
+        );
+        // move_to 插值：4 帧从当前位置到 +40,+0（linear，easing 0）；vx 残值 2 不应出现在 dx 里
+        let x0 = w.body.enemies.x[i];
+        w.body
+            .move_enemy_to(h, x0 + Fx::from_int(40), w.body.enemies.y[i], 4, 0);
+        for f in 1..=4u32 {
+            let before = w.body.enemies.x[i];
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+            assert_eq!(
+                w.body.enemies.dx[i],
+                w.body.enemies.x[i] - before,
+                "插值帧 {f}"
+            );
+            assert_ne!(
+                w.body.enemies.dx[i], w.body.enemies.vx[i],
+                "插值帧不等于积分器 vx"
+            );
+        }
+    }
+
+    /// 瞬移（dur=0，phase 2 之外直接调用等价）不计入；时停帧为 0。
+    #[test]
+    fn enemy_dxdy_excludes_teleport_and_is_zero_when_frozen() {
+        let mut w = crate::step::World::new(1);
+        let h = w
+            .body
+            .create_enemy(crate::enemy::tests::enemy_at(0, 100, 10));
+        let i = h.index as usize;
+        w.body
+            .move_enemy_to(h, Fx::from_int(50), Fx::from_int(100), 0, 0); // 瞬移
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.enemies.dx[i], Fx::ZERO, "瞬移不计入");
+        // 时停：按 world.rs 里 freeze 测试（约 2236 行）的做法把 freeze_left[0] 置为正数
+        w.body.enemies.vx[i] = Fx::from_int(3);
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
+        assert_eq!(w.body.enemies.dx[i], Fx::from_int(3));
+        w.body.freeze_left = [5, 0];
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(2));
+        assert_eq!(w.body.enemies.dx[i], Fx::ZERO, "时停帧 dx = 0");
     }
 }

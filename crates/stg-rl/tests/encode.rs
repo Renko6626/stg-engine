@@ -79,6 +79,8 @@ fn enemy(w: &mut World, x: i32, y: i32, hp: i32, hp_max: i32) -> stg_core::enemy
         y: Fx::from_int(y),
         vx: Fx::ZERO,
         vy: Fx::ZERO,
+        dx: Fx::ZERO,
+        dy: Fx::ZERO,
         speed: Fx::ZERO,
         angle: stg_core::math::Angle::ZERO,
         vel_from_0: 0,
@@ -327,6 +329,29 @@ fn write_bullets_rejects_zero_cap() {
     let _ = write_bullets(&w, 0, &mut rows, &mut BulletScratch::new());
 }
 
+/// 敌人行 46 字节，vx/vy 在 38/42，取自池的 dx/dy（Q16.16 原值）。
+#[test]
+fn enemy_row_carries_dxdy_as_vx_vy() {
+    let st = stg_rl::layout::ENEMIES.stride;
+    assert_eq!(st, 46);
+    let mut w = World::new(1);
+    let h = enemy(&mut w, 30, 60, 500, 700);
+    // `w.body.enemies` 是 pub(crate)，集成测试用公开写口设速度：dur=0 立即设。
+    w.body
+        .set_enemy_vel_cart(h, Fx::from_int(2), Fx::ZERO, 0, 0);
+    run_step(&mut w, 0);
+    let mut rows = vec![0u8; 256 * st];
+    assert_eq!(write_enemies(&w, &mut rows), 1);
+    let r0 = &rows[0..st];
+    assert_eq!(rd_i32(r0, off::enemy::VX), Fx::from_int(2).raw());
+    assert_eq!(rd_i32(r0, off::enemy::VY), 0);
+    assert_eq!(
+        rd_i32(r0, off::enemy::X),
+        Fx::from_int(32).raw(),
+        "位置同帧已积分"
+    );
+}
+
 #[test]
 fn enemies_rows_boss_collidable_id() {
     let mut w = World::new(1);
@@ -346,10 +371,11 @@ fn enemies_rows_boss_collidable_id() {
     // b 标 NO_BODY：`WorldBody::set_enemy_flags` 是公开脚本写口（只许 NO_BODY|KILLALL_EXEMPT）。
     w.body
         .set_enemy_flags(b, stg_core::enemy::ENEMY_NO_BODY, true);
-    let mut rows = vec![0u8; 256 * 38];
+    let st = stg_rl::layout::ENEMIES.stride;
+    let mut rows = vec![0u8; 256 * st];
     let n = write_enemies(&w, &mut rows);
     assert_eq!(n, 2);
-    let (r0, r1) = (&rows[0..38], &rows[38..76]);
+    let (r0, r1) = (&rows[0..st], &rows[st..2 * st]);
     assert_eq!(rd_i32(r0, off::enemy::X), Fx::from_int(30).raw());
     assert_eq!(rd_i32(r0, off::enemy::Y), Fx::from_int(60).raw());
     assert_eq!(rd_i32(r0, off::enemy::HURT_W), Fx::from_int(16).raw());

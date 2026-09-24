@@ -25,6 +25,10 @@ define_pool! {
     Enemy, cap = 256,
     fields {
         x: Fx, y: Fx, vx: Fx, vy: Fx,
+        // ── 本帧实际位移（引擎第二刀 §6）：phase 5 积分前后位置之差，由 integrate_enemies 写；
+        //    瞬移（phase 2 的 move_to dur=0）不计入；时停帧为 0。与 vx/vy（积分器状态）不同：
+        //    move_to 插值期间 vx/vy 是残值，dx/dy 才是真实位移。Tier 0 敌人行的 vx/vy 取自这里。
+        dx: Fx, dy: Fx,
         // ── 双表示（敌人运动动词族刀 2026-07-31）：vx/vy 是积分真相，speed/angle 是
         //    作者视图。改任一侧后必须同步另一侧（正向 refresh_enemy_vel_from_polar /
         //    反向 backfill_enemy_polar）——"忘了回填"是弹那边被称作火药桶的同一个坑。
@@ -95,17 +99,19 @@ pub fn pack_handle(h: EnemyHandle) -> i32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::checksum::Checksum;
 
     /// 全字段 Init 助手（exhaustive；move_to/挂钩字段本切片惰性置零）。
-    fn enemy_at(x: i32, y: i32, hp: i32) -> EnemyInit {
+    pub(crate) fn enemy_at(x: i32, y: i32, hp: i32) -> EnemyInit {
         EnemyInit {
             x: Fx::from_int(x),
             y: Fx::from_int(y),
             vx: Fx::ZERO,
             vy: Fx::ZERO,
+            dx: Fx::ZERO,
+            dy: Fx::ZERO,
             speed: Fx::ZERO,
             angle: Angle::ZERO,
             vel_from_0: 0,

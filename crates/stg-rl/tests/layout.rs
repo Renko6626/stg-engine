@@ -118,6 +118,8 @@ fn offset_consts_agree_with_field_tables() {
             ("hp_max", off::enemy::HP_MAX),
             ("flags", off::enemy::FLAGS),
             ("id", off::enemy::ID),
+            ("vx", off::enemy::VX),
+            ("vy", off::enemy::VY),
         ],
     );
     assert_offsets(

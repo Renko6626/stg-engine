@@ -15,7 +15,7 @@ def test_build_info_and_hello():
     h = json.loads(stg_rl.hello(512))
     assert h["backend"] == f"stg-engine@{info['engine_ver']}"
     assert [t["cap"] for t in h["tables"]] == [1, 512, 256, 64, 1024]
-    assert stg_rl.STRIDES == {"player": 36, "bullets": 30, "enemies": 38, "lasers": 48, "items": 18}
+    assert stg_rl.STRIDES == {"player": 36, "bullets": 30, "enemies": 46, "lasers": 48, "items": 18}
     assert stg_rl.EVENT_COLUMNS[0] == "died" and len(stg_rl.EVENT_COLUMNS) == 8
 
 

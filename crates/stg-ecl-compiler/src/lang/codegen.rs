@@ -1563,6 +1563,8 @@ mod tests {
             y: stg_core::math::Fx::ZERO,
             vx: stg_core::math::Fx::ZERO,
             vy: stg_core::math::Fx::ZERO,
+            dx: stg_core::math::Fx::ZERO,
+            dy: stg_core::math::Fx::ZERO,
             speed: stg_core::math::Fx::ZERO,
             angle: stg_core::math::Angle::ZERO,
             vel_from_0: 0,

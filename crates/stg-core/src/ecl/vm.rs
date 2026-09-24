@@ -1792,6 +1792,8 @@ mod tests {
             y: Fx::from_int(y),
             vx: Fx::ZERO,
             vy: Fx::ZERO,
+            dx: Fx::ZERO,
+            dy: Fx::ZERO,
             speed: Fx::ZERO,
             angle: Angle::ZERO,
             vel_from_0: 0,

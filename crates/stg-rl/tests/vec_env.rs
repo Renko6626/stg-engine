@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use stg_core::math::Fx;
 use stg_rl::encode;
 use stg_rl::env::*;
-use stg_rl::layout::ITEMS_CAP;
+use stg_rl::layout::{ITEMS_CAP, off};
 use stg_rl::vec_env::*;
 
 /// 测试用缓冲 = 公开的 `OwnedBuffers`（与 harness rl-bench 共用，不再各写一份）。
@@ -43,8 +45,9 @@ impl Digest for Owned {
                 v.extend_from_slice(&x.to_le_bytes());
             }
         }
+        let est = stg_rl::layout::ENEMIES.stride;
         for (i, &c) in self.enemies_count.iter().enumerate() {
-            v.extend_from_slice(&self.enemies[i * 256 * 38..][..c as usize * 38]);
+            v.extend_from_slice(&self.enemies[i * 256 * est..][..c as usize * est]);
         }
         for s in [&self.frame, &self.phase] {
             for x in s.iter() {
@@ -253,4 +256,170 @@ fn rejects_bad_buffers_actions_weights() {
         "允许单个为 0，总和须 > 0"
     );
     assert!(VecEnv::new(game_cfg(1), 0, 2).is_err());
+}
+
+/// 端到端对拍（Task 4 Review Focus 4）：内联 ECL 建三只敌——一只 `move_to` 插值 30 帧、
+/// 一只匀速漂移、一只在场上等 20 帧后瞬移 +100px——`VecEnv` 跑 40 步，逐步按 `id` 匹配上一步
+/// 的行，核对 Tier 0 `vx`/`vy`（取自池 `dx`/`dy`）与坐标差的关系：
+/// - 正常帧（位移 ≤16px）：vx/vy 逐位等于坐标差；
+/// - 瞬移帧（坐标差 ~100px）：vx/vy **不**等于坐标差（瞬移不计入 dx/dy）；
+/// - 匀速敌新出现的第一步：vx/vy 就是它的速度（1.5fx，笛卡尔立即设）。
+#[test]
+fn enemy_rows_vx_vy_match_dxdy_across_move_to_const_vel_and_teleport() {
+    let src = r#"
+async sub drift_lerp() {
+    move_to(30, 40.0fx, 50.0fx, 0);
+    loop { wait(1); }
+}
+
+async sub drift_const() {
+    move_vel_xy(0, 1.5fx, 0.0fx, 0);
+    loop { wait(1); }
+}
+
+async sub drift_teleport() {
+    wait(20);
+    move_to(0, $self_x + 100.0fx, $self_y, 0);
+    loop { wait(1); }
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 50.0fx, 1000, 0, 0, 0, drift_lerp);
+    _ = spawn_enemy(-60.0fx, 50.0fx, 1000, 0, 0, 0, drift_const);
+    _ = spawn_enemy(60.0fx, 50.0fx, 1000, 0, 0, 0, drift_teleport);
+    loop { wait(1); }
+}
+"#;
+    let image = compile(&[("t4_dxdy.ecl".to_string(), src.to_string())]).unwrap();
+    let cfg = EnvConfig {
+        images: vec![image],
+        starts: vec![Start {
+            image: 0,
+            mark: 0,
+            rank: 1,
+            weight: 1.0,
+        }],
+        frame_skip: 1,
+        max_frames: 1000,
+        warmup_max: 0,
+        end_on: vec![],
+        bullets_cap: 32,
+        seed: 1,
+    };
+    let n = 1;
+    let mut ve = VecEnv::new(cfg, n, 1).unwrap();
+    let mut buf = Owned::new(n, 32);
+    ve.reset(&mut buf.view()).unwrap();
+
+    let st = stg_rl::layout::ENEMIES.stride;
+    let rd_i32 = |b: &[u8], o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let rd_u32 = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+
+    /// env 0 的敌人行 → `id -> (x, y, vx, vy)`（Q16.16 原值）。
+    fn snapshot(
+        rows: &[u8],
+        count: i32,
+        st: usize,
+        rd_i32: &dyn Fn(&[u8], usize) -> i32,
+        rd_u32: &dyn Fn(&[u8], usize) -> u32,
+    ) -> HashMap<u32, (i32, i32, i32, i32)> {
+        let mut m = HashMap::new();
+        for k in 0..count as usize {
+            let r = &rows[k * st..(k + 1) * st];
+            let id = rd_u32(r, off::enemy::ID);
+            let x = rd_i32(r, off::enemy::X);
+            let y = rd_i32(r, off::enemy::Y);
+            let vx = rd_i32(r, off::enemy::VX);
+            let vy = rd_i32(r, off::enemy::VY);
+            m.insert(id, (x, y, vx, vy));
+        }
+        m
+    }
+
+    let sixteen_px = Fx::from_int(16).raw();
+    let const_vel_x = 98_304i32; // 1.5fx = 1.5 * 65536，精确整数
+    // 匀速敌出生于 (-60, 50)。ECL 的敌主任务"出生当帧不跑"（docs/ecl-lang.md 五条坑之一）：
+    // `drift_const` 里的 `move_vel_xy` 要到出生后下一帧才首次执行，故这只敌**第一次出现在
+    // 观测里那一帧**（= spawn_enemy 那一帧）vx/vy 必为 0（池新分配槽的 dx/dy 精确清零，
+    // exhaustive Init 的直接验证）；速度要到*下一步*才体现——那一步已经落进下面 `Some` 分支的
+    // 通用坐标差核对，同时额外显式核对它等于我们设的 1.5fx。
+    let const_vel_spawn_x = Fx::from_int(-60).raw();
+    let mut const_vel_id: Option<u32> = None;
+    let mut checked_uniform_velocity_value = false;
+
+    let mut prev = snapshot(
+        &buf.enemies[0..256 * st],
+        buf.enemies_count[0],
+        st,
+        &rd_i32,
+        &rd_u32,
+    );
+    let mut checked_new_appearance = false;
+    let mut checked_normal_frame = false;
+    let mut checked_teleport_frame = false;
+
+    for s in 0..40u32 {
+        ve.step(&[0u32], &mut buf.view()).unwrap();
+        let cur = snapshot(
+            &buf.enemies[0..256 * st],
+            buf.enemies_count[0],
+            st,
+            &rd_i32,
+            &rd_u32,
+        );
+        for (&id, &(x, y, vx, vy)) in cur.iter() {
+            match prev.get(&id) {
+                None => {
+                    // 新出现的敌：本帧就是它的 spawn 帧，本帧位移恒为 0（主任务出生当帧不跑，
+                    // 还没来得及发任何运动指令）——vx/vy 必须精确等于它本帧的（零）位移，
+                    // 直接验证新分配槽的 dx/dy 没有携带上一任槽主的陈值。
+                    assert_eq!(
+                        (vx, vy),
+                        (0, 0),
+                        "新出现的敌首帧 vx/vy 必为 0，id {id} 帧 {s}"
+                    );
+                    checked_new_appearance = true;
+                    if x == const_vel_spawn_x && y == Fx::from_int(50).raw() {
+                        const_vel_id = Some(id);
+                    }
+                }
+                Some(&(px, py, _, _)) => {
+                    let (dx, dy) = (x - px, y - py);
+                    if dx.abs() <= sixteen_px && dy.abs() <= sixteen_px {
+                        assert_eq!(
+                            (vx, vy),
+                            (dx, dy),
+                            "正常帧 vx/vy 应等于坐标差，id {id} 帧 {s}"
+                        );
+                        checked_normal_frame = true;
+                        if Some(id) == const_vel_id && vx != 0 {
+                            // 匀速敌：命令一旦生效（下一帧），vx 应精确等于我们设的 1.5fx。
+                            assert_eq!(vx, const_vel_x, "匀速敌 vx 应等于设定速度，帧 {s}");
+                            assert_eq!(vy, 0, "匀速敌 vy 应恒为 0，帧 {s}");
+                            checked_uniform_velocity_value = true;
+                        }
+                    } else {
+                        assert_ne!(
+                            (vx, vy),
+                            (dx, dy),
+                            "瞬移帧 vx/vy 不应等于坐标差，id {id} 帧 {s}"
+                        );
+                        assert!(
+                            dx.abs() > Fx::from_int(50).raw(),
+                            "瞬移坐标差应 ~100px，实得 {dx}（raw），帧 {s}"
+                        );
+                        checked_teleport_frame = true;
+                    }
+                }
+            }
+        }
+        prev = cur;
+    }
+    assert!(checked_new_appearance, "从未验证过新出现敌首帧 vx/vy = 0");
+    assert!(
+        checked_uniform_velocity_value,
+        "从未验证过匀速敌 vx == 设定速度 1.5fx"
+    );
+    assert!(checked_normal_frame, "从未验证过正常帧 vx/vy == 坐标差");
+    assert!(checked_teleport_frame, "从未验证过瞬移帧 vx/vy != 坐标差");
 }

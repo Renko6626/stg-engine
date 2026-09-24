@@ -2330,9 +2330,9 @@ mod tests {
         // （本 Task 不 bump）；③ 非池。判别面：`bomb_timer_enters_the_checksum`。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (1035256, 1195056);
+        const EXPECTED: (usize, usize) = (1037304, 1197104);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (1035256, 1195056);
+        const EXPECTED: (usize, usize) = (1037304, 1197104);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2361,7 +2361,7 @@ mod tests {
         // cap: bullets 8192 / enemies 256 / shots 1024 / items 1024 / fields 16 / xform 4096
         let expected = [
             ("bullets", 476_160), // 56 B/弹 ×8192 + gen 16384 + alive 1024  ≈ 465 KiB（v2：+born_frame u32）
-            ("enemies", 28_448), // 109 B/敌 ×256 + gen 512 + alive 32      ≈ 27.8 KiB（v2：+anm_state_frame u32）
+            ("enemies", 30_496), // 117 B/敌 ×256 + gen 512 + alive 32      ≈ 29.8 KiB（引擎第二刀：+dx/dy Fx×2 = +8 B/敌）
             ("shots", 28_800),
             ("items", 22_656), // 22 B/道具 ×1024 + gen 2048 + alive 128（F12：512→1024）
             ("fields", 328),
@@ -2503,6 +2503,8 @@ mod tests {
             y: Fx::from_int(60),
             vx: Fx::from_int(1),
             vy: Fx::from_int(-1),
+            dx: Fx::ZERO,
+            dy: Fx::ZERO,
             speed: Fx::ZERO,
             angle: Angle::ZERO,
             vel_from_0: 0,

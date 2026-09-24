@@ -93,6 +93,8 @@ pub mod off {
         pub const HP_MAX: usize = 28;
         pub const FLAGS: usize = 32;
         pub const ID: usize = 34;
+        pub const VX: usize = 38;
+        pub const VY: usize = 42;
     }
     pub mod laser {
         pub const X: usize = 0;
@@ -161,7 +163,7 @@ pub const BULLETS: TableDef = TableDef {
 pub const ENEMIES: TableDef = TableDef {
     id: 3,
     name: "enemies",
-    stride: 38,
+    stride: 46,
     fields: &[
         f!("x", Fx, 0),
         f!("y", Fx, 4),
@@ -173,6 +175,8 @@ pub const ENEMIES: TableDef = TableDef {
         f!("hp_max", I32, 28),
         f!("flags", U16, 32),
         f!("id", U32, 34),
+        f!("vx", Fx, 38),
+        f!("vy", Fx, 42),
     ],
 };
 pub const LASERS: TableDef = TableDef {

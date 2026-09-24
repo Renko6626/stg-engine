@@ -4,31 +4,29 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-09-16）
+## 现在（2026-09-24）
 
-- **位置**：**RL 卡池第一批入库——TH06 第 1–3 关 45 张转写卡**（训练仓 `cards/`，`c2fdaf7`）：dsh 切分 / 转写 / 审核全派，
-  37/38 首派过验收、首轮审核 5 张返工后全 pass；`eval/splits.toml` 分层留出 9 张（rank 2 × 32 局），训练侧 rank 2 起点 33 个。
-  分诊修了对照表 §4.3 自动射击停火边界 off-by-one（`>` → `>=`，3 张卡返工）；`th06_s3_w12` H/L 弹峰值超 1024——根因是 TH06 640 弹池压画面（屏内弹数本身就超，非出界删除差异），离线复现 640 池拟合苦无截止帧，四档都收（曲线误差 1.1% / 2.9%）。
-  opus 抽检仍暂停。细节见训练仓转写 spec §13.4。
-- **再上一位置**：**TH06 批量转写流水线建成**（训练仓 `transcribe/`）：对照表 + 4 张手转范例 + dsh 三份契约 + 四层验收器 + 断点续跑驱动 + `play.sh`；
-  本仓配套 harness `run` 段结束行、`serve --rank`。
-- **上一位置**：**stg-rl-train 第一刀落地**（新仓 `Renko6626/stg-rl-train`；spec `docs/superpowers/specs/2026-09-15-stg-rl-train-design.md`，计划 `docs/superpowers/plans/2026-09-15-stg-rl-train.md`）——
-  躲弹小模型训练仓：意图点胶水 / 动作表 v1 / 危险度 top-K 特征化 / 势函数遵从 reward / 注册表可切换模型 /
-  LeanRL 底本 PPO（compile + CUDA 图）/ 固定评测集 / metrics + TensorBoard + 出图 / 开销记录 + `--bench` / `run.sh` 一条命令。
-  依赖钉 `stg_rl` `rl-v0.1.0` wheel + `stgagent` `v0.1.0`。RL 卡池写作约束 `docs/rl-card-pool.md`（写卡另开会话）。
-- **实证**：训练仓 CPU 上 `pytest` 80 passed（含端到端训练→评测→续训→出图→打包冒烟），输出无告警；GitHub CI 绿（最终提交 `8bc1745`）。
-  实施为 12 个任务，外部 dsh-flash（deepseek-flash）worker 承担、每 2–3 个任务一次 opus 批量复审、控制者本人做全分支终审；
-  终审 + 复审抓到 3 处计划要求的缺陷（`_fx` 单行崩溃、密度图边界镜像不对称、gpucheck 容差过严），另修 CI `setup-uv@v10` 标签（钉 `v10.1.0`）与 TensorBoard 清除 off-by-one。GPU 路径未验。
-- **下一步**：卡池到位后回到训练侧——4090 探测 run（`runs/v4090`，只跑 14.6 分钟、6 张卡）判定 reward 暂不改，
-  下一次上机候选是 `frame_skip` 1/2/3 扫描（治 shift 高频切换 + 约 1.7× 有效吞吐）或长基线；TH06 第 4–7 关批量另排。原计划：首次上 Vast.ai 做 GPU 验收（spec §8：bench / gpucheck / 1 小时训练 / 打断续训）→ 卡池交付后正式训练 →
-  第二刀 Vast.ai 自动化 → 第三刀 ONNX 导出与 C 侧对拍；与**第 1 关内容刀**（gameplay-design §6）并列。
-  `rl-v0.1.0` wheel 的 `build_info()["git_sha"]` 为 `unknown`，修复后发 `rl-v0.1.1`。
+- **位置**：**引擎第二刀落地（本仓 Task 1–4，`ENGINE_VER` 22→23，`stg_rl` 0.1.1→0.2.0）**——
+  spec `docs/superpowers/specs/2026-09-24-engine-rl-round2-design.md`：① 弹 `BULLET_STEP_LIVE`
+  跳过位（无活跃 STEP 的弹跳过 `tick_steps`）；② ECL VM 加载时校验（坏 op/越界操作数/非法跳转/
+  syscall 号）+ 两个指令预算并一个倒数，取指与操作数越界检查仍留运行时；③ `CART_FX` 弹极坐标
+  惰性回填（`BULLET_POLAR_STALE` 位，读写前 materialize）；④ 敌人池新增一等字段 `dx/dy`（phase 5
+  本帧实际位移），进 Tier 0 敌人行 `vx@38`/`vy@42`（stride 38→46），训练侧从此不必按 id 差分。
+  proto 仓 `stg-agent-proto` 同步 `SPEC.md`/`c/sa_layout.h`/`c/sa_encode.c`（C 侧暂写 0，
+  部署侧速度仍是差分，记 follow-ups D25）。四项前后对比只有校验和变化（已拍板可接受）。
+- **下一步**：**Task 5（训练仓 `stg-rl-train` 侧）**——`envwrap` 改读 `stg_rl.OFFSETS` 的敌人
+  `vx`/`vy`，删除按 id 差分的 `enemy_velocity` 与瞬移守卫；依赖钉 `stg_rl >= 0.2.0`；
+  `docs/rl-perf-roadmap.md` 剩 §1（RL 专用观测缓冲，最大一件，跨三仓）、§4（道中卡每帧轮询）、
+  §6（reset/warmup 成本）未动。
+- **上一位置**：RL 卡池第一批入库（训练仓 `cards/`，TH06 第 1–3 关 45 张）、TH06 批量转写流水线、
+  stg-rl-train 第一刀落地——细节见 git log 与训练仓 `docs/`。
 - **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-09-24 | **引擎第二刀 Task 1–4**（`ENGINE_VER` 23 / `stg_rl` 0.2.0） | 弹 `BULLET_STEP_LIVE` 跳过位 + ECL VM 加载时校验 + `CART_FX` 极坐标惰性化 + 敌人池一等字段 `dx/dy` 进 Tier 0 `vx`/`vy`（stride 38→46，训练侧不再按 id 差分）；proto 仓 `stg-agent-proto` 同步 SPEC/C 布局（C 侧暂写 0）；四项前后对比仅校验和变化。 |
 | 2026-09-16 | **RL 卡池第一批（TH06 第 1–3 关 45 张）** | 训练仓 `cards/` 45 张（9/13/23）+ `eval/splits.toml` 留出 9 张；dsh 全派，主会话分诊：对照表 §4.3 停火边界 `>=`（3 张返工）、s3_w12 按 640 弹池等效截止扩回四档、dsh 并发启动撞配置（单机单 pipeline）。opus 抽检未做。 |
 | 2026-09-16 | **TH06 批量转写流水线（训练仓 transcribe/）** | 对照表（覆盖全作 123 个指令名、片段真编译）+ 4 张范例 + dsh 三份契约 + 验收器（编译 / 各档 run / 卡池 lint / 段结束帧 / 开场安全）+ pipeline 状态机 + play.sh；本仓 harness `run` 段结束行、`serve --rank`。第 1 关冒烟通过，批量待开。 |
 | 2026-09-15 | **stg-rl-train 第一刀（训练仓）** | 新仓 `Renko6626/stg-rl-train`（spec `2026-09-15-stg-rl-train-design.md`，Ruling 1–7 见 §13）：uv 钉版本、注册表（模型/特征化器/意图/reward 项）、`envwrap`（CSR 铺定长、镜像、意图刷新）、`danger_topk_v1`、reward 七项、`set_attn_v1`、LeanRL 底本 PPO + 自描述 checkpoint、固定评测集、metrics/plots/perf、`train`/`bench`/`gpucheck`/`run.sh`。CPU pytest 全绿 + CI 绿；GPU 验收待 Vast.ai。 |

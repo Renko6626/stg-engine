@@ -22,7 +22,7 @@
 
 use crate::encode::{self, BulletStats};
 use crate::env::{BootCache, EVENTS, Env, EnvConfig, validate};
-use crate::layout::{ENEMIES_CAP, ITEMS_CAP};
+use crate::layout::{ENEMIES, ENEMIES_CAP, ITEMS_CAP};
 use rayon::prelude::*;
 use std::sync::Arc;
 use stg_core::tables::TABLES_V0;
@@ -54,7 +54,7 @@ pub fn buffer_sizes(n: usize, cap: usize) -> BufferSizes {
         frame: n,
         phase: n,
         player: n * 36,
-        enemies: n * ENEMIES_CAP * 38,
+        enemies: n * ENEMIES_CAP * ENEMIES.stride,
         enemies_count: n,
         bullets: n * cap * 30,
         bullets_offsets: n + 1,
@@ -448,7 +448,7 @@ fn build_work<'a>(
     act_of: impl Fn(usize) -> u32,
 ) -> Vec<Work<'a>> {
     let mut player = buf.player.chunks_mut(36);
-    let mut enemies = buf.enemies.chunks_mut(ENEMIES_CAP * 38);
+    let mut enemies = buf.enemies.chunks_mut(ENEMIES_CAP * ENEMIES.stride);
     let mut enemies_count = buf.enemies_count.iter_mut();
     let mut frame = buf.frame.iter_mut();
     let mut phase = buf.phase.iter_mut();

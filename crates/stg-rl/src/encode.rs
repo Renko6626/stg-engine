@@ -195,9 +195,10 @@ pub fn write_bullets(
 pub fn write_enemies(w: &World, rows: &mut [u8]) -> usize {
     let v = w.view();
     let e = v.enemies();
+    let st = crate::layout::ENEMIES.stride;
     let mut k = 0;
     for i in e.iter_alive().take(ENEMIES_CAP) {
-        let r = &mut rows[k * 38..(k + 1) * 38];
+        let r = &mut rows[k * st..(k + 1) * st];
         r.fill(0);
         let h = EnemyHandle {
             index: i as u16,
@@ -220,6 +221,8 @@ pub fn write_enemies(w: &World, rows: &mut [u8]) -> usize {
             u16::from(boss) | (u16::from(collidable) << 4),
         );
         put_u32(r, off::enemy::ID, pack_handle(h) as u32);
+        put_i32(r, off::enemy::VX, e.dx()[i].raw());
+        put_i32(r, off::enemy::VY, e.dy()[i].raw());
         k += 1;
     }
     k

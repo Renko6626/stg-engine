@@ -784,6 +784,34 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
 
 来源：`.superpowers/sdd/2026-09-15-stg-rl-train/progress.md` 「Ruling: final whole-branch review」PARK 列表（1–26）+ 「Final fix wave re-review」两条 minors（27–28）。
 
+### D25. 引擎第二刀遗留（2026-09-24）
+
+引擎侧敌人池新增 `dx/dy`（phase 5 本帧实际位移）并透传进 Tier 0 敌人行 `vx`/`vy`（stride
+38→46，spec `2026-09-24-engine-rl-round2-design.md` §6）之后，还留两条待办：
+
+1. **部署侧（th06nc）敌人速度仍是差分**：`stg-agent-proto/c/sa_model.c:88-131` 按 `id` 差分
+   算速度，带 `≤ 16` px 的瞬移守卫；`sa_encode.c` 写出的 `vx`/`vy` 两列本刀只写 0
+   （`c/sa_encode.c` 里的注释指回本条）。与训练侧（读引擎的 `dx/dy` 直传值）的差异点：
+   - **出生帧**：部署侧差分无「上一帧」可比，读到 0；训练侧读到的是引擎当帧 phase 5 的真实
+     位移（出生当帧若已在动，非零）——两者这一帧凑巧都可能是 0，但语义不同，不能假设一致。
+   - **小于 16 px 的瞬移**：部署侧的守卫只挡「够大」的位置跳变，16 px 以内的瞬移会被误当成
+     真实速度差分进去；训练侧因为拿的是引擎自己算的 `dx/dy`，瞬移那一帧（phase 2 发生，不进
+     phase 5 积分）精确为 0，不受幅度影响。
+   - **触发点**：下次动 th06nc 抽取器，或者实机迁移时显示出「部署 AI 手感和训练不一致」一类
+     症状。届时要先查 TH06 的敌人结构体能不能直接读到引擎那样的「本帧积分位移」，能读到就照抄
+     `stg-engine::integrate_enemies` 的算法（当帧位置差、瞬移和时停之外都计入），读不到就只能
+     继续差分 + 守卫，此时把这条差异写进 `stg-agent-proto/SPEC.md` 的已知限制里。
+2. **`pack_handle` 的 15 位 generation 回绕**（已有记录，`follow-ups.md:523` 的 D15）：训练侧
+   Tier 0 观测编码直接读 `dx/dy`，不再需要按 `id`（`pack_handle` 编码）匹配前后两帧算速度，
+   这个回绕问题对训练侧已经无关。C 侧（`sa_model.c` 的差分）仍然依赖 `id` 匹配，回绕问题继续
+   存在，但 C 侧本来就没有 `!= 0` 之类的额外守卫去暴露它——随上面第 1 条一起处理，不必单开票。
+3. `docs/rl-perf-roadmap.md` 的 §2、§3、§5（STEP 跳过位 / VM 加载时校验 / CART_FX 惰性极坐标）
+   随本刀（Task 1–4）落地，已在该文档标注「已落地（`ENGINE_VER` 23 / `stg_rl` 0.2.0）」；
+   `pack_handle` 回绕问题的处理方式见本条第 2 点，不单独在 roadmap 开新条目。roadmap 剩下的
+   §1、§4、§6 维持原状（本刀不动）。
+
+来源：`docs/superpowers/specs/2026-09-24-engine-rl-round2-design.md` §7。
+
 ## F. 长期预留（M0-18 性能审记档，均不动现刀）
 
 ### F1. 嵌入式画像三条（单片机移植预留）
