@@ -7,8 +7,23 @@ use crate::bullets::BulletPool;
 use crate::enemy::EnemyPool;
 use crate::field::FieldPool;
 use crate::items::ItemPool;
+use crate::math::{Angle, Fx};
 use crate::player::PlayerState;
 use crate::shots::ShotPool;
+
+impl BulletPool {
+    /// 世界外读取方（表现层/harness/ECL 之外的一切只读消费者）用的极坐标读口
+    /// （引擎第二刀 §5 CART_FX 极坐标惰性化）：`flags` 位 6（`BULLET_POLAR_STALE`）置位时
+    /// 按 [`crate::world::motion::polar_of_vel`] 纯计算回填结果返回，不改世界状态
+    /// （`&self`——视图只读，不能顺带 materialize）；否则直接返回存储值。
+    pub fn polar(&self, i: usize) -> (Fx, Angle) {
+        if self.flags[i] & crate::bullets::BULLET_POLAR_STALE != 0 {
+            crate::world::motion::polar_of_vel(self.vx[i], self.vy[i], self.angle[i])
+        } else {
+            (self.speed[i], self.angle[i])
+        }
+    }
+}
 
 /// 只读世界视图。`Copy`（仅一个借用）；方法取 `self` 以还 `'w` 生命。
 #[derive(Clone, Copy)]

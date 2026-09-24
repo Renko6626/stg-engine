@@ -32,7 +32,7 @@ use crate::shots::{ShotHandle, ShotInit, ShotPool};
 mod cleanup;
 mod collide;
 mod integrate;
-mod motion;
+pub mod motion;
 mod player;
 mod settle;
 mod transform;

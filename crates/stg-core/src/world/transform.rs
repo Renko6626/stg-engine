@@ -106,6 +106,7 @@ impl WorldBody {
         match slot.op {
             OP_SET_SPEED => self.set_speed_at(i, Fx::from_raw(slot.args[0])),
             OP_ADD_SPEED => {
+                self.materialize_polar(i); // 读 speed 之前先补齐陈值
                 let v = self.bullets.speed[i] + Fx::from_raw(slot.args[0]);
                 self.set_speed_at(i, v);
             }
@@ -160,6 +161,7 @@ impl WorldBody {
                     }
                 } else {
                     // scratch 无条件重初始化（LOOP 重访 = 自动重新武装）
+                    self.materialize_polar(i); // 读 speed/angle 起点之前先补齐陈值
                     let idx = self.bullets.xform_next[i] as usize;
                     if idx + 1 >= SLOTS_PER_SEG {
                         // P4-b：末槽 STEP 无扩展槽空间（create 期空间校验属后续任务；此为发射期兜底）

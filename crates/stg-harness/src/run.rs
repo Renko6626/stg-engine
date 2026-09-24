@@ -197,13 +197,18 @@ fn dump_at(w: &World) -> (Vec<BulletRow>, Vec<EnemyRow>) {
     let b = v.bullets();
     let bullets = b
         .iter_alive()
-        .map(|i| BulletRow {
-            idx: i,
-            x_raw: b.x()[i].raw(),
-            y_raw: b.y()[i].raw(),
-            angle_bam: b.angle()[i].raw(),
-            speed_raw: b.speed()[i].raw(),
-            sprite: b.sprite()[i],
+        .map(|i| {
+            // CART_FX 惰性化（引擎第二刀 §5）：走 `polar(i)` 而非裸 `angle()`/`speed()`
+            // 切片——陈值时按 vx/vy 纯计算，dump 不越权改世界状态。
+            let (speed, angle) = b.polar(i);
+            BulletRow {
+                idx: i,
+                x_raw: b.x()[i].raw(),
+                y_raw: b.y()[i].raw(),
+                angle_bam: angle.raw(),
+                speed_raw: speed.raw(),
+                sprite: b.sprite()[i],
+            }
         })
         .collect();
     let e = v.enemies();

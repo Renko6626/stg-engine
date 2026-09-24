@@ -3,7 +3,7 @@
 
 use super::WorldBody;
 use crate::bullets::BulletHandle;
-use crate::bullets::{BULLET_CART_FX, BULLET_POLAR_FX};
+use crate::bullets::{BULLET_CART_FX, BULLET_POLAR_FX, BULLET_POLAR_STALE};
 use crate::math::Angle;
 use crate::math::Fx;
 use crate::math::cordic::atan2;
@@ -17,24 +17,70 @@ use crate::world::{STATUS_BAD_ARGS, STATUS_STALE_HANDLE};
 /// 改值 = 确定性契约变更，须过评审（spec 2026-07-15）。
 pub const BACKFILL_MIN_SPEED: Fx = Fx::from_raw(4096);
 
+/// 笛卡尔 → 作者视图回填规则的唯一实现（纯函数；`backfill_polar`/`materialize_polar` 与
+/// `BulletPool::polar` 视图共用，保证"惰性读"与"及时回填"两条路逐位一致——引擎第二刀 §5
+/// CART_FX 极坐标惰性化）。`speed = isqrt(len_sq(vx,vy))` 恒回填；`angle` 仅 `speed >=
+/// BACKFILL_MIN_SPEED` 时按 `atan2(vy,vx)` 回填，否则保留 `stored_angle`（近停冻结朝向：
+/// 防 CORDIC 低幅垃圾角污染作者视图与 sprite 朝向）。
+/// sqrt(Q32.32) = Q16.16，故 isqrt(len_sq) 的 raw 直接是 Fx raw。
+pub fn polar_of_vel(vx: Fx, vy: Fx, stored_angle: Angle) -> (Fx, Angle) {
+    let sp = Fx::from_raw(isqrt(len_sq(vx, vy) as u64) as i32);
+    // C6/C20③：`isqrt` 返 u64、这里窄化成 i32 塞进 `Fx`。数学上 `|v|` 逼近 `Fx` 上限
+    // （速度分量 ≥ ~23000 px/帧）时可回绕成**负 speed**——正常速度不可达，且当帧就被越界
+    // 回收兜底，故属"引擎自身 bug"而非调用方违约：按 P4-c 用 debug 帧内断言接，release
+    // 不检查（`Fx::mul`/`div` 的同款窄化早有 debug_assert，此前唯独这两处裸奔）。
+    debug_assert!(
+        sp.raw() >= 0,
+        "backfill: isqrt 窄化回绕成负 speed（|v| 越界，vx={vx:?} vy={vy:?}）"
+    );
+    let ang = if sp.raw() >= BACKFILL_MIN_SPEED.raw() {
+        atan2(vy, vx)
+    } else {
+        stored_angle
+    };
+    (sp, ang)
+}
+
 impl WorldBody {
     /// 极坐标 → 积分真相：`(vx,vy) = polar_to_vec(speed, angle)`。
     /// 一切改动 speed/angle 的路径改完必须调它（"忘了回填"火药桶的唯一出口）。
+    ///
+    /// **debug 防漏**（引擎第二刀 §5）：`speed`/`angle` 若仍陈值（`BULLET_POLAR_STALE`
+    /// 置位）就被读到这里，必是某条改动路径漏了 `materialize_polar`——P4-c 帧内断言接住，
+    /// release 不检查。
     #[inline]
     pub(crate) fn refresh_vel_from_polar(&mut self, i: usize) {
+        debug_assert_eq!(
+            self.bullets.flags[i] & BULLET_POLAR_STALE,
+            0,
+            "refresh_vel_from_polar 读到陈值极坐标（漏 materialize_polar，i={i}）"
+        );
         let (vx, vy) = polar_to_vec(self.bullets.speed[i], self.bullets.angle[i]);
         self.bullets.vx[i] = vx;
         self.bullets.vy[i] = vy;
     }
 
+    /// 极坐标若为陈值则按回填规则写回（引擎第二刀 §5）。读写 speed/angle 之前、离开
+    /// CART 模式之前调用。
+    #[inline]
+    pub(crate) fn materialize_polar(&mut self, i: usize) {
+        if self.bullets.flags[i] & BULLET_POLAR_STALE != 0 {
+            self.backfill_polar(i);
+        }
+    }
+
     /// 开 POLAR_FX（清 CART_FX，互斥律）；只动两模式位。
+    /// 先 materialize：离开 CART 模式前必须把陈值极坐标补齐，否则次帧 POLAR 积分会拿
+    /// 陈旧 speed/angle 起算（Review Focus 3）。
     pub(crate) fn set_ang_vel_at(&mut self, i: usize, w: i16) {
+        self.materialize_polar(i);
         self.bullets.ang_vel[i] = w;
         self.bullets.flags[i] = (self.bullets.flags[i] | BULLET_POLAR_FX) & !BULLET_CART_FX;
     }
 
-    /// 沿向加速，开 POLAR_FX（清 CART_FX）。
+    /// 沿向加速，开 POLAR_FX（清 CART_FX）。先 materialize（理由同 [`Self::set_ang_vel_at`]）。
     pub(crate) fn set_accel_at(&mut self, i: usize, a: Fx) {
+        self.materialize_polar(i);
         self.bullets.accel[i] = a;
         self.bullets.flags[i] = (self.bullets.flags[i] | BULLET_POLAR_FX) & !BULLET_CART_FX;
     }
@@ -46,29 +92,24 @@ impl WorldBody {
         self.bullets.flags[i] = (self.bullets.flags[i] | BULLET_CART_FX) & !BULLET_POLAR_FX;
     }
 
-    /// 清两模式位（字段留陈值，确定性无损——ZUN 语义只关开关）。
+    /// 清两模式位（字段留陈值，确定性无损——ZUN 语义只关开关）。先 materialize：CART_FX
+    /// 关掉之后不再有人补齐极坐标，留着陈值会让之后任何直读（越过 `polar()` 视图的世界内
+    /// 消费者）读到谎报的 speed/angle。
     pub(crate) fn stop_fx_at(&mut self, i: usize) {
+        self.materialize_polar(i);
         self.bullets.flags[i] &= !(BULLET_POLAR_FX | BULLET_CART_FX);
     }
 
-    /// 笛卡尔 → 作者视图回填（阈值规则见 `BACKFILL_MIN_SPEED`）。
-    /// sqrt(Q32.32) = Q16.16，故 isqrt(len_sq) 的 raw 直接是 Fx raw。
+    /// 笛卡尔 → 作者视图回填（规则见 [`polar_of_vel`]）+ 清 `BULLET_POLAR_STALE`。
     pub(crate) fn backfill_polar(&mut self, i: usize) {
-        let vx = self.bullets.vx[i];
-        let vy = self.bullets.vy[i];
-        let sp = Fx::from_raw(isqrt(len_sq(vx, vy) as u64) as i32);
-        // C6/C20③：`isqrt` 返 u64、这里窄化成 i32 塞进 `Fx`。数学上 `|v|` 逼近 `Fx` 上限
-        // （速度分量 ≥ ~23000 px/帧）时可回绕成**负 speed**——正常速度不可达，且当帧就被越界
-        // 回收兜底，故属"引擎自身 bug"而非调用方违约：按 P4-c 用 debug 帧内断言接，release
-        // 不检查（`Fx::mul`/`div` 的同款窄化早有 debug_assert，此前唯独这两处裸奔）。
-        debug_assert!(
-            sp.raw() >= 0,
-            "backfill: isqrt 窄化回绕成负 speed（|v| 越界，vx={vx:?} vy={vy:?}）"
+        let (sp, ang) = polar_of_vel(
+            self.bullets.vx[i],
+            self.bullets.vy[i],
+            self.bullets.angle[i],
         );
         self.bullets.speed[i] = sp;
-        if sp.raw() >= BACKFILL_MIN_SPEED.raw() {
-            self.bullets.angle[i] = atan2(vy, vx);
-        }
+        self.bullets.angle[i] = ang;
+        self.bullets.flags[i] &= !BULLET_POLAR_STALE;
     }
 
     /// 敌人：极坐标 → 积分真相。**改动 `speed`/`angle` 的每条路径改完必须调它。**
@@ -115,19 +156,26 @@ impl WorldBody {
     }
 
     /// 改速率并回填 v（索引核；D4 op SET_SPEED/ADD_SPEED 与公开 setter 共用）。
+    /// 先 materialize：`angle` 分量若为陈值，直接覆写 `speed` 后 `refresh_vel_from_polar`
+    /// 会拿陈旧 `angle` 算 v——必须先把 angle 补齐。
     pub(crate) fn set_speed_at(&mut self, i: usize, speed: Fx) {
+        self.materialize_polar(i);
         self.bullets.speed[i] = speed;
         self.refresh_vel_from_polar(i);
     }
 
-    /// 改朝向并回填 v（索引核；D4 op 与公开 setter 共用）。
+    /// 改朝向并回填 v（索引核；D4 op 与公开 setter 共用）。先 materialize（理由同
+    /// [`Self::set_speed_at`]，角色对调：这里是 `speed` 分量可能陈值）。
     pub(crate) fn set_angle_at(&mut self, i: usize, angle: Angle) {
+        self.materialize_polar(i);
         self.bullets.angle[i] = angle;
         self.refresh_vel_from_polar(i);
     }
 
-    /// 相对转向（回绕加）并回填 v（索引核；D4 op 与公开 setter 共用）。
+    /// 相对转向（回绕加）并回填 v（索引核；D4 op 与公开 setter 共用）。先 materialize：
+    /// 转向读的正是 `angle[i]` 自身，陈值会把回绕基点算错。
     pub(crate) fn turn_at(&mut self, i: usize, delta: Angle) {
+        self.materialize_polar(i);
         self.bullets.angle[i] = self.bullets.angle[i].add(delta);
         self.refresh_vel_from_polar(i);
     }
@@ -226,11 +274,13 @@ impl WorldBody {
     }
 
     /// 瞄最近可瞄自机 + delta 偏移，回填 v（索引核；D4 op 与公开 setter 共用）。
-    /// 无可瞄自机 → 纯 no-op（不计数）。
+    /// 无可瞄自机 → 纯 no-op（不计数）。先 materialize：`refresh_vel_from_polar` 要读
+    /// `speed[i]`，陈值会把瞄准算出来的方向乘错速率。
     pub(crate) fn aim_at_player_at(&mut self, i: usize, delta: Angle) {
         let Some(p) = self.nearest_aimable_player(self.bullets.x[i], self.bullets.y[i]) else {
             return;
         };
+        self.materialize_polar(i);
         let dx = self.players[p].x - self.bullets.x[i];
         let dy = self.players[p].y - self.bullets.y[i];
         self.bullets.angle[i] = crate::math::cordic::atan2(dy, dx).add(delta);

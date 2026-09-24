@@ -104,10 +104,12 @@ pub fn encode_layer(
     match layer {
         LAYER_BULLETS => {
             let p = view.bullets();
-            let (xs, ys, angles, sprites, born) =
-                (p.x(), p.y(), p.angle(), p.sprite(), p.born_frame());
+            let (xs, ys, sprites, born) = (p.x(), p.y(), p.sprite(), p.born_frame());
             for i in p.iter_alive() {
-                let (cos, sin) = bullet_basis(angles[i]);
+                // CART_FX 惰性化（引擎第二刀 §5）：`angle()` 裸切片可能是陈值，表现层
+                // 走 `polar(i)`——陈值时按 vx/vy 纯计算，不越权改世界状态。
+                let (_, angle) = p.polar(i);
+                let (cos, sin) = bullet_basis(angle);
                 write_instance(
                     out,
                     n,

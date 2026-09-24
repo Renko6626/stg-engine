@@ -54,6 +54,11 @@ impl WorldBody {
                     "模式位互斥被破坏（P4-c 帧内断言）"
                 );
                 if fl & crate::bullets::BULLET_POLAR_FX != 0 {
+                    debug_assert_eq!(
+                        fl & crate::bullets::BULLET_POLAR_STALE,
+                        0,
+                        "POLAR 积分读到陈值极坐标（漏 materialize，i={i}）"
+                    );
                     self.bullets.angle[i] =
                         self.bullets.angle[i].add_delta(self.bullets.ang_vel[i]);
                     self.bullets.speed[i] = self.bullets.speed[i] + self.bullets.accel[i];
@@ -61,7 +66,9 @@ impl WorldBody {
                 } else if fl & crate::bullets::BULLET_CART_FX != 0 {
                     self.bullets.vx[i] = self.bullets.vx[i] + self.bullets.ax[i];
                     self.bullets.vy[i] = self.bullets.vy[i] + self.bullets.ay[i];
-                    self.backfill_polar(i);
+                    // 惰性化（引擎第二刀 §5）：不再逐帧回填 speed/angle，只标脏；
+                    // 谁真要读（materialize_polar/`polar()` 视图）时才按 vx/vy 算。
+                    self.bullets.flags[i] |= crate::bullets::BULLET_POLAR_STALE;
                 }
                 self.bullets.x[i] = self.bullets.x[i] + self.bullets.vx[i];
                 self.bullets.y[i] = self.bullets.y[i] + self.bullets.vy[i];
@@ -335,7 +342,8 @@ impl WorldBody {
                 self.refresh_vel_from_polar(i);
             } else {
                 self.bullets.vx[i] = Fx::ZERO - self.bullets.vx[i];
-                self.backfill_polar(i);
+                // 惰性化：CART/无模式弹反弹后同样只标脏，不逐帧回填（引擎第二刀 §5）。
+                self.bullets.flags[i] |= crate::bullets::BULLET_POLAR_STALE;
             }
             count -= 1;
         }
@@ -352,7 +360,7 @@ impl WorldBody {
                 self.refresh_vel_from_polar(i);
             } else {
                 self.bullets.vy[i] = Fx::ZERO - self.bullets.vy[i];
-                self.backfill_polar(i);
+                self.bullets.flags[i] |= crate::bullets::BULLET_POLAR_STALE;
             }
             count -= 1;
         }
@@ -532,11 +540,93 @@ mod tests {
         // vy = -3 + 20×0.25 = +2：过了顶点
         assert_eq!(w.body.bullets.vy[i].raw(), -3 * 65536 + 20 * 16384);
         assert!(w.body.bullets.vy[i].raw() > 0);
-        // angle/speed 每帧回填：与参考逐位相等
+        // 惰性化（引擎第二刀 §5）：CART_FX 期间只标脏，speed/angle 不再逐帧回填——
+        // materialize 后与参考逐位相等。
+        w.body.materialize_polar(i);
         let (vx, vy) = (w.body.bullets.vx[i], w.body.bullets.vy[i]);
         assert_eq!(w.body.bullets.angle[i], crate::math::cordic::atan2(vy, vx));
         let sp = crate::math::isqrt::isqrt(crate::math::geom::len_sq(vx, vy) as u64) as i32;
         assert_eq!(w.body.bullets.speed[i].raw(), sp);
+    }
+
+    /// §5 对拍：速度全程高于阈值时，惰性结果与逐帧回填逐位相同。
+    #[test]
+    fn lazy_polar_matches_eager_backfill_while_fast() {
+        use crate::bullets::BULLET_POLAR_STALE;
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 0, 200);
+        let i = w.body.bullets.get(h).unwrap();
+        w.body.bullets.vx[i] = Fx::from_int(2);
+        w.body.bullets.vy[i] = Fx::from_int(-3);
+        w.body.set_gravity_at(i, Fx::ZERO, Fx::from_raw(16384)); // ay = 0.25：vy −3 → +2，|v| ≥ 2 全程高于阈值
+        for f in 0..20u32 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+            assert_ne!(
+                w.body.bullets.flags[i] & BULLET_POLAR_STALE,
+                0,
+                "积分后应标脏"
+            );
+            let (vx, vy) = (w.body.bullets.vx[i], w.body.bullets.vy[i]);
+            let (sp, ang) = crate::world::motion::polar_of_vel(vx, vy, w.body.bullets.angle[i]);
+            assert_eq!(ang, crate::math::cordic::atan2(vy, vx), "帧 {f}");
+            assert_eq!(
+                sp.raw(),
+                crate::math::isqrt::isqrt(crate::math::geom::len_sq(vx, vy) as u64) as i32
+            );
+        }
+        w.body.materialize_polar(i);
+        assert_eq!(w.body.bullets.flags[i] & BULLET_POLAR_STALE, 0);
+        let (vx, vy) = (w.body.bullets.vx[i], w.body.bullets.vy[i]);
+        assert_eq!(w.body.bullets.angle[i], crate::math::cordic::atan2(vy, vx));
+    }
+
+    /// 新语义锁定：降到阈值以下再回升，期间没人读 ⇒ materialize 取当前方向（旧实现会取当前方向——
+    /// 两者在此一致）；期间被读过一次 ⇒ 低速时的读取保留读取前存储的角度。
+    #[test]
+    fn lazy_polar_low_speed_keeps_stored_angle() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 0, 200);
+        let i = w.body.bullets.get(h).unwrap();
+        w.body.bullets.vx[i] = Fx::ZERO;
+        w.body.bullets.vy[i] = Fx::from_raw(-2048); // 1/32 px/帧：低于阈值
+        w.body.bullets.angle[i] = crate::math::Angle(1234);
+        w.body.set_gravity_at(i, Fx::ZERO, Fx::ZERO);
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        w.body.materialize_polar(i);
+        assert_eq!(
+            w.body.bullets.angle[i],
+            crate::math::Angle(1234),
+            "低速不改角度"
+        );
+        assert_eq!(w.body.bullets.speed[i].raw(), 2048);
+    }
+
+    /// Review Focus 3：CART → POLAR 切换帧必须用 materialize 后的值，位移与旧的逐帧回填实现一致。
+    #[test]
+    fn switch_cart_to_polar_uses_fresh_polar() {
+        let mut w = crate::step::World::new(1);
+        let h = bullet_at(&mut w, 0, 200);
+        let i = w.body.bullets.get(h).unwrap();
+        w.body.bullets.vx[i] = Fx::from_int(3);
+        w.body.bullets.vy[i] = Fx::ZERO;
+        w.body.set_gravity_at(i, Fx::ZERO, Fx::from_int(1)); // 每帧 vy += 1
+        for f in 0..3u32 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+        }
+        // 此时 v = (3, 3)，存储的 angle/speed 是陈值
+        w.body.set_accel_at(i, Fx::ZERO); // 切 POLAR
+        let (x0, y0) = (w.body.bullets.x[i], w.body.bullets.y[i]);
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(3));
+        let dx = w.body.bullets.x[i] - x0;
+        let dy = w.body.bullets.y[i] - y0;
+        let (evx, evy) = crate::math::geom::polar_to_vec(
+            Fx::from_raw(crate::math::isqrt::isqrt(crate::math::geom::len_sq(
+                Fx::from_int(3),
+                Fx::from_int(3),
+            ) as u64) as i32),
+            crate::math::cordic::atan2(Fx::from_int(3), Fx::from_int(3)),
+        );
+        assert_eq!((dx, dy), (evx, evy), "POLAR 首帧应沿 45° 以 |v| 前进");
     }
 
     /// 右墙折返判别式（哑弹）：x 越界量镜像 + vx 翻号 + 计数递减。

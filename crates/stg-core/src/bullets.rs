@@ -22,6 +22,9 @@ pub const BULLET_BOUNCE_MASK: u8 = 0b0001_1000;
 /// 只是跳过扫描的提示位：多置无害（多扫一次），漏置不会发生（STEP 只由 `fire_op` 武装）。
 /// 进校验和（P6）；Tier 0 不读 `flags`。
 pub const BULLET_STEP_LIVE: u8 = 1 << 5;
+/// `flags` 位 6：极坐标（`speed`/`angle`）是陈值，需按 `vx/vy` 回填后才能读（引擎第二刀 §5）。
+/// 只有 CART_FX 积分与 CART 反弹置它；`materialize_polar` 清。世界外读取方用视图的 `polar()`。
+pub const BULLET_POLAR_STALE: u8 = 1 << 6;
 
 // 弹池（D3 定稿，19 字段）。哑弹 / 变换弹 / 任务弹**共池**；变换【段】另存 XformSegPool（M0-4 手写）。
 // `transform_head == 0xFFFF` 即哑弹（无段、不付段内存，只付这几字节游标）。运动 / 双表示逻辑归 M0-4。

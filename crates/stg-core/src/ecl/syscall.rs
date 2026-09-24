@@ -532,7 +532,10 @@ fn self_pos(task: &Task, ctx: &VmCtx) -> (Fx, Fx) {
 /// owner 的速度四件（`$self_vx`/`$self_vy`/`$self_speed`/`$self_angle` 共用）。
 /// 派发规则逐条同 [`self_pos`]：ENEMY → 敌池、BULLET → 弹池、其余 → 全零。
 /// 返回 `(vx, vy, speed, angle_raw)`，四个都已是可直接押栈的 raw。
-fn self_vel(task: &Task, ctx: &VmCtx) -> (i32, i32, i32, i32) {
+///
+/// BULLET 分支需要 `&mut`：CART_FX 惰性化后 `speed`/`angle` 可能陈值（引擎第二刀 §5），
+/// 读之前先 `materialize_polar`（读取顺带回写，读完 `BULLET_POLAR_STALE` 清零）。
+fn self_vel(task: &Task, ctx: &mut VmCtx) -> (i32, i32, i32, i32) {
     match task.owner_kind {
         OWNER_ENEMY => {
             let i = task.owner_index as usize;
@@ -545,6 +548,7 @@ fn self_vel(task: &Task, ctx: &VmCtx) -> (i32, i32, i32, i32) {
         }
         OWNER_BULLET => {
             let i = task.owner_index as usize;
+            ctx.body.materialize_polar(i);
             (
                 ctx.body.bullets.vx[i].raw(),
                 ctx.body.bullets.vy[i].raw(),
@@ -2841,6 +2845,49 @@ mod tests {
         };
         assert!(call(&mut w, &ecl, &mut task, SYS_SELF_VX, &[]).is_ok());
         assert_eq!(pop(&mut task).unwrap(), Fx::from_int(2).raw());
+    }
+
+    /// CART_FX 惰性化（引擎第二刀 §5）：弹积分 1 帧后 `speed`/`angle` 是陈值（标脏），
+    /// 读 `$self_angle` 必须先 materialize —— 值等于 `atan2(vy,vx)`，且**读取会顺带回写**
+    /// （读完 `BULLET_POLAR_STALE` 应已清零）。
+    #[test]
+    fn self_angle_read_materializes_stale_cart_fx_bullet() {
+        let (mut w, ecl) = fresh();
+        let bh = crate::world::test_support::bullet_at(&mut w, 0, 200);
+        let i = bh.index as usize;
+        w.body.bullets.vx[i] = Fx::from_int(3);
+        w.body.bullets.vy[i] = Fx::from_int(4);
+        w.body.set_bullet_gravity(bh, Fx::ZERO, Fx::from_raw(16384)); // 开 CART_FX
+        let frame = w.body.frame;
+        crate::step::step(
+            &mut w,
+            &TABLES_V0,
+            &ecl,
+            &crate::input::InputFrame::empty(frame),
+        );
+        assert_ne!(
+            w.body.bullets.flags[i] & crate::bullets::BULLET_POLAR_STALE,
+            0,
+            "CART_FX 积分一帧后应标脏"
+        );
+        let (vx, vy) = (w.body.bullets.vx[i], w.body.bullets.vy[i]);
+        let mut task = Task {
+            owner_kind: OWNER_BULLET,
+            owner_index: bh.index,
+            owner_gen: bh.generation,
+            ..Task::default()
+        };
+        assert!(call(&mut w, &ecl, &mut task, SYS_SELF_ANGLE, &[]).is_ok());
+        assert_eq!(
+            pop(&mut task).unwrap(),
+            crate::math::cordic::atan2(vy, vx).raw() as i32,
+            "$self_angle 应等于 atan2(vy,vx)"
+        );
+        assert_eq!(
+            w.body.bullets.flags[i] & crate::bullets::BULLET_POLAR_STALE,
+            0,
+            "读取应顺带回写，清掉陈值位"
+        );
     }
 
     /// 非敌非弹 owner → 0（同 $self_x 的既有降级）。
