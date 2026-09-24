@@ -83,7 +83,7 @@
 
 - **取指越界（PC_OOB）必须保留**：`World::load_bytes` 会原样恢复存档里的 task pc，而镜像哈希只校验表的一致性，不证明是同一份脚本。
 - 栈深度与下溢（包括 SPAWN 的 `sp < argc`）、调用深度、RET、除零、syscall 内部依赖栈值或 owner kind 的检查（`syscall.rs:1569-1580`、`1732-1744`），继续在运行时检查。
-- 已经被校验器覆盖的检查从循环里删掉：`op_implemented`、操作数越界、CALL / SPAWN / PUSHL / POPL 的静态合法性。`_ =>` 分支保留为 `unreachable!` 前的防御性 BAD_OP，不计入性能。
+- **修正（Task 2 实施时拍板，覆盖上一段草案）**：循环头只删 `op_implemented` 这一次查表——未实现 op 的 `ARITY` 恒为 0，会照原样落进 `match` 的 `_ =>` 默认臂返回 `FAULT_BAD_OP`，行为不变。**取指越界与操作数越界这两个检查必须保留**（不能跟着 `op_implemented` 一起删）：`World::load_bytes` 会原样恢复存档里的 task pc，镜像哈希只证明"表一致"，证不了"pc 落在这份脚本的合法指令边界上"——跨镜像存档或手改过的存档能把 `task.pc` 带到任意位置，循环头若不再检查操作数越界，`ctx.code[opnd_start]` 就可能真的越界 panic，直接违反 P4（调用方违约 → 确定性安全结果，不 panic）。CALL / SPAWN / PUSHL / POPL / SYS 各自的运行时检查同样保留——它们只在各自的 op 分支里跑（不在每条指令的公共路径上），与静态校验器各自独立地校验同一件事，互不依赖、也不冲突。
 
 ### 4.3 预算合成一个倒数
 

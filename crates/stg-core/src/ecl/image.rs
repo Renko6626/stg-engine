@@ -5,6 +5,8 @@
 //! 同一性/哈希保证，不随快照回滚。无脚本场景传 [`EclImage::empty`]（零任务即零成本，
 //! T2 金向量一号逐位不变门）。
 
+use crate::ecl::ops::{self, ARITY};
+use crate::ecl::syscall;
 use crate::ecl::task::LOCALS;
 
 #[repr(transparent)]
@@ -228,6 +230,39 @@ pub enum ImageBuildError {
         actual: u8,
     },
     OperandOverflow,
+    /// 加载闸的代码校验（引擎第二刀 §4）拒绝：`code` 本身静态不合法——坏 op / 保留位非零 /
+    /// 截断操作数 / 跳转或 CALL·SPAWN 目标非法 / 局部下标越界 / syscall 号不在白名单。
+    /// `pc` 是该问题所在指令自身的字索引（对 sub `code_entry`/mark `ip` 落在非指令边界
+    /// 的情形，`pc` 就是那个非法落点本身——见 `validate_code` 逐条调用点）。
+    BadCode {
+        pc: u32,
+        reason: BadCodeReason,
+    },
+}
+
+/// [`ImageBuildError::BadCode`] 的具体原因（`validate_code` 产出）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BadCodeReason {
+    /// 头字低 8 位不是已实现的 opcode（`ops::op_implemented` 判否）。
+    UnknownOp(u8),
+    /// 头字高 24 位非零（当前留白供未来掩码，编译器不得写入）。
+    ReservedBits,
+    /// 按 `ARITY` 取操作数字会越出 `code` 末尾。
+    TruncatedOperand,
+    /// `JMP`/`JZ` 的跳转目标 `>= code.len()`。
+    JumpTarget(u32),
+    /// 落点（跳转目标 / sub `code_entry` / mark `ip`）没有落在某条指令的边界上。
+    NotInstructionBoundary(u32),
+    /// `CALL` 的目标不是合法 `SubId`，或对应 sub 的 kind 不是 `CallOnly`。
+    CallTarget(u32),
+    /// `SPAWN` 的目标不是合法 `SubId`，或对应 sub 的 kind 不是 `Async`，或参数个数与 `argc` 不符。
+    SpawnTarget(u32),
+    /// `SPAWN` 的 `argc > 64`（`LOCALS`）。
+    SpawnArgc(u32),
+    /// `PUSHL`/`POPL` 的局部下标 `>= 64`（`LOCALS`）。
+    LocalIndex(u32),
+    /// `SYS` 的号不满足 `syscall_implemented`（含放不进 `u16` 的情形）。
+    Syscall(u32),
 }
 
 /// 脚本镜像：`code` 是全部子程序共享的扁平字流（`Task.pc` 是其**绝对**字索引）。
@@ -446,7 +481,7 @@ impl EclImage {
             });
         }
 
-        Ok(Self {
+        let img = Self {
             code: parts.code.into_boxed_slice(),
             subs: runtime_subs.into_boxed_slice(),
             param_types: param_types.into_boxed_slice(),
@@ -459,7 +494,9 @@ impl EclImage {
             })?)),
             marks: parts.marks.into_boxed_slice(),
             content_hash: parts.content_hash,
-        })
+        };
+        validate_code(&img)?;
+        Ok(img)
     }
 
     pub fn code(&self) -> &[u32] {
@@ -567,6 +604,153 @@ pub(crate) fn is_valid_identifier(name: &str) -> bool {
     let mut bytes = name.bytes();
     matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// 加载闸的代码校验（引擎第二刀 §4）：从 0 起按 `ARITY` 线性解码整条 `code`（sub 之间
+/// 连续排布，一条流从头到尾正好把全部 sub 的指令边界都扫出来——不必分段扫），先定
+/// 指令边界，再逐条查静态可判的合法性。运行期仍保留取指与操作数越界检查（存档能带回
+/// 任意 pc，哈希只证明"表一致"，证不了"就是这份脚本"，见 `vm::exec_inner` 文档）。
+fn validate_code(img: &EclImage) -> Result<(), ImageBuildError> {
+    let code: &[u32] = &img.code;
+    let len = code.len();
+
+    // 第一趟：定边界 + UnknownOp / ReservedBits / TruncatedOperand。
+    let mut boundary = vec![false; len];
+    let mut pc = 0usize;
+    while pc < len {
+        boundary[pc] = true;
+        let head = code[pc];
+        if head >> 8 != 0 {
+            return Err(ImageBuildError::BadCode {
+                pc: pc as u32,
+                reason: BadCodeReason::ReservedBits,
+            });
+        }
+        let op = (head & 0xFF) as u8;
+        if !ops::op_implemented(op) {
+            return Err(ImageBuildError::BadCode {
+                pc: pc as u32,
+                reason: BadCodeReason::UnknownOp(op),
+            });
+        }
+        let arity = ARITY[op as usize] as usize;
+        let opnd_start = pc + 1;
+        let opnd_end = opnd_start + arity;
+        if opnd_end > len {
+            return Err(ImageBuildError::BadCode {
+                pc: pc as u32,
+                reason: BadCodeReason::TruncatedOperand,
+            });
+        }
+        pc = opnd_end;
+    }
+
+    // sub 的 code_entry、mark 的 ip 都必须落在指令边界上——两者此前已各自校验过
+    // `< code.len()`（`CodeEntryOutOfRange`/`MarkIpOutOfBounds`），这里只补边界对齐。
+    for sub in img.subs.iter() {
+        let ip = sub.code_entry;
+        if !boundary[ip as usize] {
+            return Err(ImageBuildError::BadCode {
+                pc: ip,
+                reason: BadCodeReason::NotInstructionBoundary(ip),
+            });
+        }
+    }
+    for &(_, ip) in img.marks.iter() {
+        if !boundary[ip as usize] {
+            return Err(ImageBuildError::BadCode {
+                pc: ip,
+                reason: BadCodeReason::NotInstructionBoundary(ip),
+            });
+        }
+    }
+
+    // 第二趟：沿第一趟定下的边界逐条复核操作数语义（跳转目标 / CALL·SPAWN 目标 /
+    // 局部下标 / syscall 号）。`pc` 恒取该指令自身的字索引（不是操作数指向的落点）。
+    let mut pc = 0usize;
+    while pc < len {
+        let head = code[pc];
+        let op = (head & 0xFF) as u8;
+        let arity = ARITY[op as usize] as usize;
+        let opnd_start = pc + 1;
+        match op {
+            ops::OP_JMP | ops::OP_JZ => {
+                let t = code[opnd_start];
+                if t as usize >= len {
+                    return Err(ImageBuildError::BadCode {
+                        pc: pc as u32,
+                        reason: BadCodeReason::JumpTarget(t),
+                    });
+                }
+                if !boundary[t as usize] {
+                    return Err(ImageBuildError::BadCode {
+                        pc: pc as u32,
+                        reason: BadCodeReason::NotInstructionBoundary(t),
+                    });
+                }
+            }
+            ops::OP_CALL => {
+                let raw = code[opnd_start];
+                let ok = u16::try_from(raw)
+                    .ok()
+                    .and_then(|r| img.subs.get(r as usize))
+                    .is_some_and(|meta| meta.kind == SubKind::CallOnly);
+                if !ok {
+                    return Err(ImageBuildError::BadCode {
+                        pc: pc as u32,
+                        reason: BadCodeReason::CallTarget(raw),
+                    });
+                }
+            }
+            ops::OP_SPAWN => {
+                let raw = code[opnd_start];
+                let argc = code[opnd_start + 1];
+                if argc > LOCALS as u32 {
+                    return Err(ImageBuildError::BadCode {
+                        pc: pc as u32,
+                        reason: BadCodeReason::SpawnArgc(argc),
+                    });
+                }
+                let ok = u16::try_from(raw)
+                    .ok()
+                    .and_then(|r| img.subs.get(r as usize))
+                    .is_some_and(|meta| {
+                        meta.kind == SubKind::Async && meta.param_count as u32 == argc
+                    });
+                if !ok {
+                    return Err(ImageBuildError::BadCode {
+                        pc: pc as u32,
+                        reason: BadCodeReason::SpawnTarget(raw),
+                    });
+                }
+            }
+            ops::OP_PUSHL | ops::OP_POPL => {
+                let idx = code[opnd_start];
+                if idx >= LOCALS as u32 {
+                    return Err(ImageBuildError::BadCode {
+                        pc: pc as u32,
+                        reason: BadCodeReason::LocalIndex(idx),
+                    });
+                }
+            }
+            ops::OP_SYS => {
+                let n = code[opnd_start];
+                let ok = u16::try_from(n)
+                    .ok()
+                    .is_some_and(syscall::syscall_implemented);
+                if !ok {
+                    return Err(ImageBuildError::BadCode {
+                        pc: pc as u32,
+                        reason: BadCodeReason::Syscall(n),
+                    });
+                }
+            }
+            _ => {}
+        }
+        pc = opnd_start + arity;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1005,5 +1189,139 @@ mod tests {
     fn mark_id_must_be_positive() {
         let result = EclImage::try_from_parts(parts_for_marks(vec![(0, 1)]));
         assert_eq!(result, Err(ImageBuildError::MarkIdNonPositive));
+    }
+
+    // ── Task 2：加载时代码校验（引擎第二刀 §4）──────────────────────────────
+
+    /// 以单个 Root sub（入口 0）包装 code，走 try_from_parts（同 ecl/mod.rs fuzz 的镜像形状）。
+    fn parts_one_sub(code: Vec<u32>) -> Result<EclImage, ImageBuildError> {
+        EclImage::try_from_parts(ImageParts {
+            code,
+            subs: vec![SubInit::new(0, SubKind::Root, vec![])],
+            entries: vec![],
+            root: Some(0),
+            marks: vec![],
+            content_hash: 0,
+        })
+    }
+
+    use crate::ecl::ops::*;
+
+    #[test]
+    fn validate_accepts_minimal_program() {
+        assert!(parts_one_sub(vec![OP_PUSHI as u32, 5, OP_POP as u32, OP_END as u32]).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_unknown_op() {
+        let e = parts_one_sub(vec![200, OP_END as u32]).unwrap_err();
+        assert_eq!(
+            e,
+            ImageBuildError::BadCode {
+                pc: 0,
+                reason: BadCodeReason::UnknownOp(200)
+            }
+        );
+    }
+
+    #[test]
+    fn validate_rejects_reserved_high_bits() {
+        let e = parts_one_sub(vec![(1 << 8) | OP_END as u32]).unwrap_err();
+        assert_eq!(
+            e,
+            ImageBuildError::BadCode {
+                pc: 0,
+                reason: BadCodeReason::ReservedBits
+            }
+        );
+    }
+
+    #[test]
+    fn validate_rejects_truncated_operand() {
+        let e = parts_one_sub(vec![OP_END as u32, OP_PUSHI as u32]).unwrap_err();
+        assert_eq!(
+            e,
+            ImageBuildError::BadCode {
+                pc: 1,
+                reason: BadCodeReason::TruncatedOperand
+            }
+        );
+    }
+
+    #[test]
+    fn validate_rejects_jump_out_of_range_and_into_operand() {
+        let e = parts_one_sub(vec![OP_JMP as u32, 99, OP_END as u32]).unwrap_err();
+        assert_eq!(
+            e,
+            ImageBuildError::BadCode {
+                pc: 0,
+                reason: BadCodeReason::JumpTarget(99)
+            }
+        );
+        // 跳到 PUSHI 的操作数字（下标 3）上
+        let e =
+            parts_one_sub(vec![OP_JMP as u32, 3, OP_PUSHI as u32, 7, OP_END as u32]).unwrap_err();
+        assert_eq!(
+            e,
+            ImageBuildError::BadCode {
+                pc: 0,
+                reason: BadCodeReason::NotInstructionBoundary(3)
+            }
+        );
+    }
+
+    #[test]
+    fn validate_rejects_bad_local_index_and_syscall() {
+        let e = parts_one_sub(vec![OP_PUSHL as u32, 64, OP_END as u32]).unwrap_err();
+        assert_eq!(
+            e,
+            ImageBuildError::BadCode {
+                pc: 0,
+                reason: BadCodeReason::LocalIndex(64)
+            }
+        );
+        let e = parts_one_sub(vec![OP_SYS as u32, 9999, OP_END as u32]).unwrap_err();
+        assert_eq!(
+            e,
+            ImageBuildError::BadCode {
+                pc: 0,
+                reason: BadCodeReason::Syscall(9999)
+            }
+        );
+    }
+
+    #[test]
+    fn validate_rejects_call_to_non_callonly_and_bad_spawn() {
+        // sub 0 是 Root：CALL 0 → CallTarget；SPAWN 0 argc=1 → SpawnTarget；SPAWN argc=65 → SpawnArgc
+        let e = parts_one_sub(vec![OP_CALL as u32, 0, OP_END as u32]).unwrap_err();
+        assert_eq!(
+            e,
+            ImageBuildError::BadCode {
+                pc: 0,
+                reason: BadCodeReason::CallTarget(0)
+            }
+        );
+        let e = parts_one_sub(vec![OP_SPAWN as u32, 0, 1, OP_END as u32]).unwrap_err();
+        assert_eq!(
+            e,
+            ImageBuildError::BadCode {
+                pc: 0,
+                reason: BadCodeReason::SpawnTarget(0)
+            }
+        );
+        let e = parts_one_sub(vec![OP_SPAWN as u32, 0, 65, OP_END as u32]).unwrap_err();
+        assert_eq!(
+            e,
+            ImageBuildError::BadCode {
+                pc: 0,
+                reason: BadCodeReason::SpawnArgc(65)
+            }
+        );
+    }
+
+    #[test]
+    fn validate_allows_falling_off_the_end() {
+        // 不要求以 END 结尾：落出末尾仍由运行时 PC_OOB 处理
+        assert!(parts_one_sub(vec![OP_PUSHI as u32, 1, OP_POP as u32]).is_ok());
     }
 }

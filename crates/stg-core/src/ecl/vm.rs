@@ -104,25 +104,49 @@ pub(crate) struct VmCtx<'a> {
 }
 
 /// 从 `task.pc` 起解释执行，直到 `WAIT` 让出 / `END` 完成 / Fault。
+///
+/// 薄包装：先按「任务内 1024、全局余额」取小算出这次最多能跑几条，交给
+/// [`exec_inner`] 用**单个倒数**烧；退出时把实际烧掉的条数（`n0 - left`）一次性从
+/// `*ctx.budget` 扣回——语义与合并前的双检查逐位等价（引擎第二刀 §4.3）：单任务恰在
+/// 第 1025 条指令处报 `FAULT_BUDGET`（`budget_boundary_1024_ok_1025_faults`），全局余额
+/// 在任务运行中途耗尽时该任务同样报 fault 且事后 `*ctx.budget == 0`
+/// （`global_budget_exhaustion_also_faults`）。
 pub(crate) fn exec(task: &mut Task, ctx: &mut VmCtx) -> Exec {
-    let mut task_count: u32 = 0;
+    let n0 = TASK_BUDGET.min(*ctx.budget);
+    let mut left = n0;
+    let r = exec_inner(task, ctx, &mut left);
+    *ctx.budget -= n0 - left;
+    r
+}
+
+/// 真解释核——预算已在 [`exec`] 里合成 `left` 这一个倒数（任务内 1024 与全局余额
+/// 谁先到都在这条上体现，不再各自查各自的）。加载闸（`image::validate_code`，引擎
+/// 第二刀 §4）已经把「坏 op / 保留位非零 / 操作数越界 / 跳转目标非法 / CALL·SPAWN
+/// 目标不对 / 局部下标越界 / syscall 号不在白名单」这些**静态可判**的问题挡在了镜像
+/// 构造期，故循环头不再查 `op_implemented`——未实现 op 的 `ARITY` 恒为 0，会照原样落进
+/// `match` 的 `_ =>` 默认臂返回 `Fault(FAULT_BAD_OP)`，行为不变，只是判定时机从"每条指令
+/// 都查一次表"变成"落进 match 找不到分支才知道"。**取指越界与操作数越界这两个检查必须
+/// 保留**：`World::load_bytes` 会原样恢复存档里的 task pc，镜像哈希只证明"表一致"，证不了
+/// "pc 落在这份脚本的合法指令边界上"——跨镜像存档或手改过的存档能把 `task.pc` 带到任意
+/// 位置，这里若不挡住，`ctx.code[opnd_start]` 就可能真的越界 panic，违反 P4。CALL / SPAWN /
+/// PUSHL / POPL / SYS 各自的运行时检查（子表越界、kind 不对、栈深不够、syscall 号）同样
+/// 保留——它们只在各自的 op 分支里跑，不在每条指令的公共路径上，静态校验器与它们各自独立
+/// 校验同一件事，互不依赖。
+fn exec_inner(task: &mut Task, ctx: &mut VmCtx, left: &mut u32) -> Exec {
     loop {
-        // 预算门：任务内部 1024 + 全局余额，谁先到算谁——**恰在第 1025 条指令处报错**
-        // （前 1024 条已如常执行完毕，边界腿见 vm.rs 测试）。
-        if task_count >= TASK_BUDGET || *ctx.budget == 0 {
+        // 预算门：进 exec 时已取 left = min(任务内 1024, 全局余额)——任一耗尽都在下一条
+        // 指令处报错，恰在第 1025 条（或全局余额用尽后的下一条）触发，语义同合并前
+        // （引擎第二刀 §4.3）。
+        if *left == 0 {
             return Exec::Fault(FAULT_BUDGET);
         }
-        task_count += 1;
-        *ctx.budget -= 1;
+        *left -= 1;
 
         let pc = task.pc as usize;
         let Some(&head) = ctx.code.get(pc) else {
             return Exec::Fault(FAULT_PC_OOB);
         };
         let op = (head & 0xFF) as u8;
-        if !ops::op_implemented(op) {
-            return Exec::Fault(FAULT_BAD_OP);
-        }
         let arity = ARITY[op as usize] as usize;
         let opnd_start = pc + 1;
         let opnd_end = opnd_start + arity;

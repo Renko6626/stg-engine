@@ -501,7 +501,11 @@ mod tests {
 
     #[test]
     fn main_cannot_restart_after_end_or_fault() {
-        for first_word in [OP_END as u32, u8::MAX as u32] {
+        // 第二支曾用 `u8::MAX`（未实现 op）逼出运行时 Fault——引擎第二刀 §4 起未知 op
+        // 在加载时就被拒（`ImageBuildError::BadCode`），造不出这张镜像了。改用 `OP_DUP`
+        // （空栈）：仍是合法已实现 op，但语义上必然在运行时栈下溢 Fault(FAULT_STACK)——
+        // 这条测试要的只是"任务已 Fault 死"这一事实，不挑具体 fault 码。
+        for first_word in [OP_END as u32, OP_DUP as u32] {
             let image = root_only_image(first_word);
             let mut world = World::new(1);
             world.start_main(&image).unwrap();

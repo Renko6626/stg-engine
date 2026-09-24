@@ -22,7 +22,7 @@
 | 1 | `WAIT` | — | 弹 1（帧数 n） | **等 n 帧**（周期 == n）：写 `wait = n−1` 并让出；帧首 `wait>0` 递减跳过。**n==0 不让出、同帧继续**（真 no-op） |
 | 2 | `JMP` | 目标 pc | — | 无条件跳 |
 | 3 | `JZ` | 目标 pc | 弹 1（条件） | 条件==0 跳，否则顺序 |
-| 4 | `CALL` | canonical `SubId` | — | 目标须为 `CallOnly`（否则 Fault(0)）；压返回地址进调用栈（深 8），跳入 sub |
+| 4 | `CALL` | canonical `SubId` | — | 目标须为 `CallOnly`（否则**加载时拒绝**，见下方"加载时代码校验"）；压返回地址进调用栈（深 8），跳入 sub |
 | 5 | `RET` | — | — | 弹返回地址跳回 |
 | 10 | `PUSHI` | 立即数 | 压 1 | |
 | 11 | `PUSHL` | 槽号 <64 | 压 1 | 读 locals |
@@ -52,13 +52,37 @@
 `EclImage` 中每个 sub 有且仅有以下三类之一：
 
 - **`Root`**：唯一的 `sub main()`。只能通过引擎 API `start_main` / `start_main_with_owner` 启动。
-  运行时 `CALL` 或 `SPAWN` 指向 Root 会触发 Fault(0)（坏操作数值）。
+  `CALL` 或 `SPAWN` 指向 Root **在加载时就被拒**（`ImageBuildError::BadCode`，`reason` 分别是
+  `CallTarget`/`SpawnTarget`；引擎第二刀 §4 起——此前是运行时 Fault(0)，见下方"加载时代码
+  校验"）。
 - **`Async`**：`async sub` 声明。注册为 public named entry，可通过 `image.resolve_entry(name)` 按名解析，
   然后经 `world.spawn_entry` / `world.spawn_entry_named` 或运行期 `SPAWN` 指令启动。
-  `CALL` 指向 Async sub 触发 Fault(0)。
+  `CALL` 指向 Async sub **在加载时就被拒**（同上）。
 - **`CallOnly`**：普通 `sub` 声明。只能被 `CALL` 指令（来自其他 sub 的同步调用）进入。
-  不在 `EclImage` 的 entry 表中；`SPAWN` 指向 CallOnly sub 触发 Fault(0)。
+  不在 `EclImage` 的 entry 表中；`SPAWN` 指向 CallOnly sub **在加载时就被拒**（同上）。
   名称只存在于调试符号侧载（`DebugInfo::Full` 模式）。
+
+### 加载时代码校验（引擎第二刀 §4，2026-09-24）
+
+`EclImage::try_from_parts`（`image.rs`）末尾的 `validate_code` 把下面这些**静态可判**的
+问题从"运行时才第一次踩到"提前到"镜像构造时就拒绝并返回 `Err`"：坏 op（含头字保留位
+非零）、操作数越出 `code` 末尾、跳转/CALL/SPAWN 目标落在非法位置或非指令边界、局部
+下标越界、syscall 号不在白名单。编译器侧（`ImageBuilder::build`）把它当编译错误直接
+抛给脚本作者，落地脚本这类错误现在会在 `stg-harness check` 那一步就报出来，不必真的
+跑起来才能撞见。
+
+错误类型是 `ImageBuildError::BadCode { pc: u32, reason: BadCodeReason }`：`pc` 是问题
+所在指令自身的字索引（sub `code_entry`/mark `ip` 未落在指令边界上的情形例外——那时
+`pc` 就是那个非法落点本身）；`reason` 见 `BadCodeReason`（`UnknownOp`/`ReservedBits`/
+`TruncatedOperand`/`JumpTarget`/`NotInstructionBoundary`/`CallTarget`/`SpawnTarget`/
+`SpawnArgc`/`LocalIndex`/`Syscall`）。
+
+**运行时仍保留、不会被校验器取代的检查**（见下方 Fault 表）：取指越界与操作数越界
+（`FAULT_PC_OOB`）——`World::load_bytes` 会原样恢复存档里的 task pc，镜像哈希只证明
+"表一致"，证不了"pc 落在这份脚本的合法指令边界上"，跨镜像存档或手改过的存档能把
+`task.pc` 带到任意位置，这条检查是 P4（调用方违约→确定性安全结果，不 panic）的最后
+一道闸；此外栈深/下溢、调用深度、除零、SPAWN 的 `sp < argc`、syscall 内部依赖运行时
+栈值/owner kind 的动态检查，都继续在运行时判。
 
 ### 外部绑定错误边界（binding error boundary）
 
@@ -343,10 +367,10 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
 
 | 码 | 含义 |
 |---|---|
-| 0 | 未知 op / **坏操作数值**（locals 槽号越界、坏 syscall 号、坏 owner 类别等复用此码） |
-| 1 | pc/跳转目标/操作数字越界 |
+| 0 | 未知 op / **坏操作数值**（locals 槽号越界、坏 syscall 号、坏 owner 类别等复用此码）。**未知 op、非法跳转目标、CALL/SPAWN 目标不对、局部下标越界、坏 syscall 号这几类，正经过 `try_from_parts` 的镜像在加载时就已被拒（`ImageBuildError::BadCode`，见上方"加载时代码校验"）——运行时还会撞见码 0 的，只剩 syscall 内部依赖运行时值的动态检查（如坏 owner 类别）** |
+| 1 | pc/跳转目标/操作数字越界。**跳转目标越界这条同样已提前到加载时拒绝**；运行时仍会撞见的是取指越界与操作数越界——存档能把 task pc 带到任意位置，镜像哈希证不了"pc 落在这份脚本的合法边界上"，这条检查不能删（P4） |
 | 2 | 求值栈上溢或下溢（含 syscall 参数不足） |
-| 3 | 指令预算耗尽（任务 1024/帧 或 全局 65536/帧，升序消耗先到先杀） |
+| 3 | 指令预算耗尽（任务 1024/帧 或 全局 65536/帧，合成一个倒数，升序消耗先到先杀；引擎第二刀 §4.3） |
 | 4 | 除零 |
 | 5 | 调用深度超限 / 空栈 RET |
 

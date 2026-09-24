@@ -40,8 +40,12 @@ fn fault_name(code: u8) -> String {
         .copied()
         .unwrap_or("?");
     let hint = match code {
-        stg_core::ecl::FAULT_BAD_OP => "非法指令/坏 syscall 号",
-        stg_core::ecl::FAULT_PC_OOB => "pc 或跳转目标越界",
+        stg_core::ecl::FAULT_BAD_OP => {
+            "坏 op/坏 syscall 号（通常在加载时就已拒绝；运行时出现说明是 syscall 内部的动态检查）"
+        }
+        stg_core::ecl::FAULT_PC_OOB => {
+            "pc 或操作数越界（跳转目标越界已在加载时拒绝；这里多半是存档带回的坏 pc）"
+        }
         stg_core::ecl::FAULT_STACK => "求值栈上溢/下溢",
         stg_core::ecl::FAULT_BUDGET => "指令预算耗尽（多半是没 wait 的死循环）",
         stg_core::ecl::FAULT_DIV_ZERO => "除零",
