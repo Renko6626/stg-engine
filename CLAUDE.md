@@ -126,6 +126,7 @@ docs/ecl-lang/                   手册正文，按教学顺序 8 篇：1 hello-
 docs/ecl-ops.md                  ECL 字节码层速查（op/syscall/fault 码；VM/编译器开发用）
 docs/zun-ecl-v2-reference.md     ZUN ECL V2 指令/变量表本地副本 + 逐条对照（源 Priw8）
 docs/bench-baseline.md           性能基线（step 曲线/快照/校验和账；大改后重跑续表）
+docs/rl-perf-roadmap.md          RL 训练吞吐的引擎侧待办（RL 专用观测缓冲 / 模拟热点 / reset 成本；2026-09-24 调研）
 docs/bridge-adaptation-notes.md  外接适配坑记录（每接一个消费者踩的坑；M2 WorldBridge 先读）
 docs/render-contract.md          表现层契约权威（图集网格/stride 12/请求分发/锚点双表示；
                      场景刀首要读者：美术 + Godot 壳作者）
