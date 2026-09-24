@@ -211,7 +211,13 @@ extern crate self as stg_core;
 /// 进校验和与存档；② `WorldTables` 加 `CharacterCfg.kit: Kit`（`Chronos` / `Classic(BombCfg)`）、
 /// `characters` 由定长 1 改变长（`TABLE_VERSION` 6）⇒ 表 `content_hash` 变。行为：机体 0 零改动；
 /// 机体 1（RL 训练机体）X = bomb、C 无、死亡场底重生不遡行。**金向量预期改变**（表哈希进校验和），实测为准。
-pub const ENGINE_VER: u32 = 22;
+///
+/// **22 → 23**（引擎第二刀，2026-09-24，spec `2026-09-24-engine-rl-round2-design.md`）：
+/// ① 弹 `flags` 位 5 `BULLET_STEP_LIVE`（跳过无活跃 STEP 的弹）、位 6 `BULLET_POLAR_STALE`
+/// （CART_FX 极坐标惰性回填，读取前 materialize）；② ECL 镜像在加载时校验代码
+/// （坏 op / 越界操作数 / 非法跳转目标等从运行时 fault 改为加载错误），两个指令预算合成一个倒数；
+/// ③ 敌人池新增 `dx`/`dy`（本帧积分阶段的实际位移）。校验和与存档载荷均变化，旧回放失效。
+pub const ENGINE_VER: u32 = 23;
 
 pub use stg_derive::define_pool;
 

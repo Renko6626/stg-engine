@@ -35,7 +35,9 @@ impl WorldBody {
                 if self.bullets.delay[i] > 0 {
                     continue; // 激活前变换不走（delay 递减归 integrate）
                 }
-                self.tick_steps(i); // 与游标并发：wait/WAIT_SIGNAL 期间插值照走
+                if self.bullets.flags[i] & crate::bullets::BULLET_STEP_LIVE != 0 {
+                    self.tick_steps(i); // 与游标并发：wait/WAIT_SIGNAL 期间插值照走
+                }
                 if self.bullets.xform_wait[i] > 0 {
                     self.bullets.xform_wait[i] -= 1;
                     if self.bullets.xform_wait[i] > 0 {
@@ -173,6 +175,7 @@ impl WorldBody {
                     let ext = &mut self.xforms.seg_slots_mut(seg)[idx + 1];
                     ext.args[0] = start;
                     ext.args[1] = STEP_ACTIVE; // elapsed = 0
+                    self.bullets.flags[i] |= crate::bullets::BULLET_STEP_LIVE;
                 }
             }
             OP_LOOP => return self.fire_loop(i, slot),
@@ -216,13 +219,17 @@ impl WorldBody {
     }
 
     /// 推进本弹全部活跃 STEP 插值（升序，I4）。与游标并发：序列终止后插值照走完。
+    /// 只在 `BULLET_STEP_LIVE` 置位时被调用（`run_transforms` 见 0 就跳过）；扫完一遍若发现
+    /// 没有任何活跃 STEP 了，清掉该位，下一帧起本弹不再进这个函数。
     fn tick_steps(&mut self, i: usize) {
         let seg = self.bullets.transform_head[i];
         if seg as usize >= SEG_CAP {
             // P4-b：伪造越界段号——advance_cursor 负责计数+终止，这里只需不 panic。
+            self.bullets.flags[i] &= !crate::bullets::BULLET_STEP_LIVE;
             return;
         }
         let fired_end = (self.bullets.xform_next[i] as usize).min(SLOTS_PER_SEG);
+        let mut live = false;
         let mut s = 0usize;
         while s < fired_end {
             let main = self.xforms.seg_slots(seg)[s];
@@ -237,9 +244,13 @@ impl WorldBody {
                 let ext = self.xforms.seg_slots(seg)[s + 1];
                 if ext.args[1] & STEP_ACTIVE != 0 {
                     self.tick_one_step(i, seg, s, main, ext);
+                    live |= self.xforms.seg_slots(seg)[s + 1].args[1] & STEP_ACTIVE != 0;
                 }
             }
             s += 1 + ARITY[main.op as usize] as usize;
+        }
+        if !live {
+            self.bullets.flags[i] &= !crate::bullets::BULLET_STEP_LIVE;
         }
     }
 
@@ -1004,5 +1015,97 @@ mod tests {
         );
         crate::world::test_support::step_t(&mut w, &InputFrame::empty(2));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(3), "终值精确");
+    }
+
+    /// §2 跳过位：STEP 武装即置位、插值走完那帧清零；期间弹照常推进。
+    #[test]
+    fn step_live_bit_set_on_arm_and_cleared_on_finish() {
+        use crate::bullets::BULLET_STEP_LIVE;
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_SET_SPEED, Fx::from_int(1).raw(), 0),
+                slot(0, OP_STEP_SPEED, Fx::from_int(3).raw(), 2), // frames=2
+            ],
+        );
+        assert_eq!(
+            w.body.bullets.flags[i] & BULLET_STEP_LIVE,
+            0,
+            "未发射前无位"
+        );
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0)); // 武装
+        assert_ne!(w.body.bullets.flags[i] & BULLET_STEP_LIVE, 0, "武装帧置位");
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1)); // tick 1/2
+        assert_ne!(w.body.bullets.flags[i] & BULLET_STEP_LIVE, 0, "进行中保持");
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(2)); // tick 2/2 = 完成
+        assert_eq!(w.body.bullets.speed[i], Fx::from_int(3));
+        assert_eq!(
+            w.body.bullets.flags[i] & BULLET_STEP_LIVE,
+            0,
+            "完成那帧清零"
+        );
+    }
+
+    /// 两个 STEP 重叠：短的先完成时位必须保留，直到长的也完成（Review Focus 1）。
+    /// 注：两个 STEP 各占用主槽+扩展槽（arity 1），故显式给出 4 槽（含各自的扩展槽占位），
+    /// 不能像 brief 草稿那样只给 2 槽——那样第二个 STEP 会被当成第一个的扩展槽吃掉，
+    /// 实际跑不出"两个独立重叠 STEP"（沿用 `loop_rearms_step_from_new_start` 的扩展槽占位写法）。
+    #[test]
+    fn step_live_bit_survives_until_last_overlapping_step_finishes() {
+        use crate::bullets::BULLET_STEP_LIVE;
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_STEP_ANGLE, 16384, 4),                 // 槽0：主，4 帧
+                slot(0, OP_END, 0, 0), // 槽1：扩展槽占位（发射时被 scratch 覆写）
+                slot(0, OP_STEP_SPEED, Fx::from_int(2).raw(), 1), // 槽2：主，1 帧
+                slot(0, OP_END, 0, 0), // 槽3：扩展槽占位
+            ],
+        );
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0)); // 两个都武装
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1)); // SPEED 完成，ANGLE 1/4
+        assert_eq!(w.body.bullets.speed[i], Fx::from_int(2));
+        assert_ne!(
+            w.body.bullets.flags[i] & BULLET_STEP_LIVE,
+            0,
+            "ANGLE 仍在进行"
+        );
+        for f in 2..=4u32 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+        }
+        assert_eq!(w.body.bullets.angle[i], Angle(16384), "长 STEP 走完到终值");
+        assert_eq!(w.body.bullets.flags[i] & BULLET_STEP_LIVE, 0);
+    }
+
+    /// LOOP 重新武装 STEP 时再次置位。
+    /// 注：同上，STEP 的扩展槽须显式占位，否则只给 3 槽时 LOOP 目标/SET_SPRITE 的槽位号
+    /// 会和实际发射序错位（第 2 个字面量会被当成 STEP 的扩展槽吃掉）。沿用
+    /// `loop_rearms_step_from_new_start` 的写法：主/扩展槽占位/SET_SPRITE(wait)/LOOP。
+    #[test]
+    fn step_live_bit_rearmed_by_loop() {
+        use crate::bullets::BULLET_STEP_LIVE;
+        let mut w = crate::step::World::new(1);
+        let i = xf_bullet(
+            &mut w,
+            &[
+                slot(0, OP_STEP_SPEED, Fx::from_int(2).raw(), 1), // 槽0：主，1 帧（wait 0）
+                slot(0, OP_END, 0, 0),                            // 槽1：扩展槽占位
+                slot(3, OP_SET_SPRITE, 0, 0),                     // 槽2，wait 3
+                slot(0, OP_LOOP, 0, 2), // 槽3：跳回槽 0，count=2（跳一次）
+            ],
+        );
+        let mut seen_clear_then_set = false;
+        let mut was_clear = false;
+        for f in 0..10u32 {
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+            let live = w.body.bullets.flags[i] & BULLET_STEP_LIVE != 0;
+            if was_clear && live {
+                seen_clear_then_set = true;
+            }
+            was_clear = !live;
+        }
+        assert!(seen_clear_then_set, "LOOP 重新武装后位应再次置上");
     }
 }

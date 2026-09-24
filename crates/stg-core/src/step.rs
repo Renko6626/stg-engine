@@ -2398,8 +2398,13 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            22,
-            "bump 必须是有意识决定(评审 + 改本测试)——21→22：经典机体刀(2026-09-15)。\
+            23,
+            "bump 必须是有意识决定(评审 + 改本测试)——22→23：引擎第二刀(2026-09-24)。\
+             弹 flags 位 5 BULLET_STEP_LIVE(跳过无活跃 STEP 的弹)、位 6 BULLET_POLAR_STALE\
+             (CART_FX 极坐标惰性回填,读取前 materialize);ECL 镜像加载时校验代码(坏 op/越界操作数/\
+             非法跳转目标等从运行时 fault 改为加载错误),两个指令预算合成一个倒数;敌人池新增 dx/dy\
+             (本帧积分阶段的实际位移)。校验和与存档载荷均变化,旧回放失效。\
+             ——前一次 21→22：经典机体刀(2026-09-15)。\
              PlayerState 加 bomb_timer u16(存档 wire format 变);WorldTables 加 CharacterCfg.kit 规则套件、\
              characters 变长(TABLE_VERSION 6,content_hash 变);机体 1 = Kit::Classic(bomb/场底重生/无跳躍),机体 0 行为不变。\
              ——前一次 20→21：boss 换段与敌人钩子刀(2026-09-14)。\

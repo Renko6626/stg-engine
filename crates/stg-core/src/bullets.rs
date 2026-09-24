@@ -17,6 +17,11 @@ pub const BULLET_CART_FX: u8 = 1 << 2;
 /// `flags` 位 3-4：反弹剩余次数（D4 `BOUNCE_ARM`，≤3）。walls 掩码不进弹本体——从弹自有段读。
 pub const BULLET_BOUNCE_SHIFT: u32 = 3;
 pub const BULLET_BOUNCE_MASK: u8 = 0b0001_1000;
+/// `flags` 位 5：本弹可能有进行中的 STEP 插值（引擎第二刀 §3）。`fire_op` 武装 STEP 时置位，
+/// `tick_steps` 扫完一遍发现没有活跃 STEP 时清零；`run_transforms` 见 0 就不调 `tick_steps`。
+/// 只是跳过扫描的提示位：多置无害（多扫一次），漏置不会发生（STEP 只由 `fire_op` 武装）。
+/// 进校验和（P6）；Tier 0 不读 `flags`。
+pub const BULLET_STEP_LIVE: u8 = 1 << 5;
 
 // 弹池（D3 定稿，19 字段）。哑弹 / 变换弹 / 任务弹**共池**；变换【段】另存 XformSegPool（M0-4 手写）。
 // `transform_head == 0xFFFF` 即哑弹（无段、不付段内存，只付这几字节游标）。运动 / 双表示逻辑归 M0-4。
