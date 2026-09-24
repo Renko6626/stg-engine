@@ -226,6 +226,12 @@ impl WorldBody {
         let mut s = 0usize;
         while s < fired_end {
             let main = self.xforms.seg_slots(seg)[s];
+            // 序列终止后 xform_next 置满（16），END 之后是零填充的尾巴（op 0 = END、arity 0）：
+            // 不 break 就每帧逐槽扫完 16 格。END 之后的槽从未被触发，不可能有活跃 STEP，故行为不变
+            // （2026-09-24 实测：变换密集卡单 env 步耗约减半）。
+            if main.op == OP_END {
+                break;
+            }
             let is_step = main.op == OP_STEP_SPEED || main.op == OP_STEP_ANGLE;
             if is_step && s + 1 < SLOTS_PER_SEG {
                 let ext = self.xforms.seg_slots(seg)[s + 1];

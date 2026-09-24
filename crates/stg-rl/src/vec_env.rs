@@ -190,12 +190,16 @@ struct Work<'a> {
 }
 
 /// 批量 env：专属 rayon 池 + N 个独立 `Env`（spec §7）。
+///
+/// 并行迭代一律用 rayon 默认的自适应切分，**不要**设 `with_min_len(n / threads)`：rayon 只在
+/// 半块仍 ≥ min_len 时才对半分，块数因此是 2 的幂——2048 env / 28 线程只切出 16 块，12 个线程
+/// 干等；也没有富余的块给偷工，一个 env 恰好自动 reset（约 1 ms，普通一步约 10 µs）就拖住整步。
+/// 去掉之后 28 线程下批量 step 快约一倍（2026-09-24 实测，见 docs/bench-baseline.md）。
 pub struct VecEnv {
     slots: Vec<Slot>,
     pool: rayon::ThreadPool,
     cap: usize,
     n_starts: usize,
-    min_len: usize,
 }
 
 impl VecEnv {
@@ -229,13 +233,11 @@ impl VecEnv {
             .thread_name(|i| format!("stg-rl-{i}"))
             .build()
             .map_err(|e| format!("rayon 线程池创建失败: {e}"))?;
-        let min_len = num_envs.div_ceil(threads);
         Ok(VecEnv {
             slots,
             pool,
             cap,
             n_starts,
-            min_len,
         })
     }
 
@@ -289,10 +291,9 @@ impl VecEnv {
     pub fn reset(&mut self, buf: &mut BufferSet<'_>) -> Result<(), String> {
         self.check(buf)?;
         let pool = &self.pool;
-        let min_len = self.min_len;
         let works = build_work(&mut self.slots, buf, |_| 0);
         pool.install(|| {
-            works.into_par_iter().with_min_len(min_len).for_each(|w| {
+            works.into_par_iter().for_each(|w| {
                 w.slot.env.reset();
                 write_obs(
                     w.slot,
@@ -328,10 +329,9 @@ impl VecEnv {
             ));
         }
         let pool = &self.pool;
-        let min_len = self.min_len;
         let works = build_work(&mut self.slots, buf, |i| actions[i]);
         pool.install(|| {
-            works.into_par_iter().with_min_len(min_len).for_each(|w| {
+            works.into_par_iter().for_each(|w| {
                 let out = w.slot.env.step(w.act);
                 w.events.copy_from_slice(&out.events);
                 *w.done = out.done;
@@ -426,17 +426,14 @@ impl VecEnv {
         let item_src: Vec<&[u8]> = self.slots.iter().map(|s| &s.items[..s.ni * 18]).collect();
 
         let pool = &self.pool;
-        let min_len = self.min_len;
         pool.install(|| {
             bullet_dst
                 .into_par_iter()
                 .zip(bullet_src)
-                .with_min_len(min_len)
                 .for_each(|(dst, src)| dst.copy_from_slice(src));
             item_dst
                 .into_par_iter()
                 .zip(item_src)
-                .with_min_len(min_len)
                 .for_each(|(dst, src)| dst.copy_from_slice(src));
         });
     }

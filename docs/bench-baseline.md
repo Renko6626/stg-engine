@@ -388,3 +388,23 @@ owner 门禁/预算分账。**推论：把任务池填满不是性能问题**，
 观测列两侧逐位相同（dense3：338.9 / 0 / 0；dense9：1016.7 / 136 / 0）——编码改动不改输出的旁证（逐字节等价另由
 `stg-rl` 压实对拍测试与 `bullet_scratch_memo_never_serves_stale_derived` 押运）。**32 核训练机估算**：密弹（~340 弹）
 ≈ 100 万 env-steps/s、~1000 弹 ≈ 35~40 万（本机 32 线程读数；共享负载下偏保守）。
+
+## RL 批量 step 分块修复 + 变换 `tick_steps` 遇 END 即停（2026-09-24，stg_rl 0.1.1）
+
+机器：开发机 zhustation（2 × Xeon Gold 6330，与训练用的 Magnus A100 节点同款 CPU），共享负载 load 21~34，
+数字只看倍数。`taskset -c 2-17,58-73` 复刻 Magnus Job 实际拿到的 CPU（单插槽 16 物理核 + 超线程）。
+
+**分块**：`VecEnv` 原先 `with_min_len(ceil(n/threads))`。rayon 只在半块 ≥ min_len 时对半分，块数是 2 的幂：
+2048 env / 28 线程只切出 16 块，12 个线程干等，也没有富余块可偷——自动 reset 的 env（约 1 ms，普通一步约 10 µs）
+一撞上就拖住整步。改回 rayon 默认自适应切分。`rl-bench --envs 2048 --steps 300`（default 负载），前后交替各跑两轮：
+
+| threads | before (env-steps/s) | after |
+|---|---|---|
+| 28 | 871 063 / 949 380 / 983 243 / 870 927 | **2 203 495 / 2 213 421** |
+| 32 | 2 274 126 / 2 237 504 / 2 024 784 / 2 283 284 | 1 975 914 / 2 022 424 |
+
+28 线程约 ×2.3；32 线程（2048 恰好切成 32 块）前后在噪声内。旧分块只在线程数整除 env 数的 2 的幂时才不吃亏。
+
+**`tick_steps`**：序列终止后 `xform_next` 置满 16，每帧逐槽扫完零填充的尾巴。遇 `OP_END` 即 break。
+`harness run <卡> --frames 20000 --rank 2`（单核，各三轮，min = mean）：th06_s5_b4 0.08 → 0.04 s，
+th06_s6_b6 0.09 → 0.05 s，无变换的 th06_s3_b2 0.04 → 0.04 s。`golden` 1201 行、上述 `run` 输出逐字节相同。
