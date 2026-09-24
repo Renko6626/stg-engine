@@ -792,8 +792,10 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
 1. **部署侧（th06nc）敌人速度仍是差分**：`stg-agent-proto/c/sa_model.c:88-131` 按 `id` 差分
    算速度，带 `≤ 16` px 的瞬移守卫；`sa_encode.c` 写出的 `vx`/`vy` 两列本刀只写 0
    （`c/sa_encode.c` 里的注释指回本条）。与训练侧（读引擎的 `dx/dy` 直传值）的差异点：
-   - **出生帧**：部署侧差分无「上一帧」可比，读到 0；训练侧读到的是引擎当帧 phase 5 的真实
-     位移（出生当帧若已在动，非零）——两者这一帧凑巧都可能是 0，但语义不同，不能假设一致。
+   - **出生帧**：两边都读到 0，但原因不同。部署侧是因为差分没有「上一帧」可比；训练侧是因为
+     ECL 新建任务在出生当帧不执行，敌人的速度要到下一帧才生效，所以 phase 5 位移为 0
+     （`crates/stg-rl/tests/vec_env.rs` 的端到端测试钉了这一点）。如果将来有「出生即带速度」的
+     创建路径，两边就会分叉。
    - **小于 16 px 的瞬移**：部署侧的守卫只挡「够大」的位置跳变，16 px 以内的瞬移会被误当成
      真实速度差分进去；训练侧因为拿的是引擎自己算的 `dx/dy`，瞬移那一帧（phase 2 发生，不进
      phase 5 积分）精确为 0，不受幅度影响。
@@ -811,6 +813,30 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
    §1、§4、§6 维持原状（本刀不动）。
 
 来源：`docs/superpowers/specs/2026-09-24-engine-rl-round2-design.md` §7。
+
+### D26. 引擎第二刀的小问题（2026-09-24，终审后记档）
+
+逐任务评审与全分支终审都判为「不阻塞、可延后」的小项。**触发点**：下次改到对应文件时顺手处理，
+除非另注。
+
+1. **`step_live_bit_rearmed_by_loop` 只断言「10 帧内出现过清零后再置位」**（`world/transform.rs`
+   测试模块）：没钉住具体在哪一帧重新武装，LOOP 重武装时机若差一帧测不出来。
+2. **`validate_code` 第二趟重新解码 op / arity**（`ecl/image.rs`）：第一趟已经算过，可以记进
+   边界表复用。只在加载时跑一次，性能无关，属整洁度。
+3. **`ecl/mod.rs` 的 `SAFE_SYSCALLS` 注释说五个 syscall 都是 0 参**：实际 `SYS_RAND_RANGE` 与
+   `SYS_GET_VAR` 各弹一个参数。空栈时落到 `FAULT_STACK`（在允许集合内），行为无害，注释错。
+4. **有偏 fuzz 不生成 JMP / JZ / CALL / SPAWN**：`FAULT_BUDGET`、`FAULT_CALL_DEPTH` 不经 fuzz
+   覆盖，只靠确定性测试（`budget_boundary_1024_ok_1025_faults` 等）。要补的话需要先算指令边界
+   再生成合法跳转目标。
+5. **没有专门测「`STOP_FX` 之前必须 materialize」**（`world/motion.rs` 的 `stop_fx_at`）：实现
+   正确，而且目前所有读取点都会再 materialize 一次，漏掉它不可观测；但将来重构可能悄悄破坏，
+   值得补一条用例锁住。
+6. **提交署名不一致**：`389d857`、`ea86c0c`、`453a691` 与 stg-agent-proto `0ca7b7d` 的
+   `Co-Authored-By` 写的是 `Claude Sonnet 5`，与计划约定的那行不同。只影响署名，不改写历史。
+7. **训练仓（stg-rl-train）两处**：
+   - `envwrap.py` 的 `stg_rl` 版本守卫手工 `split('.')` 解析，版本号带预发布后缀（如
+     `0.2.0rc1`）时会抛 `ValueError` 而不是预期的 `ImportError`。
+   - `envwrap._u32` 在删掉按 id 差分之后已无调用者，未删。
 
 ## F. 长期预留（M0-18 性能审记档，均不动现刀）
 
