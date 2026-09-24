@@ -97,7 +97,13 @@
 
 ### 4.4 测试与文档
 
-以下 vm 测试原本断言「运行时 fault」，改为断言「加载时被拒」，理由相同：
+**修正（Task 2 实施时拍板，覆盖上一段草案）**：下面这 7 条 vm 测试**原样保留、一行不改**，
+继续断言「运行时 fault」——它们全部直接把裸 `code: &[u32]` 塞进 `VmCtx`、绕过
+`EclImage::try_from_parts`（也就绕过了加载闸），构造这些测试用例的 fault 场景全靠
+`vm::exec_inner` 自己保留的运行时检查（取指/操作数越界、CALL/SPAWN/PUSHL/POPL/SYS
+各自分支内部的检查、栈深/预算/除零/调用深度）——这些检查一个都没删（见 §4.2 的修正），
+所以旧断言原样成立，不需要也不应该改写成"加载时被拒"（那需要先把裸 `code` 包成一份
+`EclImage`，是另一件事，见下段）：
 - `unknown_op_faults`
 - `pc_out_of_bounds_on_empty_code_faults`：空代码仍在运行时报 PC_OOB，保留
 - `truncated_operand_is_pc_oob_fault`
@@ -106,9 +112,24 @@
 - `spawn_argc_over_64_faults`
 - `spawn_bad_script_id_faults`
 
-vm 测试直接把 `code: &[u32]` 交给 `VmCtx`，不经过镜像。为此加一个测试辅助函数：先跑 `validate_code`，通过了再执行。
+「加载时被拒」这条口径改由 `image.rs` 里全新的一组测试来钉（不是把上面 7 条改名字）：
+`validate_accepts_minimal_program`、`validate_rejects_unknown_op`、
+`validate_rejects_reserved_high_bits`、`validate_rejects_truncated_operand`、
+`validate_rejects_jump_out_of_range_and_into_operand`、
+`validate_rejects_bad_local_index_and_syscall`、
+`validate_rejects_call_to_non_callonly_and_bad_spawn`、
+`validate_allows_falling_off_the_end`——这些走真实的 `EclImage::try_from_parts`（单个
+Root sub 包一段 `code`），断言 `Err(ImageBuildError::BadCode { pc, reason })` 的精确
+`pc`/`reason`。不需要"先跑 `validate_code`，通过了再执行"这个测试辅助函数——vm 测试和
+加载闸测试从一开始就是两条不相交的路径，没有谁要调用谁。
 
-`ecl/mod.rs:40-130` 的 fuzz smoke 改为：随机字节**要么在加载时被拒，要么能安全运行完**（不 panic；fault 只能是留在运行时的那几类）。
+`ecl/mod.rs:40-130` 的 fuzz smoke 实际改法：两种生成策略各半交替，而不是"随机字节要么
+被拒要么能跑"这种听天由命的写法——纯随机 32 位字要求头字高 24 位恰好为 0
+（`ReservedBits`）才可能过闸，概率只有 2⁻²⁴，64 字连续过闸的概率实质为零，纯随机生成器
+测出来的 `accepted` 恒为 0，覆盖不到运行时路径。改为：偶数下标走"biased"生成器（op 从
+不带静态约束的安全子集里挑、操作数按语义配好，恒能通过加载闸）专门喂运行时路径，奇数
+下标走原版全随机生成器专门喂加载闸拒绝路径；断言 `accepted`/`rejected` 两端都不低于
+`iterations / 20`（≥5%，固定种子下实测两条测试都是精确的 50/50 分）。
 
 需要同步修改的文档：
 - `docs/ecl-ops.md` 的 fault 表（342–349 行）和 25、55–60 行（CALL / SPAWN 目标 kind 不对，改为在加载时报错）；
