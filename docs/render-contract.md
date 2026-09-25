@@ -101,7 +101,8 @@
 `[cos,-sin,0,x, sin,cos,0,y, sprite,age,0,0]` —— 前 8 = `MULTIMESH_TRANSFORM_2D`，
 后 4 = `INSTANCE_CUSTOM`；`custom.x=sprite` 号，**`custom.y = 弹龄`（弹层有语义，其余层恒 0；
 激光层例外见下；§0 口径，首帧 1）**，`z/w` 保留（将来 scale/alpha/调色，stride 不变）。
-bullets 层带旋转，其余三层单位 basis。压实前缀 + `set_visible_instances`。
+`bullets` 层带旋转；`shots`/`items` 两层单位 basis；激光层基自带缩放（见 §3.10）。
+压实前缀 + `set_visible_instances`。
 层号：`LAYER_BULLETS=0 / LAYER_SHOTS=1 / LAYER_ITEMS=2 / LAYER_LASERS=3`（**敌层已退役**，
 敌人走 §3.7 木偶；`LAYER_COUNT=4`）。
 **激光层是唯一的例外：基自带缩放、`custom.y = alpha`**（不走图集，见 §3.10），

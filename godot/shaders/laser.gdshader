@@ -31,7 +31,7 @@ const vec3 LASER_COLORS[16] = {
 	vec3(0.784, 0.863, 0.235), // 12 yellow-green
 	vec3(1.000, 0.941, 0.000), // 13 yellow
 	vec3(1.000, 0.627, 0.157), // 14 orange
-	vec3(1.000, 1.000, 1.000), // 15 white
+	vec3(1.000, 1.000, 1.000) // 15 white
 };
 
 varying flat float color_idx;

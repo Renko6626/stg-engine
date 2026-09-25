@@ -101,7 +101,8 @@ fn bullet_age(frame: u32, born: u32) -> f32 {
 
 /// 写入一条**基自带缩放**的实例（激光层用）。弹/自机弹/道具层继续走 `write_instance`——
 /// 它们的 QuadMesh 尺寸承担缩放，单位基即够；激光长度/宽度逐实例变，只能塞进基。
-/// 参数序 = 缓冲布局序：`(xx, yx, ox, xy, yy, oy)`。
+/// 参数序 = `(x, y, xx, yx, xy, yy, custom_x, custom_y)`；写入时按 stride-12 布局展开成
+/// `[xx, yx, 0, x, xy, yy, 0, y, custom_x, custom_y, 0, 0]`。
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn write_instance_basis(
@@ -477,6 +478,46 @@ sub main() {
         assert_eq!(&out[0..2], &[0.0, 200.0], "xx=0(cross 无 x)、yx=沿轴长");
         assert_eq!((out[3], out[7]), (200.0, 50.0), "原点 = start..end 中点");
         assert_eq!(&out[4..6], &[20.0, 0.0], "xy=横向宽、yy=0(dir 无 y)");
+        assert_eq!(
+            &out[8..12],
+            &[3.0, 1.0, 0.0, 0.0],
+            "custom=[color,alpha,0,0]"
+        );
+    }
+
+    /// 判别腿:angle 90°(BAM 16384)时两条基轴必须整体转 90°——截面从 (0,1)·宽 变
+    /// (−1,0)·宽、沿轴从 (1,0)·长 变 (0,1)·长,中点随射线方向落到 (ox, oy + mid)。
+    /// 交叉方向写反(`cross = (dir_y, −dir_x)`)时此腿立刻红(angle 0 那条对不上符号)。
+    #[test]
+    fn lasers_layer_90deg_rotates_cross_section() {
+        const SRC: &str = r#"
+sub main() {
+    _ = laser(3, 100.0fx, 50.0fx, 16384bam, 200.0fx, 20.0fx, 0, 9999, 0);
+    loop { wait(60); }
+}
+"#;
+        let mut g = crate::boot::boot(SRC, 7, 2).expect("boot");
+        step_once(&mut g);
+        step_once(&mut g);
+
+        let (n, out) = encode(&g, LAYER_LASERS);
+        assert_eq!(n, 1);
+        // dir=(0,1)(屏幕 y 向下,90° = 朝下)、cross=(−1,0);warn=0 出生即生效 → alpha=1。
+        assert_eq!(
+            &out[0..2],
+            &[-20.0, 0.0],
+            "局部 x 轴(截面)= cross·显示宽 = (−20, 0)"
+        );
+        assert_eq!(
+            (out[3], out[7]),
+            (100.0, 150.0),
+            "原点 = 射线原点 + dir·mid"
+        );
+        assert_eq!(
+            &out[4..6],
+            &[0.0, 200.0],
+            "局部 y 轴(沿激光)= dir·长 = (0, 200)"
+        );
         assert_eq!(
             &out[8..12],
             &[3.0, 1.0, 0.0, 0.0],

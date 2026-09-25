@@ -11,4 +11,10 @@ out=$(timeout "$GODOT_TIMEOUT" "$GODOT_BIN" --headless --path . -- --smoke 2>&1)
 st=$?
 echo "$out"
 [ "$st" -eq 124 ] && echo "[run-smoke] 超时 ${GODOT_TIMEOUT}s——常见原因:扩展未加载(Godot <4.6 / 产物路径不符),脚本报错后 headless 不自退" >&2
+# shader 编译错误只打 ERROR 到 stdout、不改变 Godot 退出码,SMOKE OK 照打——必须单独判失败,
+# 否则坏 shader 会静默混过冒烟(2026-09-25 激光池刀 Task 6 复盘)。
+if grep -qE "SHADER ERROR|Shader compilation failed" <<<"$out"; then
+	echo "[run-smoke] shader 编译失败" >&2
+	exit 1
+fi
 [ "$st" -eq 0 ] && grep -q "SMOKE OK" <<<"$out"
