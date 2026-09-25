@@ -236,14 +236,11 @@ pub fn write_enemies(w: &World, rows: &mut [u8]) -> usize {
 ///
 /// # `t_active` 口径（阶段终审 M-6）
 ///
-/// 相位 5 是**先判切换再 `timer += 1`**（Global Constraints），所以帧末 `timer` = 本状态内
-/// 已过去的帧数（出生帧末即 1）。`t_active` 只对 `state == 0`（预警）有意义，取 `warn − timer`
-/// = **帧末剩余的预警帧数**，其余状态恒 0。举例 `warn = 2`：出生帧末 `timer = 1`、
-/// `t_active = 1`（还剩下一帧预警），再走一步到下一帧末 `timer = 2`、`t_active = 0`，
-/// 其后的下一次相位 5（`timer >= warn` 判真）才切 `state 1`；`warn = 1` 时出生帧末
-/// `t_active = 0`，下一步即生效。即 `t_active == k` 表示还要 k 帧预警，`k == 0` 时下一步生效。
-/// th06nc 抽取器若把同一字段读成「还差几步生效」（含切换帧），会与本引擎差 1；本刀不改抽取器，
-/// 转写/特征化一侧按本口径对齐。
+/// 引擎时序：相位 5 **先判切换再 `timer += 1`**（Global Constraints）。故 `state == 0`（预警）
+/// 帧末 `timer` = 本状态内已过的步数（出生帧末即 1），于是 `warn − timer + 1` = **距第一次判定
+/// 还要的步数**，最小为 1（不会与生效态混淆）；生效 / 收缩态恒 0。举例 `warn = 3`：出生后第
+/// 0/1/2 步末 `t_active` = 3/2/1，第 3 步末切 `state 1`、`t_active = 0`，此刻开始判定。
+/// th06nc 抽取器若口径不同，差异由模型侧对齐；本刀不改抽取器。
 pub fn write_lasers(w: &World, rows: &mut [u8]) -> usize {
     let v = w.view();
     let l = v.lasers();
@@ -293,7 +290,7 @@ pub fn write_lasers(w: &World, rows: &mut [u8]) -> usize {
         put_i32(r, off::laser::VX, l.dx()[i].raw());
         put_i32(r, off::laser::VY, l.dy()[i].raw());
         let t_active = if l.state()[i] == stg_core::lasers::LASER_WARN {
-            l.warn()[i] as i32 - l.timer()[i] as i32
+            l.warn()[i] as i32 - l.timer()[i] as i32 + 1
         } else {
             0
         };
@@ -415,8 +412,9 @@ mod tests {
     }
 
     /// 激光行逐列核对：三形态各一条（形态一挂 omega、形态三挂 speed），第 5 帧前挪形态二原点制造
-    /// dx/dy。判别力：半高必须 `width/2`、omega 必须 `(dang·411775)>>16`、`t_active` 只对 state 0
-    /// 计 `warn−timer`、state/type 直写——任一列错位或公式错都红；所有绝对值互异非零。
+    /// dx/dy。判别力：半高必须 `width/2`、`t_active` 只对 state 0 计 `warn−timer+1`、state/type
+    /// 直写——任一列错位或公式错都红；所有绝对值互异非零。omega 不在此循环断言（避免与实现同式
+    /// 自指），改由下方绝对值 `628` 单独钉死。
     #[test]
     fn laser_rows_carry_pool_fields_omega_and_t_active() {
         use stg_core::lasers::{LASER_ACTIVE, LASER_WARN};
@@ -470,21 +468,14 @@ mod tests {
                 .find(|&k| rd_i32(&rows[k * st..], off::laser::HALF_H) == want)
                 .unwrap_or_else(|| panic!("找不到 half_h = {half} 的行"))
         };
-        // 每条激光的期望（i, half_h, state, t_active, dx_px, dy_px, omega）。
+        // 每条激光的期望（i, half_h, state, t_active, dx_px, dy_px）。
+        // 第 5 步末 timer == 5 ⇒ t_active = warn − 5 + 1：30→26、24→20；生效态恒 0。
         let want = [
-            (
-                i0,
-                16,
-                LASER_WARN,
-                25,
-                0,
-                0,
-                ((100i64 * 411_775) >> 16) as i32,
-            ),
-            (i1, 10, LASER_WARN, 19, 90, 0, 0),
-            (i2, 4, LASER_ACTIVE, 0, 0, 0, 0),
+            (i0, 16, LASER_WARN, 26, 0, 0),
+            (i1, 10, LASER_WARN, 20, 90, 0),
+            (i2, 4, LASER_ACTIVE, 0, 0, 0),
         ];
-        for &(i, half, state, t_active, dx, dy, omega) in &want {
+        for &(i, half, state, t_active, dx, dy) in &want {
             let k = find(half);
             let r = &rows[k * st..(k + 1) * st];
             assert_eq!(rd_i32(r, off::laser::X), l.ox()[i].raw(), "x");
@@ -503,7 +494,6 @@ mod tests {
                 l.width()[i].raw() / 2,
                 "half_h = width/2"
             );
-            assert_eq!(rd_i32(r, off::laser::OMEGA), omega, "omega");
             assert_eq!(rd_i32(r, off::laser::VX), Fx::from_int(dx).raw(), "vx = dx");
             assert_eq!(rd_i32(r, off::laser::VY), Fx::from_int(dy).raw(), "vy = dy");
             assert_eq!(rd_i32(r, off::laser::T_ACTIVE), t_active, "t_active");
@@ -523,6 +513,48 @@ mod tests {
         let r2 = &rows[find(4) * st..][..st];
         assert_eq!(rd_i32(r2, off::laser::END), Fx::from_int(20).raw());
         assert_eq!(rd_i32(r2, off::laser::SPEED), Fx::from_int(4).raw());
+    }
+
+    /// `t_active` = 距第一次判定的步数（`warn − timer + 1`），逐步判别：warn = 3 的激光在出生后
+    /// 第 0、1、2 步末依次为 3、2、1（都还在预警、不判定），第 3 步末切 `state 1` 且 `t_active = 0`。
+    /// 判别力：旧公式 `warn − timer` 在第 2 步末就给出 0（与生效态混淆），本测试红。
+    #[test]
+    fn t_active_counts_steps_until_first_judgement() {
+        use stg_core::lasers::{LASER_ACTIVE, LASER_WARN};
+
+        let mut w = World::new(1);
+        let h = w
+            .body
+            .create_laser(laser_init(0, 100, 16384, 500, 32, 3, 120, 16));
+        let i = h.index as usize;
+        let st = crate::layout::LASERS.stride;
+        let mut rows = vec![0u8; st];
+        // 编码一行并回读 (state, t_active)。
+        let probe = |w: &World, rows: &mut [u8]| -> (u8, i32) {
+            assert_eq!(write_lasers(w, rows), 1);
+            (rows[off::laser::STATE], rd_i32(rows, off::laser::T_ACTIVE))
+        };
+
+        for (step, want) in [3, 2, 1].into_iter().enumerate() {
+            run_step(&mut w, 0);
+            assert_eq!(
+                w.view().lasers().state()[i],
+                LASER_WARN,
+                "第 {step} 步末在预警"
+            );
+            assert_eq!(
+                probe(&w, &mut rows),
+                (LASER_WARN, want),
+                "第 {step} 步末 t_active 应为 {want}"
+            );
+        }
+        run_step(&mut w, 0);
+        assert_eq!(w.view().lasers().state()[i], LASER_ACTIVE, "第 3 步末生效");
+        assert_eq!(
+            probe(&w, &mut rows),
+            (LASER_ACTIVE, 0),
+            "生效态 t_active 恒 0"
+        );
     }
 
     /// 条数上限：70 条，只写出最近的 64 条（`ox=0, oy=i` ⇒ 距离² = (384−i)²，i 越大越近），
