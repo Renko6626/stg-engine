@@ -676,7 +676,7 @@ fn run_measured(
 ///
 /// 金向量三号（T5 激光）：独立全新 World + 独立种子，`# scene: laser` 标记段界。三种形态各
 /// 一条（预警扫射挂 omega / 自机狙 aim / 飞出棒子 speed），外加一条挂靠在直线移动敌上、带
-/// omega 的常驻扫射激光；自机保持默认位置（会被扫到），覆盖激光判定→擦弹→中弹→遡行整链。
+/// omega 的常驻扫射激光；自机保持默认位置（会被扫到），覆盖激光判定→中弹→遡行整链。
 /// 600 帧 @ 60Hz，参数全部字面量、只走公开写 API。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::{BulletHandle, BulletInit};

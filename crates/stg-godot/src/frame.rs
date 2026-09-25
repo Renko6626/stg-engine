@@ -426,7 +426,8 @@ sub main() {
 
     #[test]
     fn laser_display_warn_last_frame_near_full_width() {
-        // warn=30,ramp=30 → timer=29(本态最后一帧)宽 1.2 + (100−1.2)·29/30。
+        // warn=30, ramp=30。state 0 帧末 timer ∈ 1..=warn：timer=29 是倒数第二帧，
+        // 宽 1.2 + (100−1.2)·29/30（接近全宽）；timer == warn 那一帧末才到全宽。
         let (w, a) = laser_display(0, 29, 30, 16, 100.0, false);
         assert!(a == 1.0);
         assert!(

@@ -14,8 +14,9 @@ pub const LASER_CULL: Fx = Fx::from_int(640);
 pub const LASER_FLAG_FADE_ALPHA: u8 = 1 << 0;
 /// `anchor_idx` 取这个值表示没有挂靠。
 pub const ANCHOR_NONE: u16 = 0xFFFF;
-/// 坐标类字段（`ox/oy/ax/ay`）的双边钳位上界（P4-b）：场内坐标的合理上界远小于它，
-/// 钳住它才能让相位 5 的 `enemies.x + ax` 与判定的 `px − ox` 在 Q16.16（±32768）里加法不溢。
+/// 坐标类字段（`ox/oy/ax/ay`）的双边钳位上界（P4-b）：把激光自己的坐标留在场内。
+/// 判定原语 `seg_box_dist_sq` 对任意输入安全（远点判无穷远，见 `math::geom`）；挂靠的
+/// `敌位置 + 偏移` 另有饱和加 + 钳位兜底（`world/laser.rs::add_coord_clamped`）。
 pub const LASER_COORD_MAX: Fx = Fx::from_int(4096);
 /// 长度/速率类字段（`start/end/start_len/speed`）的上界（P4-b）：`end` 最大约 640 + 2×4096，
 /// 远小于 32768，故 `end + speed` 与 `end − start_len` 不会溢出。

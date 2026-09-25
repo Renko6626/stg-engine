@@ -1650,4 +1650,48 @@ mod tests {
         step_t(&mut w, &crate::input::InputFrame::empty(0));
         assert_eq!(w.body.players[0].life_state, LIFE_ALIVE, "时停期间激光不判");
     }
+
+    // ── F1（终审）：判定原语对任意输入安全，挂靠原点饱和钳位 ──────────────────────
+
+    /// field 在 (30000,30000)、激光原点 (0,0) 朝 45°：旧实现在 `dx·c + dy·s` 的 Fx 加法上
+    /// 溢出（dev panic）。新原语把远点当无穷远，step 一帧不 panic 且激光不被取消。
+    #[test]
+    fn far_clear_field_does_not_overflow_or_cancel() {
+        use crate::field::FIELD_CLEAR_BULLETS;
+        use crate::lasers::LASER_ACTIVE;
+        let mut w = crate::step::World::new(1);
+        let mut it = laser_init(0, 9999, 0, 500, 16);
+        it.ox = Fx::ZERO;
+        it.oy = Fx::ZERO;
+        it.angle = Angle(8192); // 45°
+        let h = w.body.create_laser(it);
+        let i = w.body.lasers.get(h).unwrap();
+        spawn_field(&mut w, 30000, 30000, 20, FIELD_CLEAR_BULLETS, 9999);
+        step_t(&mut w, &crate::input::InputFrame::empty(0));
+        assert_eq!(
+            w.body.lasers.state[i], LASER_ACTIVE,
+            "远处的清弹区够不着，激光不被取消"
+        );
+    }
+
+    /// 激光原点 (−4096,0) 朝 0°、field 在 (32000,0)：`px − ox` 在旧实现里溢出（dev panic）。
+    /// 新原语视为无穷远，不 panic、不取消。
+    #[test]
+    fn far_clear_field_negative_origin_does_not_overflow() {
+        use crate::field::FIELD_CLEAR_BULLETS;
+        use crate::lasers::LASER_ACTIVE;
+        let mut w = crate::step::World::new(1);
+        let mut it = laser_init(0, 9999, 0, 500, 16);
+        it.ox = Fx::from_int(-4096);
+        it.oy = Fx::ZERO;
+        it.angle = Angle(0);
+        let h = w.body.create_laser(it);
+        let i = w.body.lasers.get(h).unwrap();
+        spawn_field(&mut w, 32000, 0, 20, FIELD_CLEAR_BULLETS, 9999);
+        step_t(&mut w, &crate::input::InputFrame::empty(0));
+        assert_eq!(
+            w.body.lasers.state[i], LASER_ACTIVE,
+            "远处的清弹区够不着，激光不被取消"
+        );
+    }
 }

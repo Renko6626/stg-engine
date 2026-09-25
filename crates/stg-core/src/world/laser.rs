@@ -23,6 +23,15 @@ fn clamp_laser_coord(v: &mut Fx) -> bool {
     clamp_fx(v, -LASER_COORD_MAX, LASER_COORD_MAX)
 }
 
+/// 挂靠原点 = `敌位置 + 偏移`：先做 **i32 饱和加法**，再双边钳入 `±LASER_COORD_MAX`（F1 终审）。
+/// 敌位置不受 `LASER_COORD_MAX` 约束（可以远在 30000），直接 `+` 会在 debug 溢出 panic；
+/// 饱和加 + 钳位给出确定的安全原点，供 `laser_anchor` 立即吸附与相位 5 跟随共用。
+pub(crate) fn add_coord_clamped(a: Fx, b: Fx) -> Fx {
+    let mut v = Fx::from_raw(a.raw().saturating_add(b.raw()));
+    clamp_laser_coord(&mut v);
+    v
+}
+
 /// 长度/速率类字段（`start/end/start_len/speed`）双边钳入 `[0, LASER_LEN_MAX]`。
 fn clamp_laser_len(v: &mut Fx) -> bool {
     clamp_fx(v, Fx::ZERO, LASER_LEN_MAX)
@@ -205,9 +214,10 @@ impl WorldBody {
                 l.ay[i] = ay;
             }
             let (ex, ey) = (self.enemies.x[ei], self.enemies.y[ei]);
+            let (ox, oy) = (add_coord_clamped(ex, ax), add_coord_clamped(ey, ay));
             let l = &mut self.lasers;
-            l.ox[i] = ex + ax;
-            l.oy[i] = ey + ay;
+            l.ox[i] = ox;
+            l.oy[i] = oy;
         }
         self.sync_prev_if_newborn(i);
         true
@@ -941,6 +951,23 @@ mod tests {
         assert_eq!(w.body.lasers.ax[i], LASER_COORD_MAX);
         assert_eq!(w.body.lasers.ay[i], -LASER_COORD_MAX);
         assert_eq!(w.body.diag.contract_viol, cv + 1);
+    }
+
+    /// F1（终审）：敌人 x = 30000（不受激光坐标钳位约束）、偏移 ax = 4000——挂靠的
+    /// `敌位置 + 偏移` 必须饱和加法 + 钳位。`laser_anchor` 立即吸附与相位 5 跟随两条路径
+    /// 都要覆盖（旧实现在两处 `Fx::add` 上溢出，dev panic）。
+    #[test]
+    fn anchor_far_enemy_clamps_origin_without_overflow() {
+        use crate::lasers::LASER_COORD_MAX;
+        use crate::world::test_support::spawn_enemy;
+        let mut w = World::new(1);
+        let e = spawn_enemy(&mut w, 30000, 0, 5);
+        let h = w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+        let i = h.index as usize;
+        assert!(w.body.laser_anchor(h, e, Fx::from_int(4000), Fx::ZERO));
+        assert_eq!(w.body.lasers.ox[i], LASER_COORD_MAX, "立即吸附饱和并钳位");
+        step(&mut w, 0);
+        assert_eq!(w.body.lasers.ox[i], LASER_COORD_MAX, "相位 5 跟随也钳位");
     }
 
     /// F1：钳位后相位 5 的 `end + speed` 与判定的 `px − ox` 不溢出——dev（overflow-checks）

@@ -35,10 +35,11 @@ laser(color, x, y, angle, len, width, warn, active, fade) -> int
 
 ```ecl
 // 竖一条 500px 的预警线，30 帧后生效 120 帧，再收缩 16 帧；
-// 生效期以每秒 60 BAM（≈0.33°/帧）慢扫。
+// 生效期以每帧 60 BAM（≈0.33°/帧）慢扫。
 async sub sweep_laser() {
     var lz: int = laser(4, $self_x, $self_y, 90deg, 500.0fx, 32.0fx, 30, 120, 16);
-    lz_omega(lz, 60bam);          // 每帧转多少 BAM；允许负（反向扫）
+    wait(30);                     // 先等预警走完
+    lz_omega(lz, 60bam);          // 生效后每帧转多少 BAM；允许负（反向扫）
     wait(200);
     loop { wait(1); }
 }
@@ -50,7 +51,9 @@ sub main() {
 ```
 
 `lz_omega` 的 `a` 是**每帧**增量（`angle` 类型，BAM），允许负（反向扫）——负角速度按 BAM
-原始值的低 16 位**按位回绕**，不是钳到最大正转速。原作"每 N 帧转一次 `a`"的写法
+原始值的低 16 位**按位回绕**，不是钳到最大正转速。omega 在**预警、生效、收缩三态都生效**
+（相位 5 每帧无条件把 `a` 加到 `angle` 上）；不想让预警线跟着转，就照上例出生后先
+`wait(warn)` 再调用。原作"每 N 帧转一次 `a`"的写法
 对应 `lz_omega(lz, (a as int / N) as angle)`——见文末「和原作对照」。
 
 ## 形态二：自机狙（`aim_player() + a`）

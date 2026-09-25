@@ -182,7 +182,7 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `lz_aim(lz: int, off: angle)` — 激光指向自机 0 再加偏移 off(原作 89);自机狙写 lz_aim(lz, 0deg),相对自机角写 laser(..., aim_player() + a, ...)
 - `lz_anchor(lz: int, enemy: int, ox: fx, oy: fx)` — 把激光挂到敌号 enemy 上并带偏移 (ox,oy)(每帧跟随;enemy=-1 解除)。失效敌号(死了/槽被复用,且非 -1)不挂靠+计数;偏移世界层钳 ±LASER_COORD_MAX
 - `lz_origin(lz: int, x: fx, y: fx)` — 直接设激光原点 (x,y) 并解除挂靠;坐标世界层钳 ±LASER_COORD_MAX
-- `lz_cancel(lz: int)` — 取消激光:未收缩则切到收缩态(原作 92);fade=0 的激光下一帧相位 5 回收
+- `lz_cancel(lz: int)` — 取消激光:未收缩则切到收缩态(原作 92);ECL 在相位 2 取消,当帧相位 5 即回收(含 fade=0);被清弹 field(相位 7)取消的 fade=0 激光下一帧相位 5 回收
 - `lz_alive(lz: int) -> int` — 激光句柄是否仍指向当初那条激光,返 1/0(槽被复用后旧句柄返 0;只读不计数;原作 91)
 <!-- gen:builtins:end -->
 

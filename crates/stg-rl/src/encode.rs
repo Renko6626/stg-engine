@@ -234,13 +234,15 @@ pub fn write_enemies(w: &World, rows: &mut [u8]) -> usize {
 /// 池索引升序收集、键 `(seg_box_dist_sq, 下标)` 全序 ⇒ 结果确定（I4）。不做 CSR 压实：
 /// 调用方按 env 给一块定长 `LASERS_CAP * LASERS.stride` 的行区，这里直接写前 `k` 行、其余不动。
 ///
-/// # `t_active` 口径（阶段终审 M-6）
+/// # `t_active` 口径
 ///
-/// 引擎时序：相位 5 **先判切换再 `timer += 1`**（Global Constraints）。故 `state == 0`（预警）
-/// 帧末 `timer` = 本状态内已过的步数（出生帧末即 1），于是 `warn − timer + 1` = **距第一次判定
-/// 还要的步数**，最小为 1（不会与生效态混淆）；生效 / 收缩态恒 0。举例 `warn = 3`：出生后第
-/// 0/1/2 步末 `t_active` = 3/2/1，第 3 步末切 `state 1`、`t_active = 0`，此刻开始判定。
-/// th06nc 抽取器若口径不同，差异由模型侧对齐；本刀不改抽取器。
+/// 观测在帧末采集；agent 的动作在下一步生效，而下一步的相位 5 会先切换状态、相位 6 才判定，
+/// 所以 `t_active == 0` 表示「对下一步已经致命」，与 proto「0 = 现在就杀」一致；`state` 列
+/// 区分预警与生效。`state == 0`（预警）时 `t_active = warn − timer`（帧末 `timer` = 本状态内
+/// 已过的步数：出生帧末即 1，最后一帧即 `warn`），生效 / 收缩态恒 0。举例 `warn = 3`：出生后
+/// 第 0/1/2 步末 `t_active` = 2/1/0，第 3 步末切 `state 1`、`t_active = 0`，此刻开始判定。
+/// 与 th06nc 抽取器公式 `+0x270 − timer` 同口径（见 renkolab-sysfix
+/// `mods/th06nc/autoplay/TARGET.md`）。
 pub fn write_lasers(w: &World, rows: &mut [u8]) -> usize {
     let v = w.view();
     let l = v.lasers();
@@ -290,7 +292,7 @@ pub fn write_lasers(w: &World, rows: &mut [u8]) -> usize {
         put_i32(r, off::laser::VX, l.dx()[i].raw());
         put_i32(r, off::laser::VY, l.dy()[i].raw());
         let t_active = if l.state()[i] == stg_core::lasers::LASER_WARN {
-            l.warn()[i] as i32 - l.timer()[i] as i32 + 1
+            l.warn()[i] as i32 - l.timer()[i] as i32
         } else {
             0
         };
@@ -412,7 +414,7 @@ mod tests {
     }
 
     /// 激光行逐列核对：三形态各一条（形态一挂 omega、形态三挂 speed），第 5 帧前挪形态二原点制造
-    /// dx/dy。判别力：半高必须 `width/2`、`t_active` 只对 state 0 计 `warn−timer+1`、state/type
+    /// dx/dy。判别力：半高必须 `width/2`、`t_active` 只对 state 0 计 `warn−timer`、state/type
     /// 直写——任一列错位或公式错都红；所有绝对值互异非零。omega 不在此循环断言（避免与实现同式
     /// 自指），改由下方绝对值 `628` 单独钉死。
     #[test]
@@ -469,10 +471,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("找不到 half_h = {half} 的行"))
         };
         // 每条激光的期望（i, half_h, state, t_active, dx_px, dy_px）。
-        // 第 5 步末 timer == 5 ⇒ t_active = warn − 5 + 1：30→26、24→20；生效态恒 0。
+        // 第 5 步末 timer == 5 ⇒ t_active = warn − 5：30→25、24→19；生效态恒 0。
         let want = [
-            (i0, 16, LASER_WARN, 26, 0, 0),
-            (i1, 10, LASER_WARN, 20, 90, 0),
+            (i0, 16, LASER_WARN, 25, 0, 0),
+            (i1, 10, LASER_WARN, 19, 90, 0),
             (i2, 4, LASER_ACTIVE, 0, 0, 0),
         ];
         for &(i, half, state, t_active, dx, dy) in &want {
@@ -515,11 +517,11 @@ mod tests {
         assert_eq!(rd_i32(r2, off::laser::SPEED), Fx::from_int(4).raw());
     }
 
-    /// `t_active` = 距第一次判定的步数（`warn − timer + 1`），逐步判别：warn = 3 的激光在出生后
-    /// 第 0、1、2 步末依次为 3、2、1（都还在预警、不判定），第 3 步末切 `state 1` 且 `t_active = 0`。
-    /// 判别力：旧公式 `warn − timer` 在第 2 步末就给出 0（与生效态混淆），本测试红。
+    /// `t_active` = `warn − timer`（观测在帧末采集）：warn = 3 的激光在出生后第 0、1、2 步末
+    /// 依次为 2、1、0，第 3 步末切 `state 1`、`t_active = 0`。`t_active == 0` 表示「对下一步
+    /// 已经致命」（下一步相位 5 先切态、相位 6 判定），`state` 列区分预警与生效。
     #[test]
-    fn t_active_counts_steps_until_first_judgement() {
+    fn t_active_is_warn_minus_timer() {
         use stg_core::lasers::{LASER_ACTIVE, LASER_WARN};
 
         let mut w = World::new(1);
@@ -535,7 +537,7 @@ mod tests {
             (rows[off::laser::STATE], rd_i32(rows, off::laser::T_ACTIVE))
         };
 
-        for (step, want) in [3, 2, 1].into_iter().enumerate() {
+        for (step, want) in [2, 1, 0].into_iter().enumerate() {
             run_step(&mut w, 0);
             assert_eq!(
                 w.view().lasers().state()[i],

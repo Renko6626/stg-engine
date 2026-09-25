@@ -210,8 +210,9 @@ impl WorldBody {
                 if l.anchor_idx[i] != ANCHOR_NONE {
                     let e = l.anchor_idx[i] as usize;
                     if self.enemies.is_alive(e) && self.enemies.generation[e] == l.anchor_gen[i] {
-                        l.ox[i] = self.enemies.x[e] + l.ax[i];
-                        l.oy[i] = self.enemies.y[e] + l.ay[i];
+                        // 敌位置不受 ±LASER_COORD_MAX 约束，饱和加 + 钳位（F1 终审）。
+                        l.ox[i] = super::laser::add_coord_clamped(self.enemies.x[e], l.ax[i]);
+                        l.oy[i] = super::laser::add_coord_clamped(self.enemies.y[e], l.ay[i]);
                     } else {
                         // 脱钩：原点留在原地，锚信息一并清干净（口径同 `laser_origin` /
                         // `laser_anchor(NULL)`），免得陈旧的 gen/偏移在池里驻留。

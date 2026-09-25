@@ -123,7 +123,7 @@ return len_sq(along − qa, perp − qp)        // i64 Q32.32，不开根
 - 门控和弹一致：`LIFE_ALIVE && invuln == 0`，`scene_frozen` 时不判。
 - 行 9 命中后走和弹一样的 `trigger_player_hit`（相位 7 趟二）。
 - 行 10：清弹 field 的圆**碰到**激光线段（取 field 圆心代入原语，r = field.radius），就把 state<2 的激光切到 2、`timer = 0`，
-  `fade == 0` 时直接回收。符卡结束的全屏 field 因此覆盖全部激光，行为和原作的全局清除一致；局部的 `clear_bullets` 只影响碰到的激光。
+  `fade == 0` 时直接回收（**见 §12 第 11 条**：这是相位 7 取消的口径；ECL `lz_cancel` 跑在相位 2，当帧相位 5 即回收）。符卡结束的全屏 field 因此覆盖全部激光，行为和原作的全局清除一致；局部的 `clear_bullets` 只影响碰到的激光。
 - **不做**：擦弹（行 2 的激光版）、清除时沿线掉星、时停的 stop-touch（行 8）对激光的扩展。
 
 ### 4.3 资源耗尽与违约（P4）
@@ -166,7 +166,7 @@ lz_alive(lz) -> int               // 原作 91
 | `half_h` | `width / 2` |
 | `omega` | `dang` 换算为弧度/帧（Fx）。换算常数写成定点常量，不在核里用浮点 |
 | `vx, vy` | `dx, dy` |
-| `t_active` | state 0 时为 `warn − timer`，否则为 0（**见修订：`warn − timer + 1`**） |
+| `t_active` | state 0 时为 `warn − timer`，否则为 0（见 §12 第 10 条） |
 | `state` | 0/1/2（和 th06nc 抽取器同一编号） |
 | `type` | 0 |
 
@@ -174,7 +174,7 @@ lz_alive(lz) -> int               // 原作 91
 - 条数超过 `LASERS_CAP = 64` 时，按 `seg_box_dist_sq(自机, 激光)` 取最近的 64 条，平局按池下标，保证确定性。
 - 在 `vec_env.rs` 的写行处新增 `write_lasers`，去掉 `lasers_count.fill(0)`。wheel 升为 `stg_rl` **0.3.0**。
 - **见修订**：Tier 0 实际新增了 `lasers` 行缓冲（`vec_env` / `stg-py` / Python `_layout`），此前只有计数；
-  `t_active` 的预警态公式改为 `warn − timer + 1`。
+  `t_active` 的预警态公式保持 `warn − timer`（见 §12 第 10 条）。
 
 ## 7. 渲染（Godot，通道 A）
 
@@ -195,7 +195,7 @@ lz_alive(lz) -> int               // 原作 91
 2. **生命周期逐帧对拍**：用 §2 的 s1 Sub12、s1 Sub22、s2 Sub27 三组参数，断言每一帧的 state、timer、start、end，以及是否判定。
    Sub27 要一直跑到出屏回收。
 3. omega 与一次性 rotate 叠加后的 `dang`；挂靠跟随敌人、敌人死后脱钩；`lz_origin` 会解除挂靠。
-4. 行 10：全屏 field 清掉全部激光；局部 field 只清碰到的；`fade == 0` 时直接回收。
+4. 行 10：全屏 field 清掉全部激光；局部 field 只清碰到的；`fade == 0` 时直接回收（**见 §12 第 11 条**：仅相位 7 取消；ECL `lz_cancel` 当帧回收）。
 5. 失效句柄的每个 `lz_*` 都不做且计数；池满时确定性降级。
 6. 时停期间不推进、不判定。
 7. 快照与校验和往返，`copy_into` 同步，哨兵尺寸测试；`LaserInit` 全覆写宏单测。
@@ -269,8 +269,13 @@ lz_alive(lz) -> int               // 原作 91
    代际不符（或空槽）才脱钩、原点留在原地。
 9. **Tier 0 新增 `lasers` 行缓冲**（修订 §6）：`vec_env` / `stg-py` / Python `_layout` 从
    "只有计数"升级为 64 行定长缓冲（proto 不改）；`stg_rl` 升 0.3.0。
-10. **Tier 0 的 `t_active` 在预警态为 `warn − timer + 1`**（值域 `warn..1`，含义是「还要几步
-    才判定」），生效/收缩态为 0（修订 §6）。原写 `warn − timer` 会在预警第一帧得到 `warn`、
-    且与生效态的 0 冲突（生效第一帧 `warn − 0 = warn` 也会被误读）；`+1` 让「还剩几步」的心智
-    模型一致：timer = warn−1 时值 1（再 1 帧判定），timer = warn 时已切生效态报 0。
+10. **Tier 0 的 `t_active` 保持 `warn − timer`**（值域 `warn..0`），生效/收缩态为 0（修订 §6）。
+    观测在帧末采集；agent 的动作在下一步生效，而下一步的相位 5 会先切换状态、相位 6 才判定，
+    所以 `t_active == 0` 表示「对下一步已经致命」，与 proto「0 = 现在就杀」一致；`state` 列
+    区分预警与生效。这一口径与 th06nc 抽取器公式 `+0x270 − timer` 相同（见 renkolab-sysfix
+    `mods/th06nc/autoplay/TARGET.md`）。
+11. **清弹 field 取消 vs ECL `lz_cancel` 的回收时机**（修订 §4.2、§8 第 4 条）：原文
+    「`fade == 0` 时直接回收」只对**相位 7 的清弹 field 取消**成立——取消发生在相位 5 之后，
+    `fade == 0` 的激光要到**下一帧相位 5** 才回收；ECL `lz_cancel` 跑在相位 2（相位 5 之前），
+    所以被它取消的 `fade == 0` 激光**当帧相位 5** 就回收。
 

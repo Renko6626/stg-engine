@@ -83,12 +83,20 @@ mod tests {
     }
 }
 
+/// `seg_box_dist_sq` 的「远到不可能相交」阈值（raw）。点与原点任一分量差超过它即视为无穷远。
+///
+/// 12000 px 的取法：判定能用到的最大量是 `end ≤ 8832`（640 + 2×4096）、`half ≤ 1024`、
+/// `r ≤ 1024`，都远小于 12000，所以**可能相交的点绝不会被误判成无穷远**；而分量差一超过
+/// 12000 px，`dx·c + dy·s` 的两个 Fx 乘积相加（各约 12000 px）就有溢出 i32 的风险。
+const FAR_RAW: i64 = 12_000 << 16;
+
 /// 点到「旋转线段盒」的平方距离（Q32.32，i64，不开根）。盒 = 从 (ox,oy) 沿 angle 的射线上
 /// `[start, end]` 一段，横向半高 `half`。把点转进盒的局部系后钳位，求到钳位点的距离。
 /// 激光判定（碰撞行 9/10）用：`seg_box_dist_sq(..) <= r.raw()²` 即相交。
-/// **前置条件（调用方负责）**：`|px − ox| + |py − oy| < 32768`（像素）且 `half >= 0`。前者保证
-/// `dx·c + dy·s` / `dy·c − dx·s` 这两处 Fx 加法不溢出（|c|, |s| ≤ 1 ⇒ |along|, |perp| ≤ |dx|+|dy|），
-/// 后者保证 `perp` 的钳位区间 `[−half, half]` 不倒置。
+///
+/// **无前置条件（对任意输入都安全）**：任一分量与原点之差超过 `FAR_RAW`（12000 px）时
+/// 返回 `i64::MAX`——远于 12000 px 的点视为无穷远，绝不与判定半径相交；这同时保证进入 Fx
+/// 路径的坐标差不超过 12000 px，`dx·c + dy·s` / `dy·c − dx·s` 的加法不溢出。
 #[allow(clippy::too_many_arguments)] // 判定原语的天然参数面（点 + 线段盒），签名即 spec §4.2 契约
 pub fn seg_box_dist_sq(
     px: Fx,
@@ -100,8 +108,14 @@ pub fn seg_box_dist_sq(
     end: Fx,
     half: Fx,
 ) -> i64 {
+    // 先用 i64 求坐标差（`px − ox` 本身在 Fx 里就可能溢出），超远直接判无穷远。
+    let dx = px.raw() as i64 - ox.raw() as i64;
+    let dy = py.raw() as i64 - oy.raw() as i64;
+    if dx.abs() > FAR_RAW || dy.abs() > FAR_RAW {
+        return i64::MAX;
+    }
+    let (dx, dy) = (Fx::from_raw(dx as i32), Fx::from_raw(dy as i32));
     let (s, c) = sincos(angle);
-    let (dx, dy) = (px - ox, py - oy);
     let along = dx * c + dy * s;
     let perp = dy * c - dx * s;
     let qa = if along < start {
@@ -191,5 +205,22 @@ mod seg_box_tests {
             fx(3),
         );
         assert_eq!(v, 697 * 697 * R * R);
+    }
+    // F1（终审）：任一分量与原点差超过 12000 px 视为无穷远，直接返回 i64::MAX，绝不进 Fx 加法。
+    // (32767,32767) vs (−4096,−4096)：dx = dy = 36863 px，远超阈值；旧实现 `px − ox` 的
+    // Fx 减法先溢出 i32（dev panic）。
+    #[test]
+    fn far_point_is_infinite_distance() {
+        let v = seg_box_dist_sq(
+            fx(32767),
+            fx(32767),
+            fx(-4096),
+            fx(-4096),
+            Angle(0),
+            fx(0),
+            fx(640),
+            fx(4),
+        );
+        assert_eq!(v, i64::MAX, "远点视为无穷远，不 panic");
     }
 }

@@ -993,7 +993,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int)],
         ret: None,
-        doc: "取消激光:未收缩则切到收缩态(原作 92);fade=0 的激光下一帧相位 5 回收",
+        doc: "取消激光:未收缩则切到收缩态(原作 92);ECL 在相位 2 取消,当帧相位 5 即回收(含 fade=0);被清弹 field(相位 7)取消的 fade=0 激光下一帧相位 5 回收",
         param_names: &["lz"],
     },
     Builtin {
