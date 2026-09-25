@@ -77,7 +77,17 @@
     {"name": "sh_xform", "signature": "sh_xform(id: int, xf: xform|none)", "ret": null, "doc": "给发射器挂 xformdef(名或 none);开火时每颗弹都带上", "params": [{"name": "id", "ty": "int"}, {"name": "xf", "ty": "xform|none"}]},
     {"name": "sh_task", "signature": "sh_task(id: int, sub: sub|none)", "ret": null, "doc": "给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹", "params": [{"name": "id", "ty": "int"}, {"name": "sub", "ty": "sub|none"}]},
     {"name": "sh_req", "signature": "sh_req(id: int, req_id: int)", "ret": null, "doc": "设开火时顺带发的通道 B 请求 id(音效等);0 = 不发", "params": [{"name": "id", "ty": "int"}, {"name": "req_id", "ty": "int"}]},
-    {"name": "sh_fire", "signature": "sh_fire(id: int)", "ret": null, "doc": "用发射器槽 id 的参数开火;无返回值;池满走 P4-a 计数", "params": [{"name": "id", "ty": "int"}]}
+    {"name": "sh_fire", "signature": "sh_fire(id: int)", "ret": null, "doc": "用发射器槽 id 的参数开火;无返回值;池满走 P4-a 计数", "params": [{"name": "id", "ty": "int"}]},
+    {"name": "laser", "signature": "laser(color: int, x: fx, y: fx, angle: angle, len: fx, width: fx, warn: int, active: int, fade: int) -> int", "ret": "int", "doc": "建一条直线激光:color 0..15(越界 Fault);(x,y) 原点、angle 方向、len 长度、width 判定宽度(画多宽判多宽)、warn/active/fade 三段时长(帧);返打包激光句柄(不透明,别猜数值;失败 -1)。形态一固定 start=0、end=len、speed=0", "params": [{"name": "color", "ty": "int"}, {"name": "x", "ty": "fx"}, {"name": "y", "ty": "fx"}, {"name": "angle", "ty": "angle"}, {"name": "len", "ty": "fx"}, {"name": "width", "ty": "fx"}, {"name": "warn", "ty": "int"}, {"name": "active", "ty": "int"}, {"name": "fade", "ty": "int"}]},
+    {"name": "lz_speed", "signature": "lz_speed(lz: int, speed: fx, start_len: fx)", "ret": null, "doc": "形态二:设激光沿射线速度 speed 与棒长 start_len,并从近端长出去(end=start);两值世界层钳 [0,LASER_LEN_MAX]", "params": [{"name": "lz", "ty": "int"}, {"name": "speed", "ty": "fx"}, {"name": "start_len", "ty": "fx"}]},
+    {"name": "lz_start", "signature": "lz_start(lz: int, s: fx)", "ret": null, "doc": "激光近端留空 s(原作第 4 关 =64):start=s,start>end 时 end 抬到 start;世界层钳 [0,LASER_LEN_MAX]", "params": [{"name": "lz", "ty": "int"}, {"name": "s", "ty": "fx"}]},
+    {"name": "lz_omega", "signature": "lz_omega(lz: int, a: angle)", "ret": null, "doc": "激光持续转动速率(每帧多少 BAM,允许负,走回绕);栈值出 i16 钳位+计数", "params": [{"name": "lz", "ty": "int"}, {"name": "a", "ty": "angle"}]},
+    {"name": "lz_rotate", "signature": "lz_rotate(lz: int, a: angle)", "ret": null, "doc": "激光一次性转 a(回绕加,只作用当帧;原作 88)", "params": [{"name": "lz", "ty": "int"}, {"name": "a", "ty": "angle"}]},
+    {"name": "lz_aim", "signature": "lz_aim(lz: int, off: angle)", "ret": null, "doc": "激光指向自机 0 再加偏移 off(原作 89);自机狙写 lz_aim(lz, 0deg),相对自机角写 laser(..., aim_player() + a, ...)", "params": [{"name": "lz", "ty": "int"}, {"name": "off", "ty": "angle"}]},
+    {"name": "lz_anchor", "signature": "lz_anchor(lz: int, enemy: int, ox: fx, oy: fx)", "ret": null, "doc": "把激光挂到敌号 enemy 上并带偏移 (ox,oy)(每帧跟随;enemy=-1 解除)。失效敌号(死了/槽被复用,且非 -1)不挂靠+计数;偏移世界层钳 ±LASER_COORD_MAX", "params": [{"name": "lz", "ty": "int"}, {"name": "enemy", "ty": "int"}, {"name": "ox", "ty": "fx"}, {"name": "oy", "ty": "fx"}]},
+    {"name": "lz_origin", "signature": "lz_origin(lz: int, x: fx, y: fx)", "ret": null, "doc": "直接设激光原点 (x,y) 并解除挂靠;坐标世界层钳 ±LASER_COORD_MAX", "params": [{"name": "lz", "ty": "int"}, {"name": "x", "ty": "fx"}, {"name": "y", "ty": "fx"}]},
+    {"name": "lz_cancel", "signature": "lz_cancel(lz: int)", "ret": null, "doc": "取消激光:未收缩则切到收缩态(原作 92);fade=0 的激光下一帧相位 5 回收", "params": [{"name": "lz", "ty": "int"}]},
+    {"name": "lz_alive", "signature": "lz_alive(lz: int) -> int", "ret": "int", "doc": "激光句柄是否仍指向当初那条激光,返 1/0(槽被复用后旧句柄返 0;只读不计数;原作 91)", "params": [{"name": "lz", "ty": "int"}]}
   ],
   "engine_vars": [
     {"name": "frame", "ty": "int", "doc": "当前世界帧号"},

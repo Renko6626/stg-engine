@@ -761,6 +761,44 @@ sub main() {
         assert!(rows.windows(2).all(|w| w[0].idx < w[1].idx));
     }
 
+    /// 8xx 激光 e2e：`.ecl` 编译 → 跑 → 池里那条激光字段对得上。**这条穿过完整参数链**
+    /// （builtins 声明序 → codegen 压栈 → syscall 逆序弹出 → 世界写 API），`call` 级单测
+    /// 绕不过编译器，参数序写反只有这里能抓到。
+    #[test]
+    fn laser_builtins_run_end_to_end() {
+        use stg_core::math::Fx;
+        let src = r#"
+async sub shoot() {
+    var lz: int = laser(3, 10.0fx, 20.0fx, 90deg, 100.0fx, 8.0fx, 0, 600, 0);
+    lz_omega(lz, 100bam);
+    lz_anchor(lz, $self_enemy, 0.0fx, 8.0fx);
+    loop { wait(1); }
+}
+sub main() {
+    _ = spawn_enemy(0.0fx, 0.0fx, 10, 0, 0, 1, shoot);
+    loop { wait(1); }
+}
+"#;
+        let p = tmp_ecl("laser", src);
+        let (mut w, image, units) = build_ecl_world(p.to_str().unwrap(), 1, 2).expect("应编过");
+        let r = run_scene(&mut w, &image, 5, None, 1, 2, units);
+        assert_eq!(r.exit_code(), 0, "激光脚本不得 fault：{:?}", r.faults);
+        let v = w.view();
+        let l = v.lasers();
+        let i = l.iter_alive().next().expect("应有一条激光");
+        assert_eq!(l.sprite()[i], 3, "color → sprite");
+        assert_eq!(l.width()[i], Fx::from_int(8));
+        assert_eq!(l.end()[i], Fx::from_int(100), "形态一 end = len");
+        assert_eq!(l.start_len()[i], Fx::from_int(100));
+        assert_eq!(l.omega()[i], 100, "lz_omega 写入");
+        // `lz_anchor(lz, $self_enemy, 0, 8)`：原点 = 敌位置 (0,0) + 偏移 (0,8)。
+        assert_eq!(l.ox()[i], Fx::ZERO, "挂靠立即吸附 x");
+        assert_eq!(l.oy()[i], Fx::from_int(8), "挂靠立即吸附 y+偏移");
+        assert_eq!(l.anchor_idx()[i], 0, "挂到 0 号敌槽");
+        // spawn 次帧首跑：激光帧 1 出生，相位 5 起每帧转 100 BAM。
+        assert_ne!(l.angle()[i].raw(), 16384, "omega 使 90deg 推进");
+    }
+
     /// 目录整取（多文件编译单元）走得通——与 `check` 同一条路径。
     #[test]
     fn directory_units_are_collected() {

@@ -172,6 +172,10 @@ impl WorldBody {
     /// 挂到敌人身上（存代际句柄；相位 5 代际相符才跟）。`e == NULL` 表示解除挂靠。
     /// 偏移 `ax/ay` 双边钳入 `±LASER_COORD_MAX`（越界计一次违约）；敌人存活（代际相符）时
     /// **立即吸附**到 `敌位置 + 偏移`，出生当帧挂靠不必等到相位 5。
+    ///
+    /// P4-b（控制方裁定 ②）：`e` 非 NULL 但已失效（死了 / 代际不符 / 越界）→ **不挂靠、
+    /// 返回 false、计一次 `contract_viol` + `STALE_HANDLE`**；失败调用不改已有锚态。
+    /// `NULL` 解除挂靠是合法调用，不计数。
     pub fn laser_anchor(&mut self, h: LaserHandle, e: EnemyHandle, ax: Fx, ay: Fx) -> bool {
         let Some(i) = self.laser_slot(h) else {
             return false;
@@ -183,6 +187,11 @@ impl WorldBody {
             l.ax[i] = Fx::ZERO;
             l.ay[i] = Fx::ZERO;
         } else {
+            let Some(ei) = self.enemies.get(e) else {
+                self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+                self.last_status = STATUS_STALE_HANDLE;
+                return false;
+            };
             let mut ax = ax;
             let mut ay = ay;
             if clamp_laser_coord(&mut ax) | clamp_laser_coord(&mut ay) {
@@ -195,12 +204,10 @@ impl WorldBody {
                 l.ax[i] = ax;
                 l.ay[i] = ay;
             }
-            if let Some(ei) = self.enemies.get(e) {
-                let (ex, ey) = (self.enemies.x[ei], self.enemies.y[ei]);
-                let l = &mut self.lasers;
-                l.ox[i] = ex + ax;
-                l.oy[i] = ey + ay;
-            }
+            let (ex, ey) = (self.enemies.x[ei], self.enemies.y[ei]);
+            let l = &mut self.lasers;
+            l.ox[i] = ex + ax;
+            l.oy[i] = ey + ay;
         }
         self.sync_prev_if_newborn(i);
         true
@@ -615,6 +622,53 @@ mod tests {
             (ox, oy),
             "解除挂靠不动原点"
         );
+    }
+
+    /// 控制方裁定 ②：失效敌句柄（非 NULL，死 / 代际不符 / 越界）→ 不挂靠、返回 false、
+    /// 计一次 `contract_viol` + `STALE_HANDLE`；失败调用不改已有锚态。
+    #[test]
+    fn anchor_stale_enemy_returns_false_and_counts() {
+        use crate::world::test_support::spawn_enemy;
+        let mut w = World::new(1);
+        let e = spawn_enemy(&mut w, 30, 100, 5);
+        let h = w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+        let i = h.index as usize;
+        assert!(w.body.laser_anchor(h, e, Fx::ZERO, Fx::from_int(8)));
+        let stored = (w.body.lasers.anchor_idx[i], w.body.lasers.anchor_gen[i]);
+
+        // 回收槽 → 旧句柄失效（非 NULL）。
+        w.body.enemies.free(e);
+        let cv0 = w.body.diag.contract_viol;
+        assert!(
+            !w.body.laser_anchor(h, e, Fx::from_int(5), Fx::from_int(5)),
+            "失效敌句柄 → false"
+        );
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "计一次违约");
+        assert_eq!(
+            (w.body.lasers.anchor_idx[i], w.body.lasers.anchor_gen[i]),
+            stored,
+            "失败调用不改锚态"
+        );
+        assert_eq!(
+            w.body.view().last_status(),
+            crate::world::STATUS_STALE_HANDLE
+        );
+
+        // 越界句柄同样 false + 计数。
+        let cv1 = w.body.diag.contract_viol;
+        assert!(
+            !w.body.laser_anchor(
+                h,
+                crate::enemy::EnemyHandle {
+                    index: crate::enemy::EnemyPool::CAP as u16,
+                    generation: 0,
+                },
+                Fx::ZERO,
+                Fx::ZERO
+            ),
+            "越界敌句柄 → false"
+        );
+        assert_eq!(w.body.diag.contract_viol, cv1 + 1);
     }
 
     /// `laser_cancel`：`state < 2 → 2`、`timer = 0`；已收缩则 no-op（timer 保持）。

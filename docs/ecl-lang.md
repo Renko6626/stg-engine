@@ -16,6 +16,7 @@
 | [6 · 符卡与整局编排](ecl-lang/6-spell-and-stage.md) | 符卡机构、`mark` 中段启动、多文件、全局状态、账面、渲染请求 |
 | [7 · 速查](ecl-lang/7-reference.md) | 内建函数**生成段** + `$` 引擎变量 + 引擎常量。查签名来这里 |
 | [8 · 报错、静默降级与已知限制](ecl-lang/8-errors.md) | 编译错误格式、Fault vs 静默降级、debug 循环、v1 不支持什么 |
+| [9 · 激光](ecl-lang/9-lasers.md) | 直线激光 `laser()` / `lz_*` 族：三种形态（预警扫射 / 自机狙 / 飞棒）、挂靠、坏句柄降级、和原作对照 |
 
 改完跑一句 `cargo run -p stg-harness -- check <file.ecl|目录>`（行列报错；目录 = 多文件整局，
 见第 6 篇「多文件」节）。第 7 篇的「内建函数」是从 `builtins.rs` 生成的段，**签名以它为准**；

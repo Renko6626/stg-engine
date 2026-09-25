@@ -174,6 +174,16 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `sh_task(id: int, sub: sub|none)` — 给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹
 - `sh_req(id: int, req_id: int)` — 设开火时顺带发的通道 B 请求 id(音效等);0 = 不发
 - `sh_fire(id: int)` — 用发射器槽 id 的参数开火;无返回值;池满走 P4-a 计数
+- `laser(color: int, x: fx, y: fx, angle: angle, len: fx, width: fx, warn: int, active: int, fade: int) -> int` — 建一条直线激光:color 0..15(越界 Fault);(x,y) 原点、angle 方向、len 长度、width 判定宽度(画多宽判多宽)、warn/active/fade 三段时长(帧);返打包激光句柄(不透明,别猜数值;失败 -1)。形态一固定 start=0、end=len、speed=0
+- `lz_speed(lz: int, speed: fx, start_len: fx)` — 形态二:设激光沿射线速度 speed 与棒长 start_len,并从近端长出去(end=start);两值世界层钳 [0,LASER_LEN_MAX]
+- `lz_start(lz: int, s: fx)` — 激光近端留空 s(原作第 4 关 =64):start=s,start>end 时 end 抬到 start;世界层钳 [0,LASER_LEN_MAX]
+- `lz_omega(lz: int, a: angle)` — 激光持续转动速率(每帧多少 BAM,允许负,走回绕);栈值出 i16 钳位+计数
+- `lz_rotate(lz: int, a: angle)` — 激光一次性转 a(回绕加,只作用当帧;原作 88)
+- `lz_aim(lz: int, off: angle)` — 激光指向自机 0 再加偏移 off(原作 89);自机狙写 lz_aim(lz, 0deg),相对自机角写 laser(..., aim_player() + a, ...)
+- `lz_anchor(lz: int, enemy: int, ox: fx, oy: fx)` — 把激光挂到敌号 enemy 上并带偏移 (ox,oy)(每帧跟随;enemy=-1 解除)。失效敌号(死了/槽被复用,且非 -1)不挂靠+计数;偏移世界层钳 ±LASER_COORD_MAX
+- `lz_origin(lz: int, x: fx, y: fx)` — 直接设激光原点 (x,y) 并解除挂靠;坐标世界层钳 ±LASER_COORD_MAX
+- `lz_cancel(lz: int)` — 取消激光:未收缩则切到收缩态(原作 92);fade=0 的激光下一帧相位 5 回收
+- `lz_alive(lz: int) -> int` — 激光句柄是否仍指向当初那条激光,返 1/0(槽被复用后旧句柄返 0;只读不计数;原作 91)
 <!-- gen:builtins:end -->
 
 ---

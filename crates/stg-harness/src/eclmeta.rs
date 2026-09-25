@@ -133,7 +133,7 @@ const DOC_END: &str = "<!-- gen:builtins:end -->";
 const ENGVAR_BEGIN: &str = "<!-- gen:engvars:begin -->";
 const ENGVAR_END: &str = "<!-- gen:engvars:end -->";
 
-/// 手册正文目录（`docs/ecl-lang/`，按教学顺序编号的 8 篇）。
+/// 手册正文目录（`docs/ecl-lang/`，按教学顺序编号的 9 篇）。
 pub fn doc_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/ecl-lang")
 }

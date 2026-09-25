@@ -28,6 +28,7 @@ use crate::ecl::shooter::{
 use crate::ecl::task::{LOCALS, OWNER_BULLET, OWNER_ENEMY, Task};
 use crate::ecl::vm::{FAULT_BAD_OP, FAULT_STACK, VmCtx};
 use crate::enemy::{EnemyHandle, EnemyInit};
+use crate::lasers::{ANCHOR_NONE, LaserHandle, LaserInit, LaserPool};
 use crate::math::geom::polar_to_vec;
 use crate::math::{Angle, Fx};
 use crate::xform::XformSlot;
@@ -57,9 +58,9 @@ use crate::xform::XformSlot;
 // 函数形态读口 + 纯数学）／2xx 造物（4）／3xx 弹操作（9；self owner 必须是 BULLET；按
 // motion.rs 九连顺序编号）／4xx 敌运动（5；对齐 ZUN 4xx）／5xx 局面·记账·道具（14；
 // 对齐 ZUN 5xx 的 drops；owner 类别无限制，STAGE 任务常发）／6xx shooter（15；对齐 ZUN
-// 6xx 的 et*）／7xx 控制·事件·符卡·globals（7）。
+// 6xx 的 et*）／7xx 控制·事件·符卡·globals（7）／8xx 激光（10；激光池刀 Task 4）。
 //
-// 下方 76 个常量的**物理顺序沿用历史累加顺序（append-order）**，不随本刀按族重排位置——
+// 下方全部常量的**物理顺序沿用历史累加顺序（append-order）**，不随本刀按族重排位置——
 // 每个常量的族由其**取值的百位**决定，不由物理位置决定；见文件头总纲。
 pub const SYS_FRAME: u16 = 0;
 pub const SYS_PLAYER_X: u16 = 10;
@@ -144,6 +145,35 @@ pub const SYS_SPELL_BEGIN: u16 = 740;
 /// 符卡逃生舱口（符卡机构 spec 2026-07-24 §5）：无参；owner 绑定槽走 HP 路径结算，
 /// 无绑定 → no-op（重复调用安全）。
 pub const SYS_SPELL_END: u16 = 741;
+
+// ── 8xx：激光（spec 2026-09-25-laser-pool-design §5；激光池刀 Task 4）─────────────
+// 参数正序压栈、派发逆序弹出。`lz_*` 的 `lz` 是 `laser()` 返回的**打包激光句柄**——编码与
+// 敌号逐条同款（`((generation & 0x7FFF) << 16) | index`，`-1` 是唯一无效哨兵；见
+// [`pack_laser_handle`]）。代际只带低 15 位，重建句柄时一律取池里的完整 u16。
+/// 建一条激光（9 参）：`laser(color, x, y, angle, len, width, warn, active, fade)`。
+/// `color ∈ 0..=15` 否则 `FAULT_BAD_OP`（先验后建，同 `fire` 坏外观口径）；`warn/active/fade`
+/// 出 `[0,65535]` 钳位并计一次 `contract_viol`；`start=0`、`end=start_len=len`、`speed=omega=0`；
+/// 池满押 -1（P4-a，不 Fault）。返回打包句柄。
+pub const SYS_LASER_CREATE: u16 = 800;
+/// 形态二：设速率与近端长度（两字段世界层双边钳 `[0,LASER_LEN_MAX]`）。
+pub const SYS_LASER_SPEED: u16 = 801;
+/// 近端留空（原作第 4 关 `start = 64`）。
+pub const SYS_LASER_START: u16 = 802;
+/// 持续转动速率（BAM/帧，`i16`；出 i16 栈值钳位并计一次违约）。
+pub const SYS_LASER_OMEGA: u16 = 803;
+/// 一次性转一个角度（回绕加）。
+pub const SYS_LASER_ROTATE: u16 = 804;
+/// 指向自机 0 的角度 + 偏移。
+pub const SYS_LASER_AIM: u16 = 805;
+/// 挂到敌人身上；`enemy = -1` 传 `EnemyHandle::NULL` 表示解除；其它无法解析的敌号视同失效
+/// 句柄（不挂靠 + 计一次违约）。
+pub const SYS_LASER_ANCHOR: u16 = 806;
+/// 直接设置原点（同时解除挂靠）。
+pub const SYS_LASER_ORIGIN: u16 = 807;
+/// 取消：`state < 2 → 2`、`timer = 0`。
+pub const SYS_LASER_CANCEL: u16 = 808;
+/// 是否存活（只读，不计数），押 0/1。
+pub const SYS_LASER_ALIVE: u16 = 809;
 
 // 3xx：弹操作族（self owner 必须是 BULLET；按 motion.rs 九连顺序编号）
 pub const SYS_SET_BULLET_SPEED: u16 = 300;
@@ -386,13 +416,13 @@ pub const SYS_SELF_ANGLE: u16 = 25;
 /// （百分区制下号非连续，同 [`crate::ecl::ops::op_implemented`] 的纪律）。不在表内的号
 /// 由 `dispatch` 的兜底臂返 `FAULT_BAD_OP`。
 ///
-/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、79 条结构测试的表是 `cfg(test)`，
+/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、97 条结构测试的表是 `cfg(test)`，
 /// 编译器 crate 两个都够不着）：`stg-ecl-compiler` 的 `builtins::BUILTINS` 要能断言
 /// "`is_op == false` 的条目，其 `syscall` 字段装的确实是个会被派发的号"。见
 /// `builtins.rs::builtin_dispatch_kind_matches_what_the_field_holds`。
 ///
 /// **与 `dispatch` 的同步靠测试押运，不靠自律**：`syscall_whitelist_matches_the_frozen_table`
-/// 断言"全 `u16` 域里为真的号恰好是那 79 条"，漏一条/多一条即红。
+/// 断言"全 `u16` 域里为真的号恰好是那 97 条"，漏一条/多一条即红。
 pub const fn syscall_implemented(no: u16) -> bool {
     matches!(
         no,
@@ -491,6 +521,17 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_BOSS_SET
             | SYS_SPELL_BEGIN
             | SYS_SPELL_END
+            // 8xx 激光
+            | SYS_LASER_CREATE
+            | SYS_LASER_SPEED
+            | SYS_LASER_START
+            | SYS_LASER_OMEGA
+            | SYS_LASER_ROTATE
+            | SYS_LASER_AIM
+            | SYS_LASER_ANCHOR
+            | SYS_LASER_ORIGIN
+            | SYS_LASER_CANCEL
+            | SYS_LASER_ALIVE
     )
 }
 
@@ -617,6 +658,37 @@ fn resolve_enemy_handle(packed: i32, ctx: &VmCtx) -> Option<usize> {
         && (ctx.body.enemies.generation[idx] & 0x7FFF) == g
     {
         Some(idx)
+    } else {
+        None
+    }
+}
+
+/// 打包激光句柄 → 栈上 i32（编码同敌号：`((gen & 0x7FFF) << 16) | index`，NULL → -1）。
+fn pack_laser_handle(h: LaserHandle) -> i32 {
+    if h == LaserHandle::NULL {
+        -1
+    } else {
+        (((h.generation & 0x7FFF) as i32) << 16) | h.index as i32
+    }
+}
+
+/// 打包激光号 → 活槽句柄；`None` = 无效（负哨兵 / 越界 / 死槽 / **generation 不符**）。
+/// 判据与 [`resolve_enemy_handle`] 逐条同款（两边都 `& 0x7FFF`）；重建时取池里的**完整
+/// u16 代际**——相位 5 的挂靠比较用的是完整代际，低 15 位复刻会让高代际静默脱钩（I-3）。
+fn resolve_laser_handle(packed: i32, ctx: &VmCtx) -> Option<LaserHandle> {
+    if packed < 0 {
+        return None;
+    }
+    let idx = (packed & 0xFFFF) as usize;
+    let g = ((packed >> 16) & 0x7FFF) as u16;
+    if idx < LaserPool::CAP
+        && ctx.body.lasers.is_alive(idx)
+        && (ctx.body.lasers.generation[idx] & 0x7FFF) == g
+    {
+        Some(LaserHandle {
+            index: idx as u16,
+            generation: ctx.body.lasers.generation[idx],
+        })
     } else {
         None
     }
@@ -1235,6 +1307,18 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_SPELL_BEGIN => sys_spell_begin(task, ctx),
         SYS_SPELL_END => sys_spell_end(task, ctx),
 
+        // ── 8xx 激光（Task 4）───────────────────────────────────────────────
+        SYS_LASER_CREATE => sys_laser_create(task, ctx),
+        SYS_LASER_SPEED => sys_laser_speed(task, ctx),
+        SYS_LASER_START => sys_laser_start(task, ctx),
+        SYS_LASER_OMEGA => sys_laser_omega(task, ctx),
+        SYS_LASER_ROTATE => sys_laser_rotate(task, ctx),
+        SYS_LASER_AIM => sys_laser_aim(task, ctx),
+        SYS_LASER_ANCHOR => sys_laser_anchor(task, ctx),
+        SYS_LASER_ORIGIN => sys_laser_origin(task, ctx),
+        SYS_LASER_CANCEL => sys_laser_cancel(task, ctx),
+        SYS_LASER_ALIVE => sys_laser_alive(task, ctx),
+
         _ => Err(FAULT_BAD_OP),
     }
 }
@@ -1502,6 +1586,186 @@ fn sys_anchor_u16(task: &mut Task, ctx: &mut VmCtx, kind: AnchorKind) -> Result<
 #[inline]
 fn bam(raw: i32) -> Angle {
     Angle((raw as u32 & 0xFFFF) as u16)
+}
+
+// ── 8xx 激光族 handler（Task 4）──────────────────────────────────────────────
+//
+// 统一口径：`resolve_laser_handle` 失败就传 `LaserHandle::NULL`，由世界侧写 API no-op +
+// 计一次 `contract_viol`——计数只发生在一处（计划 Step 2）。参数一律逆序弹出。
+
+/// 出 `[0, u16::MAX]` → 钳位并把 `bad` 置真（一次 `laser()` 多坏字段只计一次违约）。
+fn clamp_u16_count(v: i32, bad: &mut bool) -> u16 {
+    if (0..=u16::MAX as i32).contains(&v) {
+        v as u16
+    } else {
+        *bad = true;
+        v.clamp(0, u16::MAX as i32) as u16
+    }
+}
+
+/// `laser()`（800）：9 参逆序弹。`color ∈ 0..=15` 否则 Fault（先验后建，同 `fire` 坏外观）；
+/// `warn/active/fade` 出 `[0,65535]` 钳位并计一次违约；形态一字段 `start=0`、
+/// `end=start_len=len`、`speed=omega=0`、`flags=0`，其余派生字段交给 `create_laser`。
+fn sys_laser_create(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let fade = pop(task)?;
+    let active = pop(task)?;
+    let warn = pop(task)?;
+    let width = pop(task)?;
+    let len = pop(task)?;
+    let angle = pop(task)?;
+    let y = pop(task)?;
+    let x = pop(task)?;
+    let color = pop(task)?;
+    if !(0..=15).contains(&color) {
+        return Err(FAULT_BAD_OP);
+    }
+    let mut bad = false;
+    let warn = clamp_u16_count(warn, &mut bad);
+    let active = clamp_u16_count(active, &mut bad);
+    let fade = clamp_u16_count(fade, &mut bad);
+    if bad {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+    }
+    let init = LaserInit {
+        ox: Fx::from_raw(x),
+        oy: Fx::from_raw(y),
+        angle: bam(angle),
+        omega: 0,
+        start: Fx::ZERO,
+        end: Fx::from_raw(len),
+        start_len: Fx::from_raw(len),
+        speed: Fx::ZERO,
+        width: Fx::from_raw(width),
+        sprite: color as u16,
+        warn,
+        active,
+        fade,
+        timer: 0,
+        state: 0,
+        anchor_idx: ANCHOR_NONE,
+        anchor_gen: 0,
+        ax: Fx::ZERO,
+        ay: Fx::ZERO,
+        dx: Fx::ZERO,
+        dy: Fx::ZERO,
+        dang: 0,
+        px: Fx::ZERO,
+        py: Fx::ZERO,
+        pang: Angle::ZERO,
+        flags: 0,
+        born_frame: 0,
+    };
+    let h = ctx.body.create_laser(init);
+    push(task, pack_laser_handle(h))
+}
+
+/// `lz_speed(lz, speed, start_len)`（801）。
+fn sys_laser_speed(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let start_len = pop(task)?;
+    let speed = pop(task)?;
+    let lz = pop(task)?;
+    let h = resolve_laser_handle(lz, ctx).unwrap_or(LaserHandle::NULL);
+    ctx.body
+        .laser_set_speed(h, Fx::from_raw(speed), Fx::from_raw(start_len));
+    Ok(())
+}
+
+/// `lz_start(lz, s)`（802）。
+fn sys_laser_start(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let s = pop(task)?;
+    let lz = pop(task)?;
+    let h = resolve_laser_handle(lz, ctx).unwrap_or(LaserHandle::NULL);
+    ctx.body.laser_set_start(h, Fx::from_raw(s));
+    Ok(())
+}
+
+/// `lz_omega(lz, a)`（803）：`a` 出 i16 → 钳位并计一次违约（`omega` 池字段是 `i16`）。
+fn sys_laser_omega(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let a = pop(task)?;
+    let lz = pop(task)?;
+    let h = resolve_laser_handle(lz, ctx).unwrap_or(LaserHandle::NULL);
+    let omega = match i16::try_from(a) {
+        Ok(v) => v,
+        Err(_) => {
+            ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+            a.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+        }
+    };
+    ctx.body.laser_set_omega(h, omega);
+    Ok(())
+}
+
+/// `lz_rotate(lz, a)`（804）：一次性转 `a`（回绕加）。
+fn sys_laser_rotate(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let a = pop(task)?;
+    let lz = pop(task)?;
+    let h = resolve_laser_handle(lz, ctx).unwrap_or(LaserHandle::NULL);
+    ctx.body.laser_rotate(h, bam(a));
+    Ok(())
+}
+
+/// `lz_aim(lz, off)`（805）：指向自机 0 的角度 + `off`。
+fn sys_laser_aim(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let off = pop(task)?;
+    let lz = pop(task)?;
+    let h = resolve_laser_handle(lz, ctx).unwrap_or(LaserHandle::NULL);
+    ctx.body.laser_aim(h, bam(off));
+    Ok(())
+}
+
+/// `lz_anchor(lz, enemy, ox, oy)`（806）。`enemy = -1` → `EnemyHandle::NULL`（解除）；
+/// 其它敌号一律经 [`resolve_enemy_handle`] 解析，命中则用池里的**完整 u16 代际**重建句柄
+/// （I-3）；解析失败 → 不挂靠 + 计一次 `contract_viol`（控制方裁定 ②）。
+fn sys_laser_anchor(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let oy = pop(task)?;
+    let ox = pop(task)?;
+    let enemy = pop(task)?;
+    let lz = pop(task)?;
+    let h = resolve_laser_handle(lz, ctx).unwrap_or(LaserHandle::NULL);
+    let e = if enemy == -1 {
+        EnemyHandle::NULL
+    } else {
+        match resolve_enemy_handle(enemy, ctx) {
+            Some(idx) => EnemyHandle {
+                index: idx as u16,
+                generation: ctx.body.enemies.generation[idx],
+            },
+            None => {
+                // 失效敌号（死了/代际不符/越界）：no-op + 计数，不落到世界侧。
+                ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+                ctx.body.last_status = crate::world::STATUS_STALE_HANDLE;
+                return Ok(());
+            }
+        }
+    };
+    ctx.body
+        .laser_anchor(h, e, Fx::from_raw(ox), Fx::from_raw(oy));
+    Ok(())
+}
+
+/// `lz_origin(lz, x, y)`（807）：直接设原点并解除挂靠。
+fn sys_laser_origin(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let y = pop(task)?;
+    let x = pop(task)?;
+    let lz = pop(task)?;
+    let h = resolve_laser_handle(lz, ctx).unwrap_or(LaserHandle::NULL);
+    ctx.body.laser_origin(h, Fx::from_raw(x), Fx::from_raw(y));
+    Ok(())
+}
+
+/// `lz_cancel(lz)`（808）。
+fn sys_laser_cancel(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let lz = pop(task)?;
+    let h = resolve_laser_handle(lz, ctx).unwrap_or(LaserHandle::NULL);
+    ctx.body.laser_cancel(h);
+    Ok(())
+}
+
+/// `lz_alive(lz)`（809）：只读，不计数；押 0/1。
+fn sys_laser_alive(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let lz = pop(task)?;
+    let alive = resolve_laser_handle(lz, ctx).is_some();
+    push(task, if alive { 1 } else { 0 })
 }
 
 /// `n<=0` → 押 0、不消耗世界 RNG 流（拍板：n==0 既定钉死，n<0 视同"无合法范围"同律扩展、
@@ -2310,11 +2574,22 @@ mod tests {
             (SYS_BOSS_SET, "boss_set", 7),
             (SYS_SPELL_BEGIN, "spell_begin", 7),
             (SYS_SPELL_END, "spell_end", 7),
+            (SYS_LASER_CREATE, "laser", 8),
+            (SYS_LASER_SPEED, "lz_speed", 8),
+            (SYS_LASER_START, "lz_start", 8),
+            (SYS_LASER_OMEGA, "lz_omega", 8),
+            (SYS_LASER_ROTATE, "lz_rotate", 8),
+            (SYS_LASER_AIM, "lz_aim", 8),
+            (SYS_LASER_ANCHOR, "lz_anchor", 8),
+            (SYS_LASER_ORIGIN, "lz_origin", 8),
+            (SYS_LASER_CANCEL, "lz_cancel", 8),
+            (SYS_LASER_ALIVE, "lz_alive", 8),
         ]
     }
 
-    /// 【本刀的主判据】号表族结构：79 条、无重号、每条落在其声明族的百位区间内
-    /// （原 74 条 + 自机能力刀 `513`/`560` = 76；表现契约 v2 再加 `430 set_anm_state`/`721 fx_at`/`722 fx_on` = 79；壳子刀加 `723 stage_clear` = 80）。
+    /// 【本刀的主判据】号表族结构：97 条、无重号、每条落在其声明族的百位区间内
+    /// （原 74 条 + 自机能力刀 `513`/`560` = 76；表现契约 v2 再加 `430 set_anm_state`/`721 fx_at`/`722 fx_on` = 79；壳子刀加 `723 stage_clear` = 80；
+    /// 激光池刀再加 8xx 十条 = 97）。
     ///
     /// 这一刀是大规模机械重排，判别力要求与常规刀不同——不是"新行为对不对"，而是
     /// "**有没有搬错、搬漏、搬重**"。故判据是号表自身的结构性质，不是某条 syscall 的行为。
@@ -2342,9 +2617,9 @@ mod tests {
 
         assert_eq!(
             table.len(),
-            87,
+            97,
             "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 − 玩法刀退役 513 \
-             + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87：增改需同步这个数"
+             + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97：增改需同步这个数"
         );
 
         // (a) 族归属：搬错族立刻红
@@ -2510,7 +2785,7 @@ mod tests {
     ///
     /// 两个方向都断言（缺一个就只是半张网）：
     /// - **文档 → 常量**：文档里出现的每个 `(号, 名)` 对都得在 [`frozen_table`] 里；
-    /// - **常量 → 文档**：79 条常量每条都得在文档里出现，**漏记一条即红**。
+    /// - **常量 → 文档**：97 条常量每条都得在文档里出现，**漏记一条即红**。
     ///
     /// **它还有第二重职责，别只当它是"防文档漂移"**：本条是**全仓唯一**能抓到
     /// **族内互换**（号换了、族没换，如 `SYS_ATAN2` ↔ `SYS_DIST`）的测试。
@@ -4306,7 +4581,7 @@ mod tests {
         // 方向三：把白名单钉到 `dispatch` 的兜底臂上——白名单说没有的号，`dispatch`
         // 必须以 `FAULT_BAD_OP` 拒绝（抽查，不做全域派发：派发有副作用）。
         let (mut w, ecl) = fresh();
-        for probe in [9999u16, 33, 99, 104, 199, 800, u16::MAX] {
+        for probe in [9999u16, 33, 99, 104, 199, 899, u16::MAX] {
             assert!(!syscall_implemented(probe), "{probe} 不该在白名单里");
             let mut task = Task::default();
             assert_eq!(
@@ -7601,5 +7876,445 @@ mod tests {
                 "{args:?}：敌不得建出"
             );
         }
+    }
+
+    // ── 8xx 激光族（Task 4；spec 2026-09-25-laser-pool-design §5）────────────────
+
+    /// 一条字段全零的 `LaserInit`（池满测试用；`LaserInit` 是 exhaustive、无 `Default`）。
+    fn zero_laser_init() -> crate::lasers::LaserInit {
+        crate::lasers::LaserInit {
+            ox: Fx::ZERO,
+            oy: Fx::ZERO,
+            angle: Angle::ZERO,
+            omega: 0,
+            start: Fx::ZERO,
+            end: Fx::ZERO,
+            start_len: Fx::ZERO,
+            speed: Fx::ZERO,
+            width: Fx::ZERO,
+            sprite: 0,
+            warn: 0,
+            active: 1,
+            fade: 0,
+            timer: 0,
+            state: 0,
+            anchor_idx: crate::lasers::ANCHOR_NONE,
+            anchor_gen: 0,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            dx: Fx::ZERO,
+            dy: Fx::ZERO,
+            dang: 0,
+            px: Fx::ZERO,
+            py: Fx::ZERO,
+            pang: Angle::ZERO,
+            flags: 0,
+            born_frame: 0,
+        }
+    }
+
+    /// `laser()` 的 9 参正序：`color,x,y,angle,len,width,warn,active,fade`。
+    #[allow(clippy::too_many_arguments)]
+    fn laser_args(
+        color: i32,
+        x: Fx,
+        y: Fx,
+        angle: Angle,
+        len: Fx,
+        width: Fx,
+        warn: i32,
+        active: i32,
+        fade: i32,
+    ) -> [i32; 9] {
+        [
+            color,
+            x.raw(),
+            y.raw(),
+            angle.raw() as i32,
+            len.raw(),
+            width.raw(),
+            warn,
+            active,
+            fade,
+        ]
+    }
+
+    /// 打包激光句柄 → 池槽下标。
+    fn laser_slot(packed: i32) -> usize {
+        (packed & 0xFFFF) as usize
+    }
+
+    /// `laser()` 返回打包句柄；解码后字段逐项正确（形态一：start=0、end=start_len=len、
+    /// speed=0、sprite=color、omega=0）。
+    #[test]
+    fn laser_create_packs_handle_and_fills_fields() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let args = laser_args(
+            3,
+            Fx::from_int(10),
+            Fx::from_int(20),
+            Angle(16384),
+            Fx::from_int(500),
+            Fx::from_int(32),
+            30,
+            120,
+            16,
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &args).is_ok());
+        let packed = task.stack[0];
+        assert!(packed >= 0, "创建成功压回打包句柄");
+        let i = laser_slot(packed);
+        assert!(w.body.lasers.is_alive(i), "打包句柄应指向活槽");
+        assert_eq!(
+            (packed >> 16) & 0x7FFF,
+            (w.body.lasers.generation[i] & 0x7FFF) as i32,
+            "打包句柄只带池代际的低 15 位"
+        );
+        let l = &w.body.lasers;
+        assert_eq!(l.ox[i], Fx::from_int(10));
+        assert_eq!(l.oy[i], Fx::from_int(20));
+        assert_eq!(l.angle[i], Angle(16384));
+        assert_eq!(l.start[i], Fx::ZERO, "start = 0");
+        assert_eq!(l.end[i], Fx::from_int(500), "end = len");
+        assert_eq!(l.start_len[i], Fx::from_int(500), "start_len = len");
+        assert_eq!(l.speed[i], Fx::ZERO, "speed = 0");
+        assert_eq!(l.omega[i], 0, "omega = 0");
+        assert_eq!(l.width[i], Fx::from_int(32));
+        assert_eq!(l.sprite[i], 3, "sprite = color");
+        assert_eq!(l.warn[i], 30);
+        assert_eq!(l.active[i], 120);
+        assert_eq!(l.fade[i], 16);
+        assert_eq!(l.flags[i], 0);
+    }
+
+    /// `color ∉ 0..=15` → `FAULT_BAD_OP`，先验后建（不建半成品）。
+    #[test]
+    fn laser_bad_color_faults_without_creating() {
+        for color in [-1, 16] {
+            let (mut w, ecl) = fresh();
+            let mut task = Task::default();
+            let args = laser_args(
+                color,
+                Fx::ZERO,
+                Fx::ZERO,
+                Angle::ZERO,
+                Fx::ZERO,
+                Fx::ZERO,
+                0,
+                0,
+                0,
+            );
+            assert_eq!(
+                call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &args),
+                Err(FAULT_BAD_OP),
+                "color={color} 应 Fault"
+            );
+            assert_eq!(w.body.lasers.iter_alive().count(), 0, "先验后建：零副作用");
+        }
+    }
+
+    /// 池满 → 押 -1，不 Fault，`pool_full[POOL_LASER]` 加 1。
+    #[test]
+    fn laser_pool_full_pushes_neg1_and_counts() {
+        let (mut w, ecl) = fresh();
+        for k in 0..crate::lasers::LaserPool::CAP {
+            assert_ne!(
+                w.body.create_laser(zero_laser_init()),
+                crate::lasers::LaserHandle::NULL,
+                "第 {k} 条应成功"
+            );
+        }
+        let mut task = Task::default();
+        let pf0 = w.body.diag.pool_full[crate::world::POOL_LASER];
+        let args = laser_args(
+            0,
+            Fx::ZERO,
+            Fx::ZERO,
+            Angle::ZERO,
+            Fx::ZERO,
+            Fx::ZERO,
+            0,
+            0,
+            0,
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &args).is_ok());
+        assert_eq!(task.stack[0], -1, "池满押 -1，不 Fault");
+        assert_eq!(
+            w.body.diag.pool_full[crate::world::POOL_LASER],
+            pf0 + 1,
+            "池满计一次"
+        );
+    }
+
+    /// `warn/active/fade` 出 `[0,65535]` → 钳位；一次 create 多坏字段只计一次违约。
+    #[test]
+    fn laser_time_fields_clamp_out_of_u16_and_count_once() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let cv0 = w.body.diag.contract_viol;
+        let args = laser_args(
+            0,
+            Fx::ZERO,
+            Fx::ZERO,
+            Angle::ZERO,
+            Fx::ZERO,
+            Fx::ZERO,
+            100000,
+            -1,
+            70000,
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &args).is_ok());
+        let i = laser_slot(task.stack[0]);
+        assert_eq!(w.body.lasers.warn[i], u16::MAX, "warn 上钳");
+        assert_eq!(w.body.lasers.active[i], 0, "active 负值下钳 0");
+        assert_eq!(w.body.lasers.fade[i], u16::MAX, "fade 上钳");
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "一次 create 只计一次");
+    }
+
+    /// `lz_omega` 的栈值出 i16 → 钳到 i16 界并计数；合法负角不动、不计数。
+    #[test]
+    fn lz_omega_clamps_out_of_i16_and_counts() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let args = laser_args(
+            0,
+            Fx::ZERO,
+            Fx::ZERO,
+            Angle::ZERO,
+            Fx::from_int(100),
+            Fx::from_int(8),
+            0,
+            9999,
+            0,
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &args).is_ok());
+        let lz = task.stack[0];
+        let i = laser_slot(lz);
+
+        let cv0 = w.body.diag.contract_viol;
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_OMEGA, &[lz, 100000]).is_ok());
+        assert_eq!(w.body.lasers.omega[i], i16::MAX, "上钳");
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "钳位计一次");
+
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_OMEGA, &[lz, -100000]).is_ok());
+        assert_eq!(w.body.lasers.omega[i], i16::MIN, "下钳");
+        assert_eq!(w.body.diag.contract_viol, cv0 + 2);
+
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_OMEGA, &[lz, -18204]).is_ok());
+        assert_eq!(w.body.lasers.omega[i], -18204, "合法负角原样");
+        assert_eq!(w.body.diag.contract_viol, cv0 + 2, "合法值不计数");
+    }
+
+    /// Review Focus 3：激光 A 回收、新激光 B 复用同槽后，拿 A 的旧句柄调 `lz_rotate`
+    /// 不得改到 B；计一次违约；`lz_alive(A) == 0`、`lz_alive(B) == 1`。
+    #[test]
+    fn stale_laser_handle_does_not_touch_reused_slot() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let a = laser_args(
+            1,
+            Fx::ZERO,
+            Fx::ZERO,
+            Angle::ZERO,
+            Fx::from_int(100),
+            Fx::from_int(16),
+            0,
+            9999,
+            0,
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &a).is_ok());
+        let packed_a = task.stack[0];
+        let ia = laser_slot(packed_a);
+        let gen_a = w.body.lasers.generation[ia];
+
+        // 模拟相位 5 回收 A，再用 B 复用同槽（最低空位优先）。
+        w.body.lasers.free_index(ia);
+        task.sp = 0;
+        let b = laser_args(
+            2,
+            Fx::ZERO,
+            Fx::ZERO,
+            Angle(1000),
+            Fx::from_int(200),
+            Fx::from_int(8),
+            0,
+            9999,
+            0,
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &b).is_ok());
+        let packed_b = task.stack[0];
+        let ib = laser_slot(packed_b);
+        assert_eq!(ib, ia, "最低空位复用同槽");
+        assert_ne!(w.body.lasers.generation[ib], gen_a, "复用槽代际必须前进");
+        let angle_b = w.body.lasers.angle[ib];
+
+        let cv0 = w.body.diag.contract_viol;
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_ROTATE, &[packed_a, 1234]).is_ok());
+        assert_eq!(w.body.lasers.angle[ib], angle_b, "旧句柄不得改到复用槽的 B");
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "失效句柄计一次");
+
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_ALIVE, &[packed_a]).is_ok());
+        assert_eq!(task.stack[0], 0, "A 已回收");
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_ALIVE, &[packed_b]).is_ok());
+        assert_eq!(task.stack[0], 1, "B 存活");
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "lz_alive 只读不计数");
+    }
+
+    /// `lz_anchor` 挂上活敌后立即吸附、相位 5 逐帧跟随；`lz_anchor(lz, -1, …)` 解除挂靠。
+    #[test]
+    fn lz_anchor_follows_enemy_then_detaches_with_neg1() {
+        use crate::input::InputFrame;
+        let (mut w, ecl) = fresh();
+        let e = crate::world::test_support::spawn_enemy(&mut w, 0, 100, 5);
+        let ei = e.index as usize;
+        w.body.enemies.vx[ei] = Fx::from_int(2);
+        let mut task = Task {
+            owner_kind: OWNER_ENEMY,
+            owner_index: e.index,
+            owner_gen: e.generation,
+            ..Task::default()
+        };
+        let a = laser_args(
+            0,
+            Fx::ZERO,
+            Fx::ZERO,
+            Angle::ZERO,
+            Fx::from_int(500),
+            Fx::from_int(16),
+            0,
+            9999,
+            0,
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &a).is_ok());
+        let lz = task.stack[0];
+        let i = laser_slot(lz);
+
+        // brief 的原句：`lz_anchor($self_enemy, 0, 8)`——先经 `$self_enemy` 拿打包敌号。
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_SELF_ENEMY, &[]).is_ok());
+        let self_enemy = task.stack[0];
+        task.sp = 0;
+        let anchor = [lz, self_enemy, Fx::ZERO.raw(), Fx::from_int(8).raw()];
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_ANCHOR, &anchor).is_ok());
+        assert_eq!(w.body.lasers.anchor_idx[i], e.index, "挂上敌下标");
+        assert_eq!(w.body.lasers.ox[i], Fx::ZERO, "出生帧立即吸附 x");
+        assert_eq!(w.body.lasers.oy[i], Fx::from_int(108), "出生帧立即吸附 y+8");
+
+        // 相位 5 一帧：敌人 x += 2，激光跟到 2。
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.lasers.ox[i], Fx::from_int(2));
+        assert_eq!(w.body.lasers.oy[i], Fx::from_int(108));
+
+        // -1 解除：锚态清空、原点留在原地。
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_ANCHOR, &[lz, -1, 0, 0]).is_ok());
+        assert_eq!(
+            w.body.lasers.anchor_idx[i],
+            crate::lasers::ANCHOR_NONE,
+            "-1 解除挂靠"
+        );
+        assert_eq!(w.body.lasers.ox[i], Fx::from_int(2), "解除不动原点");
+    }
+
+    /// 控制方裁定 ②：失效敌号（非 -1，已死/代际不符）→ 不挂靠 + 计一次违约。
+    #[test]
+    fn lz_anchor_stale_enemy_is_noop_and_counted() {
+        let (mut w, ecl) = fresh();
+        let e = crate::world::test_support::spawn_enemy(&mut w, 0, 100, 5);
+        let mut task = Task::default();
+        let a = laser_args(
+            0,
+            Fx::ZERO,
+            Fx::ZERO,
+            Angle::ZERO,
+            Fx::from_int(500),
+            Fx::from_int(16),
+            0,
+            9999,
+            0,
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &a).is_ok());
+        let lz = task.stack[0];
+        let i = laser_slot(lz);
+
+        let live = crate::enemy::pack_handle(e);
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_ANCHOR, &[lz, live, 0, 0]).is_ok());
+        assert_eq!(w.body.lasers.anchor_idx[i], e.index);
+        assert_eq!(w.body.lasers.anchor_gen[i], e.generation);
+
+        // 杀敌回收槽 → 旧敌号失效（非 -1）。
+        w.body.enemies.free(e);
+        let cv0 = w.body.diag.contract_viol;
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_ANCHOR, &[lz, live, 0, 0]).is_ok());
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "失效敌号计一次");
+        assert_eq!(
+            w.body.lasers.anchor_idx[i], e.index,
+            "失败调用是 no-op：不改锚态"
+        );
+    }
+
+    /// 跨任务陷阱（阶段终审 I-3）：ECL 敌号只带代际低 15 位，而相位 5 的挂靠比较用**完整
+    /// u16 代际**。`lz_anchor` 必须经 `resolve_enemy_handle` 取下标、再用池里的完整代际重建
+    /// 句柄——用低 15 位复刻时，代际越过 0x7FFF 后挂靠会立刻静默脱钩。
+    #[test]
+    fn lz_anchor_survives_enemy_generation_above_15_bits() {
+        use crate::input::InputFrame;
+        let (mut w, ecl) = fresh();
+        let e = crate::world::test_support::spawn_enemy(&mut w, 0, 100, 5);
+        let ei = e.index as usize;
+        w.body.enemies.generation[ei] = 0xF00D;
+        w.body.enemies.vx[ei] = Fx::from_int(2);
+        let mut task = Task::default();
+        let a = laser_args(
+            0,
+            Fx::ZERO,
+            Fx::ZERO,
+            Angle::ZERO,
+            Fx::from_int(500),
+            Fx::from_int(16),
+            0,
+            9999,
+            0,
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &a).is_ok());
+        let lz = task.stack[0];
+        let i = laser_slot(lz);
+
+        let packed = crate::enemy::pack_handle(EnemyHandle {
+            index: e.index,
+            generation: 0xF00D,
+        });
+        assert_eq!(packed >> 16, 0x700D, "前提：句柄只带低 15 位");
+        task.sp = 0;
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_LASER_ANCHOR,
+                &[lz, packed, 0, 0]
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            w.body.lasers.anchor_gen[i], 0xF00D,
+            "必须存池里的完整 u16 代际"
+        );
+
+        // 若用低 15 位重建，anchor_gen 会落 0x700D，相位 5 代际不符 → 立刻脱钩。
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+        assert_eq!(w.body.lasers.anchor_idx[i], e.index, "代际相符：仍挂靠");
+        assert_eq!(w.body.lasers.ox[i], Fx::from_int(2), "跟随敌人本帧位移");
+        crate::world::test_support::step_t(&mut w, &InputFrame::empty(1));
+        assert_eq!(w.body.lasers.ox[i], Fx::from_int(4));
     }
 }

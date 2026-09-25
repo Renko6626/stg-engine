@@ -310,6 +310,33 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
 - **`607 etAim` 的九值 aimmode 枚举**——D-6 塌成 `sh_aim`/`sh_ring` 两个正交布尔（640/641 号）：
   mode 4/5 在两布尔下冗余，**mode 6/7/8 的随机模式不做**（另见 `follow-ups.md` D13）。
 
+### 8xx —— 激光（10）
+
+激光是一等实体（射线原点 + 方向 + 射线上 `[start, end]` 一段，spec
+`2026-09-25-laser-pool-design`）。`laser()` 建一条并返回**打包激光句柄**（编码同敌号：
+`((generation & 0x7FFF) << 16) | index`，`-1` 为唯一无效哨兵；槽复用可辨）；其余 `lz_*` 都拿
+这个句柄操作，参数**逆序弹出**。句柄失效（已回收 / 代际不符）→ 写 API 一律 no-op +
+`contract_viol` +1 + `STALE_HANDLE`，`lz_alive` 只读不计数（P4-b）。owner 类别无限制。
+
+| 号 | 名 | 参数（压栈序） | 返回 |
+|---|---|---|---|
+| 800 | `laser`（激光池刀 2026-09-25） | color,x,y,angle,len,width,warn,active,fade | 打包句柄或 -1（`color ∉ 0..=15` → **Fault(0)**，先验后建、不建半成品，同 `fire` 坏外观；`warn/active/fade` 出 `[0,65535]` → 钳位 + `contract_viol` +1；形态一 `start=0`、`end=start_len=len`、`speed=omega=0`、`flags=0`，其余派生字段交给世界侧；池满走 P4-a：押 -1 + `pool_full[POOL_LASER]` +1，**不 Fault**；`sprite` 存 `color`） |
+| 801 | `lz_speed` | lz,speed,start_len | —（形态二：设速率与近端长度，并把 `end` 重置为 `start` 从近端长出去；两字段世界层双边钳 `[0,LASER_LEN_MAX]`） |
+| 802 | `lz_start` | lz,s | —（近端留空，原作第 4 关 `start=64`；世界层钳 `[0,LASER_LEN_MAX]`，`start > end` 时把 `end` 抬到 `start`） |
+| 803 | `lz_omega` | lz,a | —（持续转动速率；池字段是 `i16` BAM/帧，栈值出 i16 → 钳到 i16 界 + `contract_viol` +1） |
+| 804 | `lz_rotate` | lz,a | —（一次性转 `a`，回绕加） |
+| 805 | `lz_aim` | lz,off | —（角度 = 指向自机 0 的 `atan2` + `off`） |
+| 806 | `lz_anchor` | lz,enemy,ox,oy | —（挂到敌号上；`enemy = -1` → `EnemyHandle::NULL` 解除挂靠。其它敌号一律经 `resolve_enemy_handle` 解析：命中则用池里的**完整 u16 代际**重建句柄（I-3，低 15 位复刻会让高代际静默脱钩）；解析失败 → 不挂靠 + `contract_viol` +1 + `STALE_HANDLE`。偏移世界层双边钳 `±LASER_COORD_MAX`，存活敌立即吸附到 `敌位置 + 偏移`） |
+| 807 | `lz_origin` | lz,x,y | —（直接设原点并**解除挂靠**；坐标双边钳 `±LASER_COORD_MAX`） |
+| 808 | `lz_cancel` | lz | —（`state < 2 → 2`、`timer = 0`；已收缩则 no-op 但仍成功） |
+| 809 | `lz_alive` | lz | 1/0（只读，不计数） |
+
+- 时序口径（全计划统一）：相位 5 里先按 `timer >= 时长` 判切换（切换时 `timer = 0`），再
+  `timer += 1`——`warn == 0` 出生帧即生效，预警恰好 `warn` 帧不判定、生效恰好 `active` 帧判定。
+- 激光只在相位 5 回收（fade 结束、`start >= 640`、`active` 结束且 `fade == 0`）；相位 7 的
+  取消只切状态，`fade == 0` 的激光在下一帧相位 5 回收。带 `FIELD_CLEAR_BULLETS` 的 field
+  碰到激光线段也取消（碰撞行 10）。
+
 ## 符卡计器（syscall 130/131/740/741 + `wait_spell` / `phase_begin` 糖；spec 2026-07-24，boss 换段刀 2026-09-14 扩）
 
 记账（计时/衰减/超时/破卡/`boss_ui` 喂送）全归引擎 `SpellState` 机构（settle 相位符卡趟），
