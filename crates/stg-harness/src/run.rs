@@ -67,6 +67,8 @@ fn fault_name(code: u8) -> String {
 pub(crate) struct Counts {
     pub frame: u32,
     pub bullets: u32,
+    /// 活激光条数（激光池刀）。**不进采样计数表**（训练仓按 8 列解析那张表），只进峰值 / 末帧行。
+    pub lasers: u32,
     pub shots: u32,
     pub enemies: u32,
     pub items: u32,
@@ -96,6 +98,7 @@ impl Peak {
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub(crate) struct Peaks {
     pub bullets: Peak,
+    pub lasers: Peak,
     pub shots: Peak,
     pub enemies: Peak,
     pub items: Peak,
@@ -144,6 +147,30 @@ pub(crate) struct EnemyRow {
     pub sprite: u16,
 }
 
+/// `--at` 那一帧的一条活激光（池索引升序，I4）。几何给原值，时序给三段时长 + 当前态与 `timer`，
+/// 审核「预警几帧、生效几帧、扫到哪」都靠它；`width` 就是判定宽度（半高 = width/2）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct LaserRow {
+    pub idx: usize,
+    pub ox_raw: i32,
+    pub oy_raw: i32,
+    pub angle_bam: u16,
+    pub start_raw: i32,
+    pub end_raw: i32,
+    pub width_raw: i32,
+    pub speed_raw: i32,
+    pub omega: i16,
+    pub state: u8,
+    pub timer: u16,
+    pub warn: u16,
+    pub active: u16,
+    pub fade: u16,
+    pub color: u16,
+}
+
+/// `--at F` 那一帧的快照：帧号 + 活弹 / 活敌 / 活激光三张表。
+pub(crate) type AtDump = (u32, Vec<BulletRow>, Vec<EnemyRow>, Vec<LaserRow>);
+
 /// 一次 `run` 的全部事实。CLI 只负责把它印出来——测试直接吃这个结构。
 pub(crate) struct RunReport {
     pub units: Vec<String>,
@@ -157,7 +184,7 @@ pub(crate) struct RunReport {
     /// 各类段结束事件的**首次**出现帧（下标 = `SEG_EVENTS` 行序）；未出现为 `None`。
     pub seg_ends: [Option<u32>; 4],
     pub diag: DiagCounters,
-    pub at: Option<(u32, Vec<BulletRow>, Vec<EnemyRow>)>,
+    pub at: Option<AtDump>,
 }
 
 impl RunReport {
@@ -182,6 +209,7 @@ fn observe(w: &World) -> Counts {
     Counts {
         frame: w.frame(),
         bullets: popcount(v.bullets().alive_words()),
+        lasers: popcount(v.lasers().alive_words()),
         shots: popcount(v.shots().alive_words()),
         enemies: popcount(v.enemies().alive_words()),
         items: popcount(v.items().alive_words()),
@@ -191,8 +219,8 @@ fn observe(w: &World) -> Counts {
     }
 }
 
-/// 摘当帧全部活弹 + 活敌（各按池索引升序，I4）。
-fn dump_at(w: &World) -> (Vec<BulletRow>, Vec<EnemyRow>) {
+/// 摘当帧全部活弹 + 活敌 + 活激光（各按池索引升序，I4）。
+fn dump_at(w: &World) -> (Vec<BulletRow>, Vec<EnemyRow>, Vec<LaserRow>) {
     let v = w.view();
     let b = v.bullets();
     let bullets = b
@@ -222,7 +250,28 @@ fn dump_at(w: &World) -> (Vec<BulletRow>, Vec<EnemyRow>) {
             sprite: e.sprite()[i],
         })
         .collect();
-    (bullets, enemies)
+    let l = v.lasers();
+    let lasers = l
+        .iter_alive()
+        .map(|i| LaserRow {
+            idx: i,
+            ox_raw: l.ox()[i].raw(),
+            oy_raw: l.oy()[i].raw(),
+            angle_bam: l.angle()[i].raw(),
+            start_raw: l.start()[i].raw(),
+            end_raw: l.end()[i].raw(),
+            width_raw: l.width()[i].raw(),
+            speed_raw: l.speed()[i].raw(),
+            omega: l.omega()[i],
+            state: l.state()[i],
+            timer: l.timer()[i],
+            warn: l.warn()[i],
+            active: l.active()[i],
+            fade: l.fade()[i],
+            color: l.sprite()[i],
+        })
+        .collect();
+    (bullets, enemies, lasers)
 }
 
 // ── 建世界（run / serve --ecl / dump --ecl 共用）─────────────────────────────
@@ -279,7 +328,7 @@ pub(crate) fn run_scene(
     let mut peaks = Peaks::default();
     let mut faults: Vec<FaultRec> = Vec::new();
     let mut seg_ends: [Option<u32>; 4] = [None; 4];
-    let mut at_dump: Option<(u32, Vec<BulletRow>, Vec<EnemyRow>)> = None;
+    let mut at_dump: Option<AtDump> = None;
 
     // 帧号去重：`--frames` 恰好是 stride 整数倍时末帧会被推两次。
     let push = |rows: &mut Vec<Counts>, c: Counts| {
@@ -291,8 +340,8 @@ pub(crate) fn run_scene(
     let c0 = observe(w);
     push(&mut rows, c0);
     if at == Some(0) {
-        let (b, e) = dump_at(w);
-        at_dump = Some((0, b, e));
+        let (b, e, l) = dump_at(w);
+        at_dump = Some((0, b, e, l));
     }
 
     for _ in 0..frames {
@@ -319,6 +368,7 @@ pub(crate) fn run_scene(
 
         let c = observe(w);
         peaks.bullets.feed(c.bullets, f);
+        peaks.lasers.feed(c.lasers, f);
         peaks.shots.feed(c.shots, f);
         peaks.enemies.feed(c.enemies, f);
         peaks.items.feed(c.items, f);
@@ -327,8 +377,8 @@ pub(crate) fn run_scene(
             push(&mut rows, c);
         }
         if at == Some(f) {
-            let (b, e) = dump_at(w);
-            at_dump = Some((f, b, e));
+            let (b, e, l) = dump_at(w);
+            at_dump = Some((f, b, e, l));
         }
     }
 
@@ -389,7 +439,7 @@ fn print_report(path: &str, r: &RunReport) {
     }
     println!();
     println!(
-        "峰值：弹 {}（帧 {}）· 敌 {}（帧 {}）· 任务 {}（帧 {}）· 道具 {}（帧 {}）· 自机弹 {}（帧 {}）",
+        "峰值：弹 {}（帧 {}）· 敌 {}（帧 {}）· 任务 {}（帧 {}）· 道具 {}（帧 {}）· 自机弹 {}（帧 {}）· 激光 {}（帧 {}）",
         r.peaks.bullets.v,
         r.peaks.bullets.at,
         r.peaks.enemies.v,
@@ -400,10 +450,18 @@ fn print_report(path: &str, r: &RunReport) {
         r.peaks.items.at,
         r.peaks.shots.v,
         r.peaks.shots.at,
+        r.peaks.lasers.v,
+        r.peaks.lasers.at,
     );
     println!(
-        "末帧 {}：弹 {} · 敌 {} · 任务 {} · 道具 {} · 自机弹 {}",
-        r.last.frame, r.last.bullets, r.last.enemies, r.last.tasks, r.last.items, r.last.shots
+        "末帧 {}：弹 {} · 敌 {} · 任务 {} · 道具 {} · 自机弹 {} · 激光 {}",
+        r.last.frame,
+        r.last.bullets,
+        r.last.enemies,
+        r.last.tasks,
+        r.last.items,
+        r.last.shots,
+        r.last.lasers
     );
     // 固定格式（训练仓 stgtranscribe.validate 按此解析）：各类首次出现帧，未出现记 —。
     let segs: Vec<String> = SEG_EVENTS
@@ -459,7 +517,7 @@ fn print_report(path: &str, r: &RunReport) {
         println!("  不影响退出码（P4-a 是确定性降级不是崩），但场上确实少了东西。");
     }
 
-    if let Some((f, bullets, enemies)) = &r.at {
+    if let Some((f, bullets, enemies, lasers)) = &r.at {
         println!();
         println!("帧 {f} · 活敌 {} 只（池索引升序）", enemies.len());
         println!(
@@ -498,6 +556,45 @@ fn print_report(path: &str, r: &RunReport) {
             println!(
                 "  ……另 {} 条已略（--at 打印上限 {AT_DUMP_LIMIT}）",
                 bullets.len() - AT_DUMP_LIMIT
+            );
+        }
+        // 激光表放在弹表之后：训练仓 preview.parse_at 只认「活敌 / 活弹」表头，新表不打断它。
+        println!();
+        println!("帧 {f} · 活激光 {} 条（池索引升序）", lasers.len());
+        println!(
+            "{:>6} {:>9} {:>9} {:>8} {:>8} {:>8} {:>8} {:>7} {:>7} {:>6} {:>5} {:>5} {:>13} {:>5}",
+            "idx",
+            "ox",
+            "oy",
+            "angleBAM",
+            "deg",
+            "start",
+            "end",
+            "width",
+            "speed",
+            "omega",
+            "state",
+            "timer",
+            "warn/act/fade",
+            "color"
+        );
+        for l in lasers.iter().take(AT_DUMP_LIMIT) {
+            println!(
+                "{:>6} {:>9} {:>9} {:>8} {:>8} {:>8} {:>8} {:>7} {:>7} {:>6} {:>5} {:>5} {:>13} {:>5}",
+                l.idx,
+                fx(l.ox_raw, 2),
+                fx(l.oy_raw, 2),
+                l.angle_bam,
+                deg(l.angle_bam),
+                fx(l.start_raw, 2),
+                fx(l.end_raw, 2),
+                fx(l.width_raw, 2),
+                fx(l.speed_raw, 2),
+                l.omega,
+                l.state,
+                l.timer,
+                format!("{}/{}/{}", l.warn, l.active, l.fade),
+                l.color
             );
         }
     }
@@ -736,7 +833,7 @@ sub main() {
 "#;
         // 敌出生当帧不跑，次帧首跑 → 帧 2 已开完第一波。
         let r = run_src(src, 3, Some(3));
-        let (_f, rows, enemies) = r.at.as_ref().expect("--at 应有快照");
+        let (_f, rows, enemies, _lasers) = r.at.as_ref().expect("--at 应有快照");
         assert_eq!(enemies.len(), 1, "敌表也在（教程第 4 步的走位靠它验）");
         assert_eq!(rows.len(), 32, "16 路 × 2 层 = 32 颗");
 
@@ -803,6 +900,47 @@ sub main() {
     /// 写反弹序就会得到不同结果。走真 `.ecl` 编译链（builtins 声明序 → codegen 压栈 →
     /// syscall 逆序弹出），`call` 级单测绕不过编译器、抓不到这条链的错序。
     /// `lz_omega(65000bam)` 顺带端到端钉死按位回绕（>32767 的原始值 → i16 负角速度）。
+    /// `--at` 的激光表与激光峰值：转写审核靠它核「预警几帧、扫到哪」。
+    /// 激光出生那一步 = 激光峰值帧（`peaks.lasers.at`）；第 10 步后 `timer` = 出生以来推进的步数，
+    /// 预警 30 仍在 state 0，角度 = 初值 + omega × timer（omega 与 timer 在相位 5 同步推进）。
+    #[test]
+    fn at_dump_lists_lasers_and_peak_counts_them() {
+        let src = r#"
+async sub shoot() {
+    var a: int = laser(5, 10.0fx, 20.0fx, 16384bam, 300.0fx, 12.0fx, 30, 60, 8);
+    lz_omega(a, 100bam);
+    loop { wait(1); }
+}
+sub main() {
+    _ = spawn_enemy(0.0fx, 96.0fx, 300, 1, 1000, 1, shoot);
+    loop { wait(1); }
+}
+"#;
+        let r = run_src(src, 20, Some(10));
+        let (_f, _b, _e, lasers) = r.at.as_ref().expect("--at 应有快照");
+        assert_eq!(lasers.len(), 1);
+        let l = lasers[0];
+        assert_eq!((l.ox_raw, l.oy_raw), (10 << 16, 20 << 16));
+        assert_eq!(
+            (l.start_raw, l.end_raw, l.width_raw),
+            (0, 300 << 16, 12 << 16)
+        );
+        let born = r.peaks.lasers.at;
+        assert_eq!(
+            (l.state, u32::from(l.timer)),
+            (0, 10 - born + 1),
+            "出生于帧 {born}"
+        );
+        assert_eq!(
+            l.angle_bam,
+            16384u16.wrapping_add(100 * l.timer),
+            "omega 100 × timer"
+        );
+        assert_eq!((l.warn, l.active, l.fade, l.color), (30, 60, 8, 5));
+        assert_eq!(r.peaks.lasers.v, 1);
+        assert_eq!(r.last.lasers, 1);
+    }
+
     #[test]
     fn laser_setter_param_order_end_to_end() {
         use stg_core::math::{Angle, Fx, atan2};

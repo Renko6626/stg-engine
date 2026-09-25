@@ -853,14 +853,23 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
 5. **激光原点闪光**（原作 `SPAWN_BIG_BALL`）：spec §7 提到，Godot 层本刀不做——原点只画光带。
 6. **图集补一行 16 色截面渐变贴图**：现在 `laser.gdshader` 程序化生成截面渐变，16 色表是从
    `godot/assets/bullets.png` 采样的近似代表色（注释已写明是占位）。触发点：美术补图后改为采样那张图，表与 shader 一并替换。
-7. **TH06 转写的两条换算**（spec §9.1）：写 `width = 原作值 / 2`（原作画面是判定 2 倍）；
-   `loop { laser_rotate(lz, a); wait(N); }` → `lz_omega(lz, (a as int / N) as angle)`。触发点：训练仓 `transcribe/th06/mapping.md` 接激光指令时（本仓不做）。
+7. **TH06 转写的换算**（spec §9.1）：写 `width = 原作值 / 2`（原作画面是判定 2 倍）；`laser_rotate` / `laser_offset`
+   逐帧照翻成 `lz_rotate` / `lz_origin`（红魔乡的旋转全是逐帧的，`lz_omega` 只给「每 N 帧转一次」用）；自机狙用 `lz_aim`。
+   触发点：训练仓 `transcribe/th06/mapping.md` §14（已写，2026-09-25）。
 8. **`hits` 溢出时激光命中最先被丢**：碰撞矩阵里行 9/10 最后收集，`hits` 缓冲满（`HITS_CAP = 8192`）
    时后收集的激光命中会先被丢弃，符卡结束的清弹可能因此漏掉激光。行为确定且计入 `hits_overflow`。
    触发点：单帧命中数逼近 8192（当前内容远未达到），或符卡清除可靠性成为硬需求时。
 9. **Tier 0 选最近 64 条不区分状态**：`write_lasers` 按到自机的距离取前 64 条，收缩态（state 2）
    也占名额；激光超过 64 条时，收缩态可能把生效态的激光挤出观测。触发点：训练侧发现激光密度
    场景下生效态被稀释，或改成按状态/威胁度取 K 时（本仓改 `write_lasers` 的排序键即可）。
+10. **梭形激光外观**：原作 `laser_create` 的 `sprite = 1`（帕秋莉全部 128 条、芙兰全部 9 条）用圆弹 BALL 贴图
+    （etama3 第 62 号）拉伸，画出来两头尖；`sprite = 0` 才是截面光条。我们的 `laser()` 只收 `color`，只画光条。
+    只影响画面，判定仍是矩形盒。触发点：游戏侧要还原帕秋莉/芙兰的激光观感时——给 `laser.gdshader` 加一个「梭形」截面
+    样式（按 UV.y 收窄两端），并给激光加一个纯表现的样式字段或 `lz_style` 写口（不进判定）。
+11. **激光读口 `lz_x / lz_y / lz_angle / lz_start / lz_end`**：脚本现在只能写激光、不能读几何（`lz_alive` 除外）。
+    TH06 Extra 的 `ex_ins_call(14)`（沿激光每 48 px 铺弹，`EnemyEclInstr.cpp:1110`）需要读原点、角度与区间，
+    激光又挂在移动的敌人身上，靠脚本自己跟踪很别扭，所以训练仓暂把 14 号留在 skip。触发点：要转 Extra 的这张卡时，
+    在 8xx 族加五条只读 syscall（无状态、不计数，失效句柄返回 0）。
 
 ## F. 长期预留（M0-18 性能审记档，均不动现刀）
 

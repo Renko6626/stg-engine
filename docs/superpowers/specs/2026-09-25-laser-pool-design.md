@@ -206,10 +206,20 @@ lz_alive(lz) -> int               // 原作 91
 ## 9. 交接（本刀不做，写给下游）
 
 ### 9.1 转写流水线（stg-rl-train `transcribe/`）
-- mapping.md 补激光对照：**宽度减半**（裁定 ④）；循环里每帧（或每 N 帧）转同一个角度的写法改成 `lz_omega`（每 N 帧转 a，就换成 a/N 的连续 omega）；
-  每帧重发的 `laser_offset` 改成 `lz_anchor`；去掉 `laser_index`、`laser_clear_all`；85/86 → `laser(... aim_player() + a ...)`。
+- mapping.md 补激光对照：**宽度减半**（裁定 ④）；去掉 `laser_index`、`laser_clear_all`（句柄存局部变量，跨 sub 用到的句柄作为参数传入）。
+- **旋转与平移逐条照翻**（2026-09-25 核对全作后订正）：TH06 的 `laser_rotate` 全部在逐帧循环里，照翻成逐帧 `lz_rotate`
+  与原作逐位等价，观测里的 `dang` 也是平滑的；`lz_omega` 只用于「每 N 帧转一次（N > 1）」的写法（红魔乡里没有）。
+  逐帧的 `laser_offset(i, x, y)` 照翻成逐帧 `lz_origin(lz, $self_x + x, $self_y + y)`：两者都在脚本执行时刻读敌人位置；
+  `lz_anchor` 在相位 5 读敌人**移动后**的位置，会领先原作一帧，所以不用于 TH06 转写。
+- **自机狙的基点**：原作 86 号从「敌人位置 + `shoot_offset`」（= 激光原点）瞄准。转写成 `laser(...)` 之后立刻
+  `lz_aim(lz, a)`：`lz_aim` 从激光原点瞄准，与原作精确一致，出生帧的修改也不会在观测里出尖峰（§12）。
+  `aim_player() + a` 从敌人自身瞄准，`shoot_offset ≠ 0` 时会差一个小角度，不要用。
 - 从 `config.toml` 的 `[skip] instructions` 里去掉激光指令，第一批用 s1_mb2、s1_b3、s2_b4 验证，再转第 4 关和 Extra。
+- `ex_ins_call(12)`（第 4 关「在激光上发弹」）只需要激光角度与死活：角度由脚本逐帧 `lz_rotate` 驱动，脚本同步维护一份角度变量即可，
+  死活用 `lz_alive`，**可以转**。`ex_ins_call(14)`（Extra「沿激光铺弹」）要读原点、角度、start、end，等引擎加 `lz_*` 读口
+  （follow-ups D27 第 11 条）后再转。
 - Extra Sub47 的「每帧重建」写法照原样转（每帧 `laser()` + 短 active），不要合并成一条长激光：原作的判定就是这样。
+- 画面差异：原作 `sprite = 1`（帕秋莉、芙兰的全部激光）用的是圆弹 BALL 贴图拉伸成的梭形，我们只画截面光条（D27 第 10 条），不影响判定。
 
 ### 9.2 模型（stg-rl-train）
 - 激光 token，8 列：线段上离自机最近的点相对自机的位置（2）、这个点的速度（2，线段中间只算垂直于轴的扫动，端点再加上伸缩速度）、`half_h`（1）、
