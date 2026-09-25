@@ -1,6 +1,6 @@
 //! 相位 5 · 积分（各池 `pos += vel` + 计时器倒数）。
 //!
-//! 冻结趟序（`stg-world-design.md:168`）：弹 → 自机弹 → 敌人 → 道具 → 作用区。
+//! 冻结趟序（`stg-world-design.md:168`）：弹 → 自机弹 → 敌人 → 激光 → 道具 → 作用区。
 //!
 //! 弹：delay 门 → 模式效果（POLAR/CART 互斥）→ `pos += vel` → life 倒数。
 //! 自机弹：`pos += vel`。
@@ -9,6 +9,7 @@
 //! 接管位置（不读 vx/vy），否则照常 `pos += vel`。到点清速条件化：判据是黏滞位
 //! `vel_touched`（§6.3）。另 tick `invuln`/`hit_flash`，两个计时器分支外照常。
 //! 道具：触发判定（PoC / 近距磁吸）先于移动 —— 磁吸=直追终速、未锁定/解锁=重力到终速钉住。
+//! 激光：**在敌人之后**（挂靠读敌人本帧新位置），三态时序先判切换再 `timer += 1`；唯一的回收点。
 //! 作用区：`life` 倒数 —— `life=1` 本帧减到 0、相位 6 仍参与判定、相位 9 才回收（"每帧重铺=跟随"的时序基础）。
 
 use super::WorldBody;
@@ -18,9 +19,9 @@ use crate::tables::WorldTables;
 impl WorldBody {
     pub(crate) fn integrate(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_INTEGRATE);
-        // 冻结趟序（stg-world-design.md:168）：弹 → 自机弹 → 敌人 → 道具 → 作用区。
+        // 冻结趟序（stg-world-design.md:168）：弹 → 自机弹 → 敌人 → 激光 → 道具 → 作用区。
         // **顺序是宪法，门禁不得重排它**——只在原位加条件。
-        // 本相位横跨 B/C 两组：自机弹的飞行是 B（任一方向的时停都冻），其余四趟是 C。
+        // 本相位横跨 B/C 两组：自机弹的飞行是 B（任一方向的时停都冻），其余五趟是 C。
         let scene = self.scene_frozen();
         if !scene {
             self.integrate_bullets();
@@ -30,6 +31,7 @@ impl WorldBody {
         }
         if !scene {
             self.integrate_enemies();
+            self.integrate_lasers();
             self.integrate_items(tables);
             self.integrate_fields();
         } else {
@@ -43,6 +45,18 @@ impl WorldBody {
                     bits &= bits - 1;
                     self.enemies.dx[i] = Fx::ZERO;
                     self.enemies.dy[i] = Fx::ZERO;
+                }
+            }
+            // 激光同款：不推进、不更新 px/py/pang，但观测字段必须报 0（Review Focus 5）。
+            let nw = self.lasers.alive.len();
+            for w in 0..nw {
+                let mut bits = self.lasers.alive[w];
+                while bits != 0 {
+                    let i = w * 64 + bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    self.lasers.dx[i] = Fx::ZERO;
+                    self.lasers.dy[i] = Fx::ZERO;
+                    self.lasers.dang[i] = 0;
                 }
             }
         }
@@ -178,6 +192,70 @@ impl WorldBody {
                 if self.enemies.hit_flash[i] > 0 {
                     self.enemies.hit_flash[i] -= 1;
                 }
+            }
+        }
+    }
+
+    /// 相位 5 · 激光（在敌人之后：挂靠读敌人本帧新位置）。唯一的回收点。
+    fn integrate_lasers(&mut self) {
+        use crate::lasers::*;
+        let nw = self.lasers.alive.len();
+        for w in 0..nw {
+            let mut bits = self.lasers.alive[w];
+            while bits != 0 {
+                let i = w * 64 + bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                let l = &mut self.lasers;
+                // 挂靠：代际相符才跟，否则脱钩（原点留在原地）
+                if l.anchor_idx[i] != ANCHOR_NONE {
+                    let e = l.anchor_idx[i] as usize;
+                    if self.enemies.is_alive(e) && self.enemies.generation[e] == l.anchor_gen[i] {
+                        l.ox[i] = self.enemies.x[e] + l.ax[i];
+                        l.oy[i] = self.enemies.y[e] + l.ay[i];
+                    } else {
+                        l.anchor_idx[i] = ANCHOR_NONE;
+                    }
+                }
+                l.angle[i] = l.angle[i].add_delta(l.omega[i]);
+                l.end[i] = l.end[i] + l.speed[i];
+                if l.end[i] - l.start[i] > l.start_len[i] {
+                    l.start[i] = l.end[i] - l.start_len[i];
+                }
+                if l.start[i] < Fx::ZERO {
+                    l.start[i] = Fx::ZERO;
+                }
+                // 时序：先判切换再 +1（Global Constraints 的口径）。
+                let mut dead = false;
+                match l.state[i] {
+                    LASER_WARN if l.timer[i] >= l.warn[i] => {
+                        l.state[i] = LASER_ACTIVE;
+                        l.timer[i] = 0;
+                    }
+                    LASER_ACTIVE if l.timer[i] >= l.active[i] => {
+                        if l.fade[i] == 0 {
+                            dead = true;
+                        } else {
+                            l.state[i] = LASER_FADE;
+                            l.timer[i] = 0;
+                        }
+                    }
+                    LASER_FADE if l.timer[i] >= l.fade[i] => dead = true,
+                    _ => {}
+                }
+                if l.start[i] >= LASER_CULL {
+                    dead = true;
+                }
+                if dead {
+                    l.free_index(i);
+                    continue;
+                }
+                l.timer[i] = l.timer[i].saturating_add(1);
+                l.dx[i] = l.ox[i] - l.px[i];
+                l.dy[i] = l.oy[i] - l.py[i];
+                l.dang[i] = l.angle[i].raw().wrapping_sub(l.pang[i].raw()) as i16;
+                l.px[i] = l.ox[i];
+                l.py[i] = l.oy[i];
+                l.pang[i] = l.angle[i];
             }
         }
     }
