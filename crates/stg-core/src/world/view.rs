@@ -47,6 +47,11 @@ impl<'w> WorldView<'w> {
     pub fn fields(self) -> &'w FieldPool {
         &self.body.fields
     }
+    /// 激光池只读切片（spec 2026-09-25-laser-pool-design；写口只有 `WorldBody::create_laser`，
+    /// 后续 `lz_*` 写 API 住 `world/laser.rs`）。
+    pub fn lasers(self) -> &'w crate::lasers::LaserPool {
+        &self.body.lasers
+    }
     pub fn players(self) -> &'w [PlayerState] {
         self.body.players()
     }

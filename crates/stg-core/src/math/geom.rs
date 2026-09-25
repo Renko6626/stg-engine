@@ -82,3 +82,112 @@ mod tests {
         }
     }
 }
+
+/// 点到「旋转线段盒」的平方距离（Q32.32，i64，不开根）。盒 = 从 (ox,oy) 沿 angle 的射线上
+/// `[start, end]` 一段，横向半高 `half`。把点转进盒的局部系后钳位，求到钳位点的距离。
+/// 激光判定（碰撞行 9/10）用：`seg_box_dist_sq(..) <= r.raw()²` 即相交。
+/// 溢出：dx/dy 是屏幕坐标差（|·| < 32768 px 即不溢出 Fx），乘 cos/sin（|·| ≤ 1）走 Fx::mul 安全。
+#[allow(clippy::too_many_arguments)] // 判定原语的天然参数面（点 + 线段盒），签名即 spec §4.2 契约
+pub fn seg_box_dist_sq(
+    px: Fx,
+    py: Fx,
+    ox: Fx,
+    oy: Fx,
+    angle: Angle,
+    start: Fx,
+    end: Fx,
+    half: Fx,
+) -> i64 {
+    let (s, c) = sincos(angle);
+    let (dx, dy) = (px - ox, py - oy);
+    let along = dx * c + dy * s;
+    let perp = dy * c - dx * s;
+    let qa = if along < start {
+        start
+    } else if along > end {
+        end
+    } else {
+        along
+    };
+    let qp = if perp < -half {
+        -half
+    } else if perp > half {
+        half
+    } else {
+        perp
+    };
+    len_sq(along - qa, perp - qp)
+}
+
+#[cfg(test)]
+mod seg_box_tests {
+    use super::*;
+    const R: i64 = 65536; // 1 px 的 raw
+    fn fx(v: i32) -> Fx {
+        Fx::from_int(v)
+    }
+    fn d(px: i32, py: i32, a: u16, st: i32, en: i32, half: i32) -> i64 {
+        seg_box_dist_sq(
+            fx(px),
+            fx(py),
+            fx(0),
+            fx(0),
+            Angle(a),
+            fx(st),
+            fx(en),
+            fx(half),
+        )
+    }
+    #[test]
+    fn inside_box_is_zero() {
+        assert_eq!(d(50, 3, 0, 0, 100, 4), 0);
+    }
+    // 半高 4：点在 y=6 → 距 2 px。若误用 width/4 或 half*2，结果不是 4 px²。
+    #[test]
+    fn perp_distance_uses_half() {
+        assert_eq!(d(50, 6, 0, 0, 100, 4), 4 * R * R);
+    }
+    // 近端留空 start=64：点在 x=10 → 到 x=64 距 54。若钳位下界误写成 0，结果是 0。
+    #[test]
+    fn clamps_to_start_not_zero() {
+        assert_eq!(d(10, 0, 0, 64, 500, 4), 54 * 54 * R * R);
+    }
+    #[test]
+    fn beyond_end() {
+        assert_eq!(d(110, 0, 0, 0, 100, 4), 100 * R * R);
+    }
+    // angle = 90°（BAM 16384，指向 +y，屏幕向下）：点 (0,50) 在盒内，点 (50,0) 在侧面 46 px 外。
+    // along/perp 写反会让前两条互换。点 (0,−50) 在原点**后方** 50 px：sin 符号写反时它会被算进盒内（得 0）。
+    #[test]
+    fn rotated_quarter_turn() {
+        assert_eq!(d(0, 50, 16384, 0, 100, 4), 0);
+        assert_eq!(d(50, 0, 16384, 0, 100, 4), 46 * 46 * R * R);
+        assert_eq!(d(0, -50, 16384, 0, 100, 4), 50 * 50 * R * R);
+    }
+    // Review Focus 4：原点在屏外很远、长 640，点在远端附近，结果精确且不溢出。
+    #[test]
+    fn far_origin_no_overflow() {
+        let v = seg_box_dist_sq(
+            fx(0),
+            fx(440),
+            fx(0),
+            fx(-200),
+            Angle(16384),
+            fx(0),
+            fx(640),
+            fx(3),
+        );
+        assert_eq!(v, 0);
+        let v = seg_box_dist_sq(
+            fx(700),
+            fx(440),
+            fx(0),
+            fx(-200),
+            Angle(16384),
+            fx(0),
+            fx(640),
+            fx(3),
+        );
+        assert_eq!(v, 697 * 697 * R * R);
+    }
+}

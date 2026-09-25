@@ -171,6 +171,7 @@ impl World {
         s.enemies.copy_into(&mut d.enemies);
         s.fields.copy_into(&mut d.fields);
         s.items.copy_into(&mut d.items);
+        s.lasers.copy_into(&mut d.lasers);
         s.xforms.copy_into(&mut d.xforms);
         d.signals = s.signals;
         d.diag = s.diag;
@@ -2328,11 +2329,22 @@ mod tests {
         // ① `copy_into` 走 `d.players = s.players`（Copy）自动；② checksum/④ SaveBytes 走
         // derive 按字段序列化，wire format 仍多出 2 B×2 名自机 ⇒ `ENGINE_VER` 在 T4 统一 bump
         // （本 Task 不 bump）；③ 非池。判别面：`bomb_timer_enters_the_checksum`。
+        // 2026-09-25（激光池刀 Task 1）：`WorldBody` 新增 `lasers: LaserPool`（cap 256），
+        // 即 spec `2026-09-25-laser-pool-design`。27 字段/槽 = Fx×13(52 B) + Angle×2(4 B) +
+        // i16×2(4 B) + u16×7(14 B) + u8×2(2 B) + u32(4 B) = **80 B**，另加 gen 2 B/槽 +
+        // alive u64×4 字 = 80×256 + 512 + 32 = **激光池 +21024 B**，无对齐吸收（字段数组
+        // 同型连续、池自身 4 对齐）：WorldBody 1037304→1058328、World 1197104→1218128，
+        // 增量 1:1（加在 `WorldBody`，非 Task 字段）。
+        // ① `copy_into` 手写清单**已同步**加 `s.lasers.copy_into(&mut d.lasers);`（正是本哨兵
+        //    盯的缝）；② checksum 走 `define_pool!` 的 derive（哈希全槽不看 alive），自动入；
+        // ③ **D10 容量预算适用**（本刀新增池 cap 256，`stg-world-design.md` D10 表已加行）；
+        // ④ SaveBytes 走 derive 自动入档 ⇒ 存档 wire format 变化，`ENGINE_VER` 23→24（见 lib.rs）。
+        // 判别面：`world::laser::tests::snapshot_covers_laser_pool`。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (1037304, 1197104);
+        const EXPECTED: (usize, usize) = (1058328, 1218128);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (1037304, 1197104);
+        const EXPECTED: (usize, usize) = (1058328, 1218128);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2398,8 +2410,11 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            23,
-            "bump 必须是有意识决定(评审 + 改本测试)——22→23：引擎第二刀(2026-09-24)。\
+            24,
+            "bump 必须是有意识决定(评审 + 改本测试)——23→24：激光池刀(2026-09-25，spec 2026-09-25-laser-pool-design.md)。\
+             新增 LaserPool(cap 256)、相位 5 推进、碰撞行 9/10、syscall 族 8xx；校验和与存档载荷均变化，旧回放失效。\
+             WorldBody.lasers 80 B/槽×256 + gen/alive = +21024 B(World 尺寸哨兵实测 1058328/1218128；copy_into 已同步)。\
+             ——前一次 22→23：引擎第二刀(2026-09-24)。\
              弹 flags 位 5 BULLET_STEP_LIVE(跳过无活跃 STEP 的弹)、位 6 BULLET_POLAR_STALE\
              (CART_FX 极坐标惰性回填,读取前 materialize);ECL 镜像加载时校验代码(坏 op/越界操作数/\
              非法跳转目标等从运行时 fault 改为加载错误),两个指令预算合成一个倒数;敌人池新增 dx/dy\

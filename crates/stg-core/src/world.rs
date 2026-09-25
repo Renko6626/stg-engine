@@ -32,6 +32,7 @@ use crate::shots::{ShotHandle, ShotInit, ShotPool};
 mod cleanup;
 mod collide;
 mod integrate;
+mod laser;
 pub mod motion;
 mod player;
 mod settle;
@@ -49,6 +50,8 @@ pub const POOL_XFORM: usize = 4;
 pub const POOL_ITEM: usize = 5;
 /// ECL 任务池（M1 T2；`pool_full` 数组容量 8，恰余两位——够用无需扩容）。
 pub const POOL_TASK: usize = 6;
+/// 激光池（spec 2026-09-25-laser-pool-design）——`pool_full` 数组的最后一格。
+pub const POOL_LASER: usize = 7;
 pub const STATUS_OK: u16 = 0;
 pub const STATUS_POOL_FULL: u16 = 1;
 pub const STATUS_STALE_HANDLE: u16 = 2;
@@ -172,6 +175,9 @@ pub struct WorldBody {
     pub(crate) fields: FieldPool,
     /// 道具池（D7）。与四实体池同级 `pub(crate)`——表现层经 `view()` 只读访问器读。
     pub(crate) items: crate::items::ItemPool,
+    /// 激光池（spec 2026-09-25-laser-pool-design）。`create_laser` 唯一写入口（P1），
+    /// 断层线以上经 `view().lasers()` 只读。
+    pub(crate) lasers: crate::lasers::LaserPool,
     /// 变换段池（D4）。手写 Checksum 全量入校验和（P6）；I7 inline 数组。
     pub(crate) xforms: crate::xform::XformSegPool,
     /// 信号黑板（D4 11b）：每通道存"最后脉冲帧号 + 1"，0 = 从未脉冲（零初始化合法）。

@@ -217,7 +217,13 @@ extern crate self as stg_core;
 /// （CART_FX 极坐标惰性回填，读取前 materialize）；② ECL 镜像在加载时校验代码
 /// （坏 op / 越界操作数 / 非法跳转目标等从运行时 fault 改为加载错误），两个指令预算合成一个倒数；
 /// ③ 敌人池新增 `dx`/`dy`（本帧积分阶段的实际位移）。校验和与存档载荷均变化，旧回放失效。
-pub const ENGINE_VER: u32 = 23;
+///
+/// **23 → 24**（激光池刀，2026-09-25，spec `2026-09-25-laser-pool-design.md`）：新增
+/// `LaserPool`（cap 256）、相位 5 推进、碰撞行 9/10、syscall 族 8xx；校验和与存档载荷均变化，
+/// 旧回放失效。Task 1 先落池骨架（`WorldBody.lasers`，80 B/槽×256 + gen/alive = **+21024 B**，
+/// 尺寸哨兵实测 1037304→1058328 / 1197104→1218128，`copy_into` 已同步；新池从帧 0 起即入
+/// 校验和，哈希全槽 P6），相位推进/碰撞/syscall 由同一刀后续步骤落地，故本刀只 bump 一次。
+pub const ENGINE_VER: u32 = 24;
 
 pub use stg_derive::define_pool;
 
@@ -234,6 +240,7 @@ pub mod events;
 pub mod field;
 pub mod input;
 pub mod items;
+pub mod lasers;
 pub mod math;
 pub mod player;
 pub mod reqs;
