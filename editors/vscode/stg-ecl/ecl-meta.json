@@ -87,7 +87,12 @@
     {"name": "lz_anchor", "signature": "lz_anchor(lz: int, enemy: int, ox: fx, oy: fx)", "ret": null, "doc": "把激光挂到敌号 enemy 上并带偏移 (ox,oy)(每帧跟随;enemy=-1 解除)。失效敌号(死了/槽被复用,且非 -1)不挂靠+计数;偏移世界层钳 ±LASER_COORD_MAX", "params": [{"name": "lz", "ty": "int"}, {"name": "enemy", "ty": "int"}, {"name": "ox", "ty": "fx"}, {"name": "oy", "ty": "fx"}]},
     {"name": "lz_origin", "signature": "lz_origin(lz: int, x: fx, y: fx)", "ret": null, "doc": "直接设激光原点 (x,y) 并解除挂靠;坐标世界层钳 ±LASER_COORD_MAX", "params": [{"name": "lz", "ty": "int"}, {"name": "x", "ty": "fx"}, {"name": "y", "ty": "fx"}]},
     {"name": "lz_cancel", "signature": "lz_cancel(lz: int)", "ret": null, "doc": "取消激光:未收缩则切到收缩态(原作 92);ECL 在相位 2 取消,当帧相位 5 即回收(含 fade=0);被清弹 field(相位 7)取消的 fade=0 激光下一帧相位 5 回收", "params": [{"name": "lz", "ty": "int"}]},
-    {"name": "lz_alive", "signature": "lz_alive(lz: int) -> int", "ret": "int", "doc": "激光句柄是否仍指向当初那条激光,返 1/0(槽被复用后旧句柄返 0;只读不计数;原作 91)", "params": [{"name": "lz", "ty": "int"}]}
+    {"name": "lz_alive", "signature": "lz_alive(lz: int) -> int", "ret": "int", "doc": "激光句柄是否仍指向当初那条激光,返 1/0(槽被复用后旧句柄返 0;只读不计数;原作 91)", "params": [{"name": "lz", "ty": "int"}]},
+    {"name": "lz_x", "signature": "lz_x(lz: int) -> fx", "ret": "fx", "doc": "激光原点 x;只读不计数;失效句柄返 0(**不是哨兵**,先 lz_alive 探活)", "params": [{"name": "lz", "ty": "int"}]},
+    {"name": "lz_y", "signature": "lz_y(lz: int) -> fx", "ret": "fx", "doc": "激光原点 y;只读不计数;失效句柄返 0(**不是哨兵**,先 lz_alive 探活)", "params": [{"name": "lz", "ty": "int"}]},
+    {"name": "lz_angle", "signature": "lz_angle(lz: int) -> angle", "ret": "angle", "doc": "激光当前角度(BAM);只读不计数;失效句柄返 0", "params": [{"name": "lz", "ty": "int"}]},
+    {"name": "lz_near", "signature": "lz_near(lz: int) -> fx", "ret": "fx", "doc": "激光近端偏移 start(沿射线离原点的距离);只读不计数;失效句柄返 0", "params": [{"name": "lz", "ty": "int"}]},
+    {"name": "lz_far", "signature": "lz_far(lz: int) -> fx", "ret": "fx", "doc": "激光远端偏移 end(沿射线离原点的距离);只读不计数;失效句柄返 0", "params": [{"name": "lz", "ty": "int"}]}
   ],
   "engine_vars": [
     {"name": "frame", "ty": "int", "doc": "当前世界帧号"},

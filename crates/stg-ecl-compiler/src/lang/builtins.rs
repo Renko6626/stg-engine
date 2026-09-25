@@ -1005,6 +1005,51 @@ const BUILTINS: &[Builtin] = &[
         doc: "激光句柄是否仍指向当初那条激光,返 1/0(槽被复用后旧句柄返 0;只读不计数;原作 91)",
         param_names: &["lz"],
     },
+    Builtin {
+        name: "lz_x",
+        syscall: syscall::SYS_LASER_X,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Fx),
+        doc: "激光原点 x;只读不计数;失效句柄返 0(**不是哨兵**,先 lz_alive 探活)",
+        param_names: &["lz"],
+    },
+    Builtin {
+        name: "lz_y",
+        syscall: syscall::SYS_LASER_Y,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Fx),
+        doc: "激光原点 y;只读不计数;失效句柄返 0(**不是哨兵**,先 lz_alive 探活)",
+        param_names: &["lz"],
+    },
+    Builtin {
+        name: "lz_angle",
+        syscall: syscall::SYS_LASER_ANGLE,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Angle),
+        doc: "激光当前角度(BAM);只读不计数;失效句柄返 0",
+        param_names: &["lz"],
+    },
+    Builtin {
+        name: "lz_near",
+        syscall: syscall::SYS_LASER_NEAR,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Fx),
+        doc: "激光近端偏移 start(沿射线离原点的距离);只读不计数;失效句柄返 0",
+        param_names: &["lz"],
+    },
+    Builtin {
+        name: "lz_far",
+        syscall: syscall::SYS_LASER_FAR,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Fx),
+        doc: "激光远端偏移 end(沿射线离原点的距离);只读不计数;失效句柄返 0",
+        param_names: &["lz"],
+    },
 ];
 
 /// 按名字查内建函数（线性扫描；表 <30 项，`lang::typeck` 每次 `Call` 判型调用一次）。
@@ -1410,6 +1455,11 @@ mod tests {
             "lz_origin",
             "lz_cancel",
             "lz_alive",
+            "lz_x",
+            "lz_y",
+            "lz_angle",
+            "lz_near",
+            "lz_far",
         ];
         for n in names {
             assert!(lookup(n).is_some(), "内建函数 '{n}' 应在表中");

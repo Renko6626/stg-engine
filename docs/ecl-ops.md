@@ -330,6 +330,11 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
 | 807 | `lz_origin` | lz,x,y | —（直接设原点并**解除挂靠**；坐标双边钳 `±LASER_COORD_MAX`） |
 | 808 | `lz_cancel` | lz | —（`state < 2 → 2`、`timer = 0`；已收缩则 no-op 但仍成功） |
 | 809 | `lz_alive` | lz | 1/0（只读，不计数） |
+| 810 | `lz_x` | lz | 原点 x（fx）；只读不计数，失效句柄押 0 |
+| 811 | `lz_y` | lz | 原点 y（fx）；同上 |
+| 812 | `lz_angle` | lz | 角度（BAM）；同上 |
+| 813 | `lz_near` | lz | 近端偏移 `start`（fx）；同上 |
+| 814 | `lz_far` | lz | 远端偏移 `end`（fx）；同上 |
 
 - 时序口径（全计划统一）：相位 5 里先按 `timer >= 时长` 判切换（切换时 `timer = 0`），再
   `timer += 1`——`warn == 0` 出生帧即生效，预警恰好 `warn` 帧不判定、生效恰好 `active` 帧判定。

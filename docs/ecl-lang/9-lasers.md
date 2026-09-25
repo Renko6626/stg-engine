@@ -133,6 +133,42 @@ sub main() {
 `lz_origin(lz, x, y)` 反过来直接设原点，并**解除挂靠**。`lz_alive(lz)` 探活（返 1/0，
 只读不计数）——想复用句柄前先问一声，别对已经回收的槽瞎写。
 
+## 读几何：`lz_x` / `lz_y` / `lz_angle` / `lz_near` / `lz_far`
+
+五个只读口，读调用那一刻激光的原点、角度（BAM）、近端偏移 `start`、远端偏移 `end`（都是沿射线离原点的距离）。
+只读、不计数；失效句柄返回 `0`——**0 不是哨兵**（原点在 0、角度朝右都合法），要先 `lz_alive(lz) == 1` 再读。
+读的是**当前值**：相位 2 里读到的是上一帧推进完的结果，加上本帧此前写口做的修改；挂靠或 `lz_omega` 的激光，
+脚本自己不知道它此刻转到哪、原点在哪，就靠这几个口。沿激光上某点的坐标 = 原点 + `d × (cos a, sin a)`，`d ∈ [near, far]`。
+
+```ecl
+// 光剑：挂在自己身上慢慢转；每 5 帧沿剑身每 48 px 放一颗慢弹（原作 Extra「沿激光铺弹」）。
+// 激光挂靠 + omega 时脚本不知道几何，直接用读口读当前值。
+async sub sword() {
+    var lz: int = laser(2, $self_x, $self_y, 90deg, 420.0fx, 12.0fx, 30, 300, 16);
+    lz_start(lz, 32.0fx);
+    lz_anchor(lz, $self_enemy, 0.0fx, 0.0fx);
+    lz_omega(lz, 60bam);
+    wait(30);
+    for k in 0..60 {
+        wait(5);
+        if lz_alive(lz) == 1 {
+            var a: angle = lz_angle(lz);
+            var d: fx = lz_near(lz);
+            while d < lz_far(lz) {
+                _ = fire(48, 2, lz_x(lz) + d * cos(a), lz_y(lz) + d * sin(a), 0.5fx, a + 90deg, none, none);
+                d = d + 48.0fx;
+            }
+        }
+    }
+    loop { wait(1); }
+}
+
+sub main() {
+    _ = spawn_enemy(0.0fx, 96.0fx, 300, 1, 1000, 1, sword);
+    loop { wait(1); }
+}
+```
+
 ## 验证：`run --at F` 的激光表
 
 `cargo run -p stg-harness -- run my.ecl --frames 300 --at 60` 在活弹表之后多打一张「活激光」表：

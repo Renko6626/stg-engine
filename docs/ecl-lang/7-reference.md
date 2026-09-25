@@ -184,6 +184,11 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `lz_origin(lz: int, x: fx, y: fx)` — 直接设激光原点 (x,y) 并解除挂靠;坐标世界层钳 ±LASER_COORD_MAX
 - `lz_cancel(lz: int)` — 取消激光:未收缩则切到收缩态(原作 92);ECL 在相位 2 取消,当帧相位 5 即回收(含 fade=0);被清弹 field(相位 7)取消的 fade=0 激光下一帧相位 5 回收
 - `lz_alive(lz: int) -> int` — 激光句柄是否仍指向当初那条激光,返 1/0(槽被复用后旧句柄返 0;只读不计数;原作 91)
+- `lz_x(lz: int) -> fx` — 激光原点 x;只读不计数;失效句柄返 0(**不是哨兵**,先 lz_alive 探活)
+- `lz_y(lz: int) -> fx` — 激光原点 y;只读不计数;失效句柄返 0(**不是哨兵**,先 lz_alive 探活)
+- `lz_angle(lz: int) -> angle` — 激光当前角度(BAM);只读不计数;失效句柄返 0
+- `lz_near(lz: int) -> fx` — 激光近端偏移 start(沿射线离原点的距离);只读不计数;失效句柄返 0
+- `lz_far(lz: int) -> fx` — 激光远端偏移 end(沿射线离原点的距离);只读不计数;失效句柄返 0
 <!-- gen:builtins:end -->
 
 ---

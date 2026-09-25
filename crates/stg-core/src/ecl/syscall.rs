@@ -174,6 +174,14 @@ pub const SYS_LASER_ORIGIN: u16 = 807;
 pub const SYS_LASER_CANCEL: u16 = 808;
 /// 是否存活（只读，不计数），押 0/1。
 pub const SYS_LASER_ALIVE: u16 = 809;
+/// 几何读口（810–814，只读、不计数；失效句柄押 0——**0 不是哨兵**，先 `lz_alive` 探活）：
+/// 原点 x / 原点 y / 角度（BAM）/ 近端偏移 `start` / 远端偏移 `end`。读的是调用时刻池里的值：
+/// 相位 2 里读到的是上一帧相位 5 推进后的结果，加上本帧此前 ECL 写口做的修改。
+pub const SYS_LASER_X: u16 = 810;
+pub const SYS_LASER_Y: u16 = 811;
+pub const SYS_LASER_ANGLE: u16 = 812;
+pub const SYS_LASER_NEAR: u16 = 813;
+pub const SYS_LASER_FAR: u16 = 814;
 
 // 3xx：弹操作族（self owner 必须是 BULLET；按 motion.rs 九连顺序编号）
 pub const SYS_SET_BULLET_SPEED: u16 = 300;
@@ -416,13 +424,13 @@ pub const SYS_SELF_ANGLE: u16 = 25;
 /// （百分区制下号非连续，同 [`crate::ecl::ops::op_implemented`] 的纪律）。不在表内的号
 /// 由 `dispatch` 的兜底臂返 `FAULT_BAD_OP`。
 ///
-/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、97 条结构测试的表是 `cfg(test)`，
+/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、102 条结构测试的表是 `cfg(test)`，
 /// 编译器 crate 两个都够不着）：`stg-ecl-compiler` 的 `builtins::BUILTINS` 要能断言
 /// "`is_op == false` 的条目，其 `syscall` 字段装的确实是个会被派发的号"。见
 /// `builtins.rs::builtin_dispatch_kind_matches_what_the_field_holds`。
 ///
 /// **与 `dispatch` 的同步靠测试押运，不靠自律**：`syscall_whitelist_matches_the_frozen_table`
-/// 断言"全 `u16` 域里为真的号恰好是那 97 条"，漏一条/多一条即红。
+/// 断言"全 `u16` 域里为真的号恰好是那 102 条"，漏一条/多一条即红。
 pub const fn syscall_implemented(no: u16) -> bool {
     matches!(
         no,
@@ -532,6 +540,11 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_LASER_ORIGIN
             | SYS_LASER_CANCEL
             | SYS_LASER_ALIVE
+            | SYS_LASER_X
+            | SYS_LASER_Y
+            | SYS_LASER_ANGLE
+            | SYS_LASER_NEAR
+            | SYS_LASER_FAR
     )
 }
 
@@ -1318,6 +1331,9 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_LASER_ORIGIN => sys_laser_origin(task, ctx),
         SYS_LASER_CANCEL => sys_laser_cancel(task, ctx),
         SYS_LASER_ALIVE => sys_laser_alive(task, ctx),
+        SYS_LASER_X | SYS_LASER_Y | SYS_LASER_ANGLE | SYS_LASER_NEAR | SYS_LASER_FAR => {
+            sys_laser_read(task, ctx, no)
+        }
 
         _ => Err(FAULT_BAD_OP),
     }
@@ -1760,6 +1776,25 @@ fn sys_laser_alive(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let lz = pop(task)?;
     let alive = resolve_laser_handle(lz, ctx).is_some();
     push(task, if alive { 1 } else { 0 })
+}
+
+/// 激光几何读口（810–814）共用：只读、不计数；失效句柄押 0（同 `enemy_x` 读族口径）。
+fn sys_laser_read(task: &mut Task, ctx: &mut VmCtx, id: u16) -> Result<(), u8> {
+    let lz = pop(task)?;
+    let v = match resolve_laser_handle(lz, ctx) {
+        None => 0,
+        Some(h) => {
+            let (l, i) = (&ctx.body.lasers, h.index as usize);
+            match id {
+                SYS_LASER_X => l.ox[i].raw(),
+                SYS_LASER_Y => l.oy[i].raw(),
+                SYS_LASER_ANGLE => i32::from(l.angle[i].raw()),
+                SYS_LASER_NEAR => l.start[i].raw(),
+                _ => l.end[i].raw(),
+            }
+        }
+    };
+    push(task, v)
 }
 
 /// `n<=0` → 押 0、不消耗世界 RNG 流（拍板：n==0 既定钉死，n<0 视同"无合法范围"同律扩展、
@@ -2578,12 +2613,17 @@ mod tests {
             (SYS_LASER_ORIGIN, "lz_origin", 8),
             (SYS_LASER_CANCEL, "lz_cancel", 8),
             (SYS_LASER_ALIVE, "lz_alive", 8),
+            (SYS_LASER_X, "lz_x", 8),
+            (SYS_LASER_Y, "lz_y", 8),
+            (SYS_LASER_ANGLE, "lz_angle", 8),
+            (SYS_LASER_NEAR, "lz_near", 8),
+            (SYS_LASER_FAR, "lz_far", 8),
         ]
     }
 
-    /// 【本刀的主判据】号表族结构：97 条、无重号、每条落在其声明族的百位区间内
+    /// 【本刀的主判据】号表族结构：102 条、无重号、每条落在其声明族的百位区间内
     /// （原 74 条 + 自机能力刀 `513`/`560` = 76；表现契约 v2 再加 `430 set_anm_state`/`721 fx_at`/`722 fx_on` = 79；壳子刀加 `723 stage_clear` = 80；
-    /// 激光池刀再加 8xx 十条 = 97）。
+    /// 激光池刀再加 8xx 十条 = 97；激光读口五条 810–814 = 102）。
     ///
     /// 这一刀是大规模机械重排，判别力要求与常规刀不同——不是"新行为对不对"，而是
     /// "**有没有搬错、搬漏、搬重**"。故判据是号表自身的结构性质，不是某条 syscall 的行为。
@@ -2611,9 +2651,9 @@ mod tests {
 
         assert_eq!(
             table.len(),
-            97,
+            102,
             "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 − 玩法刀退役 513 \
-             + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97：增改需同步这个数"
+             + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97；激光读口 810–814 = 102：增改需同步这个数"
         );
 
         // (a) 族归属：搬错族立刻红
@@ -2779,7 +2819,7 @@ mod tests {
     ///
     /// 两个方向都断言（缺一个就只是半张网）：
     /// - **文档 → 常量**：文档里出现的每个 `(号, 名)` 对都得在 [`frozen_table`] 里；
-    /// - **常量 → 文档**：97 条常量每条都得在文档里出现，**漏记一条即红**。
+    /// - **常量 → 文档**：102 条常量每条都得在文档里出现，**漏记一条即红**。
     ///
     /// **它还有第二重职责，别只当它是"防文档漂移"**：本条是**全仓唯一**能抓到
     /// **族内互换**（号换了、族没换，如 `SYS_ATAN2` ↔ `SYS_DIST`）的测试。
@@ -8105,6 +8145,85 @@ mod tests {
         assert!(call(&mut w, &ecl, &mut task, SYS_LASER_OMEGA, &[lz, 47332]).is_ok());
         assert_eq!(w.body.lasers.omega[i], -18204, "负角速度原样");
         assert_eq!(w.body.diag.contract_viol, cv0, "仍不计数");
+    }
+
+    /// 激光几何读口（810–814）：读调用时刻池里的 `ox/oy/angle/start/end`；五个值取互不相同的数，
+    /// 读错字段即红。失效句柄押 0、不计数（同 `enemy_x` 与 `lz_alive` 的读族口径）。
+    #[test]
+    fn lz_readers_return_current_geometry_and_zero_when_stale() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let a = laser_args(
+            1,
+            Fx::from_int(-30),
+            Fx::from_int(70),
+            Angle(12345),
+            Fx::from_int(420),
+            Fx::from_int(8),
+            0,
+            9999,
+            0,
+        );
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_CREATE, &a).is_ok());
+        let lz = task.stack[0];
+        let i = laser_slot(lz);
+        task.sp = 0;
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_LASER_START,
+                &[lz, Fx::from_int(32).raw()]
+            )
+            .is_ok()
+        );
+
+        let read = |w: &mut crate::step::World, task: &mut Task, sys: u16, packed: i32| -> i32 {
+            task.sp = 0;
+            assert!(call(w, &ecl, task, sys, &[packed]).is_ok());
+            task.stack[0]
+        };
+        let cv0 = w.body.diag.contract_viol;
+        assert_eq!(
+            read(&mut w, &mut task, SYS_LASER_X, lz),
+            Fx::from_int(-30).raw()
+        );
+        assert_eq!(
+            read(&mut w, &mut task, SYS_LASER_Y, lz),
+            Fx::from_int(70).raw()
+        );
+        assert_eq!(read(&mut w, &mut task, SYS_LASER_ANGLE, lz), 12345);
+        assert_eq!(
+            read(&mut w, &mut task, SYS_LASER_NEAR, lz),
+            Fx::from_int(32).raw()
+        );
+        assert_eq!(
+            read(&mut w, &mut task, SYS_LASER_FAR, lz),
+            Fx::from_int(420).raw()
+        );
+
+        // 读的是当前值：改过之后再读，拿到新值。
+        task.sp = 0;
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_ROTATE, &[lz, 1000]).is_ok());
+        assert_eq!(read(&mut w, &mut task, SYS_LASER_ANGLE, lz), 13345);
+
+        // 失效句柄：五个读口都押 0，不计数。
+        w.body.lasers.free_index(i);
+        for sys in [
+            SYS_LASER_X,
+            SYS_LASER_Y,
+            SYS_LASER_ANGLE,
+            SYS_LASER_NEAR,
+            SYS_LASER_FAR,
+        ] {
+            assert_eq!(read(&mut w, &mut task, sys, lz), 0, "syscall {sys}");
+        }
+        assert_eq!(read(&mut w, &mut task, SYS_LASER_X, -1), 0);
+        assert_eq!(
+            w.body.diag.contract_viol, cv0,
+            "读口一律不计数（含失效句柄）"
+        );
     }
 
     /// Review Focus 3：激光 A 回收、新激光 B 复用同槽后，拿 A 的旧句柄调 `lz_rotate`
