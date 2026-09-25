@@ -2369,8 +2369,9 @@ mod tests {
             ("items", size_of::<crate::items::ItemPool>()),
             ("fields", size_of::<crate::field::FieldPool>()),
             ("xform", size_of::<crate::xform::XformSegPool>()),
+            ("lasers", size_of::<crate::lasers::LaserPool>()),
         ];
-        // cap: bullets 8192 / enemies 256 / shots 1024 / items 1024 / fields 16 / xform 4096
+        // cap: bullets 8192 / enemies 256 / shots 1024 / items 1024 / fields 16 / xform 4096 / lasers 256
         let expected = [
             ("bullets", 476_160), // 56 B/弹 ×8192 + gen 16384 + alive 1024  ≈ 465 KiB（v2：+born_frame u32）
             ("enemies", 30_496), // 117 B/敌 ×256 + gen 512 + alive 32      ≈ 29.8 KiB（引擎第二刀：+dx/dy Fx×2 = +8 B/敌）
@@ -2378,6 +2379,7 @@ mod tests {
             ("items", 22_656), // 22 B/道具 ×1024 + gen 2048 + alive 128（F12：512→1024）
             ("fields", 328),
             ("xform", 393_472),
+            ("lasers", 21_024), // 80 B/激光 ×256 + gen 512 + alive 32 ≈ 20.5 KiB（激光池刀 2026-09-25 T1）
         ];
         assert_eq!(
             actual, expected,

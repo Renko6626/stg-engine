@@ -20,7 +20,7 @@ func _init():
 	# register_layer 三路(task-4:B18 可达面——坏 kind/坏尺寸/合法注册全覆盖)。表现契约 v2
 	# 起敌层退役(敌人走 puppets() 木偶喂料),改用 LAYER_BULLETS:godot_smoke.ecl 每 30 帧发一颗
 	# 弹;cap=BulletPool::CAP=8192,播种 8192×12=98304 浮点。
-	# 坏 kind:层号越界(LAYER_COUNT==3,99 显然越界),no-op 直接返 false。
+	# 坏 kind:层号越界(LAYER_COUNT==4,99 显然越界),no-op 直接返 false。
 	var rid_bad_kind := RenderingServer.multimesh_create()
 	if b.register_layer(99, rid_bad_kind): fail("rl bad kind"); return
 	RenderingServer.free_rid(rid_bad_kind)

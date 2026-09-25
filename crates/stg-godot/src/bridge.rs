@@ -150,6 +150,8 @@ impl WorldBridge {
     #[constant]
     const LAYER_ITEMS: i64 = frame::LAYER_ITEMS as i64;
     #[constant]
+    const LAYER_LASERS: i64 = frame::LAYER_LASERS as i64;
+    #[constant]
     const LAYER_COUNT: i64 = frame::LAYER_COUNT as i64;
     // 通道 B 引擎保留请求 id 与事件 kind(表现契约 v2 §4.7):**转出来而非让 GDScript 手抄**,
     // 理由同 RANK_*——手抄镜像与 core 之间没有编译期押运。类别(即发即忘/须确认/电平镜像)
@@ -346,7 +348,7 @@ impl WorldBridge {
 
     /// 播放一帧(代替 `step_frame`):**-2** = 播完 / **-1** = 正常 / **≥0** = 本帧落了录制时
     /// 的遡行(值 = 落点帧;播放里没有被丢弃的分支,壳不做倒放动画)。非播放态 → -2 + 日志。
-    /// 上传三层同 `step_frame`。
+    /// 上传各层同 `step_frame`。
     #[func]
     fn playback_step(&mut self) -> i64 {
         let Some(game) = self.game.as_mut() else {
@@ -395,7 +397,7 @@ impl WorldBridge {
     }
 
     /// 倒放读口(spec §4):把环里第 `frame` 帧(含刚被遡行丢弃的分支,下一次 `step_frame`
-    /// 前仍可读)编码上传到三层,并把所有通道 A 读口切到那一帧,直到下一次 `step_frame`。
+    /// 前仍可读)编码上传到各层,并把所有通道 A 读口切到那一帧,直到下一次 `step_frame`。
     /// 不在环里 → false(视图态不变)。
     #[func]
     fn view_ring(&mut self, frame: i64) -> bool {

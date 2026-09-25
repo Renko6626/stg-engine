@@ -91,7 +91,7 @@
 
 ## 1. 两条通道（定位）
 
-通道 A 状态视图 → 三层实例缓冲（本文 §2-3）+ 敌人木偶喂料（§3.7）+ 事件流（§3.5）+
+通道 A 状态视图 → 四层实例缓冲（本文 §2-3 + §3.10）+ 敌人木偶喂料（§3.7）+ 事件流（§3.5）+
 `vanished`（§3.6）；通道 B 离散请求 → 分发器（§4）。
 权威上游：`crates/stg-godot/src/frame.rs`（编码器）/ `crates/stg-godot/src/puppets.rs`（木偶）
 / `crates/stg-core/src/reqs.rs`（请求 id 与类别）/ `crates/stg-core/src/events.rs`（事件与聚合口径）。
@@ -99,10 +99,13 @@
 ## 2. 实例缓冲布局（冻结，stride 12）
 
 `[cos,-sin,0,x, sin,cos,0,y, sprite,age,0,0]` —— 前 8 = `MULTIMESH_TRANSFORM_2D`，
-后 4 = `INSTANCE_CUSTOM`；`custom.x=sprite` 号，**`custom.y = 弹龄`（只在弹层有语义，其余层恒 0；
-§0 口径，首帧 1）**，`z/w` 保留（将来 scale/alpha/调色，stride 不变）。
-bullets 层带旋转，其余层单位 basis。压实前缀 + `set_visible_instances`。
-层号：`LAYER_BULLETS=0 / LAYER_SHOTS=1 / LAYER_ITEMS=2`（**敌层已退役**，敌人走 §3.7 木偶）。
+后 4 = `INSTANCE_CUSTOM`；`custom.x=sprite` 号，**`custom.y = 弹龄`（弹层有语义，其余层恒 0；
+激光层例外见下；§0 口径，首帧 1）**，`z/w` 保留（将来 scale/alpha/调色，stride 不变）。
+bullets 层带旋转，其余三层单位 basis。压实前缀 + `set_visible_instances`。
+层号：`LAYER_BULLETS=0 / LAYER_SHOTS=1 / LAYER_ITEMS=2 / LAYER_LASERS=3`（**敌层已退役**，
+敌人走 §3.7 木偶；`LAYER_COUNT=4`）。
+**激光层是唯一的例外：基自带缩放、`custom.y = alpha`**（不走图集，见 §3.10），
+其余三层照上式。
 
 **shader 不得乘片元 `COLOR`（有头目验判决，2026-09-07）**：MultiMesh 未开 `use_colors` 时
 片元 `COLOR` 输入是未定义的逐像素垃圾（GL/Vulkan 两后端一致的彩色噪点），乘上去弹就成了
@@ -130,6 +133,7 @@ bullets 层带旋转，其余层单位 basis。压实前缀 + `set_visible_insta
 | bullets | assets/bullets.png | 16×16 | 16×12 | tables appearances[].sprite（identity：id 即格号） |
 | shots   | assets/shots.png   | 32×32 | 4×1 | shottype 表 sprite |
 | items   | assets/items.png   | 32×32 | 8×1 | tables item_cfg[].sprite |
+| lasers  | **无图集**（程序化截面，§3.10） | — | — | 池 `sprite` = 颜色号 0..15 |
 | （木偶）enemies | assets/enemies.png | 64×64 | 4×1 | spawn_enemy sprite 参（A5 起脚本自给）——**不是 MultiMesh 层**，Sprite2D `hframes=4` 选格，见 §3.7 |
 
 sprite 号 = 格号（行优先）；越界号 mod 回卷。QuadMesh 尺寸 = cell 尺寸（1px=1unit）。
@@ -247,10 +251,45 @@ ECL 侧 `set_anm_state(n)` 写状态并盖帧（同状态重设 = 重播，即 Z
 ## 3.9 倒放视图（`view_ring`；时间机制内核刀）
 
 `view_ring(f)` 把快照环里第 `f` 帧（含**刚被遡行丢弃的分支**——下一次 `step_frame` 之前
-那些槽原封不动）编码上传三层，并把**全部通道 A 读口**（层缓冲、`puppets()`、`hud_*`、
+那些槽原封不动）编码上传各层，并把**全部通道 A 读口**（层缓冲、`puppets()`、`hud_*`、
 `anchors()`、`player_pos()`、`fields_info()`）切到那一帧；`vanished()` 在视图态恒空；
 `frame()`/`checksum()`/`take_requests()`/`frame_events()` 始终是权威世界。下一次
 `step_frame` 自动切回。宿主用它做「逐帧倒退」动画，不需要自己存任何历史。
+
+## 3.10 激光层（激光池刀 2026-09-25；spec `2026-09-25-laser-pool-design` §7）
+
+`LAYER_LASERS=3`（`LAYER_COUNT=4`），cap 256，编码器 `frame.rs::encode_layer` 逐条从
+`view().lasers()` 读（池索引升序）。**不走图集**：截面渐变由 `godot/shaders/laser.gdshader`
+程序化生成，`playfield.gd::_make_laser_layer` 的 QuadMesh 取 1×1，缩放全在实例基里，
+stride 12 不变。
+
+实例布局（`[xx, yx, 0, ox, xy, yy, 0, oy, custom.x, custom.y, 0, 0]`）：
+
+| 分量 | 语义 |
+|---|---|
+| 局部 x 轴 `(xx, xy)` | 横截面方向（激光方向转 90°）× **显示宽度**（shader 的 `UV.x` 即截面） |
+| 局部 y 轴 `(yx, yy)` | 激光方向 `(cos,sin)`（BAM 0 指 +x）× **可见长度 `end − start`** |
+| 原点 `(ox, oy)` | 线段中点 = 射线原点 + dir × (start + end)/2 |
+| `custom.x` | 颜色号 0..15（池 `sprite`）；shader 查 16 色表，索引序照 `bullets.ecl` 的颜色列 |
+| `custom.y` | alpha（其余层 = 弹龄 / 0） |
+| `custom.z/w` | 保留 |
+
+**显示宽度 = 判定宽度（硬规矩，裁定 ④）**：核只存一个 `width`，判定半高 = `width/2`（D8 行 9）、
+画面宽度也 = `width`；渐变的暗边也在判定内。TH06 原作画面是判定的 2 倍，这个口径差**由转写方**
+写 `width = 原作值/2` 抹平，引擎不内置任何一作的口径。
+
+**三态画面全在表现层算**（`frame.rs::laser_display`，核里不存画面状态）：预警 state 0 =
+1.2 px 细线、最后 `min(warn, 30)` 帧线性长到全宽；生效 state 1 = 全宽；收缩 state 2 =
+`flags` 位 0 为 1 时 alpha 线性到 0、否则宽度线性到 0。alpha 乘 `custom.y`，加色混合
+（`laser.gdshader` 的 `render_mode blend_add`）。
+原点闪光（原作 `SPAWN_BIG_BALL`）本刀不做，记 follow-ups。
+
+> **被清弹取消的激光多一帧、且收缩首帧 `timer == 0`**（2026-09-25 控制方补充）：
+> 清弹 field 在相位 7 把激光置 `state 2`、`timer = 0`（D8 行 10），此后相位 5 才会加
+> `timer`；而自然到期 / ECL `lz_cancel` 的收缩首帧 `timer` 已是 1。于是取消的激光**收缩期
+> 比自然到期或 ECL 取消多 1 帧**，且**收缩首帧 `timer == 0`**。渲染按 `timer / fade` 插值时必须容忍
+> 这一点：`timer == 0` 当满宽/满 alpha 处理；`fade == 0` 时 `k = 0`（不能除零）。
+> `laser_display` 已如此实现。
 
 ## 5. 锚点双表示规矩（硬规矩）
 
@@ -310,6 +349,7 @@ bg 段内局部时间 = `frame - bg_phase_frame`（A4 mini-VM 的 seek 契约，
 | 弹层 | `LAYER_BULLETS` 缓冲 | 每帧 | 图集格 + 速度朝向旋转（§2） | 否 |
 | 自机弹层 | `LAYER_SHOTS` | 每帧 | 图集格，不旋转 | 否 |
 | 道具层 | `LAYER_ITEMS` | 每帧 | 图集格 | 否 |
+| 激光层 | `LAYER_LASERS` | 每帧 | 程序化截面（白芯 → 实例色渐暗，加色），预警/收缩在表现层算（§3.10） | 否 |
 | 敌人木偶 | `puppets()` | 每帧 | 按 `(sprite, anm_state, state_age)` 选帧（§3.7） | 否 |
 | 自机 + 判定点 | `player_pos()`/`hud_player()` | 每帧 | 单图；`BTN_SLOW` 显判定点；`invuln` 按帧号奇偶闪 | 判定点否 |
 | 弹出现闪光 | `custom.y`（弹龄） | shader | age 小时放大 + 提亮，6 帧内收敛 | 是 |
@@ -320,7 +360,7 @@ bg 段内局部时间 = `frame - bg_phase_frame`（A4 mini-VM 的 seek 契约，
 | 脚本演出 | `REQ_FX_AT` / `REQ_FX_ATTACHED` | 边沿 | 按 kind：闪点 / 依附光环 / 内容包自定 | 是 |
 | 时停滤镜 | `freeze_left()` | 每帧 | 全屏色调 | 是（未接） |
 | 影子层 | `preview(n)` → 影子弹层缓冲 | 観測期间每帧 | 去饱和压暗半透明的弹（§3.8） | 否（策划案核心机制） |
-| 遡行倒放 | `view_ring(f)` | 落地后每 tick | 三层 + 木偶按环里那一帧重画（§3.9/§5.6） | 否 |
+| 遡行倒放 | `view_ring(f)` | 落地后每 tick | 四层 + 木偶按环里那一帧重画（§3.9/§5.6） | 否 |
 | 时间提示 | `hud_player().life_state` + 壳状态机 | 每帧 | 一行文字：観測 N / 跳躍 / V 遡行 | 是 |
 | HUD | `hud_*` | 每帧 | 数字 + boss 条 + 符卡行 | 否 |
 | 横幅 | `REQ_SPELL_*` / `EVT_STAGE_CLEARED`（事件） | 边沿（须确认 / 事实） | 文本 | 是 |

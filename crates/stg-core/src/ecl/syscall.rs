@@ -159,7 +159,7 @@ pub const SYS_LASER_CREATE: u16 = 800;
 pub const SYS_LASER_SPEED: u16 = 801;
 /// 近端留空（原作第 4 关 `start = 64`）。
 pub const SYS_LASER_START: u16 = 802;
-/// 持续转动速率（BAM/帧，`i16`；出 i16 栈值钳位并计一次违约）。
+/// 持续转动速率（BAM/帧，`i16`；栈值取低 16 位按位回绕为 i16，**不钳位、不计数**）。
 pub const SYS_LASER_OMEGA: u16 = 803;
 /// 一次性转一个角度（回绕加）。
 pub const SYS_LASER_ROTATE: u16 = 804;

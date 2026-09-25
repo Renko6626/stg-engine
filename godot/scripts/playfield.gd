@@ -1,16 +1,17 @@
 class_name Playfield
 extends SubViewportContainer
 ## 弹幕域:SubViewport 384×448;世界根@(192,0)(世界坐标即本地坐标)。
-## z 序(节点序,下→上):Bg < shots < Puppets(敌人节点) < items < Player < bullets < FxRoot。
+## z 序(节点序,下→上):Bg < shots < Puppets(敌人节点) < items < Player < lasers < bullets < FxRoot。
 ## 表现契约 v2(2026-09-07):敌层退役,敌人走**节点木偶**(按池索引预分配 256 个 Sprite2D,
-## 永不释放,每帧读 puppets() 压缩列);三层 MultiMesh 保留。
+## 永不释放,每帧读 puppets() 压缩列);四层 MultiMesh 保留(激光层 2026-09-25 加,不走图集)。
 
-# 池容量镜像(值源 crates/stg-core/src/{bullets,shots,items}.rs define_pool! 声明;
+# 池容量镜像(值源 crates/stg-core/src/{bullets,shots,items,lasers}.rs define_pool! 声明;
 # 桥面冻结不出容量口——漂移由 register_layer false + 冒烟兜底,见 setup)
 # 2026-09-03(F12):道具层 512→1024,跟 items.rs 的 cap 一起改。这条镜像**没有编译期护栏**,
 # 唯一的网就是本工程冒烟——改核心池 cap 而忘了这里,冒烟会以 "register_layer(N) 被拒
 # (容量镜像漂移?)" + SMOKE FAIL: boot(0) 的形态报出来(本刀就是这么被抓住的)。
-const CAPS := { 0: 8192, 1: 1024, 2: 1024 } # key = WorldBridge.LAYER_*(bullets/shots/items)
+# 2026-09-25(激光池刀):加 3: 256,跟 lasers.rs cap 一起改。
+const CAPS := { 0: 8192, 1: 1024, 2: 1024, 3: 256 } # key = WorldBridge.LAYER_*(bullets/shots/items/lasers)
 # cell 尺寸 = 该层图集的格边长(也是 QuadMesh 边长,1px=1unit)。
 # bullets = 16:原作弹片本就是 16×16 网格,取 16 即精确切割、零留白,渲染出来正好是
 # 东方在 384×448 场界里的原生比例。将来若补 32×32 大玉,整张图要改按 32 排、小图元
@@ -24,7 +25,8 @@ const TEXTURES := {
 # 弹层出现闪光帧数(layer.gdshader `spawn_flash_frames`;其余层 0 = 关)。
 const BULLET_SPAWN_FLASH_FRAMES := 6.0
 # 节点序 = 绘制序;bullets 最上(东方惯例)。木偶插在 shots 之后、items 之前(原敌层位置)。
-const Z_ORDER := [1, 2, 0] # shots, items, bullets——puppets 插在 shots 后、player 插在 items 后
+const Z_ORDER := [1, 2, 0] # shots, items, bullets——puppets 插在 shots 后、player 插在 items 后;
+                          # lasers 在 bullets 之前插(压在 player 上、弹层之下,见 _init)
 # 敌人木偶:图集 enemies.png 64px 4×1;cap 镜像 enemy.rs(puppets() 行数永远 ≤ 它)。
 const PUPPET_CAP := 256
 const PUPPET_TEXTURE := "res://assets/enemies.png"
@@ -66,9 +68,12 @@ func _init() -> void:
 	viewport.add_child(world_root)
 
 	for kind in Z_ORDER:
-		if kind == 0: # bullets 之前插影子层:影子比实弹暗,压在实弹之下不遮真弹
+		if kind == 0: # bullets 之前插影子层(比实弹暗,压在实弹之下不遮真弹)+ 激光层
 			ghost = _make_ghost()
 			world_root.add_child(ghost)
+			var laser := _make_laser_layer()
+			layer_nodes[WorldBridge.LAYER_LASERS] = laser
+			world_root.add_child(laser)
 		var mmi := _make_layer(kind)
 		layer_nodes[kind] = mmi
 		world_root.add_child(mmi)
@@ -104,6 +109,30 @@ func _make_layer(kind: int) -> MultiMeshInstance2D:
 	# 的判据就是 buffer 长度==cap×12(bridge.rs 契约注释)
 	var buf := PackedFloat32Array()
 	buf.resize(CAPS[kind] * 12)
+	RenderingServer.multimesh_set_buffer(mm.get_rid(), buf)
+	RenderingServer.multimesh_set_custom_aabb(mm.get_rid(), FIELD_AABB)
+	mm.visible_instance_count = 0
+	return mmi
+
+## 激光层(激光池刀 2026-09-25 Task 6;spec §7):**不走图集**——截面渐变由
+## `laser.gdshader` 程序化生成,故 QuadMesh 取 1×1、缩放全在实例基里
+## (沿轴长 = end−start、横向 = 显示宽度;见 crates/stg-godot/src/frame.rs `LAYER_LASERS`)。
+func _make_laser_layer() -> MultiMeshInstance2D:
+	var mmi := MultiMeshInstance2D.new()
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_2D
+	mm.use_custom_data = true
+	mm.instance_count = CAPS[WorldBridge.LAYER_LASERS]
+	var quad := QuadMesh.new()
+	quad.size = Vector2.ONE
+	mm.mesh = quad
+	mmi.multimesh = mm
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/laser.gdshader")
+	mmi.material = mat
+	# 播种定长零缓冲(同 _make_layer):headless get_buffer 与 register_layer 尺寸判据都靠它
+	var buf := PackedFloat32Array()
+	buf.resize(CAPS[WorldBridge.LAYER_LASERS] * 12)
 	RenderingServer.multimesh_set_buffer(mm.get_rid(), buf)
 	RenderingServer.multimesh_set_custom_aabb(mm.get_rid(), FIELD_AABB)
 	mm.visible_instance_count = 0
@@ -171,7 +200,7 @@ func _make_player() -> void:
 	hitbox.visible = false
 	player.add_child(hitbox)
 
-## 三层注册;任何一层失败 → push_error + false(容量镜像漂移在此炸出,冒烟接得住)
+## 四层注册;任何一层失败 → push_error + false(容量镜像漂移在此炸出,冒烟接得住)
 func setup(bridge: WorldBridge) -> bool:
 	var ok := true
 	for kind in layer_nodes:

@@ -26,7 +26,10 @@ define_pool! {
     fields {
         ox: Fx, oy: Fx, angle: Angle, omega: i16,
         start: Fx, end: Fx, start_len: Fx, speed: Fx,
-        width: Fx, sprite: u16,
+        width: Fx,
+        // 颜色号 0..=15（`laser()` 只取 color、不取 sprite；见 Global Constraints 简化 1）。
+        // 激光只有一种截面贴图，颜色就是全部外观——表现层按这个号查 16 色表。
+        sprite: u16,
         warn: u16, active: u16, fade: u16, timer: u16, state: u8,
         anchor_idx: u16, anchor_gen: u16, ax: Fx, ay: Fx,
         // 观测：本帧相位 5 结束时相对上一帧同一时刻的变化（含 ECL rotate/aim/origin、omega、挂靠）。

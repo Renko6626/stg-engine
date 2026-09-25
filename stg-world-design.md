@@ -180,7 +180,7 @@ WorldTables 清单（v1）：
 | 3 | **导演槽** | 组装层调 ECL | 规范租户 `ecl::run_tasks(&mut world.body, &mut world.tasks, &ecl_image, &tables)`：按任务池索引升序推进，owner 门禁 / born_frame 门禁 / 指令预算照母文档。syscall 经世界写 API **就地直接分配** | spawn_q 删除（A6） |
 | 4 | `update_players` | world | 每自机：移动（input、低速、场界钳制）→ 生死状态机计时 → bomb 触发仲裁与 bomb 状态机 → **角色模块**静态分发（发弹、homing 转向、bomb 效果时间线）（A8） | 角色模块化（原为笼统"自机更新"） |
 | 5 | `run_transforms` | world | 对有变换段的弹执行游标推进（相对 wait 制 + LOOP 护栏 + WAIT_SIGNAL + 插值 op，D4）。delay 期的弹跳过 | 语义升级（原"到期 canned op"） |
-| 6 | `integrate` | world | 按池索引序：弹（双表示积分，D3）→ 自机弹 → 敌人（move_to 插值器优先，D5）→ 道具（重力/磁吸，D7）→ Bomb 场计时。`delay > 0` 的弹只递减 delay，不移动 | 双表示模型（D3） |
+| 6 | `integrate` | world | 按池索引序：弹（双表示积分，D3）→ 自机弹 → 敌人（move_to 插值器优先，D5）→ **激光**（三态推进 + 挂靠跟随/脱钩 + omega，spec `2026-09-25-laser-pool-design` §4.1；在敌人之后读其本帧新位置）→ 道具（重力/磁吸，D7）→ Bomb 场计时。`delay > 0` 的弹只递减 delay，不移动 | 双表示模型（D3） |
 | 7 | `collide` | world | 按矩阵行序收集 `hits`（**只收集，不改状态**——硬规则不变）。delay 期与已清除标记的弹不参与 | 半径映射列（D8） |
 | 8 | `settle` | world | **三趟结算**：清除/防护 → 伤害 → 计分/拾取（D9）。死亡掉落、`frame_events` 产出在此相位**直接分配/写入** | 掉落直接分配（A6） |
 | 9 | **ECL 事件挂钩** | 组装层调 ECL | ECL 层扫描本帧 `frame_events`，对带 `death_script` 的 `EnemyDied` 派生任务（owner = 关卡句柄，死亡坐标经任务入参传递）（A7） | **新增相位** |
@@ -574,13 +574,17 @@ release 回绕成负数 → 平方后仍为正巨数 → 全场无条件判撞�
 | 5 | Item | PlayerGraze | item 拾取半径（配置表） | player.graze_radius | ItemPicked |
 | 6 | Field | EnemyBullet | field.radius | bullet.radius | FieldCleared |
 | 7 | Field | EnemyBody | field.radius | enemy.**hurtbox** | EnemyDamaged |
-| 9 | EnemyLaser（仅 state 1） | PlayerHit | `width/2`（线段盒半高） | player.hit_radius | PlayerHitByLaser |
-| 10 | Field（`FIELD_CLEAR_BULLETS`） | EnemyLaser（state 0/1） | field.radius | `width/2` | LaserCanceled |
+| 9 | EnemyLaser（仅 state 1） | PlayerHit | `width/2`（线段盒半高） | player.hit_radius | PlayerHitByLaser ① |
+| 10 | Field（`FIELD_CLEAR_BULLETS`） | EnemyLaser（state 0/1） | field.radius | `width/2` | LaserCanceled ② |
 
+> 表注 ①：行 9 **不另发新事件**——命中后与行 1/3 同走 `trigger_player_hit`（settle 趟二），
+> 事件列的名字只是矩阵行的语义标签，`events.rs` 里没有 `PlayerHitByLaser` 这个 kind。
+> 表注 ②：行 10 **不发事件**，只把 state<2 的激光切到 2、`timer = 0`（`fade == 0` 时下一帧
+> 相位 5 回收）。
+>
 > 行 8（停止冻结中自机判定圆 × 冻弹 → 触碰消弹）见玩法刀 2026-09-14，未列表。
-> 行 9/10 由 spec `2026-09-25-laser-pool-design` §4.2 定义：行 9 命中后与行 1/3 同走
-> `trigger_player_hit`；行 10 把 state<2 的激光切到 2、`timer = 0`，`fade == 0` 时下一帧相位 5 回收。
-> 行 10 先于趟二（趟一）——同帧 field 取消的激光当帧不杀人。
+> 行 9/10 由 spec `2026-09-25-laser-pool-design` §4.2 定义，实现在 `world/collide.rs` 行 9
+> 与 `world/settle.rs` 行 10。行 10 先于趟二（趟一）——同帧 field 取消的激光当帧不杀人。
 
 - 行 6/7 主动方按 `flags` 能力位（`FIELD_CLEAR_BULLETS`/`FIELD_DAMAGE`）选择性启用——未开启对应
   能力位的 field，整行在收集前就跳过（省 O(N×M)，而非收集完到结算才发现无事可做）；
@@ -714,7 +718,11 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 
 每条都设计为**纯增量**，不推翻本文档任何决定：
 
-1. **激光池**：走 D2"新增池标准动作"五步；判定形状（线段/胶囊）需扩碰撞矩阵一行 + 一个新距离原语（平方点线距，仍不开根）；
+1. **激光池** —— **已落地（2026-09-25，spec `docs/superpowers/specs/2026-09-25-laser-pool-design.md`）**：
+   走 D2"新增池标准动作"五步（`LaserPool` cap 256）；判定形状（线段盒）已扩碰撞矩阵行 9/10（D8）+ 新距离原语
+   `math::geom::seg_box_dist_sq`（平方点线距，仍不开根）；相位 5 新增一趟（在敌人之后）、syscall 族 8xx、
+   Tier 0 `lasers` 表与 Godot 激光层同刀落地。
+   〔原预估〕走 D2"新增池标准动作"五步；判定形状（线段/胶囊）需扩碰撞矩阵一行 + 一个新距离原语（平方点线距，仍不开根）；
 2. **ZUN 式 ECL 中断 / 垂死状态**（死亡机制乙方案）：世界侧只需追加敌人 `interrupt_flags` 字段 + dying 状态位（已预留），VM 侧机制归 ECL 文档；
 3. **脚本化自机**：加"自机 ECL 任务"纯增量挂上（owner = 自机），世界侧账本/仲裁不动；
 4. **道具高度计价**：升级点局限在结算趟三的价值函数一处 + WorldTables 加一条价值曲线；

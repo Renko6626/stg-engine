@@ -4,28 +4,31 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-09-24）
+## 现在（2026-09-25）
 
-- **位置**：**引擎第二刀落地（本仓 Task 1–4，`ENGINE_VER` 22→23，`stg_rl` 0.1.1→0.2.0）**——
-  spec `docs/superpowers/specs/2026-09-24-engine-rl-round2-design.md`：① 弹 `BULLET_STEP_LIVE`
-  跳过位（无活跃 STEP 的弹跳过 `tick_steps`）；② ECL VM 加载时校验（坏 op/越界操作数/非法跳转/
-  syscall 号）+ 两个指令预算并一个倒数，取指与操作数越界检查仍留运行时；③ `CART_FX` 弹极坐标
-  惰性回填（`BULLET_POLAR_STALE` 位，读写前 materialize）；④ 敌人池新增一等字段 `dx/dy`（phase 5
-  本帧实际位移），进 Tier 0 敌人行 `vx@38`/`vy@42`（stride 38→46），训练侧从此不必按 id 差分。
-  proto 仓 `stg-agent-proto` 同步 `SPEC.md`/`c/sa_layout.h`/`c/sa_encode.c`（C 侧暂写 0，
-  部署侧速度仍是差分，记 follow-ups D25）。四项前后对比只有校验和变化（已拍板可接受）。
-- **下一步**：**Task 5（训练仓 `stg-rl-train` 侧）**——`envwrap` 改读 `stg_rl.OFFSETS` 的敌人
-  `vx`/`vy`，删除按 id 差分的 `enemy_velocity` 与瞬移守卫；依赖钉 `stg_rl >= 0.2.0`；
-  `docs/rl-perf-roadmap.md` 剩 §1（RL 专用观测缓冲，最大一件，跨三仓）、§4（道中卡每帧轮询）、
-  §6（reset/warmup 成本）未动。
-- **上一位置**：RL 卡池第一批入库（训练仓 `cards/`，TH06 第 1–3 关 45 张）、TH06 批量转写流水线、
-  stg-rl-train 第一刀落地——细节见 git log 与训练仓 `docs/`。
+- **位置**：**激光池刀落地（本仓 Task 1–6，`ENGINE_VER` 23→24，`stg_rl` 0.2.0→0.3.0）**——
+  spec `docs/superpowers/specs/2026-09-25-laser-pool-design.md`：直线激光成为一等实体。
+  ① `LaserPool`（cap 256，27 字段，D10 +21 KB）+ `math::geom::seg_box_dist_sq`（平方点线距，不开根）；
+  ② 相位 5 新增一趟（在敌人之后：三态时序、omega、挂靠跟随/脱钩、`dx/dy/dang` 观测）；
+  ③ 碰撞行 9（激光 × 自机，仅 state 1 判）与行 10（清弹 field 取消激光，趟一）；
+  ④ syscall 族 8xx（`laser`/`lz_*`，编译器内建 + 手册第 9 篇 + `gen-ecl-meta`）；
+  ⑤ Tier 0 新增 `lasers` 行缓冲（64 行，此前只有计数；proto 不改）；金向量加激光场景三平台对拍；
+  ⑥ Godot 激光层（`LAYER_LASERS=3`/`LAYER_COUNT=4`，`laser.gdshader` 程序化截面，不走图集）。
+  实施相对 spec 的 10 条修订见 spec §12；待办见 follow-ups D27。
+- **下一步**：**训练仓 `stg-rl-train` 侧**——TH06 转写接激光（宽度减半、每帧转 → `lz_omega`，
+  spec §9.1）与模型加激光 token（spec §9.2，指向训练仓）。引擎侧剩余：`docs/rl-perf-roadmap.md`
+  §1/§4/§6 与 follow-ups D25/D27。
+- **上一位置**：**引擎第二刀（本仓 Task 1–4，`ENGINE_VER` 22→23，`stg_rl` 0.1.1→0.2.0）**——
+  弹 `BULLET_STEP_LIVE` 跳过位 + ECL VM 加载时校验 + `CART_FX` 极坐标惰性化 + 敌人池一等字段
+  `dx/dy` 进 Tier 0 `vx`/`vy`（proto 仓同步，C 侧暂写 0，记 D25）；再往前：RL 卡池第一批入库
+  （训练仓 `cards/`，TH06 第 1–3 关 45 张）、TH06 批量转写流水线、stg-rl-train 第一刀落地。
 - **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-09-25 | **激光池刀**（`ENGINE_VER` 24 / `stg_rl` 0.3.0） | 直线激光一等实体（spec `2026-09-25-laser-pool-design`）：`LaserPool` cap 256 + `seg_box_dist_sq` + 相位 5 推进（三态/omega/挂靠脱钩/观测）+ 碰撞行 9/10 + syscall 8xx + 手册第 9 篇 + Tier 0 `lasers` 64 行缓冲 + Godot 激光层（`LAYER_LASERS=3`，程序化截面 shader，不走图集）+ 金向量激光场景；实施修订 10 条见 spec §12，待办 D27。 |
 | 2026-09-24 | **引擎第二刀 Task 1–4**（`ENGINE_VER` 23 / `stg_rl` 0.2.0） | 弹 `BULLET_STEP_LIVE` 跳过位 + ECL VM 加载时校验 + `CART_FX` 极坐标惰性化 + 敌人池一等字段 `dx/dy` 进 Tier 0 `vx`/`vy`（stride 38→46，训练侧不再按 id 差分）；proto 仓 `stg-agent-proto` 同步 SPEC/C 布局（C 侧暂写 0）；四项前后对比仅校验和变化。 |
 | 2026-09-16 | **RL 卡池第一批（TH06 第 1–3 关 45 张）** | 训练仓 `cards/` 45 张（9/13/23）+ `eval/splits.toml` 留出 9 张；dsh 全派，主会话分诊：对照表 §4.3 停火边界 `>=`（3 张返工）、s3_w12 按 640 弹池等效截止扩回四档、dsh 并发启动撞配置（单机单 pipeline）。opus 抽检未做。 |
 | 2026-09-16 | **TH06 批量转写流水线（训练仓 transcribe/）** | 对照表（覆盖全作 123 个指令名、片段真编译）+ 4 张范例 + dsh 三份契约 + 验收器（编译 / 各档 run / 卡池 lint / 段结束帧 / 开场安全）+ pipeline 状态机 + play.sh；本仓 harness `run` 段结束行、`serve --rank`。第 1 关冒烟通过，批量待开。 |

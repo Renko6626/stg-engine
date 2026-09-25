@@ -745,7 +745,10 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
    以 ×1/2、×1/2.5、×1/3 速度移动且**无判定**，训练仓 `transcribe/th06/mapping.md` §4）。真游戏内存里这类弹存的是全速 `velocity`，
    直接喂特征化会按全速外推、把还打不到人的弹当成威胁（敌人贴近自机开火时最明显）。C 侧读弹表时须识别出生状态
    （TH06 `BULLET_STATE_SPAWNING_*`），要么先不喂、要么按实际倍率缩放速度；对拍测试覆盖这一分支。
-10. **训练分布无激光**：引擎无激光池 ⇒ HELLO 恒发空 lasers 表。触发点：迁移验证显示激光是主要差距；届时引擎激光池另开刀（world-design §709）。
+10. ~~**训练分布无激光**~~ **已销（2026-09-25，激光池刀）**：引擎已有激光池（`LaserPool` cap 256，
+    spec `2026-09-25-laser-pool-design`）；Tier 0 恒发 `lasers` 表（`stg_rl` 0.3.0，`LASERS_CAP = 64`
+    按距自机最近取），HELLO 不再恒空；TH06 转写口径见 spec §9.1。原文如下，留档：
+    **〔原记录〕**：引擎无激光池 ⇒ HELLO 恒发空 lasers 表。触发点：迁移验证显示激光是主要差距；届时引擎激光池另开刀（world-design §709）。
 11. ~~**`rl-bench` 默认 workload 不代表密弹**~~ **已销（2026-09-15）**：`rl-bench --workload dense --density K`（`scenes/rl_dense.ecl`，上半区 ±15° 横飞、自机不死，稳态 ≈112·K 弹）+ `--profile` 单 env 分段计时。实测密弹瓶颈是**弹行编码**（density 3 下 21µs vs env.step 7µs），逐弹现算 `atan2`+`isqrt` 为主因 ⇒ 同刀修：core `atan2` 改无分支 CORDIC（逐位等价测试押运）+ `encode::BulletScratch` 派生量逐槽记忆，编码 4.8×、dense3 32 线程 39万→99万 env-steps/s（`docs/bench-baseline.md`「密弹 workload」节）。**余项**：弹数超 `cap` 时的 `len_sq`+`select_nth_unstable`+按索引排序成为新热点（density 12 编码仍 50µs）；触发点：训练确需 >cap 弹场景的吞吐时。
 12. **`VecEnv::step` / `reset` 每步现场 `collect` 一个 `Vec<Work>`**（~N 项引用结构，`build_work`）：串行段内的小分配，默认 workload 下占比可忽略；复用它要处理跨步借用的生命周期，改动面大于收益。触发点：密弹档位基准（第 11 条）显示串行段成为瓶颈时。
 
@@ -837,6 +840,21 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
    - `envwrap.py` 的 `stg_rl` 版本守卫手工 `split('.')` 解析，版本号带预发布后缀（如
      `0.2.0rc1`）时会抛 `ValueError` 而不是预期的 `ImportError`。
    - `envwrap._u32` 在删掉按 id 差分之后已无调用者，未删。
+
+### D27. 激光池刀的非目标（spec §10 记档，2026-09-25）
+
+本刀只交付「直线激光一等实体」（池 + 相位 5 推进 + 碰撞行 9/10 + syscall 8xx + Tier 0 + Godot 层）。
+以下未做，**触发点**各自写明：
+
+1. **激光擦弹**：th06nc 只在 state 1 判，擦弹判定盒向外扩 48 px。触发点：玩法/训练需要"贴激光得擦弹"时（行 2 的激光版）。
+2. **清除时沿线掉星/点数道具**：原作被清激光沿轴每 32 px 掉一个星。触发点：经济对齐需要时（引擎当前消弹转星是按弹 1:1，激光不产生道具）。
+3. **曲线激光**（TH16/18 `LaserCurve`）：用一串共享时间线的短线段复用本池；proto 可用现有 `type` 列标成曲线段（当前恒 0）。触发点：转写 TH16/18 内容时。
+4. **时停 stop-touch（碰撞行 8）是否扩展到激光**：现在是"冻 C 时激光整段不推进、不判定"，不是"冻住的激光被自机碰掉"。触发点：玩法拍板。
+5. **激光原点闪光**（原作 `SPAWN_BIG_BALL`）：spec §7 提到，Godot 层本刀不做——原点只画光带。
+6. **图集补一行 16 色截面渐变贴图**：现在 `laser.gdshader` 程序化生成截面渐变，16 色表是从
+   `godot/assets/bullets.png` 采样的近似代表色（注释已写明是占位）。触发点：美术补图后改为采样那张图，表与 shader 一并替换。
+7. **TH06 转写的两条换算**（spec §9.1）：写 `width = 原作值 / 2`（原作画面是判定 2 倍）；
+   `loop { laser_rotate(lz, a); wait(N); }` → `lz_omega(lz, (a as int / N) as angle)`。触发点：训练仓 `transcribe/th06/mapping.md` 接激光指令时（本仓不做）。
 
 ## F. 长期预留（M0-18 性能审记档，均不动现刀）
 

@@ -34,7 +34,7 @@ struct BulletPool {
 | **积分热集** `x,y,vx,vy`（全 4B） | 4 × 32KB = **128 KB** |
 | 弹池全 20 字段 + gen/alive | 56 B/弹 × 8192 + 17 KB = **476 160 B ≈ 465 KiB**（表现契约 v2 起含 `born_frame: u32`，模拟相位不读，只有编码器读） |
 
-六个池的实测总账（`gen: u16×cap` 与 `alive: u64×⌈cap/64⌉` 已计入）：
+七个池的实测总账（`gen: u16×cap` 与 `alive: u64×⌈cap/64⌉` 已计入）：
 
 | 池 | cap | 每槽字节 | 池总量 |
 |---|---|---|---|
@@ -44,6 +44,7 @@ struct BulletPool {
 | `EnemyPool` | 256 | 117 | 30 496 B ≈ 29.8 KiB（引擎第二刀 2026-09-24：+`dx`/`dy: Fx`×2 = +8 B/敌） |
 | `ItemPool` | 1024 | 22 | 22 656 B ≈ 22.1 KiB |
 | `FieldPool` | 16 | — | 328 B |
+| `LaserPool`（激光池刀 2026-09-25） | 256 | 80 | 21 024 B ≈ 20.5 KiB（27 字段 + `gen` 2 B×256 + alive 位图 32 B，实测见下） |
 
 **这张表由 `step.rs` 的 `pool_size_sentinel_guards_the_layout_doc_account` 押运**：池宽了而
 账没跟，测试就红——这份文档做的是缓存精算，账过期等于第 2 节整篇推论悄悄失效

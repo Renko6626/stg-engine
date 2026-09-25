@@ -1,13 +1,15 @@
-//! 纯 Rust:三渲染层 → f32 实例缓冲编码器。**定点→浮点唯一转换点**(I1 边界)。
+//! 纯 Rust:四渲染层 → f32 实例缓冲编码器。**定点→浮点唯一转换点**(I1 边界)。
 //! 布局(spec §11.2,GLES3 源码+headless 实测双源):
-//! 12 float/实例 = [xx, yx, 0, ox, xy, yy, 0, oy] + custom[age, 0, 0, 0]。
+//! 12 float/实例 = [xx, yx, 0, ox, xy, yy, 0, oy] + custom[.., .., 0, 0]。
 //!
 //! **敌层已退役**(表现契约 v2,2026-09-07,拍板 ④甲案):敌人走节点木偶,喂料见
-//! `crate::puppets`。三层保留:bullets / shots / items。custom.y 只在弹层有语义(弹龄),
-//! 其余层恒 0;custom.z/w 预留,stride 12 冻结。
+//! `crate::puppets`。四层保留:bullets / shots / items / lasers(激光池刀 2026-09-25)。
+//! custom.y 在弹层 = 弹龄、激光层 = alpha,其余层恒 0;custom.z/w 预留,stride 12 冻结。
+//! **激光层不走图集**(截面渐变由 `laser.gdshader` 程序化生成):基自带缩放,见 `LAYER_LASERS`。
 
 use stg_core::bullets::BulletPool;
 use stg_core::items::ItemPool;
+use stg_core::lasers::{LASER_FLAG_FADE_ALPHA, LaserPool};
 use stg_core::math::{Angle, Fx, sincos};
 use stg_core::shots::ShotPool;
 use stg_core::tables::WorldTables;
@@ -16,7 +18,12 @@ use stg_core::world::WorldView;
 pub const LAYER_BULLETS: usize = 0;
 pub const LAYER_SHOTS: usize = 1;
 pub const LAYER_ITEMS: usize = 2;
-pub const LAYER_COUNT: usize = 3;
+/// 激光层(激光池刀 2026-09-25 Task 6;spec §7):无图集,截面渐变在 shader 里程序化生成。
+/// 实例布局同 stride 12,但**基已含缩放**(弹/自机弹/道具层把缩放交给 QuadMesh 尺寸):
+/// 沿激光方向的轴长 = `end − start`、横向轴长 = 显示宽度,原点 = 线段中点;
+/// `custom = [color, alpha, 0, 0]`(`color` = 池 `sprite` 存的颜色号 0..15)。
+pub const LAYER_LASERS: usize = 3;
+pub const LAYER_COUNT: usize = 4;
 pub const FLOATS_PER_INSTANCE: usize = 12;
 
 pub fn layer_cap(layer: usize) -> usize {
@@ -24,6 +31,7 @@ pub fn layer_cap(layer: usize) -> usize {
         LAYER_BULLETS => BulletPool::CAP,
         LAYER_SHOTS => ShotPool::CAP,
         LAYER_ITEMS => ItemPool::CAP,
+        LAYER_LASERS => LaserPool::CAP,
         _ => 0,
     }
 }
@@ -91,6 +99,71 @@ fn bullet_age(frame: u32, born: u32) -> f32 {
     frame.wrapping_sub(born).min(u16::MAX as u32) as f32
 }
 
+/// 写入一条**基自带缩放**的实例（激光层用）。弹/自机弹/道具层继续走 `write_instance`——
+/// 它们的 QuadMesh 尺寸承担缩放，单位基即够；激光长度/宽度逐实例变，只能塞进基。
+/// 参数序 = 缓冲布局序：`(xx, yx, ox, xy, yy, oy)`。
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn write_instance_basis(
+    out: &mut [f32],
+    slot: usize,
+    x: f32,
+    y: f32,
+    xx: f32,
+    yx: f32,
+    xy: f32,
+    yy: f32,
+    custom_x: f32,
+    custom_y: f32,
+) {
+    let o = slot * FLOATS_PER_INSTANCE;
+    out[o..o + FLOATS_PER_INSTANCE]
+        .copy_from_slice(&[xx, yx, 0.0, x, xy, yy, 0.0, y, custom_x, custom_y, 0.0, 0.0]);
+}
+
+/// 激光的**显示宽度与 alpha**（spec §7；原作画法见 spec §2「贴图」）。核里只存判定宽度
+/// `width` 与三态计时，画面宽度/淡出全在表现层算：
+/// - 预警（state 0）：1.2 px 细线；最后 `min(warn, 30)` 帧线性长到全宽。
+/// - 生效（state 1）：全宽。
+/// - 收缩（state 2）：`flags` 位 0 为 1 时 alpha 线性到 0（宽度不动），否则宽度线性到 0。
+///
+/// `fade == 0` 不能除零（相位 7 被清弹 field 取消的激光会以 `state 2 / timer 0` 多留一帧，
+/// 见 `docs/render-contract.md` 激光层一节）：`k = 0`。
+#[inline]
+fn laser_display(
+    state: u8,
+    timer: u16,
+    warn: u16,
+    fade: u16,
+    width: f32,
+    fade_alpha: bool,
+) -> (f32, f32) {
+    match state {
+        0 => {
+            let ramp = warn.min(30);
+            let t0 = warn - ramp;
+            if timer >= t0 && ramp > 0 {
+                (1.2 + (width - 1.2) * (timer - t0) as f32 / ramp as f32, 1.0)
+            } else {
+                (1.2, 1.0)
+            }
+        }
+        1 => (width, 1.0),
+        _ => {
+            let k = if fade == 0 {
+                0.0
+            } else {
+                1.0 - timer as f32 / fade as f32
+            };
+            if fade_alpha {
+                (width, k)
+            } else {
+                (width * k, 1.0)
+            }
+        }
+    }
+}
+
 /// 活槽压实(池索引升序)写 `out` 前缀,返活数。`out.len() == layer_cap(layer)*12`。
 /// `frame` = step 结束后的 `world.frame()`(弹龄用)。未知 layer → 0(P4-b no-op)。
 pub fn encode_layer(
@@ -149,6 +222,45 @@ pub fn encode_layer(
             for i in p.iter_alive() {
                 let s = lut[types[i] as usize];
                 write_instance(out, n, fx_f32(xs[i]), fx_f32(ys[i]), 1.0, 0.0, s, 0.0);
+                n += 1;
+            }
+        }
+        LAYER_LASERS => {
+            let p = view.lasers();
+            let (oxs, oys, angles) = (p.ox(), p.oy(), p.angle());
+            let (starts, ends, widths, colors) = (p.start(), p.end(), p.width(), p.sprite());
+            let (warns, fades, timers, states, flags) =
+                (p.warn(), p.fade(), p.timer(), p.state(), p.flags());
+            for i in p.iter_alive() {
+                // `sincos` 返 (sin, cos);BAM 0 指 +x(右),与激光角度同基准。
+                let (sin, cos) = sincos(angles[i]);
+                let (dir_x, dir_y) = (fx_f32(cos), fx_f32(sin));
+                // 横截面方向 = 方向转 +90°(-y, x);实例基 [xx,yx; xy,yy] 的局部 x 轴承载
+                // 显示宽度、局部 y 轴承载沿轴长度(与 shader 的 `UV.x` = 截面一致)。
+                let (cross_x, cross_y) = (-dir_y, dir_x);
+                let (disp_w, alpha) = laser_display(
+                    states[i],
+                    timers[i],
+                    warns[i],
+                    fades[i],
+                    fx_f32(widths[i]),
+                    flags[i] & LASER_FLAG_FADE_ALPHA != 0,
+                );
+                let len = fx_f32(ends[i] - starts[i]);
+                // 原点 = 线段中点 = 射线原点 + dir × (start+end)/2。
+                let mid = (fx_f32(starts[i]) + fx_f32(ends[i])) * 0.5;
+                write_instance_basis(
+                    out,
+                    n,
+                    fx_f32(oxs[i]) + dir_x * mid,
+                    fx_f32(oys[i]) + dir_y * mid,
+                    cross_x * disp_w,
+                    dir_x * len,
+                    cross_y * disp_w,
+                    dir_y * len,
+                    colors[i] as f32,
+                    alpha,
+                );
                 n += 1;
             }
         }
@@ -276,19 +388,100 @@ sub main() {
         assert_eq!(items[9], 0.0);
     }
 
-    /// 敌层退役:层号 3(旧 LAYER_ENEMIES 的位置早已被 items 顶上)与任何 ≥ LAYER_COUNT 的
-    /// 层号都是 P4-b no-op——cap 0、编码返 0。敌人走 `crate::puppets`。
+    /// 敌层退役:敌人走 `crate::puppets`,任何 ≥ LAYER_COUNT 的层号都是 P4-b no-op——
+    /// cap 0、编码返 0。激光池刀(2026-09-25)后层号 3 已被 LAYER_LASERS 顶上,越界腿改打 4。
     #[test]
     fn enemies_layer_is_retired() {
-        assert_eq!(LAYER_COUNT, 3);
-        assert_eq!(layer_cap(3), 0);
+        assert_eq!(LAYER_COUNT, 4);
+        assert_eq!(layer_cap(LAYER_LASERS), stg_core::lasers::LaserPool::CAP);
+        assert_eq!(layer_cap(LAYER_COUNT), 0);
         let g = stepped_game();
         assert_eq!(
-            encode_layer(g.world().view(), g.tables, g.world().frame(), 3, &mut []),
+            encode_layer(
+                g.world().view(),
+                g.tables,
+                g.world().frame(),
+                LAYER_COUNT,
+                &mut []
+            ),
             0
         );
         let c = crate::puppets::encode_puppets(g.world().view(), g.world().frame());
         assert_eq!((c.x[0], c.y[0]), (-96.0, -64.0), "敌人从木偶喂料读");
+    }
+
+    // ── 激光层(激光池刀 2026-09-25 Task 6;spec §7)────────────────────────
+
+    /// 表现层显示宽度/alpha 的三态换算(允许 f32):预警 1.2 px;生效全宽;收缩按 `flags`
+    /// 位 0 选变窄或淡出。三条判别式单测分别锚住早期、预警最后一帧、收缩一半。
+    #[test]
+    fn laser_display_warn_early_stays_thin() {
+        // timer = 0 落在 ramp 之前:还是 1.2 px 细线,alpha 满。
+        assert_eq!(laser_display(0, 0, 30, 16, 100.0, false), (1.2, 1.0));
+        // 长预警(warn=120)只取最后 30 帧做 ramp:前 90 帧一律细线。
+        assert_eq!(laser_display(0, 89, 120, 16, 100.0, false), (1.2, 1.0));
+        assert_eq!(laser_display(0, 90, 120, 16, 100.0, false), (1.2, 1.0));
+    }
+
+    #[test]
+    fn laser_display_warn_last_frame_near_full_width() {
+        // warn=30,ramp=30 → timer=29(本态最后一帧)宽 1.2 + (100−1.2)·29/30。
+        let (w, a) = laser_display(0, 29, 30, 16, 100.0, false);
+        assert!(a == 1.0);
+        assert!(
+            w > 95.0 && w < 100.0,
+            "预警最后一帧应接近全宽但未到全宽,实际 {w}"
+        );
+        // 单调:越靠后越宽(20 帧处应明显窄于 29 帧处)。
+        let (w20, _) = laser_display(0, 20, 30, 16, 100.0, false);
+        assert!(w20 < w, "预警期宽度应随时间递增");
+    }
+
+    #[test]
+    fn laser_display_fade_half_width_halved() {
+        // 收缩一半:变窄腿宽度减半、alpha 仍满;淡出腿宽度不动、alpha 减半。
+        assert_eq!(laser_display(2, 5, 30, 10, 100.0, false), (50.0, 1.0));
+        assert_eq!(laser_display(2, 5, 30, 10, 100.0, true), (100.0, 0.5));
+        // fade == 0(相位 7 取消的 fade==0 激光当帧仍可见一帧)不能除零。
+        assert_eq!(laser_display(2, 0, 30, 0, 100.0, false), (0.0, 1.0));
+    }
+
+    /// ECL 建一条激光(color 3、原点 (100,50)、angle 0、len 200、width 20、warn 0
+    /// 即出生生效),编码后逐字段对拍实例布局:基 = 旋转(angle+90°)×缩放(宽, 长),
+    /// 原点 = 线段中点,custom = [color, alpha, 0, 0]。
+    #[test]
+    fn lasers_layer_transform_and_custom() {
+        const SRC: &str = r#"
+sub main() {
+    _ = laser(3, 100.0fx, 50.0fx, 0deg, 200.0fx, 20.0fx, 0, 9999, 0);
+    loop { wait(60); }
+}
+"#;
+        let mut g = crate::boot::boot(SRC, 7, 2).expect("boot");
+        step_once(&mut g);
+        step_once(&mut g);
+
+        let p = g.world().view().lasers();
+        let i = p.iter_alive().next().expect("两帧后激光应已出生");
+        assert_eq!(
+            (p.ox()[i], p.oy()[i]),
+            (Fx::from_int(100), Fx::from_int(50))
+        );
+        assert_eq!((p.start()[i], p.end()[i]), (Fx::ZERO, Fx::from_int(200)));
+        assert_eq!(p.sprite()[i], 3, "sprite 存的是颜色号");
+
+        let (n, out) = encode(&g, LAYER_LASERS);
+        assert_eq!(n, 1);
+        // angle 0 → dir=(1,0)、cross=(0,1);沿轴长 200、横向宽 20。
+        // 实例基 [xx,yx,0,ox, xy,yy,0,oy] = [cross·w, dir·长, 中点]。
+        assert_eq!(&out[0..2], &[0.0, 200.0], "xx=0(cross 无 x)、yx=沿轴长");
+        assert_eq!((out[3], out[7]), (200.0, 50.0), "原点 = start..end 中点");
+        assert_eq!(&out[4..6], &[20.0, 0.0], "xy=横向宽、yy=0(dir 无 y)");
+        assert_eq!(
+            &out[8..12],
+            &[3.0, 1.0, 0.0, 0.0],
+            "custom=[color,alpha,0,0]"
+        );
     }
 
     #[test]

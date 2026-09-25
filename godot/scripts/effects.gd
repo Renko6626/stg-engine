@@ -6,7 +6,7 @@ extends Node2D
 ## `clear_all()` 即可。此前每个火花一个带 _process/_draw 的节点,擦弹一接就炸(B28)。
 ##
 ## 行 = (kind, x, y, born, param, sprite, index, gen)。`index >= 0` 的是依附行(fx_on):
-## 每帧经 entity_pos 跟随,句柄失效即回收。缓冲布局同三层:stride 12,
+## 每帧经 entity_pos 跟随,句柄失效即回收。缓冲布局同各实体层:stride 12,
 ## [1,0,0,x, 0,1,0,y, kind,age,param,sprite](缩放在 shader 里按 kind 算)。
 ## 飘字仍是 Label(数量小)。
 

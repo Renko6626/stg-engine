@@ -63,7 +63,7 @@ state： 0 预警（不判）→ 1 生效（判）→ 2 收缩（不判）→ �
 | | `omega` | `i16` | 每帧转多少 BAM，口径同弹的 `ang_vel` |
 | | `start, end, start_len, speed` | `Fx` | 语义同 §2 |
 | 外观/判定 | `width` | `Fx` | 画面宽度 = 判定宽度，判定半高 `width/2` |
-| | `sprite` | `u16` | 图集外观（形状 + 颜色，折叠方式同弹） |
+| | `sprite` | `u16` | 图集外观（形状 + 颜色，折叠方式同弹）。**见修订：实际只存颜色号 0..15** |
 | 时序 | `warn, active, fade` | `u16` | 三段的时长（帧）。`warn == 0` 时出生即是 state 1；`fade == 0` 时生效期一结束直接回收 |
 | | `timer` | `u16` | 当前 state 内的帧计数 |
 | | `state` | `u8` | 0 预警 / 1 生效 / 2 收缩 |
@@ -71,7 +71,7 @@ state： 0 预警（不判）→ 1 生效（判）→ 2 收缩（不判）→ �
 | | `ax, ay` | `Fx` | 挂靠偏移 |
 | 观测 | `dx, dy` | `Fx` | 本帧原点的实际位移（先例：敌人 dx/dy） |
 | | `dang` | `i16` | 本帧实际转角，包括 omega、一次性 rotate、aim |
-| | `px, py` / `pang` | `Fx` / `Angle` | 上一帧相位 5 结束时的原点与角度，求差用。出生时等于初值 |
+| | `px, py` / `pang` | `Fx` / `Angle` | 上一帧相位 5 结束时的原点与角度，求差用。出生时等于初值（**见修订：出生当帧被脚本改写时同步**） |
 | 杂项 | `flags` | `u8` | 位 0 同原作（收缩方式：0 = 变窄，1 = 淡出），纯表现 |
 | | `born_frame` | `u32` | |
 
@@ -87,7 +87,7 @@ state： 0 预警（不判）→ 1 生效（判）→ 2 收缩（不判）→ �
 若 scene_frozen：整段跳过（同弹）
 对每条存活激光（相位 2 的 ECL 修改此时已经生效）：
   若挂靠且敌人仍存活（代际相符）：(ox, oy) = 敌人位置 + (ax, ay)
-  否则若挂靠但敌人已失效：清除挂靠（脱钩），原点不动
+  否则若挂靠但敌人已失效：清除挂靠（脱钩），原点不动   // 见修订：被杀那一帧敌人仍存活，激光照跟
   angle += omega
   end += speed;  若 end − start > start_len：start = end − start_len;  start = max(start, 0)
   timer += 1；按表切换 state：
@@ -100,6 +100,7 @@ state： 0 预警（不判）→ 1 生效（判）→ 2 收缩（不判）→ �
 
 - 时停期间不推进，`dx,dy,dang` 也不更新；时停结束后第一帧的差值包含时停期间 ECL 做的修改（时停时相位 2 是否运行以现有规则为准）。
 - 边界：`warn/active/fade` 的「≥」语义和逐帧状态由单测按 §2 三组真实参数钉死（§8）。
+  **见修订**：`warn > 0 && active == 0` 不判定任何一帧；`start > end` 时令 `end = start`。
 
 ### 4.2 判定（相位 6 collide，碰撞矩阵新增行 9）
 
@@ -130,15 +131,16 @@ return len_sq(along − qa, perp − qp)        // i64 Q32.32，不开根
 - 池满：`laser()` 返回 -1，`diag.pool_full[POOL_LASER]` 加 1，不 panic。
 - 失效句柄（已回收或代际不符）：所有 `lz_*` 调用什么都不做，计数加 1；`lz_alive` 返回 0。
 - 参数越界（负宽度、负长度等）：钳到合法值或不做，并计数。具体规则在计划里逐条列出。
+  **见修订**：坐标 ±4096、长度/偏移/速度 `[0, 4096]`、宽度 `[0, 2048]`，一次调用多坏字段只计一次 `contract_viol`。
 
 ## 5. ECL 表层语法（新族 8xx）
 
 ```ecl
 let lz = laser(sprite, color, x, y, angle, len, width, warn, active, fade);
     // 出生时 start = 0、end = len、start_len = len、speed = 0（形态一）；返回打包句柄，池满时返回 -1
-lz_speed(lz, speed, start_len);   // 形态二：出生后调用，同时把 end 重置为 0，棒子从原点长出去
+lz_speed(lz, speed, start_len);   // 形态二：出生后调用，同时把 end 重置为 0，棒子从原点长出去（见修订：end = start）
 lz_start(lz, s);                  // 近端留空（第 4 关的 start = 64）
-lz_omega(lz, a);                  // 持续转动（每帧多少 BAM）
+lz_omega(lz, a);                  // 持续转动（每帧多少 BAM）（见修订：低 16 位按位回绕为 i16）
 lz_rotate(lz, a);                 // 一次性转一个角度（原作 88）
 lz_aim(lz, off);                  // angle = 指向自机的角度 + off（原作 89）
 lz_anchor(lz, enemy, ox, oy);     // 挂到敌人身上；enemy 传 -1 表示解除
@@ -147,6 +149,8 @@ lz_cancel(lz);                    // state<2 时切到 2（原作 92）
 lz_alive(lz) -> int               // 原作 91
 ```
 
+- **见修订**：`laser()` 实际签名为 `laser(color, x, y, ...)`——**只取 `color`、没有 `sprite` 参数**
+  （池 `sprite` 字段存颜色号 0..15）；`lz_speed` 令 `end = start`；`lz_omega` 按位回绕不钳位。
 - syscall 号落在新族 `8xx`，按 `docs/ecl-ops.md` 的百分区制登记；`builtins.rs` 是唯一权威，改完重跑 `gen-ecl-meta`。
 - 原作 85/86 的区别只是「角度是否相对自机」，转写时写成 `laser(..., aim_player() + a, ...)`，不单独做 `laser_aimed`。
 - 原作 87 `laser_index` 与 `laser_clear_all` 只是在维护敌人指针表。有了句柄，脚本把句柄存进局部变量即可，转写时去掉这两条。
@@ -162,13 +166,15 @@ lz_alive(lz) -> int               // 原作 91
 | `half_h` | `width / 2` |
 | `omega` | `dang` 换算为弧度/帧（Fx）。换算常数写成定点常量，不在核里用浮点 |
 | `vx, vy` | `dx, dy` |
-| `t_active` | state 0 时为 `warn − timer`，否则为 0 |
+| `t_active` | state 0 时为 `warn − timer`，否则为 0（**见修订：`warn − timer + 1`**） |
 | `state` | 0/1/2（和 th06nc 抽取器同一编号） |
 | `type` | 0 |
 
 - state 2 的激光也照发，由特征化一侧决定丢不丢。
 - 条数超过 `LASERS_CAP = 64` 时，按 `seg_box_dist_sq(自机, 激光)` 取最近的 64 条，平局按池下标，保证确定性。
 - 在 `vec_env.rs` 的写行处新增 `write_lasers`，去掉 `lasers_count.fill(0)`。wheel 升为 `stg_rl` **0.3.0**。
+- **见修订**：Tier 0 实际新增了 `lasers` 行缓冲（`vec_env` / `stg-py` / Python `_layout`），此前只有计数；
+  `t_active` 的预警态公式改为 `warn − timer + 1`。
 
 ## 7. 渲染（Godot，通道 A）
 
@@ -176,6 +182,8 @@ lz_alive(lz) -> int               // 原作 91
 - 每条激光一个四边形：截面贴图横向拉到 `width`、纵向拉到 `end − start`，旋转后加色混合；原点贴一个闪光。
 - 预警线（1.2 px，最后 min(warn, 30) 帧线性长到全宽）和收缩（变窄或淡出，看 `flags` 位 0）**全在表现层**根据 `state/timer/warn/fade` 计算，核里不存画面状态。
 - 图集补一行截面渐变（16 色，按弹的色列排）。`docs/render-contract.md` 补这一层的说明。
+  **见修订：截面渐变先由 shader 程序化生成（16 色表从 bullets 图集采样），图集补图留待办**；
+  原点闪光本刀不做。
 - 画出来的宽度就是判定宽度（裁定 ④），渐变的暗边也在判定内。
 
 ## 8. 测试
@@ -230,3 +238,39 @@ lz_alive(lz) -> int               // 原作 91
 - 文档：`stg-world-design.md`（D8 碰撞矩阵加行 9/10、D10 预算、Part IV §1 标注已落地）；`docs/ecl-ops.md` 的 8xx 族；
   `docs/ecl-lang/` 新增激光章节，并同步 `docs/ecl-lang.md` 索引；`docs/render-contract.md` 的激光层；
   `docs/follow-ups.md` 关闭 D23#10，新增 §10 的条目；`docs/rl-card-pool.md` 第 7 条改写；`PROGRESS.md`。
+
+## 12. 实施中的修订（2026-09-25）
+
+实施（Task 1–6）相对本设计的有意偏离，逐条如下；正文相关处已加「见修订」指针。
+分歧时**以本节与代码为准**。
+
+1. **`laser()` 只取 `color`，不取 `sprite`**（修订 §5、§3）。激光只有一种截面贴图，颜色就是
+   全部外观；池 `sprite` 字段存颜色号 0..15。理由：给同一个东西两个外观参数是没必要的状态。
+2. **截面渐变由 shader 程序化生成，图集补图列为后续待办**（修订 §7）。`laser.gdshader` 用
+   `UV.x` 画「中心白芯 → 两侧渐暗」，16 色表从 `bullets` 图集采样（近似占位）。原设计"etama3
+   第 146–153 号 8 色截面小方块"需美术补图后才谈；见 follow-ups D27#6。
+3. **出生当帧（`born_frame == frame`）改几何时同步 `px/py/pang`，`lz_anchor` 立即吸附**
+   （修订 §3「出生时等于初值」）。理由：ECL 在出生当帧就改角度/原点/挂靠时，若 `px/py/pang`
+   仍停在初值，相位 5 报出的 `dx/dy/dang` 会把「初值 → 出生帧被改写」的整段跳变当成这一帧的
+   位移/转角，污染 Tier 0 观测（首帧尖峰）。`world/laser.rs::sync_prev_if_newborn` 实现。
+4. **参数上界与钳位计次**（修订 §4.3）：坐标 `ox/oy/ax/ay ∈ ±4096`、长度/偏移/速度
+   `start/end/start_len/speed ∈ [0, 4096]`、宽度 `width ∈ [0, 2048]`（= 2×`MAX_ENTITY_RADIUS`）；
+   越界双边钳位并计 `contract_viol`——一次 create/写 API 调用里多个字段越界**只计一次**。
+   `create_laser` 与 `lz_*` 写 API 均如此（`world/laser.rs`）。
+5. **`lz_omega` 按 BAM 模 65536 按位回绕为 `i16`，不钳位、不计数**（修订 §5）。
+   `raw as u16 as i16`：反向扫射编码成 >32767 的原始值也能保持反向；钳位会让大负值变正转而反向。
+6. **`lz_speed` 令 `end = start`（不是 0）**（修订 §5）。形态二出生后若已 `lz_start` 设过近端
+   留空，棒子应从那一点长出去，`end = 0` 会让线段倒退到原点之前。
+7. **`warn > 0 && active == 0` 不判定任何一帧；`start > end` 时令 `end = start`**（修订 §4.1）。
+   前者：预警结束当帧直接按生效结束处理（`fade == 0` 则立即回收），绝不让相位 6 多判一帧；
+   后者：倒置盒没有意义，归一为空线段。
+8. **挂靠敌人被杀的那一帧激光仍跟随**（修订 §4.1）：致死的结算是相位 7、敌人在相位 9 才
+   回收，而激光在相位 5 跟随——死亡那一帧敌人还在池里，激光读到的是它最后位置；下一帧
+   代际不符（或空槽）才脱钩、原点留在原地。
+9. **Tier 0 新增 `lasers` 行缓冲**（修订 §6）：`vec_env` / `stg-py` / Python `_layout` 从
+   "只有计数"升级为 64 行定长缓冲（proto 不改）；`stg_rl` 升 0.3.0。
+10. **Tier 0 的 `t_active` 在预警态为 `warn − timer + 1`**（值域 `warn..1`，含义是「还要几步
+    才判定」），生效/收缩态为 0（修订 §6）。原写 `warn − timer` 会在预警第一帧得到 `warn`、
+    且与生效态的 0 冲突（生效第一帧 `warn − 0 = warn` 也会被误读）；`+1` 让「还剩几步」的心智
+    模型一致：timer = warn−1 时值 1（再 1 帧判定），timer = warn 时已切生效态报 0。
+

@@ -1,6 +1,6 @@
 //! 相位 5 · 积分（各池 `pos += vel` + 计时器倒数）。
 //!
-//! 冻结趟序（`stg-world-design.md:168`）：弹 → 自机弹 → 敌人 → 激光 → 道具 → 作用区。
+//! 冻结趟序（`stg-world-design.md:183`，A4 流水线 integrate 行）：弹 → 自机弹 → 敌人 → 激光 → 道具 → 作用区。
 //!
 //! 弹：delay 门 → 模式效果（POLAR/CART 互斥）→ `pos += vel` → life 倒数。
 //! 自机弹：`pos += vel`。
@@ -19,7 +19,7 @@ use crate::tables::WorldTables;
 impl WorldBody {
     pub(crate) fn integrate(&mut self, tables: &WorldTables) {
         self.phase_enter(super::PH_INTEGRATE);
-        // 冻结趟序（stg-world-design.md:168）：弹 → 自机弹 → 敌人 → 激光 → 道具 → 作用区。
+        // 冻结趟序（stg-world-design.md:183，A4 流水线 integrate 行）：弹 → 自机弹 → 敌人 → 激光 → 道具 → 作用区。
         // **顺序是宪法，门禁不得重排它**——只在原位加条件。
         // 本相位横跨 B/C 两组：自机弹的飞行是 B（任一方向的时停都冻），其余五趟是 C。
         let scene = self.scene_frozen();
