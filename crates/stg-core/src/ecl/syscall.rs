@@ -1679,19 +1679,13 @@ fn sys_laser_start(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     Ok(())
 }
 
-/// `lz_omega(lz, a)`（803）：`a` 出 i16 → 钳位并计一次违约（`omega` 池字段是 `i16`）。
+/// `lz_omega(lz, a)`（803）：`a` 取低 16 位**按位回绕**为 `i16`（BAM 语义——反向扫射编码后
+/// 原始值 > 32767，位穿透才能保持反向），不钳位、不计数。
 fn sys_laser_omega(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let a = pop(task)?;
     let lz = pop(task)?;
     let h = resolve_laser_handle(lz, ctx).unwrap_or(LaserHandle::NULL);
-    let omega = match i16::try_from(a) {
-        Ok(v) => v,
-        Err(_) => {
-            ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
-            a.clamp(i16::MIN as i32, i16::MAX as i32) as i16
-        }
-    };
-    ctx.body.laser_set_omega(h, omega);
+    ctx.body.laser_set_omega(h, bam(a).raw() as i16);
     Ok(())
 }
 
@@ -8047,7 +8041,9 @@ mod tests {
         );
     }
 
-    /// `warn/active/fade` 出 `[0,65535]` → 钳位；一次 create 多坏字段只计一次违约。
+    /// **只覆盖时间字段**：`warn/active/fade` 出 `[0,65535]` → 钳位；这三个字段一起越界时
+    /// `laser()` 只计一次违约。几何字段（坐标/长度/宽度）另由 `world::create_laser` 再计一次，
+    /// 故"时间 + 几何同时坏"的一次调用会合计 2 次——控制方裁定保持现状，本测试不覆盖那半边。
     #[test]
     fn laser_time_fields_clamp_out_of_u16_and_count_once() {
         let (mut w, ecl) = fresh();
@@ -8072,9 +8068,11 @@ mod tests {
         assert_eq!(w.body.diag.contract_viol, cv0 + 1, "一次 create 只计一次");
     }
 
-    /// `lz_omega` 的栈值出 i16 → 钳到 i16 界并计数；合法负角不动、不计数。
+    /// `lz_omega` 的栈值取**低 16 位按位回绕**为 `i16`（BAM 语义：反向角速度编码后原始值大于
+    /// 32767，例如 65000 == i16 −536），**不钳位、不计数**。判别腿：旧实现把它钳到
+    /// `i16::MAX`（最大正转速），此断言必红；合法负角（47332 == −18204）原样写入且不计数。
     #[test]
-    fn lz_omega_clamps_out_of_i16_and_counts() {
+    fn lz_omega_wraps_bits_not_clamps() {
         let (mut w, ecl) = fresh();
         let mut task = Task::default();
         let args = laser_args(
@@ -8093,20 +8091,20 @@ mod tests {
         let i = laser_slot(lz);
 
         let cv0 = w.body.diag.contract_viol;
+        // 65000 > 32767：按位回绕为 i16 −536（反向扫射），不计数。
         task.sp = 0;
-        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_OMEGA, &[lz, 100000]).is_ok());
-        assert_eq!(w.body.lasers.omega[i], i16::MAX, "上钳");
-        assert_eq!(w.body.diag.contract_viol, cv0 + 1, "钳位计一次");
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_OMEGA, &[lz, 65000]).is_ok());
+        assert_eq!(
+            w.body.lasers.omega[i], 65000u16 as i16,
+            ">32767 按位回绕为负"
+        );
+        assert_eq!(w.body.diag.contract_viol, cv0, "按位回绕不计数");
 
+        // 47332 == u16 0xB8C4 == i16 −18204：合法负角速度原样写入，不计数。
         task.sp = 0;
-        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_OMEGA, &[lz, -100000]).is_ok());
-        assert_eq!(w.body.lasers.omega[i], i16::MIN, "下钳");
-        assert_eq!(w.body.diag.contract_viol, cv0 + 2);
-
-        task.sp = 0;
-        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_OMEGA, &[lz, -18204]).is_ok());
-        assert_eq!(w.body.lasers.omega[i], -18204, "合法负角原样");
-        assert_eq!(w.body.diag.contract_viol, cv0 + 2, "合法值不计数");
+        assert!(call(&mut w, &ecl, &mut task, SYS_LASER_OMEGA, &[lz, 47332]).is_ok());
+        assert_eq!(w.body.lasers.omega[i], -18204, "负角速度原样");
+        assert_eq!(w.body.diag.contract_viol, cv0, "仍不计数");
     }
 
     /// Review Focus 3：激光 A 回收、新激光 B 复用同槽后，拿 A 的旧句柄调 `lz_rotate`

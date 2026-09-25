@@ -799,6 +799,74 @@ sub main() {
         assert_ne!(l.angle()[i].raw(), 16384, "omega 使 90deg 推进");
     }
 
+    /// 8xx 各 setter 的**参数正序**判别腿：每条 handler 的两个参数取不同值，声明/弹出
+    /// 写反弹序就会得到不同结果。走真 `.ecl` 编译链（builtins 声明序 → codegen 压栈 →
+    /// syscall 逆序弹出），`call` 级单测绕不过编译器、抓不到这条链的错序。
+    /// `lz_omega(65000bam)` 顺带端到端钉死按位回绕（>32767 的原始值 → i16 负角速度）。
+    #[test]
+    fn laser_setter_param_order_end_to_end() {
+        use stg_core::math::{Angle, Fx, atan2};
+        let src = r#"
+async sub shoot() {
+    var a: int = laser(1, 0.0fx, 0.0fx, 0deg, 0.0fx, 8.0fx, 100, 60, 0);
+    var b: int = laser(2, 0.0fx, 0.0fx, 0deg, 0.0fx, 8.0fx, 100, 60, 0);
+    var c: int = laser(3, 0.0fx, 0.0fx, 1000bam, 0.0fx, 8.0fx, 100, 60, 0);
+    var d: int = laser(4, 0.0fx, 0.0fx, 0deg, 0.0fx, 8.0fx, 100, 60, 0);
+    var e: int = laser(5, 0.0fx, 0.0fx, 0deg, 0.0fx, 8.0fx, 100, 60, 0);
+    var f: int = laser(6, 0.0fx, 0.0fx, 0deg, 0.0fx, 8.0fx, 100, 60, 60);
+    var g: int = laser(7, 0.0fx, 0.0fx, 0deg, 0.0fx, 8.0fx, 100, 60, 0);
+    lz_speed(a, 4.0fx, 192.0fx);
+    lz_start(b, 64.0fx);
+    lz_rotate(c, 2000bam);
+    lz_aim(d, 3000bam);
+    lz_origin(e, 10.0fx, 20.0fx);
+    lz_cancel(f);
+    lz_omega(g, 65000bam);
+    loop { wait(1); }
+}
+sub main() {
+    _ = spawn_enemy(0.0fx, 0.0fx, 10, 0, 0, 1, shoot);
+    loop { wait(1); }
+}
+"#;
+        let p = tmp_ecl("laser-args", src);
+        let (mut w, image, units) = build_ecl_world(p.to_str().unwrap(), 1, 2).expect("应编过");
+        let r = run_scene(&mut w, &image, 5, None, 1, 2, units);
+        assert_eq!(r.exit_code(), 0, "激光脚本不得 fault：{:?}", r.faults);
+        let v = w.view();
+        let l = v.lasers();
+        // color → 槽下标：每条激光用不同 color，按 sprite 定位。
+        let mut slot = [usize::MAX; 8];
+        for i in l.iter_alive() {
+            slot[l.sprite()[i] as usize] = i;
+        }
+        // lz_speed(lz, speed, start_len)：两值不同，写反就换位。
+        assert_eq!(
+            l.speed()[slot[1]],
+            Fx::from_int(4),
+            "speed 不得与 start_len 对调"
+        );
+        assert_eq!(l.start_len()[slot[1]], Fx::from_int(192), "start_len");
+        // lz_start(lz, s)。
+        assert_eq!(l.start()[slot[2]], Fx::from_int(64));
+        // lz_rotate(lz, a)：初值 1000bam + 一次性 2000bam。
+        assert_eq!(l.angle()[slot[3]], Angle(1000).add(Angle(2000)));
+        // lz_aim(lz, off)：原点 (0,0)、自机默认 (0,384) → 正下方 atan2，再加 off。
+        let p0 = &v.players()[0];
+        assert_eq!(
+            l.angle()[slot[4]],
+            atan2(p0.y, p0.x).add(Angle(3000)),
+            "自机方向 + off"
+        );
+        // lz_origin(lz, x, y)：x、y 取不同值，写反就换位。
+        assert_eq!(l.ox()[slot[5]], Fx::from_int(10));
+        assert_eq!(l.oy()[slot[5]], Fx::from_int(20));
+        // lz_cancel(lz)：取消切收缩态 2（fade=60，故当帧不回收）。
+        assert_eq!(l.state()[slot[6]], 2, "取消切收缩态");
+        // lz_omega(lz, 65000bam)：原始值 >32767 按位回绕为 i16 −536，不钳位。
+        assert_eq!(l.omega()[slot[7]], 65000u16 as i16, "按位回绕不钳位");
+    }
+
     /// 目录整取（多文件编译单元）走得通——与 `check` 同一条路径。
     #[test]
     fn directory_units_are_collected() {

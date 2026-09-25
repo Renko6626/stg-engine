@@ -42,6 +42,7 @@
 | owner 不是敌的任务调运动动词 / `die` / `drop_*` / `spell_begin` | [3 · 敌人](3-enemy.md) |
 | owner 不是弹的任务调弹 setter 族（`set_speed`/`turn`/…） | [4 · 弹](4-bullets.md) |
 | `fire`/`batch`/`sh_fire` 的弹型+色号越界或落在图集空格（两参全设才查） | [4 · 弹](4-bullets.md) |
+| `laser()` 的 `color` 越界（非 `0..=15`） | [9 · 激光](9-lasers.md) |
 | `sh_xform` 区间越界、`sh_task` 的 sub 号不在册或不是零参 `async sub` | [4 · 弹](4-bullets.md) |
 | 单任务指令预算烧穿（`loop {}` / `loop { wait(0); }`）= `FAULT_BUDGET` | [2 · 任务与时间](2-tasks.md) |
 
@@ -62,6 +63,7 @@
 | `clear_bullets` 时作用区池满 | 这一帧的清弹静默失效 | [6 · 符卡与整局编排](6-spell-and-stage.md) |
 | 一次消掉的弹多于道具池余量 | 弹照消，**多出的星星生不出来**（逐颗计 `pool_full`）——已知设计边界 | [6 · 符卡与整局编排](6-spell-and-stage.md) |
 | `emit_req` 时请求缓冲满 | 确定性丢弃，不 Fault | [6 · 符卡与整局编排](6-spell-and-stage.md) |
+| 失效激光句柄（已回收/代际不符）、`lz_anchor` 的失效敌句柄 | 写 API no-op + `contract_viol` 计数（`lz_alive` 只读返 `0`、不计数） | [9 · 激光](9-lasers.md) |
 | 时停期间的相位跳过 | 冻 C 时相位 6/7/9 不跑 ⇒ 不判定、不结算、不回收（bomb 不冻 C，判定/结算/回收照跑，与时停不同） | spec §4 |
 
 字节码层的完整口径（fault 码表、加载时代码校验、每个 syscall 的越界处置）见

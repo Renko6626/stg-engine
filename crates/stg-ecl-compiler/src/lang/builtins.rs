@@ -948,7 +948,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Angle)],
         ret: None,
-        doc: "激光持续转动速率(每帧多少 BAM,允许负,走回绕);栈值出 i16 钳位+计数",
+        doc: "激光持续转动速率(每帧多少 BAM,允许负,走回绕);栈值取低 16 位按位回绕为 i16,不钳位不计数",
         param_names: &["lz", "a"],
     },
     Builtin {

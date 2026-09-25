@@ -9,7 +9,7 @@
 | 形态 | 参数怎么填 | 例子 |
 |---|---|---|
 | 预警线 → 生效扫射 | `warn > 0`、`speed = 0`，出生后 `lz_omega` | 竖一条线警告 30 帧，然后慢慢扫 |
-| 自机狙 | `warn > 0`，出生后 `lz_aim` | 线摆到自机方向再射 |
+| 自机狙 | `warn > 0`，出生即 `aim_player() + a`（或出生后 `lz_aim`） | 线摆到自机方向再射 |
 | 飞出去的棒子 | `warn = 0`、`active` 很大，出生后 `lz_speed` | 192px 的短棒沿射线匀速飞出 |
 
 ## 建一条激光
@@ -49,20 +49,22 @@ sub main() {
 }
 ```
 
-`lz_omega` 的 `a` 是**每帧**增量（`angle` 类型，BAM）。原作"每 N 帧转一次 `a`"的写法
+`lz_omega` 的 `a` 是**每帧**增量（`angle` 类型，BAM），允许负（反向扫）——负角速度按 BAM
+原始值的低 16 位**按位回绕**，不是钳到最大正转速。原作"每 N 帧转一次 `a`"的写法
 对应 `lz_omega(lz, (a as int / N) as angle)`——见文末「和原作对照」。
 
-## 形态二：自机狙（`lz_aim`）
+## 形态二：自机狙（`aim_player() + a`）
 
-`lz_aim(lz, off)` 把激光角度设为**从激光原点到自机 0 的方向 + `off`**。相对自机角的写法
-是 `lz_aim(lz, a)`；要"发射瞬间就瞄"也可以直接给 `laser` 的角度位传
-`aim_player() + a`（`aim_player()` 返 `angle`，加偏移角不判型报错）。
+`aim_player()` 在调用那一刻返回**从 owner 位置指向最近可瞄自机**的 `angle`（细则见
+[4 · 弹](4-bullets.md) 的"自机狙"节）。发射瞬间就瞄，直接把它填进 `laser()` 的角度位、
+再加偏移角：`laser(color, x, y, aim_player() + a, ...)`。出生后再改角度则用
+`lz_aim(lz, off)`——它把激光角度设为**从激光原点到自机 0 的方向 + `off`**。两者基点
+不同（`aim_player` 从 owner 自身，`lz_aim` 从激光原点），原点 ≠ owner 时不等价。
 
 ```ecl
-// 预警 24 帧，线摆到自机方向 + 10°；生效 90 帧期间不再改角度，就是一条自机狙。
+// 预警 24 帧；出生即把线摆到自机方向 + 10°，生效 90 帧期间不再改角度，就是一条自机狙。
 async sub aimed_laser() {
-    var lz: int = laser(6, $self_x, $self_y, 0deg, 400.0fx, 24.0fx, 24, 90, 12);
-    lz_aim(lz, 10deg);            // angle = atan2(自机 - 原点) + 10deg
+    var lz: int = laser(6, $self_x, $self_y, aim_player() + 10deg, 400.0fx, 24.0fx, 24, 90, 12);
     wait(150);
     loop { wait(1); }
 }
@@ -72,6 +74,8 @@ sub main() {
     loop { wait(1); }
 }
 ```
+
+另一种写法是出生后再瞄：把角度位先填 `0deg`，紧接着调 `lz_aim(lz, 10deg)`。
 
 ## 形态三：飞出去的棒子（`lz_speed`）
 

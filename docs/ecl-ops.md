@@ -323,7 +323,7 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
 | 800 | `laser`（激光池刀 2026-09-25） | color,x,y,angle,len,width,warn,active,fade | 打包句柄或 -1（`color ∉ 0..=15` → **Fault(0)**，先验后建、不建半成品，同 `fire` 坏外观；`warn/active/fade` 出 `[0,65535]` → 钳位 + `contract_viol` +1；形态一 `start=0`、`end=start_len=len`、`speed=omega=0`、`flags=0`，其余派生字段交给世界侧；池满走 P4-a：押 -1 + `pool_full[POOL_LASER]` +1，**不 Fault**；`sprite` 存 `color`） |
 | 801 | `lz_speed` | lz,speed,start_len | —（形态二：设速率与近端长度，并把 `end` 重置为 `start` 从近端长出去；两字段世界层双边钳 `[0,LASER_LEN_MAX]`） |
 | 802 | `lz_start` | lz,s | —（近端留空，原作第 4 关 `start=64`；世界层钳 `[0,LASER_LEN_MAX]`，`start > end` 时把 `end` 抬到 `start`） |
-| 803 | `lz_omega` | lz,a | —（持续转动速率；池字段是 `i16` BAM/帧，栈值出 i16 → 钳到 i16 界 + `contract_viol` +1） |
+| 803 | `lz_omega` | lz,a | —（持续转动速率；池字段是 `i16` BAM/帧，栈值取低 16 位**按位回绕**（`raw as u16 as i16`，反向扫射编码成 >32767 的原始值也能保持反向），不钳位、不计数） |
 | 804 | `lz_rotate` | lz,a | —（一次性转 `a`，回绕加） |
 | 805 | `lz_aim` | lz,off | —（角度 = 指向自机 0 的 `atan2` + `off`） |
 | 806 | `lz_anchor` | lz,enemy,ox,oy | —（挂到敌号上；`enemy = -1` → `EnemyHandle::NULL` 解除挂靠。其它敌号一律经 `resolve_enemy_handle` 解析：命中则用池里的**完整 u16 代际**重建句柄（I-3，低 15 位复刻会让高代际静默脱钩）；解析失败 → 不挂靠 + `contract_viol` +1 + `STALE_HANDLE`。偏移世界层双边钳 `±LASER_COORD_MAX`，存活敌立即吸附到 `敌位置 + 偏移`） |
