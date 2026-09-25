@@ -106,7 +106,8 @@ notes = ""
 ## 4. 弹型标签（`tags`，可多选，缺了再加）
 
 `aimed` 自机狙 · `random` 随机散弹 · `ring` 环 · `spiral` 螺旋 · `wall` 带缝弹墙 · `curve` 曲线 / 变速 ·
-`split` 分裂 · `stream` 连射流 · `dense` 高密度小弹 · `fast` 高速弹 · `mixed` 多种叠加
+`split` 分裂 · `stream` 连射流 · `dense` 高密度小弹 · `fast` 高速弹 · `mixed` 多种叠加 ·
+`laser` 含真激光（`laser()`，2026-09-25 起；弹链近似的仍用 `laser_approx = true`，不打本标签）
 
 ## 5. 自检流程（每张卡）
 
