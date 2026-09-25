@@ -91,12 +91,15 @@ impl WorldBody {
                     let d2 = len_sq(dx, dy);
                     let br = self.bullets.radius[b];
                     let graze_sum = (br + graze_r).raw() as i64;
+                    let hit_sum = (br + hit_r).raw() as i64;
+                    // 两圈**各自**判：原先只在擦弹圈内才查中弹，隐含「hit ≤ graze」；局中写口
+                    // `set_player_hit_radius` 能把判定放到擦弹圈外，那一环会被漏判（2026-09-25 实测）。
+                    // hit ⊆ graze 时推入顺序（先 GRAZE 后 HIT）与旧实现逐位相同。
                     if d2 <= graze_sum * graze_sum {
                         self.push_hit(ROW_BULLET_PLAYER_GRAZE, b as u16, p as u16);
-                        let hit_sum = (br + hit_r).raw() as i64;
-                        if d2 <= hit_sum * hit_sum {
-                            self.push_hit(ROW_BULLET_PLAYER_HIT, b as u16, p as u16);
-                        }
+                    }
+                    if d2 <= hit_sum * hit_sum {
+                        self.push_hit(ROW_BULLET_PLAYER_HIT, b as u16, p as u16);
                     }
                 }
             }
@@ -337,6 +340,79 @@ mod tests {
     #[cfg(debug_assertions)]
     use crate::world::PH_COLLIDE;
     use crate::world::test_support::*;
+
+    fn player_hits_at(w: &mut crate::step::World) -> usize {
+        use crate::events::ROW_BULLET_PLAYER_HIT;
+        w.body.hits_len = 0;
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        (0..w.body.hits_len as usize)
+            .filter(|&k| w.body.hits[k].row == ROW_BULLET_PLAYER_HIT)
+            .count()
+    }
+
+    /// 判别式（2026-09-25 自机判定写口）：弹半径 2、离自机 6 px。默认 hit_radius 2.5 ⇒ 和 4.5 < 6 不中；
+    /// 写成 5 ⇒ 和 7 ≥ 6 必中；写回 2.5 又不中。圆心重合式测试区分不了半径对错，所以取这个几何。
+    #[test]
+    fn set_player_hit_radius_changes_bullet_collision() {
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        bullet_at(&mut w, 6, 384);
+        let base = w.body.players[0].hit_radius;
+        assert_eq!(player_hits_at(&mut w), 0, "默认判定下 6 px 外不该中");
+        w.body.set_player_hit_radius(0, Fx::from_int(5));
+        assert_eq!(w.body.players[0].hit_radius, Fx::from_int(5));
+        assert_eq!(w.body.last_status, crate::world::STATUS_OK);
+        assert_eq!(player_hits_at(&mut w), 1, "判定改大后必须中");
+        w.body.set_player_hit_radius(0, base);
+        assert_eq!(player_hits_at(&mut w), 0, "改回表值后恢复");
+    }
+
+    /// 判别式：判定放到擦弹圈（16）之外——弹在 24 px、判定 30 ⇒ 必中、且不算擦弹。
+    /// 旧实现只在擦弹圈内查中弹，这里会漏判（stg-rl `hit_extra_turns_grazing_rain_lethal_and_persists` 抓到的）。
+    #[test]
+    fn hit_radius_larger_than_graze_still_hits() {
+        use crate::events::ROW_BULLET_PLAYER_GRAZE;
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(384);
+        bullet_at(&mut w, 24, 384);
+        assert!(
+            w.body.players[0].graze_radius < Fx::from_int(22),
+            "前提：弹在擦弹圈外"
+        );
+        w.body.set_player_hit_radius(0, Fx::from_int(30));
+        assert_eq!(player_hits_at(&mut w), 1, "判定大于擦弹圈时也必须判中");
+        let graze = (0..w.body.hits_len as usize)
+            .filter(|&k| w.body.hits[k].row == ROW_BULLET_PLAYER_GRAZE)
+            .count();
+        assert_eq!(graze, 0, "擦弹圈外不算擦弹");
+    }
+
+    #[test]
+    fn set_player_hit_radius_clamps_and_rejects_bad_index() {
+        let mut w = crate::step::World::new(1);
+        let viol0 = w.body.diag.contract_viol;
+        w.body.set_player_hit_radius(0, Fx::from_int(5000));
+        assert_eq!(
+            w.body.players[0].hit_radius,
+            crate::world::MAX_ENTITY_RADIUS,
+            "上钳到 MAX_ENTITY_RADIUS"
+        );
+        w.body.set_player_hit_radius(0, Fx::from_int(-3));
+        assert_eq!(w.body.players[0].hit_radius, Fx::ZERO, "下钳到 0");
+        assert_eq!(w.body.diag.contract_viol, viol0 + 2, "钳了计违约");
+        let before = w.body.players[0].hit_radius;
+        w.body
+            .set_player_hit_radius(crate::MAX_PLAYERS, Fx::from_int(3));
+        assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
+        assert_eq!(w.body.diag.contract_viol, viol0 + 3);
+        assert_eq!(w.body.players[0].hit_radius, before, "坏索引 no-op");
+    }
 
     #[test]
     fn collide_bullet_on_player_collects_hit_and_graze() {

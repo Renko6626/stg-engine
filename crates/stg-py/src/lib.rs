@@ -212,6 +212,10 @@ impl NativeVecEnv {
     fn set_start_weights(&mut self, w: Vec<f64>) -> PyResult<()> {
         self.0.set_start_weights(w).map_err(PyValueError::new_err)
     }
+
+    fn set_hit_radius_extra(&mut self, px: Vec<f64>) -> PyResult<()> {
+        self.0.set_hit_radius_extra(&px).map_err(PyValueError::new_err)
+    }
 }
 
 /// proto v1 HELLO JSON（`bullets_cap` 须在 `1..=BULLETS_CAP_MAX`）。

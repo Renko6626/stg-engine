@@ -25,6 +25,7 @@ use crate::env::{BootCache, EVENTS, Env, EnvConfig, validate};
 use crate::layout::{ENEMIES, ENEMIES_CAP, ITEMS_CAP, LASERS, LASERS_CAP};
 use rayon::prelude::*;
 use std::sync::Arc;
+use stg_core::math::Fx;
 use stg_core::tables::TABLES_V0;
 
 /// `buffer_sizes` 的各字段长度（调用方按此分配，`check` 逐字段核对）。
@@ -389,6 +390,27 @@ impl VecEnv {
         let w = Arc::new(w);
         for slot in &mut self.slots {
             slot.env.set_weights(w.clone());
+        }
+        Ok(())
+    }
+
+    /// 判定点写口（RL：判定点随机增大）：每个 env 追加的中弹判定半径，单位 px（长度须等于 env 数、全部有限、
+    /// |x| ≤ 1024）。当前局立即生效，之后每次自动 reset 都按「角色表值 + extra」重设，直到再改；0 = 恢复表值。
+    /// 浮点只在这里（断层线以上）换算成 `Fx`，引擎侧再钳 `[0, MAX_ENTITY_RADIUS]`。
+    pub fn set_hit_radius_extra(&mut self, px: &[f64]) -> Result<(), String> {
+        if px.len() != self.slots.len() {
+            return Err(format!(
+                "hit_radius_extra: len {} != num_envs {}",
+                px.len(),
+                self.slots.len()
+            ));
+        }
+        if px.iter().any(|x| !x.is_finite() || x.abs() > 1024.0) {
+            return Err("hit_radius_extra 必须有限且 |x| ≤ 1024".to_string());
+        }
+        for (slot, &x) in self.slots.iter_mut().zip(px) {
+            slot.env
+                .set_hit_extra(Fx::from_raw((x * 65536.0).round() as i32));
         }
         Ok(())
     }

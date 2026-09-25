@@ -494,3 +494,65 @@ sub main() {
     assert!(checked_normal_frame, "从未验证过正常帧 vx/vy == 坐标差");
     assert!(checked_teleport_frame, "从未验证过瞬移帧 vx/vy != 坐标差");
 }
+
+// ── 判定点写口 set_hit_radius_extra（2026-09-25）────────────────────────────
+
+fn player_hit_r(b: &Owned, env: usize) -> i32 {
+    let st = stg_rl::layout::PLAYER.stride;
+    let o = env * st + off::player::HIT_R;
+    i32::from_le_bytes(b.player[o..o + 4].try_into().unwrap())
+}
+
+/// extra 全 0 = 不调写 API：与从没调过的 VecEnv 逐位相同（默认行为不变）。
+#[test]
+fn hit_extra_zero_is_bitwise_noop() {
+    let n = 8;
+    let (mut a, mut b) = (
+        VecEnv::new(game_cfg(3), n, 2).unwrap(),
+        VecEnv::new(game_cfg(3), n, 2).unwrap(),
+    );
+    b.set_hit_radius_extra(&vec![0.0; n]).unwrap();
+    let (mut ba, mut bb) = (Owned::new(n, 256), Owned::new(n, 256));
+    a.reset(&mut ba.view()).unwrap();
+    b.reset(&mut bb.view()).unwrap();
+    for s in 0..200 {
+        let act = actions(s, n);
+        a.step(&act, &mut ba.view()).unwrap();
+        b.step(&act, &mut bb.view()).unwrap();
+        assert_eq!(ba.digest(), bb.digest(), "step {s}");
+    }
+}
+
+/// 只给 env 0 追加 3 px：观测里 env 0 的判定 = 表值 + 3，其余不动；跨 reset 保持；写回 0 恢复表值。
+#[test]
+fn hit_extra_applies_per_env_and_persists_across_reset() {
+    let n = 4;
+    let mut e = VecEnv::new(game_cfg(4), n, 2).unwrap();
+    let mut b = Owned::new(n, 256);
+    e.reset(&mut b.view()).unwrap();
+    let base = player_hit_r(&b, 0);
+    let mut extra = vec![0.0; n];
+    extra[0] = 3.0;
+    e.set_hit_radius_extra(&extra).unwrap();
+    e.step(&actions(0, n), &mut b.view()).unwrap();
+    assert_eq!(player_hit_r(&b, 0), base + Fx::from_int(3).raw());
+    assert_eq!(player_hit_r(&b, 1), base);
+    e.reset(&mut b.view()).unwrap();
+    assert_eq!(
+        player_hit_r(&b, 0),
+        base + Fx::from_int(3).raw(),
+        "新局照样生效"
+    );
+    e.set_hit_radius_extra(&vec![0.0; n]).unwrap();
+    e.step(&actions(1, n), &mut b.view()).unwrap();
+    assert_eq!(player_hit_r(&b, 0), base, "写回 0 恢复表值");
+}
+
+#[test]
+fn hit_extra_rejects_bad_input() {
+    let n = 2;
+    let mut e = VecEnv::new(game_cfg(1), n, 1).unwrap();
+    assert!(e.set_hit_radius_extra(&[1.0]).is_err(), "长度须等于 env 数");
+    assert!(e.set_hit_radius_extra(&[f64::NAN, 0.0]).is_err());
+    assert!(e.set_hit_radius_extra(&[2000.0, 0.0]).is_err());
+}

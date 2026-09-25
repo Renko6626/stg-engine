@@ -170,3 +170,22 @@ def test_caps_and_strides_come_from_native():
     assert b["lasers"].shape == (3, stg_rl.CAPS["lasers"], stg_rl.STRIDES["lasers"])
     assert b["items"].shape == (3 * stg_rl.CAPS["items"], stg_rl.STRIDES["items"])
     assert b["bullets"].shape == (3 * 128, stg_rl.STRIDES["bullets"])
+
+
+def test_hit_radius_extra_per_env_and_validation():
+    """判定点写口：env 0 追加 3 px，观测里的 hit_radius 列跟着变、跨 reset 保持；长度 / 数值不合法报 ValueError。"""
+    env = make()
+    b = env.reset()
+    base = b["player"][0].copy()
+    env.set_hit_radius_extra(np.array([3.0, 0.0, 0.0, 0.0]))
+    env.step(np.zeros(4, dtype=np.uint32))
+    hit = lambda i: int(np.frombuffer(b["player"][i, 8:12].tobytes(), dtype="<i4")[0])
+    base_hit = int(np.frombuffer(base[8:12].tobytes(), dtype="<i4")[0])
+    assert hit(0) == base_hit + 3 * 65536 and hit(1) == base_hit
+    env.reset()
+    assert hit(0) == base_hit + 3 * 65536, "新局照样生效"
+    with pytest.raises(ValueError):
+        env.set_hit_radius_extra([1.0])
+    with pytest.raises(ValueError):
+        env.set_hit_radius_extra([float("nan"), 0, 0, 0])
+

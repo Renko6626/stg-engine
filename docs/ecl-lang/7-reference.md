@@ -149,6 +149,7 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `bg(id: int)` — 声明当前背景:写锚点 bg_id 并发 REQ_BG;换背景隐含新的 phase 纪元(补偿细则见 ecl-lang)
 - `bg_phase(phase: int)` — 声明背景演出段号:写 bg_phase 并自动盖 bg_phase_frame=当前帧,发 REQ_BG_PHASE;表现层按段内局部时间 seek
 - `time_stop_player(frames: int)` — 停住自机的时间 frames 帧(自机不能动/不能发新弹,自机弹也冻住;敌方照跑);0 = 立即解除;重入覆盖;越界 no-op+计数
+- `set_player_hitbox(r: fx)` — 改写自机中弹判定半径(出场值取角色表;擦弹半径不动);钳 [0,1024]+计数;持续到下次改写或开新局
 - `clear_bullets()` — 全场清弹:铺一个覆盖全场、存活 1 帧的消弹区(复用 FieldPool),每颗被消的弹原位转一颗星星(M0-15);不给护盾帧
 - `clear_bullets_at(x: fx, y: fx, r: fx, stars: int)` — 圆形清弹:以 (x,y) 为心、半径 r 铺存活 1 帧的清弹区;stars=0 不转星星,非 0 同 clear_bullets 转星;扩张消弹波就每帧调一次加大 r;owner 无限制
 - `add_lives(delta: int)` — 增减残机:delta 允许负,双边钳 [0,255] 不回绕;开局初值走 Loadout,故只有 add_ 没有 set_

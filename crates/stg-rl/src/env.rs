@@ -16,6 +16,7 @@ use stg_core::events::{
     EVT_SPELL_CAPTURED, EVT_SPELL_FAILED, EVT_STAGE_CLEARED, Event,
 };
 use stg_core::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_UP, InputFrame};
+use stg_core::math::Fx;
 use stg_core::player::{LIFE_ALIVE, Loadout};
 use stg_core::step::{World, step as core_step};
 use stg_core::tables::TABLES_V0;
@@ -299,6 +300,10 @@ pub struct Env {
     prev_graze: u32,
     prev_score: u64,
     prev_bombs: u8,
+    /// 本局开局时角色表给的中弹判定半径（`reset` 预热后读出）。
+    hit_base: Fx,
+    /// 外部（RL：判定点随机增大）追加的判定半径；0 = 不动（不调写 API，逐位同旧行为）。
+    hit_extra: Fx,
 }
 
 impl Env {
@@ -319,6 +324,8 @@ impl Env {
             prev_graze: 0,
             prev_score: 0,
             prev_bombs: 0,
+            hit_base: Fx::ZERO,
+            hit_extra: Fx::ZERO,
         };
         env.reset();
         env
@@ -337,6 +344,21 @@ impl Env {
             self.cfg.starts.len()
         );
         self.weights = w;
+    }
+
+    /// 追加中弹判定半径（`Fx`；负值即缩小）。当前局立即生效，此后每次 `reset` 按「表值 + extra」重设，
+    /// 直到再改。写入走 `WorldBody::set_player_hit_radius`（钳 `[0, MAX_ENTITY_RADIUS]`）。
+    pub fn set_hit_extra(&mut self, extra: Fx) {
+        self.hit_extra = extra;
+        self.apply_hit();
+    }
+
+    fn apply_hit(&mut self) {
+        let want = self.hit_base + self.hit_extra;
+        // extra = 0 且半径本就是表值 ⇒ 不调写 API（它会写 last_status、进校验和），保证默认逐位不变
+        if self.world.body.players()[0].hit_radius != want {
+            self.world.body.set_player_hit_radius(0, want);
+        }
     }
 
     /// 只读世界（测试 / 观测编码）。
@@ -389,6 +411,9 @@ impl Env {
             }
         }
         self.warmup_retries = retry_ok;
+        // 判定写口在预热**之后**生效：预热是随机游走，放大判定只会徒增重试；每局都按表值 + extra 重设。
+        self.hit_base = self.world.body.players()[0].hit_radius;
+        self.apply_hit();
         self.ep_frames = 0;
         let (graze, score, bombs) = {
             let v = self.world.view();

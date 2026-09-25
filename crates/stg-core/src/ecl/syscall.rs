@@ -211,6 +211,11 @@ pub const SYS_BG_PHASE: u16 = 552;
 /// （自机不能移动/发新弹，已在场上的自机弹也冻住），敌方照常行动。
 /// `frames = 0` 即**立即解除**；重入取覆盖（后写为准）。
 pub const SYS_TIME_STOP_PLAYER: u16 = 560;
+/// 1 参：`r`（`Fx` raw）。改写自机 0 的**中弹判定半径**（碰撞行 1 / 3 的被动操作数；擦弹半径不动）。
+/// 出场值仍由角色表决定（数据驱动），本 syscall 是局中的覆写口——演出（放大 / 缩小判定）与外部驱动同一条路
+/// （`WorldBody::set_player_hit_radius`）。钳 `[0, MAX_ENTITY_RADIUS]`、钳了计 `contract_viol`（同 441 `set_hitbox`）；
+/// 持续到下次改写或开新局（Classic 死亡重生不重置）。
+pub const SYS_SET_PLAYER_HITBOX: u16 = 561;
 /// 全场清弹（B19；0 参、无返回）。铺一个覆盖全场、`life=1` 的 `FIELD_CLEAR_BULLETS`
 /// 作用区——**复用现成的消弹区机制**，故"每颗被消的弹原位转一颗星星"（M0-15）与
 /// `EVT_FIELD_CLEARED` 都是白送的，引擎侧零新机制（同 `settle_one_spell` 的全屏清弹样板）。
@@ -502,6 +507,7 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_BG
             | SYS_BG_PHASE
             | SYS_TIME_STOP_PLAYER
+            | SYS_SET_PLAYER_HITBOX
             // 6xx shooter
             | SYS_SH_RESET
             | SYS_SH_SPRITE
@@ -1120,6 +1126,11 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
                 return Ok(());
             };
             ctx.body.freeze_left[1] = frames;
+            Ok(())
+        }
+        SYS_SET_PLAYER_HITBOX => {
+            let r = pop(task)?;
+            ctx.body.set_player_hit_radius(0, Fx::from_raw(r));
             Ok(())
         }
 
@@ -2578,6 +2589,7 @@ mod tests {
             (SYS_BG, "bg", 5),
             (SYS_BG_PHASE, "bg_phase", 5),
             (SYS_TIME_STOP_PLAYER, "time_stop_player", 5),
+            (SYS_SET_PLAYER_HITBOX, "set_player_hitbox", 5),
             (SYS_SH_RESET, "sh_reset", 6),
             (SYS_SH_SPRITE, "sh_sprite", 6),
             (SYS_SH_OFFSET, "sh_offset", 6),
@@ -2621,9 +2633,9 @@ mod tests {
         ]
     }
 
-    /// 【本刀的主判据】号表族结构：102 条、无重号、每条落在其声明族的百位区间内
+    /// 【本刀的主判据】号表族结构：103 条、无重号、每条落在其声明族的百位区间内
     /// （原 74 条 + 自机能力刀 `513`/`560` = 76；表现契约 v2 再加 `430 set_anm_state`/`721 fx_at`/`722 fx_on` = 79；壳子刀加 `723 stage_clear` = 80；
-    /// 激光池刀再加 8xx 十条 = 97；激光读口五条 810–814 = 102）。
+    /// 激光池刀再加 8xx 十条 = 97；激光读口五条 810–814 = 102；自机判定写口 561 = 103）。
     ///
     /// 这一刀是大规模机械重排，判别力要求与常规刀不同——不是"新行为对不对"，而是
     /// "**有没有搬错、搬漏、搬重**"。故判据是号表自身的结构性质，不是某条 syscall 的行为。
@@ -2651,9 +2663,9 @@ mod tests {
 
         assert_eq!(
             table.len(),
-            102,
+            103,
             "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 − 玩法刀退役 513 \
-             + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97；激光读口 810–814 = 102：增改需同步这个数"
+             + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97；激光读口 810–814 = 102；自机判定写口 561 = 103：增改需同步这个数"
         );
 
         // (a) 族归属：搬错族立刻红
@@ -5045,6 +5057,44 @@ mod tests {
         task.sp = 0;
         assert!(call(&mut w, &ecl, &mut task, SYS_ADD_SCORE, &[100]).is_ok());
         assert_eq!(w.body.players[0].score, u64::MAX, "上溢钳 u64::MAX");
+    }
+
+    // ── SYS_SET_PLAYER_HITBOX（561；判定写口 2026-09-25）──────────────────────────
+
+    /// 写的是自机 0 的中弹半径（不碰擦弹半径）；钳上界计违约。判别力：写 5 与写 5000 各一腿。
+    #[test]
+    fn sys_set_player_hitbox_writes_hit_radius_and_clamps() {
+        let (mut w, ecl) = fresh();
+        let mut task = Task::default();
+        let graze = w.body.players[0].graze_radius;
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_SET_PLAYER_HITBOX,
+                &[Fx::from_int(5).raw()]
+            )
+            .is_ok()
+        );
+        assert_eq!(w.body.players[0].hit_radius, Fx::from_int(5));
+        assert_eq!(w.body.players[0].graze_radius, graze, "擦弹半径不动");
+        let viol = w.body.diag.contract_viol;
+        assert!(
+            call(
+                &mut w,
+                &ecl,
+                &mut task,
+                SYS_SET_PLAYER_HITBOX,
+                &[Fx::from_int(5000).raw()]
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            w.body.players[0].hit_radius,
+            crate::world::MAX_ENTITY_RADIUS
+        );
+        assert_eq!(w.body.diag.contract_viol, viol + 1);
     }
 
     // ── SYS_TIME_STOP_PLAYER（560；自机能力刀 T6）───────────────────────────

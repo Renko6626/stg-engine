@@ -662,6 +662,16 @@ const BUILTINS: &[Builtin] = &[
         doc: "停住自机的时间 frames 帧(自机不能动/不能发新弹,自机弹也冻住;敌方照跑);0 = 立即解除;重入覆盖;越界 no-op+计数",
         param_names: &["frames"],
     },
+    // ── 自机判定写口（syscall 561，2026-09-25）──────────────────────────────
+    Builtin {
+        name: "set_player_hitbox",
+        syscall: syscall::SYS_SET_PLAYER_HITBOX,
+        is_op: false,
+        params: &[Val(Fx)],
+        ret: None,
+        doc: "改写自机中弹判定半径(出场值取角色表;擦弹半径不动);钳 [0,1024]+计数;持续到下次改写或开新局",
+        param_names: &["r"],
+    },
     // ── B19：全场清弹（整局流程刀 Task 2；关底转场用）─────────────────────────
     Builtin {
         name: "clear_bullets",
@@ -1440,6 +1450,7 @@ mod tests {
             "spell_result",
             "set_invuln",
             "set_hitbox",
+            "set_player_hitbox",
             "set_hurtbox",
             "set_enemy_flag",
             "kill_all_enemies",

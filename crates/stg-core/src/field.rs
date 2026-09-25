@@ -30,8 +30,9 @@ pub const FIELD_RADIUS_FULLSCREEN: Fx = Fx::from_int(400);
 /// 但只钳这一侧不构成完整证明——被动半径（弹/敌人/自机弹/自机 hit_radius/graze_radius）若无
 /// 上限，同样能把和推过 `i32::MAX`。真正的证明分两条、强度不同：`create_bullet`/`create_enemy`/
 /// `create_player_shot` 与本 API 共用同一常量，把池侧半径各自钳入 `[0, 1024]`——这一侧因池的
-/// SoA 数组 `pub(crate)` 而是写 API **可强制**的；行 1/2/3 的被动操作数（自机半径）不经写 API，
-/// 只由 `player.rs` 的编译期断言钉住上限，前提是没人绕过 `PlayerState::spawn` 直接写字段
+/// SoA 数组 `pub(crate)` 而是写 API **可强制**的；行 1/2/3 的被动操作数（自机半径）出场经
+/// `PlayerState::spawn` 取表值、局中只能经 `set_player_hit_radius`（钳入同一区间），
+/// 上限由表校验 + 该写口钉住，前提是没人绕过这两处直接写字段
 /// （`WorldBody.players` 已收 `pub(crate)`——刀 A 2026-07-21，crate 外无绕行路径；
 /// crate 内绕过 `spawn` 直写仍属纪律约束）。两侧都 ≤1024 时
 /// 任意两半径之和 ≤ 2048 ≪ 32767，六行碰撞的 Fx 加法才不溢出。完整推导见 `world::MAX_ENTITY_RADIUS`。

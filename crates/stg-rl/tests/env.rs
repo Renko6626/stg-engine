@@ -283,3 +283,47 @@ fn done_priority_died_over_segment_over_timeout() {
     );
     assert_eq!(decide_done(true, true, 100, 100), DONE_DIED);
 }
+
+/// 场顶 x = 24 的炮台每 4 帧朝正下方发一颗高速弹：弹沿 x = 24 竖直落下，从不动的自机（x = 0）右侧擦过。
+const SIDE_RAIN: &str = r#"
+const BALL: int = 48;
+const COLOR_RED: int = 2;
+
+async sub rain_main() {
+    loop {
+        _ = fire(BALL, COLOR_RED, $self_x, $self_y, 6.0fx, 90deg, none, none);
+        wait(4);
+    }
+}
+
+sub main() {
+    _ = spawn_enemy(24.0fx, 24.0fx, 100000, 1, 0, 0, rain_main);
+    loop { wait(1); }
+}
+"#;
+
+/// 判定点写口的判别式（2026-09-25）：默认判定下擦边弹打不中、整段不死；判定 +24 px 后必死；
+/// 死了自动 reset 后新局仍是放大的判定（`hit_extra` 跨局保持）。
+#[test]
+fn hit_extra_turns_grazing_rain_lethal_and_persists() {
+    let c = Arc::new(cfg(vec![img(SIDE_RAIN)], vec![]));
+    let mut calm = Env::new(c.clone(), 0, Arc::new(BootCache::new()));
+    assert!(
+        run(&mut calm, 300, 0).iter().all(|o| o.done == DONE_NONE),
+        "默认判定下擦边弹不该致死"
+    );
+
+    let mut env = Env::new(c, 0, Arc::new(BootCache::new()));
+    let base = env.world().view().players()[0].hit_radius;
+    env.set_hit_extra(stg_core::math::Fx::from_int(24));
+    let outs = run(&mut env, 300, 0);
+    assert!(
+        outs.iter().any(|o| o.done == DONE_DIED),
+        "判定 +24 px 必须被擦边弹打死"
+    );
+    assert_eq!(
+        env.world().view().players()[0].hit_radius,
+        base + stg_core::math::Fx::from_int(24),
+        "自动 reset 后新局仍是放大的判定"
+    );
+}

@@ -71,8 +71,9 @@ pub const STATUS_TRUNCATED: u16 = 4;
 ///   经 `create_bullet`/`create_enemy`（radius + hurtbox）/`create_player_shot`/`create_field`
 ///   四个写 API 双边钳入 `[0, MAX_ENTITY_RADIUS]`。这四个池的 SoA 数组是 `pub(crate)`，
 ///   "只能走写 API"是类型系统**可强制**的纪律，不是约定。
-/// - **自机侧**（行 1/2/3 的被动操作数，`PlayerState::hit_radius`/`graze_radius`）：**不经任何
-///   写 API**——由 `PlayerState::spawn` 从 `WorldTables::CharacterCfg` 赋值（M0-17 迁表），
+/// - **自机侧**（行 1/2/3 的被动操作数，`PlayerState::hit_radius`/`graze_radius`）：出场由
+///   `PlayerState::spawn` 从 `WorldTables::CharacterCfg` 赋值（M0-17 迁表）；`hit_radius` 另有局中写口
+///   `set_player_hit_radius`（2026-09-25，钳入同一区间，同四池口径），`graze_radius` 仍不经写 API，
 ///   上限由 `WorldTables::validate()` 的角色半径腿 + `spawn_radii_match_tables_v0_bitwise`
 ///   位等测试钉死（原 player.rs 编译期断言已随常量迁表退役）。**自机写口已收紧**（刀 A，
 ///   2026-07-21）：`WorldBody.players` 字段为 `pub(crate)`，断层线以上只能经 `set_player_power`
@@ -884,6 +885,26 @@ impl WorldBody {
             return;
         }
         self.players[player].power = power.min(crate::items::POWER_MAX);
+    }
+
+    /// 自机中弹判定半径（碰撞行 1 / 3 的被动操作数）的运行时写入口。出场初值仍由
+    /// `PlayerState::spawn` 从 `WorldTables::CharacterCfg` 取（数据驱动）；本 API 供脚本
+    /// （`SYS_SET_PLAYER_HITBOX`）与外部驱动（RL：判定点随机增大）在局中改写。
+    /// 钳制口径同 `set_enemy_hitbox`：`[0, MAX_ENTITY_RADIUS]`，钳了计违约——这正是自机侧
+    /// 半径上限证明所需的那道闸（见本文件顶 `MAX_ENTITY_RADIUS` 注释）。越界 player 索引 →
+    /// no-op + contract_viol + BAD_ARGS（同 `set_player_power`）。字段本就在 `PlayerState` 里、
+    /// 随快照 / 入校验和；Classic 机体死亡重生不重置它（`commit_death` 不碰半径）。
+    pub fn set_player_hit_radius(&mut self, player: usize, mut r: Fx) {
+        if player >= crate::MAX_PLAYERS {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            self.last_status = STATUS_BAD_ARGS;
+            return;
+        }
+        if Self::clamp_radius(&mut r) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
+        self.players[player].hit_radius = r;
+        self.last_status = STATUS_OK;
     }
 
     /// 自机只读切片（表现层读自机态的入口；通道 A 最小种子，非完整 WorldView）。

@@ -246,6 +246,7 @@ owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P
 | 551 | `bg` | id | —（同上，写 `bg_id` + 发 `REQ_BG`；同一收窄/no-op 口径） |
 | 552 | `bg_phase` | n | —（写 `bg_phase`，同时把 `bg_phase_frame` 盖为当前帧，再发 `REQ_BG_PHASE`；`n` 同上收窄/no-op 口径） |
 | 560 | `time_stop_player`（自机能力刀，ECL 演出方向） | frames | —（写 `freeze_left[1]` ⇒ 冻 A+B——自机不能移动/发新弹，已在场上的自机弹也冻住，敌方照常行动；碰撞判定不冻，弹幕仍会打中自机；`frames=0` 即**立即解除**，天然的取消 API；重入取**覆盖**（后写为准），不取最大不叠加；`frames` 收窄 `u16::try_from`，越界（负值或 >65535）→ **整条 no-op** + `diag.contract_viol` +1 + `last_status=BAD_ARGS`，**不钳位、不 Fault**（D19 判例）） |
+| 561 | `set_player_hitbox`（判定写口，2026-09-25） | r | —（改写自机 0 的**中弹判定半径** `hit_radius`（碰撞行 1/3）；出场值仍取角色表（数据驱动），这是局中覆写口，与外部驱动（RL `set_hit_radius_extra`）同走 `WorldBody::set_player_hit_radius`；`Fx` raw，钳 `[0, MAX_ENTITY_RADIUS]`，钳了计 `contract_viol`（同 441）；擦弹半径不动；持续到下次改写或开新局，Classic 死亡重生不重置） |
 
 ### 6xx —— shooter（预存发射参数集）（15）
 
