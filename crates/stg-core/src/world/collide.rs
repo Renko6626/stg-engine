@@ -3,15 +3,18 @@
 //! **只收集不改状态硬规则**：本相位纯读，只经 `push_hit` 追加 `hits`；改状态一律在 settle（相位 7）。
 //! 半径映射见 D8：行1/2 弹×自机(hit/graze)、行3 敌体×自机(体碰 radius；`ENEMY_NO_BODY` 跳过)、行4 自机弹×敌人(受击 hurtbox)、
 //! 行5 道具×自机(拾取半径+graze_radius)、行6 作用区×敌弹、行7 作用区×敌人(受击 hurtbox)、
-//! 行8 停止冻结中自机判定圆×冻弹（触碰消弹，玩法刀；只在冻结分支收集）。
+//! 行8 停止冻结中自机判定圆×冻弹（触碰消弹，玩法刀；只在冻结分支收集）、
+//! 行9 激光(仅 state 1)×自机(hit_radius，半高 width/2)、行10 清弹作用区×激光(state 0/1 → 切收缩)。
 
 use super::WorldBody;
 use crate::events::{
     ROW_BODY_PLAYER_HIT, ROW_BULLET_PLAYER_GRAZE, ROW_BULLET_PLAYER_HIT, ROW_FIELD_BULLET,
-    ROW_FIELD_ENEMY, ROW_ITEM_PLAYER, ROW_SHOT_ENEMY, ROW_STOP_TOUCH,
+    ROW_FIELD_ENEMY, ROW_FIELD_LASER, ROW_ITEM_PLAYER, ROW_LASER_PLAYER_HIT, ROW_SHOT_ENEMY,
+    ROW_STOP_TOUCH,
 };
 use crate::field::{FIELD_CLEAR_BULLETS, FIELD_DAMAGE};
-use crate::math::geom::len_sq;
+use crate::math::Fx;
+use crate::math::geom::{len_sq, seg_box_dist_sq};
 use crate::tables::WorldTables;
 
 impl WorldBody {
@@ -31,6 +34,8 @@ impl WorldBody {
         self.collide_item_player(tables); // 行 5：道具 × 自机拾取圈
         self.collide_field_bullet(); // 行 6：作用区 × 敌弹（消弹）
         self.collide_field_enemy(); // 行 7：作用区 × 敌人（伤敌）
+        self.collide_lasers_player(); // 行 9：激光（仅 state 1）× 自机
+        self.collide_field_laser(); // 行 10：清弹作用区 × 激光（state 0/1 → 切收缩）
     }
 
     /// 行 8：停止冻结中，自机判定圆 × 冻住的敌弹。只 ALIVE 参与、**不看 `invuln`**（停止本身
@@ -249,6 +254,75 @@ impl WorldBody {
                         let sum = (fr + self.enemies.hurtbox[e]).raw() as i64;
                         if d2 <= sum * sum {
                             self.push_hit(ROW_FIELD_ENEMY, f as u16, e as u16);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 激光 `i` 到点 `(x,y)` 的判定平方距离（半高 `width/2`）。行 9/10 共用。
+    fn laser_dist_sq(&self, i: usize, x: Fx, y: Fx) -> i64 {
+        let l = &self.lasers;
+        let half = Fx::from_raw(l.width[i].raw() / 2);
+        seg_box_dist_sq(
+            x, y, l.ox[i], l.oy[i], l.angle[i], l.start[i], l.end[i], half,
+        )
+    }
+
+    /// 行 9：激光（仅 state 1）× 自机 hit_radius。门禁同行 1（`LIFE_ALIVE && invuln == 0`）。
+    /// 借用：每轮只拷出局部值，不持有对池的长借用，这样 `push_hit(&mut self)` 能编过（同行 1 写法）。
+    fn collide_lasers_player(&mut self) {
+        for p in 0..crate::MAX_PLAYERS {
+            if self.players[p].life_state != crate::player::LIFE_ALIVE
+                || self.players[p].invuln != 0
+            {
+                continue;
+            }
+            let (px, py) = (self.players[p].x, self.players[p].y);
+            let r = self.players[p].hit_radius.raw() as i64;
+            let nw = self.lasers.alive.len();
+            for w in 0..nw {
+                let mut bits = self.lasers.alive[w];
+                while bits != 0 {
+                    let i = w * 64 + bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    if self.lasers.state[i] != crate::lasers::LASER_ACTIVE {
+                        continue; // 行 9 只在生效态判定
+                    }
+                    if self.laser_dist_sq(i, px, py) <= r * r {
+                        self.push_hit(ROW_LASER_PLAYER_HIT, i as u16, p as u16);
+                    }
+                }
+            }
+        }
+    }
+
+    /// 行 10：清弹 field（`FIELD_CLEAR_BULLETS`）× 激光（state 0/1）——field 圆碰到线段即命中。
+    /// 未开 CLEAR 位的 field 整行跳过（同行 6 的能力位 gate）。
+    fn collide_field_laser(&mut self) {
+        let nf = self.fields.alive.len();
+        for fw in 0..nf {
+            let mut fbits = self.fields.alive[fw];
+            while fbits != 0 {
+                let f = fw * 64 + fbits.trailing_zeros() as usize;
+                fbits &= fbits - 1;
+                if self.fields.flags[f] & FIELD_CLEAR_BULLETS == 0 {
+                    continue;
+                }
+                let (fx, fy) = (self.fields.x[f], self.fields.y[f]);
+                let r = self.fields.radius[f].raw() as i64;
+                let nw = self.lasers.alive.len();
+                for w in 0..nw {
+                    let mut bits = self.lasers.alive[w];
+                    while bits != 0 {
+                        let i = w * 64 + bits.trailing_zeros() as usize;
+                        bits &= bits - 1;
+                        if self.lasers.state[i] >= crate::lasers::LASER_FADE {
+                            continue; // 已收缩的不再取消（幂等）
+                        }
+                        if self.laser_dist_sq(i, fx, fy) <= r * r {
+                            self.push_hit(ROW_FIELD_LASER, f as u16, i as u16);
                         }
                     }
                 }

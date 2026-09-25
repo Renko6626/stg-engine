@@ -574,6 +574,13 @@ release 回绕成负数 → 平方后仍为正巨数 → 全场无条件判撞�
 | 5 | Item | PlayerGraze | item 拾取半径（配置表） | player.graze_radius | ItemPicked |
 | 6 | Field | EnemyBullet | field.radius | bullet.radius | FieldCleared |
 | 7 | Field | EnemyBody | field.radius | enemy.**hurtbox** | EnemyDamaged |
+| 9 | EnemyLaser（仅 state 1） | PlayerHit | `width/2`（线段盒半高） | player.hit_radius | PlayerHitByLaser |
+| 10 | Field（`FIELD_CLEAR_BULLETS`） | EnemyLaser（state 0/1） | field.radius | `width/2` | LaserCanceled |
+
+> 行 8（停止冻结中自机判定圆 × 冻弹 → 触碰消弹）见玩法刀 2026-09-14，未列表。
+> 行 9/10 由 spec `2026-09-25-laser-pool-design` §4.2 定义：行 9 命中后与行 1/3 同走
+> `trigger_player_hit`；行 10 把 state<2 的激光切到 2、`timer = 0`，`fade == 0` 时下一帧相位 5 回收。
+> 行 10 先于趟二（趟一）——同帧 field 取消的激光当帧不杀人。
 
 - 行 6/7 主动方按 `flags` 能力位（`FIELD_CLEAR_BULLETS`/`FIELD_DAMAGE`）选择性启用——未开启对应
   能力位的 field，整行在收集前就跳过（省 O(N×M)，而非收集完到结算才发现无事可做）；

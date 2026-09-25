@@ -2,8 +2,10 @@
 //!
 //! 趟一 清除/防护：行6 消弹（**标记不回收**，回收在 cleanup 相位9）+ 逐弹原位转星星
 //!   （M0-15 一律转化：出生即磁吸存活自机，30 分经济回流）+ 按 field 索引升序发聚合
-//!   `FieldCleared`。**先于趟二** —— 故同帧作用区能救下本会命中自机的弹（bomb 救命）。
-//! 趟二 伤害：行4/7 敌人扣血（overkill/无敌帧门禁）；行1/3 自机中弹 → 决死窗口（行1 跳过已清除的弹）。
+//!   `FieldCleared`；行10 清弹 field × 激光 → 切收缩（幂等、不发事件）。**先于趟二** ——
+//!   故同帧作用区能救下本会命中自机的弹/激光（bomb 救命）。
+//! 趟二 伤害：行4/7 敌人扣血（overkill/无敌帧门禁）；行1/3 自机中弹 → 决死窗口（行1 跳过已清除的弹）；
+//!   行9 激光中弹（跳过趟一被取消/已回收的激光）。
 //! 趟三 计分/拾取：graze（`grazed_by` 逐弹一次；**不查已清除位** —— 擦在相位6 已发生、清弹是相位7
 //!   的事）+ 行5 道具拾取（首见即标 `MAGNET_PICKED`，同帧多 hit 只入账一次，账本落 `credit_item`）。
 
@@ -170,6 +172,15 @@ impl WorldBody {
                 self.push_event(ev);
             }
         }
+        // 行 10：清弹 field × 激光 → 切收缩。`cancel_laser_index` 本身幂等（多 field 同帧压
+        // 同一条只切一次），不发事件；`fade == 0` 的回收留给下一帧相位 5。
+        for k in 0..self.hits_len as usize {
+            let h = self.hits[k];
+            if h.row != crate::events::ROW_FIELD_LASER {
+                continue;
+            }
+            self.cancel_laser_index(h.passive as usize);
+        }
         // ── 趟二 · 伤害 ──────────────────────────────────────────────────
         for k in 0..self.hits_len as usize {
             let h = self.hits[k];
@@ -218,6 +229,16 @@ impl WorldBody {
                 }
                 crate::events::ROW_BODY_PLAYER_HIT => {
                     // 敌体无"被清除"概念（敌人经 hp≤0 → dying），故不查已清除位
+                    self.trigger_player_hit(h.passive as usize);
+                }
+                crate::events::ROW_LASER_PLAYER_HIT => {
+                    // 趟一被 field 取消（或已回收）的激光不杀人 —— bomb/清弹救命。
+                    let i = h.active as usize;
+                    if !self.lasers.is_alive(i)
+                        || self.lasers.state[i] != crate::lasers::LASER_ACTIVE
+                    {
+                        continue;
+                    }
                     self.trigger_player_hit(h.passive as usize);
                 }
                 _ => {}
@@ -1401,5 +1422,232 @@ mod tests {
         assert!(cleared(&w, inside));
         assert!(!cleared(&w, outside));
         assert_eq!(w.body.items.iter_alive().count(), 1, "stars=true 给星");
+    }
+
+    // ── Task 3：碰撞行 9/10（激光 × 自机 / 清弹 field × 激光）────────────────────
+
+    /// 一条纵向、朝下（BAM 16384）、原点 (0,100) 的激光：start 0、end = start_len = len。
+    /// `warn` 决定出生状态（0 → 出生即 state 1）。
+    fn laser_init(
+        warn: u16,
+        active: u16,
+        fade: u16,
+        len: i32,
+        width: i32,
+    ) -> crate::lasers::LaserInit {
+        crate::lasers::LaserInit {
+            ox: Fx::ZERO,
+            oy: Fx::from_int(100),
+            angle: Angle(16384),
+            omega: 0,
+            start: Fx::ZERO,
+            end: Fx::from_int(len),
+            start_len: Fx::from_int(len),
+            speed: Fx::ZERO,
+            width: Fx::from_int(width),
+            sprite: 0,
+            warn,
+            active,
+            fade,
+            timer: 0,
+            state: 0,
+            anchor_idx: crate::lasers::ANCHOR_NONE,
+            anchor_gen: 0,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            dx: Fx::ZERO,
+            dy: Fx::ZERO,
+            dang: 0,
+            px: Fx::ZERO,
+            py: Fx::ZERO,
+            pang: Angle::ZERO,
+            flags: 0,
+            born_frame: 0,
+        }
+    }
+
+    /// 时序（Global Constraints）：warn 30 的激光步 0..29 后是 state 0，步 30 后是 state 1；
+    /// 相位 5 切态先于相位 6 判定 ⇒ 生效当帧即杀人。
+    #[test]
+    fn laser_kills_only_when_active() {
+        use crate::player::{LIFE_ALIVE, LIFE_DEATHWINDOW};
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(200);
+        w.body.create_laser(laser_init(30, 9999, 0, 500, 16));
+        // 预警 30 帧（步 0..29）不判定：自机始终存活。
+        for f in 0..30u32 {
+            step_t(&mut w, &crate::input::InputFrame::empty(f));
+            assert_eq!(
+                w.body.players[0].life_state, LIFE_ALIVE,
+                "预警第 {f} 步不得判定"
+            );
+        }
+        // 第 30 步相位 5 切到 state 1，同帧相位 6 收集、相位 7 结算。
+        step_t(&mut w, &crate::input::InputFrame::empty(30));
+        assert_eq!(
+            w.body.players[0].life_state, LIFE_DEATHWINDOW,
+            "生效当帧进入死亡窗"
+        );
+    }
+
+    /// 门禁同行 1：`invuln != 0` 不判；清掉 invuln 后同一帧条件照样成立（对照腿，证明是
+    /// invuln 挡的而不是几何没碰上）。
+    #[test]
+    fn laser_hit_respects_invuln() {
+        use crate::player::{LIFE_ALIVE, LIFE_DEATHWINDOW};
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(200);
+        w.body.players[0].invuln = 60;
+        w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+        // 激光出生即 ACTIVE（warn=0）；跑几帧穿过无敌窗。
+        for f in 0..3u32 {
+            step_t(&mut w, &crate::input::InputFrame::empty(f));
+        }
+        assert_eq!(w.body.players[0].life_state, LIFE_ALIVE, "无敌期间激光不判");
+        // 对照腿：解开无敌后同一条激光立刻判死（否则本测试对实现全瞎）。
+        w.body.players[0].invuln = 0;
+        step_t(&mut w, &crate::input::InputFrame::empty(3));
+        assert_eq!(
+            w.body.players[0].life_state, LIFE_DEATHWINDOW,
+            "解除无敌后同一激光照杀"
+        );
+    }
+
+    /// 判定半高 = width/2（不是 width/4）：自机半径 r、激光 width 16。
+    /// 离轴 8 + r − 1 命中、8 + r + 1 不中；误用 width/4 时第一条会漏判而红。
+    #[test]
+    fn laser_width_is_hit_width() {
+        use crate::player::{LIFE_ALIVE, LIFE_DEATHWINDOW};
+        let hit_r = crate::step::World::new(1).body.players[0].hit_radius;
+        let half = Fx::from_int(8); // width 16 的半高
+        let run = |offset: Fx| -> u8 {
+            let mut w = crate::step::World::new(1);
+            w.body.players[0].x = offset;
+            w.body.players[0].y = Fx::from_int(200);
+            w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+            #[cfg(debug_assertions)]
+            {
+                w.body.phase_guard = PH_COLLIDE;
+            }
+            w.body.collide(&crate::tables::TABLES_V0);
+            w.body.settle(&crate::tables::TABLES_V0);
+            w.body.players[0].life_state
+        };
+        // 夹具前提：r 非零且与 8 拉开，才可能区分 width/2 与 width/4。
+        assert!(hit_r > Fx::ZERO, "前提：自机 hit_radius > 0");
+        assert_eq!(
+            run(half + hit_r - Fx::ONE),
+            LIFE_DEATHWINDOW,
+            "离轴 8 + r − 1 应命中（半高必须取 width/2）"
+        );
+        assert_eq!(
+            run(half + hit_r + Fx::ONE),
+            LIFE_ALIVE,
+            "离轴 8 + r + 1 不应命中"
+        );
+    }
+
+    /// 行 10：全屏清弹 field（`fullscreen_clear_field()` 的等价物）当帧把 state<2 的激光
+    /// 切到 2；`fade == 0` 的激光下一帧相位 5 回收。
+    #[test]
+    fn fullscreen_field_cancels_all_lasers() {
+        use crate::lasers::{LASER_ACTIVE, LASER_FADE, LASER_WARN};
+        let mut w = crate::step::World::new(1);
+        let h_warn = w.body.create_laser(laser_init(30, 9999, 0, 500, 16));
+        let h_active = w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+        let (i_warn, i_active) = (
+            w.body.lasers.get(h_warn).unwrap(),
+            w.body.lasers.get(h_active).unwrap(),
+        );
+        assert_eq!(w.body.lasers.state[i_warn], LASER_WARN);
+        assert_eq!(w.body.lasers.state[i_active], LASER_ACTIVE);
+
+        // 场心 (0,224)、半径 400：两条激光的线段都落在圆内。
+        w.body.create_field(crate::field::fullscreen_clear_field());
+        step_t(&mut w, &crate::input::InputFrame::empty(0));
+        assert_eq!(w.body.lasers.state[i_warn], LASER_FADE, "state 0 → 2");
+        assert_eq!(w.body.lasers.state[i_active], LASER_FADE, "state 1 → 2");
+
+        // fade == 0 ⇒ 下一帧相位 5 收起（相位 7 只切状态、回收在相位 5）。
+        step_t(&mut w, &crate::input::InputFrame::empty(1));
+        assert!(!w.body.laser_alive(h_warn), "fade==0 下一帧回收");
+        assert!(!w.body.laser_alive(h_active), "fade==0 下一帧回收");
+    }
+
+    /// 行 10 几何：两条平行激光，小圆 field 只碰到其中一条。
+    #[test]
+    fn local_field_cancels_only_touched() {
+        use crate::field::FIELD_CLEAR_BULLETS;
+        use crate::lasers::{LASER_ACTIVE, LASER_FADE};
+        let mut w = crate::step::World::new(1);
+        let h_touched = w.body.create_laser(laser_init(0, 9999, 0, 500, 16)); // x = 0
+        let mut far = laser_init(0, 9999, 0, 500, 16);
+        far.ox = Fx::from_int(200);
+        let h_far = w.body.create_laser(far);
+        let (i_touched, i_far) = (
+            w.body.lasers.get(h_touched).unwrap(),
+            w.body.lasers.get(h_far).unwrap(),
+        );
+        // 半径 20、圆心 (0,200) 的局部清弹区：碰到 x=0 那条，够不着 x=200 那条。
+        spawn_field(&mut w, 0, 200, 20, FIELD_CLEAR_BULLETS, 1);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        w.body.settle(&crate::tables::TABLES_V0);
+        assert_eq!(w.body.lasers.state[i_touched], LASER_FADE, "碰到的被取消");
+        assert_eq!(w.body.lasers.state[i_far], LASER_ACTIVE, "没碰到的保持生效");
+    }
+
+    /// Review Focus 2：同一帧里 field 碰到激光、激光也罩住自机 —— 趟一先取消、趟二跳过，
+    /// 自机不死。夹具同时断言两行都收了（否则"活着"是几何没碰上的假绿）。
+    #[test]
+    fn field_cancel_same_frame_saves_player() {
+        use crate::field::FIELD_CLEAR_BULLETS;
+        use crate::player::LIFE_ALIVE;
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(200);
+        w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+        spawn_field(&mut w, 0, 200, 20, FIELD_CLEAR_BULLETS, 1);
+        #[cfg(debug_assertions)]
+        {
+            w.body.phase_guard = PH_COLLIDE;
+        }
+        w.body.collide(&crate::tables::TABLES_V0);
+        let rows: Vec<u8> = (0..w.body.hits_len as usize)
+            .map(|k| w.body.hits[k].row)
+            .collect();
+        assert!(
+            rows.contains(&crate::events::ROW_LASER_PLAYER_HIT),
+            "前提：行 9 确实收了"
+        );
+        assert!(
+            rows.contains(&crate::events::ROW_FIELD_LASER),
+            "前提：行 10 确实收了"
+        );
+        w.body.settle(&crate::tables::TABLES_V0);
+        assert_eq!(
+            w.body.players[0].life_state, LIFE_ALIVE,
+            "趟一先取消 → 趟二不杀人"
+        );
+    }
+
+    /// Review Focus 5：时停期间激光不推进、不判定（`collide()` 在 `scene_frozen()` 提前
+    /// return），自机站在生效激光上不死。
+    #[test]
+    fn frozen_scene_laser_does_not_kill() {
+        use crate::player::LIFE_ALIVE;
+        let mut w = crate::step::World::new(1);
+        w.body.players[0].x = Fx::ZERO;
+        w.body.players[0].y = Fx::from_int(200);
+        w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+        // 照 integrate.rs 敌人时停测试：freeze_left[0] > 0 = 冻 C（场景）。
+        w.body.freeze_left = [5, 0];
+        step_t(&mut w, &crate::input::InputFrame::empty(0));
+        assert_eq!(w.body.players[0].life_state, LIFE_ALIVE, "时停期间激光不判");
     }
 }

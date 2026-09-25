@@ -30,6 +30,10 @@ pub(crate) const ROW_FIELD_BULLET: u8 = 6; // 作用区 × 敌弹 → 消弹
 pub(crate) const ROW_FIELD_ENEMY: u8 = 7; // 作用区 × 敌人 hurtbox → 扣血
 /// 停止冻结中：自机判定圆 × 冻住的敌弹 → 触碰消弹（玩法刀 2026-09-14）。只在 `scene_frozen()` 时收集。
 pub(crate) const ROW_STOP_TOUCH: u8 = 8;
+/// 激光（仅 state 1）× 自机 hit_radius（spec 2026-09-25-laser-pool-design §4.2）。半高 = width/2。
+pub(crate) const ROW_LASER_PLAYER_HIT: u8 = 9;
+/// 清弹作用区 × 激光（state 0/1）→ 切收缩（spec §4.2）。field 圆碰到线段即命中。
+pub(crate) const ROW_FIELD_LASER: u8 = 10;
 
 // ── 事件种类 ──────────────────────────────────────────────────────
 pub const EVT_ENEMY_DIED: u8 = 1;
