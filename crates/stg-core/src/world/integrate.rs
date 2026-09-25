@@ -213,7 +213,12 @@ impl WorldBody {
                         l.ox[i] = self.enemies.x[e] + l.ax[i];
                         l.oy[i] = self.enemies.y[e] + l.ay[i];
                     } else {
+                        // 脱钩：原点留在原地，锚信息一并清干净（口径同 `laser_origin` /
+                        // `laser_anchor(NULL)`），免得陈旧的 gen/偏移在池里驻留。
                         l.anchor_idx[i] = ANCHOR_NONE;
+                        l.anchor_gen[i] = 0;
+                        l.ax[i] = Fx::ZERO;
+                        l.ay[i] = Fx::ZERO;
                     }
                 }
                 l.angle[i] = l.angle[i].add_delta(l.omega[i]);
@@ -228,8 +233,20 @@ impl WorldBody {
                 let mut dead = false;
                 match l.state[i] {
                     LASER_WARN if l.timer[i] >= l.warn[i] => {
-                        l.state[i] = LASER_ACTIVE;
-                        l.timer[i] = 0;
+                        if l.active[i] == 0 {
+                            // active 为 0：预警一结束就直接按"生效结束"处理。若先切 ACTIVE 再等
+                            // 下一帧判 `timer >= 0`，相位 6 会多判一帧——与 warn==0 && active==0
+                            // （出生即判 0 帧）的口径不一致。
+                            if l.fade[i] == 0 {
+                                dead = true;
+                            } else {
+                                l.state[i] = LASER_FADE;
+                                l.timer[i] = 0;
+                            }
+                        } else {
+                            l.state[i] = LASER_ACTIVE;
+                            l.timer[i] = 0;
+                        }
                     }
                     LASER_ACTIVE if l.timer[i] >= l.active[i] => {
                         if l.fade[i] == 0 {

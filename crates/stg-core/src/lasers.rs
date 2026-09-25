@@ -14,6 +14,12 @@ pub const LASER_CULL: Fx = Fx::from_int(640);
 pub const LASER_FLAG_FADE_ALPHA: u8 = 1 << 0;
 /// `anchor_idx` 取这个值表示没有挂靠。
 pub const ANCHOR_NONE: u16 = 0xFFFF;
+/// 坐标类字段（`ox/oy/ax/ay`）的双边钳位上界（P4-b）：场内坐标的合理上界远小于它，
+/// 钳住它才能让相位 5 的 `enemies.x + ax` 与判定的 `px − ox` 在 Q16.16（±32768）里加法不溢。
+pub const LASER_COORD_MAX: Fx = Fx::from_int(4096);
+/// 长度/速率类字段（`start/end/start_len/speed`）的上界（P4-b）：`end` 最大约 640 + 2×4096，
+/// 远小于 32768，故 `end + speed` 与 `end − start_len` 不会溢出。
+pub const LASER_LEN_MAX: Fx = Fx::from_int(4096);
 
 define_pool! {
     Laser, cap = 256,

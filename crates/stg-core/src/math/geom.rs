@@ -86,7 +86,9 @@ mod tests {
 /// 点到「旋转线段盒」的平方距离（Q32.32，i64，不开根）。盒 = 从 (ox,oy) 沿 angle 的射线上
 /// `[start, end]` 一段，横向半高 `half`。把点转进盒的局部系后钳位，求到钳位点的距离。
 /// 激光判定（碰撞行 9/10）用：`seg_box_dist_sq(..) <= r.raw()²` 即相交。
-/// 溢出：dx/dy 是屏幕坐标差（|·| < 32768 px 即不溢出 Fx），乘 cos/sin（|·| ≤ 1）走 Fx::mul 安全。
+/// **前置条件（调用方负责）**：`|px − ox| + |py − oy| < 32768`（像素）且 `half >= 0`。前者保证
+/// `dx·c + dy·s` / `dy·c − dx·s` 这两处 Fx 加法不溢出（|c|, |s| ≤ 1 ⇒ |along|, |perp| ≤ |dx|+|dy|），
+/// 后者保证 `perp` 的钳位区间 `[−half, half]` 不倒置。
 #[allow(clippy::too_many_arguments)] // 判定原语的天然参数面（点 + 线段盒），签名即 spec §4.2 契约
 pub fn seg_box_dist_sq(
     px: Fx,

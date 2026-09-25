@@ -4,26 +4,63 @@ use crate::enemy::EnemyHandle;
 use crate::lasers::*;
 use crate::math::{Angle, Fx};
 
+/// 把 `v` 双边钳入 `[lo, hi]`（P4-b）；返回是否发生钳制。口径同 `world.rs::clamp_radius`：
+/// 调用方一次写 API 调用里多个字段越界也只计一次 `contract_viol`。
+fn clamp_fx(v: &mut Fx, lo: Fx, hi: Fx) -> bool {
+    if v.raw() > hi.raw() {
+        *v = hi;
+        true
+    } else if v.raw() < lo.raw() {
+        *v = lo;
+        true
+    } else {
+        false
+    }
+}
+
+/// 坐标类字段（`ox/oy/ax/ay`）双边钳入 `[−LASER_COORD_MAX, LASER_COORD_MAX]`。
+fn clamp_laser_coord(v: &mut Fx) -> bool {
+    clamp_fx(v, -LASER_COORD_MAX, LASER_COORD_MAX)
+}
+
+/// 长度/速率类字段（`start/end/start_len/speed`）双边钳入 `[0, LASER_LEN_MAX]`。
+fn clamp_laser_len(v: &mut Fx) -> bool {
+    clamp_fx(v, Fx::ZERO, LASER_LEN_MAX)
+}
+
+/// 判定宽度双边钳入 `[0, 2 × MAX_ENTITY_RADIUS]`（判定半高 = width/2，与引擎半径上界同源）。
+fn clamp_laser_width(v: &mut Fx) -> bool {
+    clamp_fx(
+        v,
+        Fx::ZERO,
+        Fx::from_raw(crate::world::MAX_ENTITY_RADIUS.raw() * 2),
+    )
+}
+
 impl WorldBody {
-    /// 建一条激光。P4-a：池满 → NULL + 计数。P4-b：width/start/end/start_len/speed 为负 → 钳到 0 并计一次 contract_viol。
+    /// 建一条激光。P4-a：池满 → NULL + 计数。P4-b：坐标/长度/宽度**双边**钳位
+    /// （`ox/oy/ax/ay ∈ ±LASER_COORD_MAX`、`start/end/start_len/speed ∈ [0, LASER_LEN_MAX]`、
+    /// `width ∈ [0, 2×MAX_ENTITY_RADIUS]`），一次调用多坏字段只计一次 `contract_viol`；
+    /// `end < start` 的倒置盒归一为 `end = start`。
     /// 调用方给几何、外观、时长和 omega，其余字段由本函数定：state 按 warn 是否为 0、timer 0、不挂靠、
     /// 观测字段清零、px/py/pang = 初值、born_frame = 当前帧。
     pub fn create_laser(&mut self, mut init: LaserInit) -> LaserHandle {
         let mut bad = false;
-        for v in [
-            &mut init.width,
-            &mut init.start,
-            &mut init.end,
-            &mut init.start_len,
-            &mut init.speed,
-        ] {
-            if *v < Fx::ZERO {
-                *v = Fx::ZERO;
-                bad = true;
-            }
-        }
+        bad |= clamp_laser_coord(&mut init.ox);
+        bad |= clamp_laser_coord(&mut init.oy);
+        bad |= clamp_laser_coord(&mut init.ax);
+        bad |= clamp_laser_coord(&mut init.ay);
+        bad |= clamp_laser_len(&mut init.start);
+        bad |= clamp_laser_len(&mut init.end);
+        bad |= clamp_laser_len(&mut init.start_len);
+        bad |= clamp_laser_len(&mut init.speed);
+        bad |= clamp_laser_width(&mut init.width);
         if bad {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
+        // 倒置盒（start > end）没有意义：先把 end 抬到 start（钳位之后再归一）。
+        if init.end < init.start {
+            init.end = init.start;
         }
         init.state = if init.warn == 0 {
             LASER_ACTIVE
@@ -62,7 +99,8 @@ impl WorldBody {
         }
     }
 
-    /// 形态二：设速率与近端长度，并从近端长出去（`end = start`）。负值钳 0，一次调用多坏字段只计一次违约。
+    /// 形态二：设速率与近端长度，并从近端长出去（`end = start`）。两者双边钳入
+    /// `[0, LASER_LEN_MAX]`，一次调用多坏字段只计一次违约。
     pub fn laser_set_speed(&mut self, h: LaserHandle, speed: Fx, start_len: Fx) -> bool {
         let Some(i) = self.laser_slot(h) else {
             return false;
@@ -70,14 +108,8 @@ impl WorldBody {
         let mut s = speed;
         let mut len = start_len;
         let mut bad = false;
-        if s < Fx::ZERO {
-            s = Fx::ZERO;
-            bad = true;
-        }
-        if len < Fx::ZERO {
-            len = Fx::ZERO;
-            bad = true;
-        }
+        bad |= clamp_laser_len(&mut s);
+        bad |= clamp_laser_len(&mut len);
         if bad {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
@@ -88,17 +120,21 @@ impl WorldBody {
         true
     }
 
-    /// 近端留空（原作第 4 关 `start = 64`）。负值钳 0 并计一次违约。
+    /// 近端留空（原作第 4 关 `start = 64`）。双边钳入 `[0, LASER_LEN_MAX]`，越界计一次违约；
+    /// `start > end` 时把 `end` 抬到 `start`（倒置盒归一）。
     pub fn laser_set_start(&mut self, h: LaserHandle, s: Fx) -> bool {
         let Some(i) = self.laser_slot(h) else {
             return false;
         };
         let mut v = s;
-        if v < Fx::ZERO {
-            v = Fx::ZERO;
+        if clamp_laser_len(&mut v) {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
-        self.lasers.start[i] = v;
+        let l = &mut self.lasers;
+        l.start[i] = v;
+        if l.end[i] < v {
+            l.end[i] = v;
+        }
         true
     }
 
@@ -117,6 +153,7 @@ impl WorldBody {
             return false;
         };
         self.lasers.angle[i] = self.lasers.angle[i].add(a);
+        self.sync_prev_if_newborn(i);
         true
     }
 
@@ -128,42 +165,80 @@ impl WorldBody {
         let (px, py) = (self.players[0].x, self.players[0].y);
         let to = crate::math::cordic::atan2(py - self.lasers.oy[i], px - self.lasers.ox[i]);
         self.lasers.angle[i] = to.add(off);
+        self.sync_prev_if_newborn(i);
         true
     }
 
     /// 挂到敌人身上（存代际句柄；相位 5 代际相符才跟）。`e == NULL` 表示解除挂靠。
+    /// 偏移 `ax/ay` 双边钳入 `±LASER_COORD_MAX`（越界计一次违约）；敌人存活（代际相符）时
+    /// **立即吸附**到 `敌位置 + 偏移`，出生当帧挂靠不必等到相位 5。
     pub fn laser_anchor(&mut self, h: LaserHandle, e: EnemyHandle, ax: Fx, ay: Fx) -> bool {
         let Some(i) = self.laser_slot(h) else {
             return false;
         };
-        let l = &mut self.lasers;
         if e == EnemyHandle::NULL {
+            let l = &mut self.lasers;
             l.anchor_idx[i] = ANCHOR_NONE;
             l.anchor_gen[i] = 0;
             l.ax[i] = Fx::ZERO;
             l.ay[i] = Fx::ZERO;
         } else {
-            l.anchor_idx[i] = e.index;
-            l.anchor_gen[i] = e.generation;
-            l.ax[i] = ax;
-            l.ay[i] = ay;
+            let mut ax = ax;
+            let mut ay = ay;
+            if clamp_laser_coord(&mut ax) | clamp_laser_coord(&mut ay) {
+                self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+            }
+            {
+                let l = &mut self.lasers;
+                l.anchor_idx[i] = e.index;
+                l.anchor_gen[i] = e.generation;
+                l.ax[i] = ax;
+                l.ay[i] = ay;
+            }
+            if let Some(ei) = self.enemies.get(e) {
+                let (ex, ey) = (self.enemies.x[ei], self.enemies.y[ei]);
+                let l = &mut self.lasers;
+                l.ox[i] = ex + ax;
+                l.oy[i] = ey + ay;
+            }
         }
+        self.sync_prev_if_newborn(i);
         true
     }
 
-    /// 直接设置原点，并解除挂靠。
+    /// 直接设置原点（坐标双边钳入 `±LASER_COORD_MAX`，越界计一次违约），并解除挂靠。
     pub fn laser_origin(&mut self, h: LaserHandle, x: Fx, y: Fx) -> bool {
         let Some(i) = self.laser_slot(h) else {
             return false;
         };
-        let l = &mut self.lasers;
-        l.ox[i] = x;
-        l.oy[i] = y;
-        l.anchor_idx[i] = ANCHOR_NONE;
-        l.anchor_gen[i] = 0;
-        l.ax[i] = Fx::ZERO;
-        l.ay[i] = Fx::ZERO;
+        let mut x = x;
+        let mut y = y;
+        if clamp_laser_coord(&mut x) | clamp_laser_coord(&mut y) {
+            self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
+        }
+        {
+            let l = &mut self.lasers;
+            l.ox[i] = x;
+            l.oy[i] = y;
+            l.anchor_idx[i] = ANCHOR_NONE;
+            l.anchor_gen[i] = 0;
+            l.ax[i] = Fx::ZERO;
+            l.ay[i] = Fx::ZERO;
+        }
+        self.sync_prev_if_newborn(i);
         true
+    }
+
+    /// 出生当帧（相位 5 还没跑过）改了几何后，把上一帧观测快照 `px/py/pang` 拉齐到当前
+    /// `ox/oy/angle`。否则相位 5 报出的 `dx/dy/dang` 会把"初值 → 出生帧被脚本改写"的整段跳变
+    /// 当成这一帧的位移/转角，污染 Tier 0 观测。非出生帧是 no-op（改几何就该进 dang/dx）。
+    fn sync_prev_if_newborn(&mut self, i: usize) {
+        if self.lasers.born_frame[i] == self.frame {
+            let l = &mut self.lasers;
+            l.px[i] = l.ox[i];
+            l.py[i] = l.oy[i];
+            l.pang[i] = l.angle[i];
+        }
     }
 
     /// 取消：`state < 2 → 2`、`timer = 0`（已收缩则 no-op，但仍返回 true）。
@@ -347,11 +422,18 @@ mod tests {
         }
     }
 
-    /// 逐帧跑 `frames` 步，断言每步之后的 state，返回下一个帧号。
+    /// 逐帧跑 `frames` 步，断言每步之后的 state 与 `timer`（本 state 内已过步数：第一步后为 1），
+    /// 返回下一个帧号。
     fn run_state(w: &mut crate::step::World, i: usize, f0: u32, frames: u32, want: u8) -> u32 {
-        for f in f0..f0 + frames {
+        for k in 0..frames {
+            let f = f0 + k;
             step(w, f);
             assert_eq!(w.body.lasers.state[i], want, "帧 {f}");
+            assert_eq!(
+                w.body.lasers.timer[i],
+                k as u16 + 1,
+                "帧 {f}：timer 应等于本 state 内已过步数"
+            );
         }
         f0 + frames
     }
@@ -462,6 +544,9 @@ mod tests {
         );
         step(&mut w, 3);
         assert_eq!(w.body.lasers.anchor_idx[i], ANCHOR_NONE, "敌人回收后脱钩");
+        assert_eq!(w.body.lasers.anchor_gen[i], 0, "脱钩一并清代际");
+        assert_eq!(w.body.lasers.ax[i], Fx::ZERO, "脱钩一并清 ax");
+        assert_eq!(w.body.lasers.ay[i], Fx::ZERO, "脱钩一并清 ay");
         assert_eq!(w.body.lasers.ox[i], ox_last, "脱钩后原点不动");
         assert_eq!(w.body.lasers.dx[i], Fx::ZERO, "无位移 → dx = 0");
     }
@@ -500,6 +585,9 @@ mod tests {
 
         step(&mut w, 2);
         assert_eq!(w.body.lasers.anchor_idx[i], ANCHOR_NONE, "代际不符 → 脱钩");
+        assert_eq!(w.body.lasers.anchor_gen[i], 0, "脱钩一并清代际");
+        assert_eq!(w.body.lasers.ax[i], Fx::ZERO, "脱钩一并清 ax");
+        assert_eq!(w.body.lasers.ay[i], Fx::ZERO, "脱钩一并清 ay");
         assert_eq!(w.body.lasers.ox[i], ox_at_recycle, "原点不跳到新敌位置");
         assert_ne!(w.body.lasers.ox[i], Fx::from_int(500));
     }
@@ -604,10 +692,13 @@ mod tests {
                 .laser_set_speed(h, Fx::from_int(4), Fx::from_int(192))
         );
         assert!(w.body.laser_set_omega(h, 100));
-        // 先移一次原点，让观测字段在非时停帧确实非零（否则"清零"断言无判别力）。
-        assert!(w.body.laser_origin(h, Fx::from_int(10), Fx::ZERO));
         let i = h.index as usize;
+        // 出生帧先移一次原点（被 sync_prev_if_newborn 拉齐，不产生 dx）；再在**非出生帧**
+        // 移一次，让 px/py 停在旧值——这样非时停帧的 dx/dang 才有判别力。
+        assert!(w.body.laser_origin(h, Fx::from_int(10), Fx::ZERO));
         step(&mut w, 0);
+        assert!(w.body.laser_origin(h, Fx::from_int(20), Fx::ZERO));
+        step(&mut w, 1);
         assert_ne!(w.body.lasers.dx[i], Fx::ZERO, "前提：非时停帧确实在动");
         assert_ne!(w.body.lasers.dang[i], 0, "前提：非时停帧确实在转");
 
@@ -616,15 +707,23 @@ mod tests {
             w.body.lasers.timer[i],
             w.body.lasers.state[i],
         );
+        let (px0, py0, pang0) = (
+            w.body.lasers.px[i],
+            w.body.lasers.py[i],
+            w.body.lasers.pang[i],
+        );
         // 照 integrate.rs 敌人 dx 时停测试：freeze_left[0] > 0 = 冻 C（场景）。
         w.body.freeze_left = [5, 0];
-        step(&mut w, 1);
+        step(&mut w, 2);
         assert_eq!(w.body.lasers.end[i], end0, "时停期间 end 不推进");
         assert_eq!(w.body.lasers.timer[i], timer0, "时停期间 timer 不推进");
         assert_eq!(w.body.lasers.state[i], state0, "时停期间 state 不变");
         assert_eq!(w.body.lasers.dx[i], Fx::ZERO, "时停帧 dx 报 0");
         assert_eq!(w.body.lasers.dy[i], Fx::ZERO, "时停帧 dy 报 0");
         assert_eq!(w.body.lasers.dang[i], 0, "时停帧 dang 报 0");
+        assert_eq!(w.body.lasers.px[i], px0, "时停期间 px 不变");
+        assert_eq!(w.body.lasers.py[i], py0, "时停期间 py 不变");
+        assert_eq!(w.body.lasers.pang[i], pang0, "时停期间 pang 不变");
     }
 
     /// P4-b：回收后所有写 API no-op + 每次计一次违约；`laser_alive` 只读不计数。
@@ -677,5 +776,232 @@ mod tests {
         assert!(w.body.laser_set_start(h, Fx::from_int(-5)));
         assert_eq!(w.body.lasers.start[i], Fx::ZERO);
         assert_eq!(w.body.diag.contract_viol, cv0 + 2);
+    }
+
+    // ── 阶段修复 P1：T1–T3 阶段终审修复的判别式测试 ─────────────────────
+
+    /// F1：`create_laser` 把坐标/长度/宽度双边钳到界上，一次调用只计一次违约。
+    #[test]
+    fn extreme_create_params_clamp_to_bounds() {
+        use crate::lasers::{LASER_COORD_MAX, LASER_LEN_MAX};
+        use crate::world::MAX_ENTITY_RADIUS;
+        let mut w = World::new(1);
+        let cv0 = w.body.diag.contract_viol;
+        let mut it = laser_init(0, 9999, 0, 500, 16);
+        it.ox = Fx::from_int(30000);
+        it.oy = Fx::from_int(-30000);
+        it.ax = Fx::from_int(30000);
+        it.ay = Fx::from_int(-30000);
+        it.start = Fx::from_int(30000);
+        it.end = Fx::from_int(30000);
+        it.start_len = Fx::from_int(30000);
+        it.speed = Fx::from_int(30000);
+        it.width = Fx::from_int(30000);
+        let h = w.body.create_laser(it);
+        let i = h.index as usize;
+        let l = &w.body.lasers;
+        assert_eq!(l.ox[i], LASER_COORD_MAX, "ox 上钳");
+        assert_eq!(l.oy[i], -LASER_COORD_MAX, "oy 下钳");
+        assert_eq!(l.ax[i], LASER_COORD_MAX, "未挂靠也钳 ax，防极端值驻留池里");
+        assert_eq!(l.ay[i], -LASER_COORD_MAX);
+        assert_eq!(l.start[i], LASER_LEN_MAX);
+        assert_eq!(l.end[i], LASER_LEN_MAX);
+        assert_eq!(l.start_len[i], LASER_LEN_MAX);
+        assert_eq!(l.speed[i], LASER_LEN_MAX);
+        assert_eq!(
+            l.width[i],
+            Fx::from_raw(MAX_ENTITY_RADIUS.raw() * 2),
+            "width 上钳 2×MAX_ENTITY_RADIUS"
+        );
+        assert_eq!(
+            w.body.diag.contract_viol,
+            cv0 + 1,
+            "一次 create 多坏字段只计一次"
+        );
+    }
+
+    /// F1 下界：负值钳 0（坐标钳到 −COORD_MAX），仍只计一次。
+    #[test]
+    fn extreme_negative_create_params_clamp_low() {
+        use crate::lasers::LASER_COORD_MAX;
+        let mut w = World::new(1);
+        let cv0 = w.body.diag.contract_viol;
+        let mut it = laser_init(0, 9999, 0, 500, 16);
+        it.ox = Fx::from_int(-30000);
+        it.start = Fx::from_int(-30000);
+        it.end = Fx::from_int(-30000);
+        it.start_len = Fx::from_int(-30000);
+        it.speed = Fx::from_int(-30000);
+        it.width = Fx::from_int(-30000);
+        let h = w.body.create_laser(it);
+        let i = h.index as usize;
+        let l = &w.body.lasers;
+        assert_eq!(l.ox[i], -LASER_COORD_MAX);
+        assert_eq!(l.start[i], Fx::ZERO);
+        assert_eq!(l.end[i], Fx::ZERO, "start=0 时 end 也钳到 0");
+        assert_eq!(l.start_len[i], Fx::ZERO);
+        assert_eq!(l.speed[i], Fx::ZERO);
+        assert_eq!(l.width[i], Fx::ZERO);
+        assert_eq!(w.body.diag.contract_viol, cv0 + 1);
+    }
+
+    /// F1：写 API 的上界钳位——`laser_set_speed` / `laser_set_start` / `laser_origin` /
+    /// `laser_anchor` 各自一次调用只计一次违约。
+    #[test]
+    fn extreme_setters_clamp_and_count_once() {
+        use crate::lasers::{LASER_COORD_MAX, LASER_LEN_MAX};
+        use crate::world::test_support::spawn_enemy;
+        let mut w = World::new(1);
+        let h = w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+        let i = h.index as usize;
+
+        let cv = w.body.diag.contract_viol;
+        assert!(
+            w.body
+                .laser_set_speed(h, Fx::from_int(30000), Fx::from_int(30000))
+        );
+        assert_eq!(w.body.lasers.speed[i], LASER_LEN_MAX);
+        assert_eq!(w.body.lasers.start_len[i], LASER_LEN_MAX);
+        assert_eq!(w.body.diag.contract_viol, cv + 1, "多字段只计一次");
+
+        let cv = w.body.diag.contract_viol;
+        assert!(w.body.laser_set_start(h, Fx::from_int(30000)));
+        assert_eq!(w.body.lasers.start[i], LASER_LEN_MAX);
+        assert_eq!(w.body.diag.contract_viol, cv + 1);
+
+        let cv = w.body.diag.contract_viol;
+        assert!(
+            w.body
+                .laser_origin(h, Fx::from_int(-30000), Fx::from_int(30000))
+        );
+        assert_eq!(w.body.lasers.ox[i], -LASER_COORD_MAX);
+        assert_eq!(w.body.lasers.oy[i], LASER_COORD_MAX);
+        assert_eq!(w.body.diag.contract_viol, cv + 1);
+
+        let e = spawn_enemy(&mut w, 0, 0, 5);
+        let cv = w.body.diag.contract_viol;
+        assert!(
+            w.body
+                .laser_anchor(h, e, Fx::from_int(30000), Fx::from_int(-30000))
+        );
+        assert_eq!(w.body.lasers.ax[i], LASER_COORD_MAX);
+        assert_eq!(w.body.lasers.ay[i], -LASER_COORD_MAX);
+        assert_eq!(w.body.diag.contract_viol, cv + 1);
+    }
+
+    /// F1：钳位后相位 5 的 `end + speed` 与判定的 `px − ox` 不溢出——dev（overflow-checks）
+    /// 跑几帧即可抓到。一条坐标取极值（活着并参与判定），一条长度取极值（走加法后回收）。
+    #[test]
+    fn clamped_extremes_survive_steps() {
+        let mut w = World::new(1);
+        let mut it = laser_init(0, 9999, 30, 500, 16);
+        it.ox = Fx::from_int(30000);
+        it.oy = Fx::from_int(-30000);
+        assert_ne!(w.body.create_laser(it), LaserHandle::NULL);
+
+        let mut it = laser_init(0, 9999, 30, 0, 30000);
+        it.start = Fx::from_int(30000);
+        it.end = Fx::from_int(30000);
+        it.start_len = Fx::from_int(30000);
+        it.speed = Fx::from_int(30000);
+        assert_ne!(w.body.create_laser(it), LaserHandle::NULL);
+
+        for f in 0..8 {
+            step(&mut w, f);
+        }
+    }
+
+    /// F2-a：出生当帧 `laser_aim` 不该把"初值 → 瞄准角"的整段跳变报成 dang。
+    /// 自机移到与初值方向不同的位置（初值朝下 16384，自机在 +x 方向 → 瞄准角 0）。
+    #[test]
+    fn newborn_aim_does_not_spike_dang() {
+        let mut w = World::new(1);
+        w.body.players[0].x = Fx::from_int(400);
+        w.body.players[0].y = Fx::from_int(100);
+        let h = w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+        assert!(w.body.laser_set_omega(h, 100));
+        assert!(w.body.laser_aim(h, Angle::ZERO));
+        let i = h.index as usize;
+        assert_eq!(w.body.lasers.angle[i], Angle::ZERO, "瞄准自机 0（+x 方向）");
+        step(&mut w, 0);
+        assert_eq!(w.body.lasers.dang[i], 100, "出生帧只该报 omega");
+    }
+
+    /// F2-b：出生当帧挂到 `vx = 2` 的敌人上，step 一帧后 `dx` 只报敌人本帧位移，
+    /// 不报"初值 → 挂靠点"的偏移跳变。
+    #[test]
+    fn newborn_anchor_does_not_spike_dx() {
+        use crate::world::test_support::spawn_enemy;
+        let mut w = World::new(1);
+        let e = spawn_enemy(&mut w, 0, 100, 5);
+        let ei = w.body.enemies.get(e).unwrap();
+        w.body.enemies.vx[ei] = Fx::from_int(2);
+        let h = w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+        assert!(w.body.laser_anchor(h, e, Fx::from_int(16), Fx::ZERO));
+        let i = h.index as usize;
+        assert_eq!(w.body.lasers.ox[i], Fx::from_int(16), "出生帧立即吸附");
+        step(&mut w, 0);
+        assert_eq!(w.body.lasers.ox[i], Fx::from_int(18));
+        assert_eq!(w.body.lasers.dx[i], Fx::from_int(2), "dx 只报敌人本帧位移");
+    }
+
+    /// F3：`warn > 0` 且 `active == 0`——预警结束后直接按生效结束处理，任何一帧都不进入
+    /// ACTIVE（相位 6 不会多判一帧）。
+    #[test]
+    fn zero_active_after_warn_never_enters_active() {
+        let mut w = World::new(1);
+        let h = w.body.create_laser(laser_init(5, 0, 3, 500, 16));
+        let i = h.index as usize;
+        for f in 0..9 {
+            step(&mut w, f);
+            if w.body.laser_alive(h) {
+                assert_ne!(
+                    w.body.lasers.state[i], LASER_ACTIVE,
+                    "帧 {f} 不应处于 ACTIVE"
+                );
+            }
+        }
+        assert!(!w.body.laser_alive(h), "fade 3 走完回收");
+    }
+
+    /// F4：`start > end` 的倒置盒被归一成 `end = start`（`create_laser` 与 `laser_set_start` 两处）。
+    #[test]
+    fn inverted_box_is_normalized() {
+        let mut w = World::new(1);
+        let mut it = laser_init(0, 9999, 0, 500, 16);
+        it.start = Fx::from_int(300);
+        it.end = Fx::from_int(100);
+        let h = w.body.create_laser(it);
+        let i = h.index as usize;
+        assert_eq!(w.body.lasers.start[i], Fx::from_int(300));
+        assert_eq!(
+            w.body.lasers.end[i],
+            Fx::from_int(300),
+            "create：end 抬到 start"
+        );
+
+        let h2 = w.body.create_laser(laser_init(0, 9999, 0, 500, 16));
+        let i2 = h2.index as usize;
+        assert!(w.body.laser_set_start(h2, Fx::from_int(700)));
+        assert_eq!(w.body.lasers.start[i2], Fx::from_int(700));
+        assert_eq!(
+            w.body.lasers.end[i2],
+            Fx::from_int(700),
+            "set_start：end 抬到 start"
+        );
+    }
+
+    /// F6：`active` 结束且 `fade == 0` 在结束当帧立即回收（不占一帧 FADE）。
+    #[test]
+    fn active_end_with_zero_fade_recycles_immediately() {
+        let mut w = World::new(1);
+        let h = w.body.create_laser(laser_init(0, 3, 0, 500, 16));
+        let i = h.index as usize;
+        for f in 0..3 {
+            step(&mut w, f);
+            assert_eq!(w.body.lasers.state[i], LASER_ACTIVE, "帧 {f}");
+        }
+        step(&mut w, 3);
+        assert!(!w.body.laser_alive(h), "fade == 0：生效结束当帧回收");
     }
 }
