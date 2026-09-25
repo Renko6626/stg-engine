@@ -22,8 +22,10 @@ use stg_core::ecl::image::EclImage;
 use stg_core::input::InputFrame;
 use stg_core::world::DiagCounters;
 
-/// `--at` 单帧弹表的打印上限。满弹池 8192 行会把终端冲掉，超出部分只报条数。
-const AT_DUMP_LIMIT: usize = 1024;
+/// `--at` 单帧弹表的打印上限 = 弹池容量，即不截断。原先是 1024：训练仓转写的「离线 640 弹池重放」
+/// （`th06_s3_w12/pool640`）要逐帧拿到**全部**活弹，峰值 > 1024 的卡被截断后重放失效（2026-09-25 第 4 关便笺）。
+/// 人看终端时自己 `| head`。
+const AT_DUMP_LIMIT: usize = stg_core::bullets::BulletPool::CAP;
 
 /// 采样行的目标条数（外加帧 0 与末帧）。
 const SAMPLE_ROWS: u32 = 10;
