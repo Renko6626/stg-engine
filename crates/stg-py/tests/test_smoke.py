@@ -136,11 +136,37 @@ def test_torch_backend_matches_numpy():
     assert tb["player"].abs().sum().item() > 0, "写入应落在调用方 torch 张量"
 
 
+def test_lasers_rows_populated():
+    """带激光的最小场景：step 后 lasers_count > 0，且行里 half_h 等列可读。"""
+    src = """
+sub main() {
+    loop {
+        _ = laser(4, 0.0fx, 100.0fx, 90deg, 500.0fx, 32.0fx, 30, 120, 16);
+        wait(60);
+    }
+}
+"""
+    img = stg_rl.compile_sources([("laser.ecl", src)])
+    env = stg_rl.VecEnv(1, 1, {"laser": img}, [stg_rl.Start("laser")],
+                        bullets_cap=32, warmup_max=0, seed=0)
+    b = env.reset()
+    for _ in range(5):
+        env.step(np.zeros(1, dtype=np.uint32))
+    assert int(b["lasers_count"][0]) > 0, "step 后应有激光行"
+    assert b["lasers"].shape == (1, stg_rl.CAPS["lasers"], stg_rl.STRIDES["lasers"])
+    row = b["lasers"][0, 0]
+    off = stg_rl.OFFSETS["lasers"]["half_h"][0]
+    half_h = int(np.frombuffer(row[off:off + 4].tobytes(), dtype="<i4")[0])
+    assert half_h == 16 * 65536, "half_h = width/2 = 16px（Q16.16）"
+    assert row[stg_rl.OFFSETS["lasers"]["state"][0]] in (0, 1, 2)
+
+
 def test_caps_and_strides_come_from_native():
     """Python 缓冲布局的容量与 stride 取自原生模块（不与 Rust 常量各写一份）。"""
     assert stg_rl.CAPS == {"enemies": 256, "lasers": 64, "items": 1024,
                            "bullets_default": 1024, "bullets_max": 8192}
     b = stg_rl.alloc_buffers(3, 128, backend="numpy")
     assert b["enemies"].shape == (3, stg_rl.CAPS["enemies"], stg_rl.STRIDES["enemies"])
+    assert b["lasers"].shape == (3, stg_rl.CAPS["lasers"], stg_rl.STRIDES["lasers"])
     assert b["items"].shape == (3 * stg_rl.CAPS["items"], stg_rl.STRIDES["items"])
     assert b["bullets"].shape == (3 * 128, stg_rl.STRIDES["bullets"])

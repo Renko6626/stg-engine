@@ -673,6 +673,11 @@ fn run_measured(
 /// 子机入流）——诊断场景导演直写档位合法，压相位 3 解释器逐档分支 + 子机弹随即参与
 /// 碰撞/擦弹结算链，换档瞬时生效。
 /// 600 帧 @ 60Hz。
+///
+/// 金向量三号（T5 激光）：独立全新 World + 独立种子，`# scene: laser` 标记段界。三种形态各
+/// 一条（预警扫射挂 omega / 自机狙 aim / 飞出棒子 speed），外加一条挂靠在直线移动敌上、带
+/// omega 的常驻扫射激光；自机保持默认位置（会被扫到），覆盖激光判定→擦弹→中弹→遡行整链。
+/// 600 帧 @ 60Hz，参数全部字面量、只走公开写 API。
 fn cmd_golden(rest: &[String]) -> ExitCode {
     use stg_core::bullets::{BulletHandle, BulletInit};
     use stg_core::ecl::image::EclImage;
@@ -1144,13 +1149,117 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
         }
     }
 
+    // ── 金向量三号：激光（T5）——三种形态各一条 + 一条挂靠直线移动敌、带 omega 的常驻激光 ──
+    // 一号/二号场景（上方 `world`/`world2`）逐字节不动；本段用独立全新 World + 独立种子，
+    // `# scene: laser` 分隔行标记段界（CI 仍只 diff 同一份文件的逐行文本）。
+    {
+        use stg_core::lasers::{ANCHOR_NONE, LaserInit};
+
+        const FRAMES3: u32 = 600;
+        const SEED3: u64 = 0x4C41_5345_5201; // "LASER"
+
+        lines.push_str("# scene: laser\n");
+
+        let mut world3 = World::new(SEED3);
+        // 全字段 LaserInit 助手（形态一初值；state/timer/anchor 等派生字段由 create_laser 定）。
+        let laser_at = |ox: i32,
+                        oy: i32,
+                        angle: u16,
+                        len: i32,
+                        width: i32,
+                        warn: u16,
+                        active: u16,
+                        fade: u16| LaserInit {
+            ox: Fx::from_int(ox),
+            oy: Fx::from_int(oy),
+            angle: Angle(angle),
+            omega: 0,
+            start: Fx::ZERO,
+            end: Fx::from_int(len),
+            start_len: Fx::from_int(len),
+            speed: Fx::ZERO,
+            width: Fx::from_int(width),
+            sprite: 0,
+            warn,
+            active,
+            fade,
+            timer: 0,
+            state: 0,
+            anchor_idx: ANCHOR_NONE,
+            anchor_gen: 0,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            dx: Fx::ZERO,
+            dy: Fx::ZERO,
+            dang: 0,
+            px: Fx::ZERO,
+            py: Fx::ZERO,
+            pang: Angle::ZERO,
+            flags: 0,
+            born_frame: 0,
+        };
+
+        // 挂靠目标：从 (-160, 200) 以 1px/帧向右直线缓移（600 帧内不出屏），全程免伤，
+        // 让"挂靠跟随移动敌"整段入流。
+        let anchor_enemy = world3.body.create_enemy(enemy_at(-160, 200));
+        world3
+            .body
+            .set_enemy_vel_cart(anchor_enemy, Fx::from_int(1), Fx::ZERO, 0, 0);
+        world3.body.set_enemy_invuln(anchor_enemy, 600);
+
+        // 形态一：90° 竖线，预警 30 → 生效 120 → 收缩 16，omega 60 bam/帧慢扫。
+        let l0 = world3
+            .body
+            .create_laser(laser_at(0, 96, 16_384, 500, 32, 30, 120, 16));
+        world3.body.laser_set_omega(l0, 60);
+        // 形态二：自机狙，预警 24，出生即瞄向自机 0。
+        let l1 = world3
+            .body
+            .create_laser(laser_at(-160, 200, 0, 400, 24, 24, 90, 12));
+        world3.body.laser_aim(l1, Angle(0));
+        // 形态三：飞出去的棒子，warn 0 出生即生效，speed 4、棒长 192（start 越过 640 自回收）。
+        let l2 = world3
+            .body
+            .create_laser(laser_at(0, 96, 16_384, 0, 6, 0, 9999, 0));
+        world3
+            .body
+            .laser_set_speed(l2, Fx::from_int(4), Fx::from_int(192));
+        // 挂靠移动敌、带 omega 的常驻扫射激光（active 给足，整段常驻）。
+        let l3 = world3
+            .body
+            .create_laser(laser_at(0, 0, 0, 300, 16, 0, 9999, 0));
+        world3
+            .body
+            .laser_anchor(l3, anchor_enemy, Fx::ZERO, Fx::from_int(8));
+        world3.body.laser_set_omega(l3, -200);
+
+        for frame in 0..FRAMES3 {
+            let mut input = InputFrame::empty(frame);
+            let mut btn = BTN_SHOT;
+            btn |= if (frame / 90) % 2 == 0 {
+                BTN_LEFT
+            } else {
+                BTN_RIGHT
+            };
+            input.actions[0].buttons = btn;
+            step_with_director(
+                &mut world3,
+                &stg_core::tables::TABLES_V0,
+                &ecl,
+                &input,
+                |_| {},
+            );
+            lines.push_str(&format!("{frame} {:016x}\n", world3.checksum()));
+        }
+    }
+
     match parse_out(rest) {
         Some(path) => {
             if let Err(e) = std::fs::write(&path, lines) {
                 eprintln!("error: 写入 {path} 失败: {e}");
                 return ExitCode::FAILURE;
             }
-            eprintln!("golden: 两段场景校验和已写入 {path}");
+            eprintln!("golden: 三段场景校验和已写入 {path}");
         }
         None => print!("{lines}"),
     }

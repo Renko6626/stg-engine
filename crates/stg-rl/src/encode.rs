@@ -1,10 +1,11 @@
 //! World → proto v1 行字节（spec §5）。只读 `w.view()` 与公开读口；每行全部字节显式写满。
 
-use crate::layout::{ENEMIES_CAP, ITEMS_CAP, off};
+use crate::layout::{ENEMIES_CAP, ITEMS_CAP, LASERS_CAP, off};
 use stg_core::bullets::BulletPool;
 use stg_core::enemy::{ENEMY_DYING, ENEMY_NO_BODY, EnemyHandle, pack_handle};
 use stg_core::items::{MAGNET_NONE, MAGNET_PICKED};
-use stg_core::math::{atan2, isqrt, len_sq};
+use stg_core::math::geom::seg_box_dist_sq;
+use stg_core::math::{Fx, atan2, isqrt, len_sq};
 use stg_core::player::LIFE_ALIVE;
 use stg_core::step::World;
 use stg_core::tables::WorldTables;
@@ -228,6 +229,80 @@ pub fn write_enemies(w: &World, rows: &mut [u8]) -> usize {
     k
 }
 
+/// 激光行编码：按「离自机最近」选至多 `LASERS_CAP`(64) 条，输出按 (平方距离, 池下标) 升序。
+///
+/// 池索引升序收集、键 `(seg_box_dist_sq, 下标)` 全序 ⇒ 结果确定（I4）。不做 CSR 压实：
+/// 调用方按 env 给一块定长 `LASERS_CAP * LASERS.stride` 的行区，这里直接写前 `k` 行、其余不动。
+///
+/// # `t_active` 口径（阶段终审 M-6）
+///
+/// 相位 5 是**先判切换再 `timer += 1`**（Global Constraints），所以帧末 `timer` = 本状态内
+/// 已过去的帧数（出生帧末即 1）。`t_active` 只对 `state == 0`（预警）有意义，取 `warn − timer`
+/// = **帧末剩余的预警帧数**，其余状态恒 0。举例 `warn = 2`：出生帧末 `timer = 1`、
+/// `t_active = 1`（还剩下一帧预警），再走一步到下一帧末 `timer = 2`、`t_active = 0`，
+/// 其后的下一次相位 5（`timer >= warn` 判真）才切 `state 1`；`warn = 1` 时出生帧末
+/// `t_active = 0`，下一步即生效。即 `t_active == k` 表示还要 k 帧预警，`k == 0` 时下一步生效。
+/// th06nc 抽取器若把同一字段读成「还差几步生效」（含切换帧），会与本引擎差 1；本刀不改抽取器，
+/// 转写/特征化一侧按本口径对齐。
+pub fn write_lasers(w: &World, rows: &mut [u8]) -> usize {
+    let v = w.view();
+    let l = v.lasers();
+    let p = &v.players()[0];
+    let st = crate::layout::LASERS.stride;
+    // ≤ 256 条：定长暂存 + 排序，不做堆分配。键 (平方距离, 下标) 保证确定性。
+    let mut keys = [(0i64, 0u16); stg_core::lasers::LaserPool::CAP];
+    let mut n = 0;
+    for i in l.iter_alive() {
+        let half = Fx::from_raw(l.width()[i].raw() / 2);
+        keys[n] = (
+            seg_box_dist_sq(
+                p.x,
+                p.y,
+                l.ox()[i],
+                l.oy()[i],
+                l.angle()[i],
+                l.start()[i],
+                l.end()[i],
+                half,
+            ),
+            i as u16,
+        );
+        n += 1;
+    }
+    let keys = &mut keys[..n];
+    keys.sort_unstable();
+    let k = n.min(LASERS_CAP);
+    for (row, &(_, i)) in keys[..k].iter().enumerate() {
+        let i = i as usize;
+        let r = &mut rows[row * st..(row + 1) * st];
+        r.fill(0);
+        put_i32(r, off::laser::X, l.ox()[i].raw());
+        put_i32(r, off::laser::Y, l.oy()[i].raw());
+        put_u16(r, off::laser::ANGLE, l.angle()[i].raw());
+        put_i32(r, off::laser::START, l.start()[i].raw());
+        put_i32(r, off::laser::END, l.end()[i].raw());
+        put_i32(r, off::laser::START_LEN, l.start_len()[i].raw());
+        put_i32(r, off::laser::SPEED, l.speed()[i].raw());
+        put_i32(r, off::laser::HALF_H, l.width()[i].raw() / 2);
+        // BAM/帧 → 弧度/帧的 Q16.16：`dang · 2π`（411775 ≈ 2π·65536），整数运算。
+        put_i32(
+            r,
+            off::laser::OMEGA,
+            ((l.dang()[i] as i64 * 411_775) >> 16) as i32,
+        );
+        put_i32(r, off::laser::VX, l.dx()[i].raw());
+        put_i32(r, off::laser::VY, l.dy()[i].raw());
+        let t_active = if l.state()[i] == stg_core::lasers::LASER_WARN {
+            l.warn()[i] as i32 - l.timer()[i] as i32
+        } else {
+            0
+        };
+        put_i32(r, off::laser::T_ACTIVE, t_active);
+        r[off::laser::STATE] = l.state()[i];
+    }
+    k
+}
+
 pub fn write_items(w: &World, rows: &mut [u8]) -> usize {
     let it = w.view().items();
     let mut k = 0;
@@ -256,7 +331,76 @@ pub fn write_items(w: &World, rows: &mut [u8]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::saturate_score;
+    use super::{saturate_score, write_lasers};
+    use crate::layout::off;
+    use stg_core::math::{Angle, Fx};
+    use stg_core::step::World;
+    use stg_core::tables::TABLES_V0;
+
+    #[inline]
+    fn rd_i32(b: &[u8], o: usize) -> i32 {
+        i32::from_le_bytes(b[o..o + 4].try_into().unwrap())
+    }
+    #[inline]
+    fn rd_u16(b: &[u8], o: usize) -> u16 {
+        u16::from_le_bytes(b[o..o + 2].try_into().unwrap())
+    }
+
+    /// 一帧 step（空镜像：世界内无 ECL 任务）。
+    fn run_step(w: &mut World, buttons: u32) {
+        let mut input = stg_core::input::InputFrame::empty(w.frame());
+        input.actions[0].buttons = buttons;
+        stg_core::step::step(
+            w,
+            &TABLES_V0,
+            &stg_core::ecl::image::EclImage::empty(),
+            &input,
+        );
+    }
+
+    /// 全字段 `LaserInit` 助手（形态一的初值；state/timer/anchor 等派生字段由 `create_laser` 覆写）。
+    #[allow(clippy::too_many_arguments)]
+    fn laser_init(
+        ox: i32,
+        oy: i32,
+        angle: u16,
+        len: i32,
+        width: i32,
+        warn: u16,
+        active: u16,
+        fade: u16,
+    ) -> stg_core::lasers::LaserInit {
+        use stg_core::lasers::ANCHOR_NONE;
+        stg_core::lasers::LaserInit {
+            ox: Fx::from_int(ox),
+            oy: Fx::from_int(oy),
+            angle: Angle(angle),
+            omega: 0,
+            start: Fx::ZERO,
+            end: Fx::from_int(len),
+            start_len: Fx::from_int(len),
+            speed: Fx::ZERO,
+            width: Fx::from_int(width),
+            sprite: 0,
+            warn,
+            active,
+            fade,
+            timer: 0,
+            state: 0,
+            anchor_idx: ANCHOR_NONE,
+            anchor_gen: 0,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            dx: Fx::ZERO,
+            dy: Fx::ZERO,
+            dang: 0,
+            px: Fx::ZERO,
+            py: Fx::ZERO,
+            pang: Angle::ZERO,
+            flags: 0,
+            born_frame: 0,
+        }
+    }
 
     /// `score` 是 `u64`，proto 字段是 `U32` —— 溢出必须饱和、不得回绕。
     /// 判别力：任何 `as u32`（截断）或 `+1` 回绕实现都会让 0x1_0000_0001 变成 1，测试红。
@@ -268,5 +412,167 @@ mod tests {
         assert_eq!(saturate_score(0x1_0000_0000), u32::MAX, "u32::MAX + 1");
         assert_eq!(saturate_score(0x1_0000_0001), u32::MAX, "u32::MAX + 2");
         assert_eq!(saturate_score(u64::MAX), u32::MAX);
+    }
+
+    /// 激光行逐列核对：三形态各一条（形态一挂 omega、形态三挂 speed），第 5 帧前挪形态二原点制造
+    /// dx/dy。判别力：半高必须 `width/2`、omega 必须 `(dang·411775)>>16`、`t_active` 只对 state 0
+    /// 计 `warn−timer`、state/type 直写——任一列错位或公式错都红；所有绝对值互异非零。
+    #[test]
+    fn laser_rows_carry_pool_fields_omega_and_t_active() {
+        use stg_core::lasers::{LASER_ACTIVE, LASER_WARN};
+
+        let mut w = World::new(1);
+        // 形态一（预警线 → 扫射）：预警 30、生效 120、收缩 16；omega = 100 bam/帧。
+        let l0 = w
+            .body
+            .create_laser(laser_init(10, 100, 16384, 500, 32, 30, 120, 16));
+        assert!(w.body.laser_set_omega(l0, 100));
+        // 形态二（自机狙）：预警 24；出生即 aim 到自机方向 + 约 36°。
+        let l1 = w
+            .body
+            .create_laser(laser_init(-40, 120, 0, 400, 20, 24, 90, 12));
+        assert!(w.body.laser_aim(l1, Angle(6554)));
+        // 形态三（飞出去的棒子）：warn 0 出生即生效，speed 4、棒长 192。
+        let l2 = w
+            .body
+            .create_laser(laser_init(60, 100, 16384, 0, 8, 0, 9999, 0));
+        assert!(
+            w.body
+                .laser_set_speed(l2, Fx::from_int(4), Fx::from_int(192))
+        );
+
+        for _ in 0..4 {
+            run_step(&mut w, 0);
+        }
+        // 第 5 帧前挪形态二的原点：本帧 dx 应为新原点 − 旧原点（90px），dy = 0。
+        assert!(w.body.laser_origin(l1, Fx::from_int(50), Fx::from_int(120)));
+        run_step(&mut w, 0);
+
+        let v = w.view();
+        let l = v.lasers();
+        let (i0, i1, i2) = (l0.index as usize, l1.index as usize, l2.index as usize);
+        // 前置：三条都真的按预期演化（否则后面的行断言可能退化成"比 0"）。
+        assert_eq!((l.state()[i0], l.timer()[i0]), (LASER_WARN, 5));
+        assert_eq!((l.state()[i1], l.timer()[i1]), (LASER_WARN, 5));
+        assert_eq!(l.state()[i2], LASER_ACTIVE);
+        assert_eq!(l.omega()[i0], 100, "形态一真的挂了 omega");
+        assert_ne!(l.angle()[i1], Angle(0), "形态二真的被 aim 改了角度");
+        assert_eq!(l.speed()[i2], Fx::from_int(4), "形态三真的挂了 speed");
+
+        let st = crate::layout::LASERS.stride;
+        let mut rows = vec![0u8; 64 * st];
+        assert_eq!(write_lasers(&w, &mut rows), 3);
+
+        // half_h 识别行（16 / 10 / 4 互异；列值是 Q16.16，比较 raw）。
+        let find = |half: i32| -> usize {
+            let want = Fx::from_int(half).raw();
+            (0..3)
+                .find(|&k| rd_i32(&rows[k * st..], off::laser::HALF_H) == want)
+                .unwrap_or_else(|| panic!("找不到 half_h = {half} 的行"))
+        };
+        // 每条激光的期望（i, half_h, state, t_active, dx_px, dy_px, omega）。
+        let want = [
+            (
+                i0,
+                16,
+                LASER_WARN,
+                25,
+                0,
+                0,
+                ((100i64 * 411_775) >> 16) as i32,
+            ),
+            (i1, 10, LASER_WARN, 19, 90, 0, 0),
+            (i2, 4, LASER_ACTIVE, 0, 0, 0, 0),
+        ];
+        for &(i, half, state, t_active, dx, dy, omega) in &want {
+            let k = find(half);
+            let r = &rows[k * st..(k + 1) * st];
+            assert_eq!(rd_i32(r, off::laser::X), l.ox()[i].raw(), "x");
+            assert_eq!(rd_i32(r, off::laser::Y), l.oy()[i].raw(), "y");
+            assert_eq!(rd_u16(r, off::laser::ANGLE), l.angle()[i].raw(), "angle");
+            assert_eq!(rd_i32(r, off::laser::START), l.start()[i].raw(), "start");
+            assert_eq!(rd_i32(r, off::laser::END), l.end()[i].raw(), "end");
+            assert_eq!(
+                rd_i32(r, off::laser::START_LEN),
+                l.start_len()[i].raw(),
+                "start_len"
+            );
+            assert_eq!(rd_i32(r, off::laser::SPEED), l.speed()[i].raw(), "speed");
+            assert_eq!(
+                rd_i32(r, off::laser::HALF_H),
+                l.width()[i].raw() / 2,
+                "half_h = width/2"
+            );
+            assert_eq!(rd_i32(r, off::laser::OMEGA), omega, "omega");
+            assert_eq!(rd_i32(r, off::laser::VX), Fx::from_int(dx).raw(), "vx = dx");
+            assert_eq!(rd_i32(r, off::laser::VY), Fx::from_int(dy).raw(), "vy = dy");
+            assert_eq!(rd_i32(r, off::laser::T_ACTIVE), t_active, "t_active");
+            assert_eq!(r[off::laser::STATE], state, "state");
+            assert_eq!(r[off::laser::TYPE], 0, "type");
+        }
+        // 绝对取值再钉一遍关键列（防"行 ↔ 池"整体错位也自洽）。
+        let r0 = &rows[find(16) * st..][..st];
+        assert_eq!(rd_i32(r0, off::laser::X), Fx::from_int(10).raw());
+        assert_eq!(rd_i32(r0, off::laser::Y), Fx::from_int(100).raw());
+        assert_eq!(rd_i32(r0, off::laser::END), Fx::from_int(500).raw());
+        assert_eq!(rd_i32(r0, off::laser::START_LEN), Fx::from_int(500).raw());
+        assert_eq!(rd_i32(r0, off::laser::OMEGA), 628);
+        let r1 = &rows[find(10) * st..][..st];
+        assert_eq!(rd_i32(r1, off::laser::X), Fx::from_int(50).raw());
+        assert_eq!(rd_i32(r1, off::laser::VX), Fx::from_int(90).raw());
+        let r2 = &rows[find(4) * st..][..st];
+        assert_eq!(rd_i32(r2, off::laser::END), Fx::from_int(20).raw());
+        assert_eq!(rd_i32(r2, off::laser::SPEED), Fx::from_int(4).raw());
+    }
+
+    /// 条数上限：70 条，只写出最近的 64 条（`ox=0, oy=i` ⇒ 距离² = (384−i)²，i 越大越近），
+    /// 输出按 (距离, 下标) 升序；重复调用逐字节相同（含未被写的尾行）。
+    #[test]
+    fn lasers_cap_keeps_nearest_and_is_reproducible() {
+        let mut w = World::new(1);
+        for i in 0..70i32 {
+            // len=0、angle 竖直：线段退化成点，half_h = i+1 可作行识别（宽度不影响距离）。
+            let h = w
+                .body
+                .create_laser(laser_init(0, i, 16384, 0, 2 * (i + 1), 0, 9999, 0));
+            assert_ne!(h, stg_core::lasers::LaserHandle::NULL, "第 {i} 条应建成");
+        }
+        let st = crate::layout::LASERS.stride;
+        let mut a = vec![0xAAu8; 64 * st];
+        let mut b = vec![0xAAu8; 64 * st];
+        assert_eq!(write_lasers(&w, &mut a), 64, "只写出 cap=64 条");
+        assert_eq!(write_lasers(&w, &mut b), 64);
+        assert_eq!(a, b, "重复调用逐字节相同");
+        let halfs: Vec<i32> = (0..64)
+            .map(|k| rd_i32(&a[k * st..], off::laser::HALF_H))
+            .collect();
+        // 最近 64 条 = i ∈ 6..=69，距离升序 = i 降序 ⇒ half_h = 70..=7（Q16.16 raw）。
+        let want: Vec<i32> = (7..=70).rev().map(|v| Fx::from_int(v).raw()).collect();
+        assert_eq!(halfs, want, "应取最近 64 条且按 (距离, 下标) 升序");
+    }
+
+    /// 等距平局按下标升序（keys = `(距离², 下标)`）；行序错则 half_h 序列不是 1,2,3。
+    #[test]
+    fn lasers_tie_breaks_by_pool_index() {
+        let mut w = World::new(1);
+        for i in 0..3i32 {
+            w.body
+                .create_laser(laser_init(0, 300, 16384, 0, 2 * (i + 1), 0, 9999, 0));
+        }
+        let st = crate::layout::LASERS.stride;
+        let mut rows = vec![0u8; 3 * st];
+        assert_eq!(write_lasers(&w, &mut rows), 3);
+        let halfs: Vec<i32> = (0..3)
+            .map(|k| rd_i32(&rows[k * st..], off::laser::HALF_H))
+            .collect();
+        assert_eq!(
+            halfs,
+            vec![
+                Fx::from_int(1).raw(),
+                Fx::from_int(2).raw(),
+                Fx::from_int(3).raw()
+            ],
+            "等距按下标升序"
+        );
     }
 }

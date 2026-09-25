@@ -22,7 +22,7 @@
 
 use crate::encode::{self, BulletStats};
 use crate::env::{BootCache, EVENTS, Env, EnvConfig, validate};
-use crate::layout::{ENEMIES, ENEMIES_CAP, ITEMS_CAP};
+use crate::layout::{ENEMIES, ENEMIES_CAP, ITEMS_CAP, LASERS, LASERS_CAP};
 use rayon::prelude::*;
 use std::sync::Arc;
 use stg_core::tables::TABLES_V0;
@@ -38,6 +38,7 @@ pub struct BufferSizes {
     pub bullets_offsets: usize,
     pub items: usize,
     pub items_offsets: usize,
+    pub lasers: usize,
     pub lasers_count: usize,
     pub bullets_total: usize,
     pub bullets_dropped: usize,
@@ -48,7 +49,8 @@ pub struct BufferSizes {
     pub start_index: usize,
 }
 
-/// 各缓冲应分配的长度（spec §3.1）。`bullets` 按 `cap`，`items` 恒 `ITEMS_CAP`。
+/// 各缓冲应分配的长度（spec §3.1）。`bullets` 按 `cap`，`items` 恒 `ITEMS_CAP`，
+/// `enemies`/`lasers` 恒各自 `*_CAP` 的定长行区。
 pub fn buffer_sizes(n: usize, cap: usize) -> BufferSizes {
     BufferSizes {
         frame: n,
@@ -60,6 +62,7 @@ pub fn buffer_sizes(n: usize, cap: usize) -> BufferSizes {
         bullets_offsets: n + 1,
         items: n * ITEMS_CAP * 18,
         items_offsets: n + 1,
+        lasers: n * LASERS_CAP * LASERS.stride,
         lasers_count: n,
         bullets_total: n,
         bullets_dropped: n,
@@ -82,6 +85,7 @@ pub struct BufferSet<'a> {
     pub bullets_offsets: &'a mut [i32],
     pub items: &'a mut [u8],
     pub items_offsets: &'a mut [i32],
+    pub lasers: &'a mut [u8],
     pub lasers_count: &'a mut [i32],
     pub bullets_total: &'a mut [i32],
     pub bullets_dropped: &'a mut [i32],
@@ -104,6 +108,7 @@ pub struct OwnedBuffers {
     pub bullets_offsets: Vec<i32>,
     pub items: Vec<u8>,
     pub items_offsets: Vec<i32>,
+    pub lasers: Vec<u8>,
     pub lasers_count: Vec<i32>,
     pub bullets_total: Vec<i32>,
     pub bullets_dropped: Vec<i32>,
@@ -127,6 +132,7 @@ impl OwnedBuffers {
             bullets_offsets: vec![0; s.bullets_offsets],
             items: vec![0; s.items],
             items_offsets: vec![0; s.items_offsets],
+            lasers: vec![0; s.lasers],
             lasers_count: vec![0; s.lasers_count],
             bullets_total: vec![0; s.bullets_total],
             bullets_dropped: vec![0; s.bullets_dropped],
@@ -149,6 +155,7 @@ impl OwnedBuffers {
             bullets_offsets: &mut self.bullets_offsets,
             items: &mut self.items,
             items_offsets: &mut self.items_offsets,
+            lasers: &mut self.lasers,
             lasers_count: &mut self.lasers_count,
             bullets_total: &mut self.bullets_total,
             bullets_dropped: &mut self.bullets_dropped,
@@ -178,6 +185,8 @@ struct Work<'a> {
     player: &'a mut [u8],
     enemies: &'a mut [u8],
     enemies_count: &'a mut i32,
+    lasers: &'a mut [u8],
+    lasers_count: &'a mut i32,
     frame: &'a mut u32,
     phase: &'a mut u32,
     bullets_total: &'a mut i32,
@@ -273,6 +282,7 @@ impl VecEnv {
         chk!(bullets_offsets);
         chk!(items);
         chk!(items_offsets);
+        chk!(lasers);
         chk!(lasers_count);
         chk!(bullets_total);
         chk!(bullets_dropped);
@@ -300,6 +310,8 @@ impl VecEnv {
                     w.player,
                     w.enemies,
                     w.enemies_count,
+                    w.lasers,
+                    w.lasers_count,
                     w.frame,
                     w.phase,
                     w.bullets_total,
@@ -343,6 +355,8 @@ impl VecEnv {
                     w.player,
                     w.enemies,
                     w.enemies_count,
+                    w.lasers,
+                    w.lasers_count,
                     w.frame,
                     w.phase,
                     w.bullets_total,
@@ -387,8 +401,6 @@ impl VecEnv {
     ///
     /// 结果字节只由 env 索引序与各 `Slot.nb/ni` 决定，与线程数/调度无关。
     fn compact(&self, buf: &mut BufferSet<'_>) {
-        buf.lasers_count.fill(0);
-
         // 阶段 1（串行）：前缀和。offsets 冻结后，每个 env 的目标区间即确定。
         let n = self.slots.len();
         let mut total_bullets = 0usize;
@@ -450,6 +462,9 @@ fn build_work<'a>(
     let mut player = buf.player.chunks_mut(36);
     let mut enemies = buf.enemies.chunks_mut(ENEMIES_CAP * ENEMIES.stride);
     let mut enemies_count = buf.enemies_count.iter_mut();
+    // lasers 与 enemies 同款：按 env 切一块定长行区，直接写入，不参与 CSR 压实。
+    let mut lasers = buf.lasers.chunks_mut(LASERS_CAP * LASERS.stride);
+    let mut lasers_count = buf.lasers_count.iter_mut();
     let mut frame = buf.frame.iter_mut();
     let mut phase = buf.phase.iter_mut();
     let mut bullets_total = buf.bullets_total.iter_mut();
@@ -469,6 +484,8 @@ fn build_work<'a>(
             player: player.next().expect("player chunks == num_envs"),
             enemies: enemies.next().expect("enemies chunks == num_envs"),
             enemies_count: enemies_count.next().expect("enemies_count == num_envs"),
+            lasers: lasers.next().expect("lasers chunks == num_envs"),
+            lasers_count: lasers_count.next().expect("lasers_count == num_envs"),
             frame: frame.next().expect("frame == num_envs"),
             phase: phase.next().expect("phase == num_envs"),
             bullets_total: bullets_total.next().expect("bullets_total == num_envs"),
@@ -482,7 +499,8 @@ fn build_work<'a>(
         .collect()
 }
 
-/// 写一个 env 的全部观测：player / enemies(+count) / phase / frame / bullets(暂存) / items(暂存)。
+/// 写一个 env 的全部观测：player / enemies(+count) / lasers(+count) / phase / frame /
+/// bullets(暂存) / items(暂存)。
 ///
 /// 并行闭包内调用，`slot` 与各缓冲段均为该 env 独占。
 #[allow(clippy::too_many_arguments)] // 按 BufferSet 字段逐参传入，拆包更难读
@@ -491,6 +509,8 @@ fn write_obs(
     player_row: &mut [u8],
     enemies_rows: &mut [u8],
     enemies_count: &mut i32,
+    lasers_rows: &mut [u8],
+    lasers_count: &mut i32,
     frame: &mut u32,
     phase: &mut u32,
     bullets_total: &mut i32,
@@ -509,6 +529,7 @@ fn write_obs(
     let w = env.world();
     encode::write_player(w, &TABLES_V0, player_row);
     *enemies_count = encode::write_enemies(w, enemies_rows) as i32;
+    *lasers_count = encode::write_lasers(w, lasers_rows) as i32;
     *phase = encode::phase_bits(w);
     *frame = w.frame();
     let BulletStats {

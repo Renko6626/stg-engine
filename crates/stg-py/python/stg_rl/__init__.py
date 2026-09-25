@@ -21,7 +21,7 @@ EVENT_COLUMNS = tuple(event_columns())
 STRIDES = {name: stride for name, stride, _ in _native.layout_tables()}
 OFFSETS = {name: {f: (off, ty) for f, off, ty in fields} for name, _, fields in _native.layout_tables()}
 CAPS = dict(_native.caps())
-ENEMIES_CAP, ITEMS_CAP = CAPS["enemies"], CAPS["items"]
+ENEMIES_CAP, LASERS_CAP, ITEMS_CAP = CAPS["enemies"], CAPS["lasers"], CAPS["items"]
 _END_ON = ("phase_ended", "spell_captured", "spell_failed", "stage_cleared")
 
 
@@ -65,6 +65,7 @@ def _layout(n: int, cap: int):
         ("player", n * _S["player"], np.uint8, (n, _S["player"])),
         ("enemies", n * ENEMIES_CAP * _S["enemies"], np.uint8, (n, ENEMIES_CAP, _S["enemies"])),
         ("enemies_count", n, np.int32, (n,)),
+        ("lasers", n * LASERS_CAP * _S["lasers"], np.uint8, (n, LASERS_CAP, _S["lasers"])),
         ("bullets", n * cap * _S["bullets"], np.uint8, (n * cap, _S["bullets"])),
         ("bullets_offsets", n + 1, np.int32, (n + 1,)),
         ("items", n * ITEMS_CAP * _S["items"], np.uint8, (n * ITEMS_CAP, _S["items"])),

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use stg_core::math::Fx;
 use stg_rl::encode;
 use stg_rl::env::*;
-use stg_rl::layout::{ITEMS_CAP, off};
+use stg_rl::layout::{ITEMS_CAP, LASERS_CAP, off};
 use stg_rl::vec_env::*;
 
 /// 测试用缓冲 = 公开的 `OwnedBuffers`（与 harness rl-bench 共用，不再各写一份）。
@@ -48,6 +48,11 @@ impl Digest for Owned {
         let est = stg_rl::layout::ENEMIES.stride;
         for (i, &c) in self.enemies_count.iter().enumerate() {
             v.extend_from_slice(&self.enemies[i * 256 * est..][..c as usize * est]);
+        }
+        // lasers 是定长行区（每 env 恰 LASERS_CAP 行，不压实）：只比有效前缀，尾行是残留。
+        let lst = stg_rl::layout::LASERS.stride;
+        for (i, &c) in self.lasers_count.iter().enumerate() {
+            v.extend_from_slice(&self.lasers[i * LASERS_CAP * lst..][..c as usize * lst]);
         }
         for s in [&self.frame, &self.phase] {
             for x in s.iter() {
@@ -160,6 +165,8 @@ fn csr_offsets_are_consistent() {
             assert!(cnt >= 0 && cnt as usize <= 256);
             assert_eq!(cnt, buf.bullets_total[i] - buf.bullets_dropped[i]);
             assert!(buf.items_offsets[i + 1] >= buf.items_offsets[i]);
+            // 内置 game 内容包不含 `laser()`，本场景 lasers_count 必为 0；
+            // 带激光场景的非零断言见 `lasers_rows_match_direct_encode_and_count`。
             assert_eq!(buf.lasers_count[i], 0);
         }
         if first_nonempty.is_none() && buf.bullets_offsets[n] > 0 {
@@ -238,6 +245,70 @@ fn compacted_rows_match_direct_encode() {
         saw_rows,
         "200 步内应至少有一 env 某步压实行数 > 0（否则本测试对压实内容是瞎的）"
     );
+}
+
+/// T5：lasers 行区是**非 CSR 压实**的定长区（每 env 恰 `LASERS_CAP` 行），step 后与
+/// `encode::write_lasers` 直接编码逐字节对拍；`lasers_count` 必须等于返回行数。最小 ECL
+/// 每 60 帧建一条 warn=30/active=120/fade=16 的激光 ⇒ 220 步内必有非零帧。判别力：计数写成
+/// 0、行区错位、把 lasers 误走 CSR 都会红。
+#[test]
+fn lasers_rows_match_direct_encode_and_count() {
+    let src = r#"
+sub main() {
+    loop {
+        _ = laser(4, 0.0fx, 100.0fx, 90deg, 500.0fx, 32.0fx, 30, 120, 16);
+        wait(60);
+    }
+}
+"#;
+    let image = compile(&[("t5_laser.ecl".to_string(), src.to_string())]).unwrap();
+    let cfg = EnvConfig {
+        images: vec![image],
+        starts: vec![Start {
+            image: 0,
+            mark: 0,
+            rank: 1,
+            weight: 1.0,
+        }],
+        frame_skip: 1,
+        max_frames: 1000,
+        warmup_max: 0,
+        end_on: vec![],
+        bullets_cap: 32,
+        seed: 1,
+    };
+    let n = 1;
+    // 双 reset 对称：`VecEnv::reset` + `Env::new` 的组合与 `VecEnv::new` + 显式 reset 一致。
+    let mut ve = VecEnv::new(cfg.clone(), n, 1).unwrap();
+    let mut direct = Env::new(Arc::new(cfg), 0, Arc::new(BootCache::new()));
+    let mut buf = Owned::new(n, 32);
+    ve.reset(&mut buf.view()).unwrap();
+    direct.reset();
+
+    let lst = stg_rl::layout::LASERS.stride;
+    let mut laser_rows = vec![0u8; LASERS_CAP * lst];
+    let mut saw = false;
+    for s in 0..220u32 {
+        ve.step(&[0u32], &mut buf.view()).unwrap();
+        let _ = direct.step(0);
+        let k = encode::write_lasers(direct.world(), &mut laser_rows);
+        assert_eq!(
+            buf.lasers_count[0], k as i32,
+            "step {s}: lasers_count != 直接编码行数"
+        );
+        assert_eq!(
+            &buf.lasers[..k * lst],
+            &laser_rows[..k * lst],
+            "step {s}: 激光行字节 != 直接编码"
+        );
+        saw |= k > 0;
+    }
+    assert!(saw, "220 步内应至少有一帧 lasers_count > 0");
+    // 行里可读：half_h = width/2 = 16px（Q16.16 raw），state 为 0/1/2。
+    let off = off::laser::HALF_H;
+    let half_h = i32::from_le_bytes(buf.lasers[off..off + 4].try_into().unwrap());
+    assert_eq!(half_h, Fx::from_int(16).raw(), "half_h 应等于 width/2");
+    assert!(buf.lasers[off::laser::STATE] <= 2, "state 0/1/2");
 }
 
 #[test]

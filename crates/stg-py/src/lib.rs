@@ -1,6 +1,6 @@
 //! `stg_rl._native` —— PyO3 abi3 薄壳（spec `docs/superpowers/specs/2026-09-15-stg-rl-env-design.md`）。
 //!
-//! 只做三件事：把 Python 值翻译成 `stg-rl` 的类型、把 17 个调用方缓冲的 numpy 视图借成
+//! 只做三件事：把 Python 值翻译成 `stg-rl` 的类型、把 18 个调用方缓冲的 numpy 视图借成
 //! `BufferSet`、在批量 step 期间用 `py.detach` 释放 GIL。所有世界语义住 `stg-rl`。
 //!
 //! 缓冲区一律**一维**（多维形状由 Python 包装层 `reshape` 出视图），Rust 只见扁平切片；
@@ -48,7 +48,7 @@ fn take<'py, T: Element>(
         .map_err(|e| PyValueError::new_err(format!("buffer {key:?}: {e}")))
 }
 
-/// 17 个 numpy 可写数组的持有者——活得比它借出的 `BufferSet` 久。
+/// 18 个 numpy 可写数组的持有者——活得比它借出的 `BufferSet` 久。
 struct OwnedBufs<'py> {
     frame: PyReadwriteArray1<'py, u32>,
     phase: PyReadwriteArray1<'py, u32>,
@@ -59,6 +59,7 @@ struct OwnedBufs<'py> {
     bullets_offsets: PyReadwriteArray1<'py, i32>,
     items: PyReadwriteArray1<'py, u8>,
     items_offsets: PyReadwriteArray1<'py, i32>,
+    lasers: PyReadwriteArray1<'py, u8>,
     lasers_count: PyReadwriteArray1<'py, i32>,
     bullets_total: PyReadwriteArray1<'py, i32>,
     bullets_dropped: PyReadwriteArray1<'py, i32>,
@@ -81,6 +82,7 @@ impl<'py> OwnedBufs<'py> {
             bullets_offsets: take::<i32>(bufs, "bullets_offsets")?,
             items: take::<u8>(bufs, "items")?,
             items_offsets: take::<i32>(bufs, "items_offsets")?,
+            lasers: take::<u8>(bufs, "lasers")?,
             lasers_count: take::<i32>(bufs, "lasers_count")?,
             bullets_total: take::<i32>(bufs, "bullets_total")?,
             bullets_dropped: take::<i32>(bufs, "bullets_dropped")?,
@@ -111,6 +113,7 @@ impl<'py> OwnedBufs<'py> {
             bullets_offsets: sl(&mut self.bullets_offsets, "bullets_offsets")?,
             items: sl(&mut self.items, "items")?,
             items_offsets: sl(&mut self.items_offsets, "items_offsets")?,
+            lasers: sl(&mut self.lasers, "lasers")?,
             lasers_count: sl(&mut self.lasers_count, "lasers_count")?,
             bullets_total: sl(&mut self.bullets_total, "bullets_total")?,
             bullets_dropped: sl(&mut self.bullets_dropped, "bullets_dropped")?,
