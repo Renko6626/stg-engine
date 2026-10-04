@@ -302,6 +302,43 @@ fn bullets_overflow_keeps_nearest_in_pool_order() {
 }
 
 #[test]
+fn bullet_selection_bitmap_crosses_words_and_does_not_leak_between_worlds() {
+    let mut scratch = BulletScratch::new();
+    let mut rows = vec![0u8; 5 * 30];
+    // Equal distances straddle bit 63/64 and 127/128; ties still use pool index.
+    for (near, expected) in [
+        (vec![0, 63, 64, 65, 127, 128, 129], vec![0, 63, 64, 65, 127]),
+        (vec![1, 62, 66, 126, 129], vec![1, 62, 66, 126, 129]),
+    ] {
+        let mut w = World::new(1);
+        for i in 0..130 {
+            let y = if near.contains(&i) { 383 } else { 0 };
+            bullet(&mut w, 0, y, 0, 0, 3, 0, 0, i as u16);
+        }
+        let st = write_bullets(&w, 5, &mut rows, &mut scratch);
+        assert_eq!((st.count, st.total, st.dropped), (5, 130, 125));
+        let got: Vec<_> = (0..st.count)
+            .map(|i| rd_u16(&rows[i * 30..], off::bullet::TYPE))
+            .collect();
+        assert_eq!(got, expected);
+
+        // Reuse after truncation: direct alive traversal must ignore the selected bitmap.
+        let mut small = World::new(2);
+        for i in 0..3 {
+            bullet(&mut small, 0, 300, 0, 0, 3, 0, 0, 200 + i);
+        }
+        let st = write_bullets(&small, 5, &mut rows, &mut scratch);
+        assert_eq!((st.count, st.total, st.dropped), (3, 3, 0));
+        let got: Vec<_> = (0..st.count)
+            .map(|i| rd_u16(&rows[i * 30..], off::bullet::TYPE))
+            .collect();
+        assert_eq!(got, vec![200, 201, 202]);
+        let st = write_bullets(&World::new(3), 5, &mut rows, &mut scratch);
+        assert_eq!((st.count, st.total, st.dropped), (0, 0, 0));
+    }
+}
+
+#[test]
 fn bullets_overflow_tie_breaks_by_pool_index() {
     let mut w = World::new(1);
     for i in 0..3 {

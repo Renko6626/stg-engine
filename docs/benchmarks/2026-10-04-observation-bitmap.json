@@ -1,0 +1,1199 @@
+{
+  "date": "2026-10-04",
+  "purpose": "Observation bitmap reorder and direct encode A/B",
+  "machine": "Shared dual-socket Intel Xeon Gold 6330; affinity is not exclusive CPU ownership",
+  "before_base_commit": "5dfc08d45f8f0c359c301de94d6fe7bb399df889",
+  "before_note": "Saved release binary included this session diagnostic timings and pre-existing uncommitted current_start_indices API",
+  "after_note": "Final bitmap reorder, direct encode and nonzero-word-prefix implementation; overflow logging disabled",
+  "limitations": [
+    "Three alternating rounds; shared-host noise",
+    "Synthetic/default workloads, not actual training card mix",
+    "No Python/H2D/GPU timing"
+  ],
+  "results": [
+    {
+      "trial": 1,
+      "case": "default",
+      "mode": "plain",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 967137 12.2 0 1536\n",
+      "elapsed_s": 0.5956017971038818
+    },
+    {
+      "trial": 1,
+      "case": "default",
+      "mode": "plain",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 1009614 12.2 0 1536\n",
+      "elapsed_s": 0.5487666130065918
+    },
+    {
+      "trial": 1,
+      "case": "default",
+      "mode": "profile",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=12.4 selected/step=12.4 resets=39 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames               2.33 µs/env-step\n  reset (incl warmup)              0.25 µs/env-step\n  episode management+timers        0.09 µs/env-step\n  player+enemies+phase+frame       0.08 µs/env-step\n  lasers select+encode             0.25 µs/env-step\n  bullets count+gather+dist        0.44 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             0.14 µs/env-step\n  items encode                     0.05 µs/env-step\n  diagnostic loop wall      3.90 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.03139853477478027
+    },
+    {
+      "trial": 1,
+      "case": "default",
+      "mode": "profile",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=12.4 selected/step=12.4 resets=39 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames               2.30 µs/env-step\n  reset (incl warmup)              0.24 µs/env-step\n  episode management+timers        0.09 µs/env-step\n  player+enemies+phase+frame       0.08 µs/env-step\n  lasers select+encode             0.24 µs/env-step\n  bullets count+gather+dist        0.29 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             0.15 µs/env-step\n  items encode                     0.05 µs/env-step\n  diagnostic loop wall      3.72 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.029561758041381836
+    },
+    {
+      "trial": 1,
+      "case": "dense9",
+      "mode": "plain",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 175824 1016.7 199 0\n",
+      "elapsed_s": 1.8591094017028809
+    },
+    {
+      "trial": 1,
+      "case": "dense9",
+      "mode": "plain",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 168197 1016.7 199 0\n",
+      "elapsed_s": 1.8889248371124268
+    },
+    {
+      "trial": 1,
+      "case": "dense9",
+      "mode": "profile",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1016.7 selected/step=1016.7 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              13.20 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.08 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.22 µs/env-step\n  bullets count+gather+dist        3.94 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             5.78 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     23.55 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.15040826797485352
+    },
+    {
+      "trial": 1,
+      "case": "dense9",
+      "mode": "profile",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1016.7 selected/step=1016.7 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              13.21 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.08 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.23 µs/env-step\n  bullets count+gather+dist        0.24 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             5.98 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     20.05 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.12737107276916504
+    },
+    {
+      "trial": 1,
+      "case": "dense12",
+      "mode": "plain",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 85613 1355.6 84897697 0\n",
+      "elapsed_s": 3.5140273571014404
+    },
+    {
+      "trial": 1,
+      "case": "dense12",
+      "mode": "plain",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 167546 1355.6 84897697 0\n",
+      "elapsed_s": 2.0560007095336914
+    },
+    {
+      "trial": 1,
+      "case": "dense12",
+      "mode": "profile",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1355.6 selected/step=1024.0 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              17.21 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.08 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.23 µs/env-step\n  bullets count+gather+dist        6.04 µs/env-step\n  bullets nearest selection        4.40 µs/env-step\n  bullets index reorder           21.32 µs/env-step\n  bullets rows+derived             6.34 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     56.00 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.3498561382293701
+    },
+    {
+      "trial": 1,
+      "case": "dense12",
+      "mode": "profile",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1355.6 selected/step=1024.0 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              17.04 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.08 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.24 µs/env-step\n  bullets count+gather+dist        5.01 µs/env-step\n  bullets nearest selection        4.38 µs/env-step\n  bullets index reorder            1.75 µs/env-step\n  bullets rows+derived             6.36 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     35.25 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.22093439102172852
+    },
+    {
+      "trial": 2,
+      "case": "dense9",
+      "mode": "plain",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 201279 1016.7 199 0\n",
+      "elapsed_s": 1.646939754486084
+    },
+    {
+      "trial": 2,
+      "case": "dense9",
+      "mode": "plain",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 223495 1016.7 199 0\n",
+      "elapsed_s": 1.5778610706329346
+    },
+    {
+      "trial": 2,
+      "case": "dense9",
+      "mode": "profile",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1016.7 selected/step=1016.7 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              13.14 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.08 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.23 µs/env-step\n  bullets count+gather+dist        0.24 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             5.87 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     19.87 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.12835216522216797
+    },
+    {
+      "trial": 2,
+      "case": "dense9",
+      "mode": "profile",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1016.7 selected/step=1016.7 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              13.21 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.08 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.22 µs/env-step\n  bullets count+gather+dist        3.94 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             5.77 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     23.54 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.14880943298339844
+    },
+    {
+      "trial": 2,
+      "case": "dense12",
+      "mode": "plain",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 151181 1355.6 84897697 0\n",
+      "elapsed_s": 2.1209089756011963
+    },
+    {
+      "trial": 2,
+      "case": "dense12",
+      "mode": "plain",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 108629 1355.6 84897697 0\n",
+      "elapsed_s": 2.8944756984710693
+    },
+    {
+      "trial": 2,
+      "case": "dense12",
+      "mode": "profile",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1355.6 selected/step=1024.0 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              17.15 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.09 µs/env-step\n  player+enemies+phase+frame       0.06 µs/env-step\n  lasers select+encode             0.25 µs/env-step\n  bullets count+gather+dist        5.05 µs/env-step\n  bullets nearest selection        4.48 µs/env-step\n  bullets index reorder            1.76 µs/env-step\n  bullets rows+derived             6.41 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     35.58 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.22820115089416504
+    },
+    {
+      "trial": 2,
+      "case": "dense12",
+      "mode": "profile",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1355.6 selected/step=1024.0 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              17.11 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.07 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.23 µs/env-step\n  bullets count+gather+dist        6.01 µs/env-step\n  bullets nearest selection        4.41 µs/env-step\n  bullets index reorder           21.31 µs/env-step\n  bullets rows+derived             6.34 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     55.84 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.34729814529418945
+    },
+    {
+      "trial": 2,
+      "case": "default",
+      "mode": "plain",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 1120552 12.2 0 1536\n",
+      "elapsed_s": 0.5390076637268066
+    },
+    {
+      "trial": 2,
+      "case": "default",
+      "mode": "plain",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 1158852 12.2 0 1536\n",
+      "elapsed_s": 0.5313236713409424
+    },
+    {
+      "trial": 2,
+      "case": "default",
+      "mode": "profile",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=12.4 selected/step=12.4 resets=39 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames               1.76 µs/env-step\n  reset (incl warmup)              0.19 µs/env-step\n  episode management+timers        0.07 µs/env-step\n  player+enemies+phase+frame       0.06 µs/env-step\n  lasers select+encode             0.19 µs/env-step\n  bullets count+gather+dist        0.22 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             0.12 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall      2.85 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.023708820343017578
+    },
+    {
+      "trial": 2,
+      "case": "default",
+      "mode": "profile",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=12.4 selected/step=12.4 resets=39 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames               1.72 µs/env-step\n  reset (incl warmup)              0.18 µs/env-step\n  episode management+timers        0.07 µs/env-step\n  player+enemies+phase+frame       0.06 µs/env-step\n  lasers select+encode             0.19 µs/env-step\n  bullets count+gather+dist        0.37 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             0.11 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall      2.95 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.022914409637451172
+    },
+    {
+      "trial": 3,
+      "case": "dense12",
+      "mode": "plain",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 97433 1355.6 84897697 0\n",
+      "elapsed_s": 3.155487060546875
+    },
+    {
+      "trial": 3,
+      "case": "dense12",
+      "mode": "plain",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 173247 1355.6 84897697 0\n",
+      "elapsed_s": 1.9286725521087646
+    },
+    {
+      "trial": 3,
+      "case": "dense12",
+      "mode": "profile",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1355.6 selected/step=1024.0 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              17.09 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.08 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.23 µs/env-step\n  bullets count+gather+dist        5.98 µs/env-step\n  bullets nearest selection        4.40 µs/env-step\n  bullets index reorder           21.29 µs/env-step\n  bullets rows+derived             6.29 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     55.74 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.34614109992980957
+    },
+    {
+      "trial": 3,
+      "case": "dense12",
+      "mode": "profile",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "12",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=12 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1355.6 selected/step=1024.0 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              19.18 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.08 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.24 µs/env-step\n  bullets count+gather+dist        5.01 µs/env-step\n  bullets nearest selection        4.39 µs/env-step\n  bullets index reorder            1.76 µs/env-step\n  bullets rows+derived             6.38 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     37.42 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.23279094696044922
+    },
+    {
+      "trial": 3,
+      "case": "default",
+      "mode": "plain",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 1091034 12.2 0 1536\n",
+      "elapsed_s": 0.5375325679779053
+    },
+    {
+      "trial": 3,
+      "case": "default",
+      "mode": "plain",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 1117841 12.2 0 1536\n",
+      "elapsed_s": 0.5430681705474854
+    },
+    {
+      "trial": 3,
+      "case": "default",
+      "mode": "profile",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=12.4 selected/step=12.4 resets=39 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames               1.91 µs/env-step\n  reset (incl warmup)              0.20 µs/env-step\n  episode management+timers        0.07 µs/env-step\n  player+enemies+phase+frame       0.06 µs/env-step\n  lasers select+encode             0.20 µs/env-step\n  bullets count+gather+dist        0.36 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             0.12 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall      3.21 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.028638124465942383
+    },
+    {
+      "trial": 3,
+      "case": "default",
+      "mode": "profile",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Default density=6 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=12.4 selected/step=12.4 resets=39 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames               1.71 µs/env-step\n  reset (incl warmup)              0.18 µs/env-step\n  episode management+timers        0.07 µs/env-step\n  player+enemies+phase+frame       0.06 µs/env-step\n  lasers select+encode             0.19 µs/env-step\n  bullets count+gather+dist        0.23 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             0.11 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall      2.80 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.023598670959472656
+    },
+    {
+      "trial": 3,
+      "case": "dense9",
+      "mode": "plain",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 220088 1016.7 199 0\n",
+      "elapsed_s": 1.6131868362426758
+    },
+    {
+      "trial": 3,
+      "case": "dense9",
+      "mode": "plain",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2-9",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--envs",
+        "256",
+        "--threads",
+        "8",
+        "--steps",
+        "1000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=256 steps=1000 warmup=160\n8 256 1000 265344 1016.7 199 0\n",
+      "elapsed_s": 1.3352267742156982
+    },
+    {
+      "trial": 3,
+      "case": "dense9",
+      "mode": "profile",
+      "version": "before",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/tmp/sunyunbo/stg-observation-measure-20261004/stg-harness-before-bitmap",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1016.7 selected/step=1016.7 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              13.25 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.08 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.22 µs/env-step\n  bullets count+gather+dist        3.96 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             5.79 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     23.62 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.15101265907287598
+    },
+    {
+      "trial": 3,
+      "case": "dense9",
+      "mode": "profile",
+      "version": "after",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "/data/sunyunbo/www/stg-engine/target/release/stg-harness",
+        "rl-bench",
+        "--warmup",
+        "160",
+        "--cap",
+        "1024",
+        "--workload",
+        "dense",
+        "--density",
+        "9",
+        "--profile",
+        "--steps",
+        "6000"
+      ],
+      "stdout": "# workload=Dense density=9 mark=15 rank=2 cap=1024 envs=512 steps=6000 warmup=160\nprofile single-env (instrumented; excludes VecEnv/CSR/Python/GPU)\n  bullets/step=1016.7 selected/step=1016.7 resets=0 core_frames=6000\n  worker intervals: summed elapsed / env calls; do not add to batch wall\n  core action frames              13.16 µs/env-step\n  reset (incl warmup)              0.00 µs/env-step\n  episode management+timers        0.08 µs/env-step\n  player+enemies+phase+frame       0.05 µs/env-step\n  lasers select+encode             0.23 µs/env-step\n  bullets count+gather+dist        0.24 µs/env-step\n  bullets nearest selection        0.00 µs/env-step\n  bullets index reorder            0.00 µs/env-step\n  bullets rows+derived             5.88 µs/env-step\n  items encode                     0.04 µs/env-step\n  diagnostic loop wall     19.91 µs/env-step (includes clocks/bookkeeping)\n",
+      "elapsed_s": 0.1282031536102295
+    }
+  ],
+  "summary": {
+    "default": {
+      "before": {
+        "eps": [
+          967137,
+          1158852,
+          1091034
+        ],
+        "eps_median": 1091034,
+        "core action frames": [
+          2.33,
+          1.72,
+          1.91
+        ],
+        "bullets count+gather+dist": [
+          0.44,
+          0.37,
+          0.36
+        ],
+        "bullets nearest selection": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bullets index reorder": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bullets rows+derived": [
+          0.14,
+          0.11,
+          0.12
+        ],
+        "diagnostic loop wall": [
+          3.9,
+          2.95,
+          3.21
+        ],
+        "bullet_total_median": 0.48
+      },
+      "after": {
+        "eps": [
+          1009614,
+          1120552,
+          1117841
+        ],
+        "eps_median": 1117841,
+        "core action frames": [
+          2.3,
+          1.76,
+          1.71
+        ],
+        "bullets count+gather+dist": [
+          0.29,
+          0.22,
+          0.23
+        ],
+        "bullets nearest selection": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bullets index reorder": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bullets rows+derived": [
+          0.15,
+          0.12,
+          0.11
+        ],
+        "diagnostic loop wall": [
+          3.72,
+          2.85,
+          2.8
+        ],
+        "bullet_total_median": 0.34
+      }
+    },
+    "dense9": {
+      "before": {
+        "eps": [
+          175824,
+          223495,
+          220088
+        ],
+        "eps_median": 220088,
+        "core action frames": [
+          13.2,
+          13.21,
+          13.25
+        ],
+        "bullets count+gather+dist": [
+          3.94,
+          3.94,
+          3.96
+        ],
+        "bullets nearest selection": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bullets index reorder": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bullets rows+derived": [
+          5.78,
+          5.77,
+          5.79
+        ],
+        "diagnostic loop wall": [
+          23.55,
+          23.54,
+          23.62
+        ],
+        "bullet_total_median": 9.72
+      },
+      "after": {
+        "eps": [
+          168197,
+          201279,
+          265344
+        ],
+        "eps_median": 201279,
+        "core action frames": [
+          13.21,
+          13.14,
+          13.16
+        ],
+        "bullets count+gather+dist": [
+          0.24,
+          0.24,
+          0.24
+        ],
+        "bullets nearest selection": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bullets index reorder": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bullets rows+derived": [
+          5.98,
+          5.87,
+          5.88
+        ],
+        "diagnostic loop wall": [
+          20.05,
+          19.87,
+          19.91
+        ],
+        "bullet_total_median": 6.12
+      }
+    },
+    "dense12": {
+      "before": {
+        "eps": [
+          85613,
+          108629,
+          97433
+        ],
+        "eps_median": 97433,
+        "core action frames": [
+          17.21,
+          17.11,
+          17.09
+        ],
+        "bullets count+gather+dist": [
+          6.04,
+          6.01,
+          5.98
+        ],
+        "bullets nearest selection": [
+          4.4,
+          4.41,
+          4.4
+        ],
+        "bullets index reorder": [
+          21.32,
+          21.31,
+          21.29
+        ],
+        "bullets rows+derived": [
+          6.34,
+          6.34,
+          6.29
+        ],
+        "diagnostic loop wall": [
+          56.0,
+          55.84,
+          55.74
+        ],
+        "bullet_total_median": 38.07
+      },
+      "after": {
+        "eps": [
+          167546,
+          151181,
+          173247
+        ],
+        "eps_median": 167546,
+        "core action frames": [
+          17.04,
+          17.15,
+          19.18
+        ],
+        "bullets count+gather+dist": [
+          5.01,
+          5.05,
+          5.01
+        ],
+        "bullets nearest selection": [
+          4.38,
+          4.48,
+          4.39
+        ],
+        "bullets index reorder": [
+          1.75,
+          1.76,
+          1.76
+        ],
+        "bullets rows+derived": [
+          6.36,
+          6.41,
+          6.38
+        ],
+        "diagnostic loop wall": [
+          35.25,
+          35.58,
+          37.42
+        ],
+        "bullet_total_median": 17.54
+      }
+    }
+  }
+}

@@ -41,6 +41,11 @@ stg_rl.OFFSETS, stg_rl.STRIDES, stg_rl.EVENT_COLUMNS
 stg_rl.build_info()                              # {"version","engine_ver","tables_hash","git_sha"}
 ```
 
+可传 `warn_bullet_overflow=True` 开启 `stg_rl` logger 的超限提醒，阈值为 `bullets_cap`。
+默认关闭；每个环境每局只提醒一次，同一批首次超限的环境合并成一条日志。自动或手动 reset
+后重新允许提醒。日志只报告观测截断，世界仍模拟全部弹；不改变输出、RNG 或模拟状态。
+Rust 基准可用 `rl-bench --warn-bullet-overflow` 开启同样的提醒。
+
 - 编译错误抛 `stg_rl.CompileError`（消息含文件名 / 行列）；配置 / 缓冲形状错误抛 `ValueError`，
   **在构造期**抛，不在 `step` 里抛。
 - 缓冲一律**一维**（多维形状由 Python 包装层 `reshape` 出视图），Rust 只见扁平切片。

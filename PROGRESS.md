@@ -4,7 +4,9 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-09-25）
+## 现在（2026-10-04）
+
+- **RL 观测适配优化**：补齐模拟/episode/reset、观测选择/编码与 CSR 的诊断计时；超 cap 的池索引排序改为选中位图升序枚举，未超 cap 时 popcount 计数并直接编码，跳过空尾字。选弹集合、并列裁决、行序、协议和 World 不变，**ENGINE_VER 保持 24**。Python/rl-bench 可选超限提醒默认关闭，每环境每局一次、同批合并。三轮固定亲和 A/B：密弹重排 21.31→1.76µs，普通批量吞吐中位数约 +72%；接近 cap 的单环境适配约 −37%，批量收益未确认。详见 [`docs/bench-baseline.md`](docs/bench-baseline.md#位图重排与直接编码2026-10-04)；后续 CSR 直接写入、训练专用输出尚未实施。
 
 - **位置**：**激光池刀落地（本仓 Task 1–6，`ENGINE_VER` 23→24，`stg_rl` 0.2.0→0.3.0）**——
   spec `docs/superpowers/specs/2026-09-25-laser-pool-design.md`：直线激光成为一等实体。
@@ -28,6 +30,7 @@
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|
+| 2026-10-04 | **RL 观测计时与编码优化** | 位图重排 + 未超 cap 直接编码；保持模拟与观测契约，ENGINE_VER 24 不变；默认关闭的每局一次超限日志。记录三轮 A/B、消费者边界、相关 Rust/Python 检查及未验证的 GPU/真实卡池吞吐。 |
 | 2026-09-25 | **激光池刀**（`ENGINE_VER` 24 / `stg_rl` 0.3.0） | 直线激光一等实体（spec `2026-09-25-laser-pool-design`）：`LaserPool` cap 256 + `seg_box_dist_sq` + 相位 5 推进（三态/omega/挂靠脱钩/观测）+ 碰撞行 9/10 + syscall 8xx + 手册第 9 篇 + Tier 0 `lasers` 64 行缓冲 + Godot 激光层（`LAYER_LASERS=3`，程序化截面 shader，不走图集）+ 金向量激光场景；实施修订 10 条见 spec §12，待办 D27。 |
 | 2026-09-24 | **引擎第二刀 Task 1–4**（`ENGINE_VER` 23 / `stg_rl` 0.2.0） | 弹 `BULLET_STEP_LIVE` 跳过位 + ECL VM 加载时校验 + `CART_FX` 极坐标惰性化 + 敌人池一等字段 `dx/dy` 进 Tier 0 `vx`/`vy`（stride 38→46，训练侧不再按 id 差分）；proto 仓 `stg-agent-proto` 同步 SPEC/C 布局（C 侧暂写 0）；四项前后对比仅校验和变化。 |
 | 2026-09-16 | **RL 卡池第一批（TH06 第 1–3 关 45 张）** | 训练仓 `cards/` 45 张（9/13/23）+ `eval/splits.toml` 留出 9 张；dsh 全派，主会话分诊：对照表 §4.3 停火边界 `>=`（3 张返工）、s3_w12 按 640 弹池等效截止扩回四档、dsh 并发启动撞配置（单机单 pipeline）。opus 抽检未做。 |

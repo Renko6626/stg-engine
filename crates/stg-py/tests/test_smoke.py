@@ -1,4 +1,6 @@
 import json
+import logging
+from pathlib import Path
 import numpy as np
 import pytest
 import stg_rl
@@ -7,6 +9,37 @@ import stg_rl
 def make(n=4, threads=2, cap=256, seed=0, **kw):
     img = stg_rl.compile_bundled("game")
     return stg_rl.VecEnv(n, threads, {"game": img}, [stg_rl.Start("game", mark=15)], bullets_cap=cap, seed=seed, **kw)
+
+
+def test_bullet_warning_once_per_episode_and_batch(caplog):
+    src = (Path(__file__).parents[2] / "stg-harness/scenes/rl_dense.ecl").read_text()
+    image = stg_rl.compile_sources([("dense.ecl", src.replace("__DENSITY__", "3"))])
+    env = stg_rl.VecEnv(2, 2, {"dense": image}, [stg_rl.Start("dense")],
+                        bullets_cap=1, max_frames=8, warmup_max=0, warn_bullet_overflow=True)
+    caplog.set_level(logging.WARNING, logger="stg_rl")
+    actions = np.zeros(2, dtype=np.uint32)
+    env.reset()
+    for _ in range(4):
+        env.step(actions)
+    assert len(caplog.records) == 1
+    assert "本批 2 个环境首次超限" in caplog.records[0].message
+    for _ in range(4):
+        env.step(actions)
+    assert np.all(env.buffers["done"] == 3)
+    assert len(caplog.records) == 1
+    for _ in range(4):
+        env.step(actions)
+    assert len(caplog.records) == 2  # automatic reset starts a new warning allowance
+    env.reset()
+    for _ in range(4):
+        env.step(actions)
+    assert len(caplog.records) == 3  # explicit reset does too
+
+    quiet = stg_rl.VecEnv(2, 2, {"dense": image}, [stg_rl.Start("dense")], bullets_cap=1)
+    quiet.reset()
+    for _ in range(4):
+        quiet.step(actions)
+    assert len(caplog.records) == 3
 
 
 def test_build_info_and_hello():

@@ -428,6 +428,22 @@ impl Env {
     /// 跑 `frame_skip` 帧（判到 done 即停）。`done != 0` 时本函数内已自动 `reset`：
     /// 返回的 `StepOut` 是刚结束那局的统计，`world()` 已是新局第一帧。
     pub fn step(&mut self, action: u32) -> StepOut {
+        self.step_inner::<false>(action).0
+    }
+
+    /// Benchmark-only instrumentation; reset includes template restore and warmup.
+    /// `core_step` counts action frames only, excluding any reset warmup frames.
+    pub fn step_profiled(&mut self, action: u32) -> (StepOut, crate::profile::EnvProfile) {
+        self.step_inner::<true>(action)
+    }
+
+    fn step_inner<const PROFILE: bool>(
+        &mut self,
+        action: u32,
+    ) -> (StepOut, crate::profile::EnvProfile) {
+        use crate::profile::{EnvProfile, elapsed, start};
+        let total_start = start::<PROFILE>();
+        let mut profile = EnvProfile::default();
         let mut ev = [0i32; EVENTS];
         let mut done = DONE_NONE;
         let mut seg_hit = false;
@@ -438,7 +454,12 @@ impl Env {
         for _ in 0..self.cfg.frame_skip {
             let mut input = InputFrame::empty(self.world.frame());
             input.actions[0].buttons = action & ACTION_MASK;
+            let core_start = start::<PROFILE>();
             core_step(&mut self.world, &TABLES_V0, image, &input);
+            if PROFILE {
+                profile.core_step += elapsed(core_start);
+                profile.core_frames += 1;
+            }
             self.ep_frames += 1;
 
             for e in self.world.frame_events() {
@@ -488,8 +509,14 @@ impl Env {
             start_index: self.start_index as i32,
         };
         if done != DONE_NONE {
+            let reset_start = start::<PROFILE>();
             self.reset();
+            if PROFILE {
+                profile.reset += elapsed(reset_start);
+                profile.resets += 1;
+            }
         }
-        out
+        profile.total = elapsed(total_start);
+        (out, profile)
     }
 }

@@ -422,3 +422,192 @@ th06_s6_b6 0.09 → 0.05 s，无变换的 th06_s3_b2 0.04 → 0.04 s。`golden` 
   其中大头来自训练侧删掉按 id 差分。分阶段表见 stg-rl-train `docs/perf-baseline.md`「stg_rl 0.2.0」一节。
 
 结论：三项优化只打中变换密集卡与重力卡，摊到整个卡池只剩几个百分点；它们的主要价值是这几张最慢的卡不再拖尾。
+
+## RL 计时边界与消费者口径（2026-10-04）
+
+模拟、episode 管理、观测适配分别计量。`stg-core::step` 更新完整世界；`stg-rl` 的 cap 选弹、
+派生字段、协议编码和 CSR 压实均为观测适配，不修改 World。`Env::step` 还处理事件增量、done
+判定和自动 reset，不能将它的全部时间标成纯模拟。
+
+### 命令与计时范围
+
+```bash
+# 普通端到端 Rust 批量吞吐：含动作填写、VecEnv.step、结果统计，不含构造/预热。
+cargo run --release -p stg-harness -- rl-bench --envs 128 --threads 8 --steps 500 --warmup 160 --workload dense --density 12
+
+# 单环境归因：不含批量调度和 CSR。包含全部实体观测，敌人缓冲使用当前布局，含激光。
+cargo run --release -p stg-harness -- rl-bench --profile --workload dense --density 12 --warmup 160 --steps 2000
+
+# 同配置先跑普通轮，再从相同种子/输入重新跑诊断轮；明确区分 batch wall 与 worker intervals。
+cargo run --release -p stg-harness -- rl-bench --profile-batch --envs 128 --threads 8 --steps 500 --warmup 160 --workload dense --density 12
+```
+
+`--profile-batch` 的普通轮只在每个 `VecEnv.step` 外增加两次时钟读取；其单独输出的 step wall
+不含动作填写和结果统计。严格吞吐比较使用不带 profile 标志的第一条命令。诊断轮的细分时钟与
+汇总会扰动执行，不能把它的耗时当作普通调用成本。共享机器上诊断轮甚至可能比普通轮更快，
+这反映轮间调度/频率变化，不代表计时有加速效果。
+
+| 输出 | 含义 |
+|---|---|
+| core action frames | 仅动作推进的 `stg-core::step`，`core_frames` 记录实际推进帧数；done 可提前终止 frame_skip |
+| reset (incl warmup) | 自动 reset，包括模板恢复、起点采样和随机预热；预热模拟不再重复计入 core action frames |
+| episode management+timers | Env 总时间减去 core/reset，含事件汇总、done 判断、输入准备及计时开销 |
+| player+enemies+phase+frame | 小表与标量编码 |
+| lasers select+encode | 激光选择和行编码 |
+| bullets count+gather+dist | 存活计数、候选收集；超过 cap 时包含全部距离计算 |
+| bullets nearest selection | 超过 cap 时的 select_nth + 截断 |
+| bullets index reorder | 超过 cap 时恢复池索引升序 |
+| bullets rows+derived | 有效行写入，含逐槽速度/角度记忆检查及未命中计算 |
+| items encode | 道具行编码 |
+| validate+build_work | 批量参数检查、工作 Vec 与输出分片组织 |
+| parallel step+observations | 整个并行模拟/观测阶段墙钟，包含调度、等待、输出统计写入 |
+| CSR prefix | 弹与道具的串行前缀和 |
+| CSR slice construction | 源/目标切片 Vec 的组织 |
+| CSR scatter+scheduling | 弹与道具复制，含 Rayon 调度/等待 |
+| profile aggregation | 仅诊断模式汇总各 Slot 计时 |
+| full profiled VecEnv.step | 整批调用墙钟，包含以上批量相位及未单独归类的控制/计时开销 |
+
+batch wall 按 **µs/batch** 输出；worker intervals 是每个 worker 的经过时间之和除以环境调用数，
+按 **µs/env-step** 输出。worker intervals 不是 CPU 硬件周期计数，也不是 batch wall 的组成项；
+不能将它们与 batch wall 相加或据此直接计算并行阶段百分比。单 env 的 diagnostic loop wall
+还包括外层记录/时钟；取消了旧版用区间之和推算“理论吞吐”的输出。
+
+计时位于 `stg-rl`，正常路径以 `PROFILE=false` 编译，不调用时钟、不写诊断字段、不遍历汇总。
+Slot 增加少量宿主诊断元数据，World/校验和/存档/观测协议不变。诊断输出跨线程、cap 截断与
+自动 reset 的字节等价由 `profiled_step_preserves_observations_and_reset_sequence` 覆盖。
+
+### 本轮单环境诊断（release）
+
+双路 Xeon Gold 6330 共享服务器；一轮归因，仅供定位热点，不承诺稳定性能。
+
+| 负载 | 弹/步 | core action frames µs | reset µs | 收集/距离 µs | 最近集合 µs | 索引重排 µs | 弹行/派生量 µs | 激光 µs |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| default，1000 步，预热160 | 12.2 | 2.61 | 0.30 | 0.52 | 0 | 0 | 0.15 | 0.26 |
+| dense12，2000 步，预热160 | 1355.7 | 24.63 | 0 | 8.70 | 6.50 | 30.93 | 9.16 | 0.33 |
+
+default 自动 reset 6 次；dense12 无 reset、输出1024行/步。这里激光场景为空但仍计入编码器的
+固定成本。dense12 的索引重排比最近集合选择和行写入更贵，后续可验证选中位图升序枚举；本刀
+只补计时，未改选择/排序/编码。
+
+### 消费者调查（只读，无训练实测）
+
+用户称 `stg-proto` 的目录在本机不存在，协议仓实际为同级 `stg-agent-proto`。它的 `SPEC.md`
+定义30B弹行；Python `src/stgagent/obs.py` 解单条协议OBS时按表复制；部署 C 路径
+`c/sa_model.c`/`c/sa_onnx.c` 直接生成模型float输入，不经过训练用的CSR字节解包流程。
+
+`stg-rl-train/src/stgtrain/envwrap.py` 的训练路径是：pinned CPU调用方缓冲 → 活跃CSR弹行H2D
+→ GPU解包/scatter为固定 `[N, cap, 5]` 与mask → 特征化 → 策略。训练只消费弹的
+`x/y/vx/vy/radius` 和 `flags&1`，未读取弹行的 `speed/angle/state/type`。这支持研究训练专用
+输出，但尚未授权协议变更。最近cap与模型Top-K不等价：密度图仍使用cap内全部可碰撞弹。
+输出行序也应保留；训练Top-K的并列结果不保证改变输入行序后仍等价。
+
+训练已有 pinned/non_blocking H2D、有效弹前缀搬运、CUDA graph 特征化/reward。剩余可定位成本
+包括字节字段 `.contiguous()`/转float、CSR铺开和dense/mask创建；v1静态敌Top-K在v3被运动敌
+Top-K覆盖，存在重复计算。它们的占比尚未实测。
+
+训练计时 `perf.py` 在采样轮阶段前后 synchronize：采样结果是同步执行归因，不能直接代表普通
+异步运行比例。现有 `env_step` 含动作 GPU→CPU 的阻塞同步；`h2d_bullets/enemies/lasers`
+实际量GPU解码，搬运由 `h2d_copy` 量；父 `h2d` 与子阶段不能重复相加。rollout末尾 stack、
+bootstrap value、episode汇总等还在细分阶段之外。引擎新增计时只覆盖Rust侧，不含这些消费者成本。
+
+## 观测适配重复测量（2026-10-04，固定 CPU 亲和）
+
+同日进一步测量：双路 Xeon Gold 6330 共享服务器，期间 load 从约22升到32。单环境诊断固定
+CPU 2，批量固定 CPU 2–9（同插槽8个不同物理核，无SMT同核重叠），release、cap=1024、
+预热160步；三轮交替负载顺序。单环境诊断每轮6000步；普通/诊断批量每轮256环境×1000步，
+8线程。亲和固定不等于独占，三轮中位数只用于本机比较。
+
+命令形态（`EXTRA` 为无参数、`--workload dense --density 9` 或 `--workload dense --density 12`）：
+
+```text
+taskset -c 2 target/release/stg-harness rl-bench --warmup 160 --cap 1024 EXTRA --profile --steps 6000
+taskset -c 2-9 target/release/stg-harness rl-bench --warmup 160 --cap 1024 EXTRA --envs 256 --threads 8 --steps 1000
+taskset -c 2-9 target/release/stg-harness rl-bench --warmup 160 --cap 1024 EXTRA --envs 256 --threads 8 --steps 1000 --profile-batch
+```
+
+普通吞吐取不带任何profile标志的独立轮；下表worker计时取批量诊断轮，均为三轮中位数。
+“观测占比”每轮先计算观测区间总和/(观测+core+reset+episode)，再取中位数；不包含CSR、
+调度/等待，也不等于完整训练时间占比。
+
+| 负载 | 弹/env-step | 普通 env-steps/s，中位数〔范围〕 | core µs/env-step | reset µs/env-step | 观测适配 µs/env-step | worker观测占比 |
+|---|---:|---:|---:|---:|---:|---:|
+| default，低弹/频繁reset | 12.2 | 915816〔896328–1070671〕 | 2.38 | 1.55 | 1.08 | 21.1% |
+| dense9，接近cap/偶尔截断 | 1016.7 | 202769〔183007–217067〕 | 16.84 | 0 | 13.08 | 42.9% |
+| dense12，超过cap | 1355.6 | 97474〔96556–97825〕 | 21.78 | 0 | 45.11 | 67.1% |
+
+观测适配包含小表/激光/道具编码及弹的全部选择与编码。dense12 分项：收集/距离7.95、
+最近集合选择5.26、池索引重排23.34、弹行/派生量8.16 µs/env-step。重排约占worker工作时间
+35%，优先验证选中位图升序枚举，保持最近集合和行序，不改变协议或World。
+
+CSR scatter加调度的中位时间：default 39.90、dense9 141.63、dense12 206.05 µs/batch；
+对应诊断整批墙钟占比的中位数约13.3%、12.2%、7.7%。CSR前缀和仅1.60–1.79 µs/batch，
+不优先并行化前缀和，也不应将copy阶段全部归因于内存搬运（它还包含线程调度）。
+
+各轮负载统计一致：default每轮1536次reset、无截断；dense9每轮199行被截断、无reset；
+dense12每轮84897697行被截断、无reset。这里“截断”是观测遗漏，World仍模拟全部弹。
+
+结论：观测适配值得优化，优先级随弹量变化。超过cap先处理重排；未超cap先评估popcount计数
+与直接遍历编码，减少候选Vec往返；之后再评估取消CSR字节暂存复制。训练专用结构化输出可以
+省未消费字段与GPU字节解包，但属于待确认接口方案。本轮未改变选弹/编码，也未测真实训练
+符卡混合或GPU端到端；不能将这些合成负载比例外推为训练加速比。
+
+完整命令、逐轮输出与汇总保存在本机临时目录
+`/tmp/sunyunbo/stg-observation-measure-20261004/{results.json,summary.json}`。
+
+
+## 位图重排与直接编码（2026-10-04）
+
+本刀保留最近集合键 `(距离², 池索引)`、30B行布局和池索引升序输出。超过cap仍用原
+`select_nth_unstable`选择集合，改为将选中索引写入1KiB位图，升序枚举置位索引编码，省去
+按池索引的排序。未超过cap直接遍历alive位图，省去候选Vec收集；存活数用popcount统计。
+计数同时记录最高非零alive字，编码只扫描该前缀，避免低弹量时再次扫描空尾字。World、RNG、
+快照和输出协议不变；每env的宿主scratch增加1KiB位图。
+
+### 可选超限提醒
+
+Python `stg_rl.VecEnv(..., warn_bullet_overflow=True)` 与 harness
+`rl-bench --warn-bullet-overflow` 均可启用，默认关闭。阈值为 `bullets_cap`；每个env每局
+最多提醒一次，同批首次超限的env合并为一条日志。降回cap以下不会重新开放提醒额度。
+显式reset清空额度；自动reset根据旧局done重新开放额度，检查的是已属于新局的观测。
+基准的profile-batch诊断重放不重复发提醒，普通轮负责提醒。日志只描述观测截断，不判断卡的
+设计合理性；World仍模拟全部弹。启用时日志检查/输出有宿主开销，性能测量保持关闭。
+
+Python验证复用真实dense脚本，覆盖聚合、持续超限不重复、自动/显式reset及默认静默。Rust
+编码测试覆盖跨63/64、127/128位边界、并列索引裁决、scratch大→小→空复用；保留字段、
+最近集合、跨线程/批量压实对拍。CLI实际运行确认profile重放不会重复输出同局提醒。
+
+
+### 最终版本 A/B
+
+before为本刀修改前保存的release二进制；after为位图重排、直接编码并跳过空尾字的最终版本。
+同样固定CPU 2（单env）/2–9（8线程批量），cap1024、预热160。单env诊断6000步，普通批量
+256env×1000步，三轮交替版本与负载顺序；日志关闭。普通吞吐与诊断计时分开跑。
+
+| 负载 | 普通吞吐 before → after，中位数 env-steps/s | before范围 | after范围 | 单env弹观测总成本 before → after µs |
+|---|---:|---:|---:|---:|
+| default，低弹 | 1091034 → 1117841 | 967137–1158852 | 1009614–1120552 | 0.48 → 0.34 |
+| dense9，接近cap | 220088 → 201279 | 175824–223495 | 168197–265344 | 9.72 → 6.12 |
+| dense12，超过cap | 97433 → 167546 | 85613–108629 | 151181–173247 | 38.07 → 17.54 |
+
+弹观测总成本为每轮收集/距离+最近选择+重排+行编码之和的中位数。dense12重排21.31→1.76µs；
+单env诊断整步55.84→35.58µs，普通批量吞吐中位数约+72%，三组配对均改善。dense9单env
+适配成本下降约37%，但普通批量中位数约−9%，轮间波动大且范围重叠，不能声称该负载有稳定
+批量收益。低弹普通吞吐约+2.5%，在共享机噪声内；稀疏编码成本有所下降。
+
+初版直接扫完整位图尾部在低弹诊断中出现小幅退化，因此最终编码使用计数时记录的非零前缀。
+本表只记录最终版本，避免将中间实现数据混入结论。
+
+各配对的弹数、观测省略行数、reset次数逐项相同。验证：`cargo test -p stg-rl -p stg-harness
+--quiet`、`cargo clippy -p stg-rl -p stg-harness --all-targets -- -D warnings`、格式检查与diff检查；
+本地release wheel构建后Python冒烟14 passed/1 skipped（环境未安装torch，对应torch缓冲用例）。
+本轮未做GPU端到端或真实训练卡池吞吐实验，没有将wheel安装到训练仓环境或发布。
+
+A/B完整命令与输出：本机临时目录
+`/tmp/sunyunbo/stg-observation-measure-20261004/bitmap-ab-final/{results.json,summary.json}`。
+
+逐轮原始输出与汇总已归档到 [`benchmarks/2026-10-04-observation-bitmap.json`](benchmarks/2026-10-04-observation-bitmap.json)，不依赖临时目录保存。
+
+提交保存前从Git暂存区导出独立快照，排除原有未提交的版本升级及current_start_indices改动。
+快照执行 `cargo test --manifest-path <snapshot>/Cargo.toml -p stg-rl -p stg-harness --quiet` 通过；
+从快照构建Python wheel并在隔离安装目录执行 `python -m pytest -q -p no:cacheprovider
+<snapshot>/crates/stg-py/tests/test_smoke.py`，13 passed/1 skipped（torch未安装）。原工作区改动保留。

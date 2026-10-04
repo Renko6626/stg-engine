@@ -97,6 +97,7 @@ struct Kin {
 /// （16 轮 CORDIC）+ isqrt 两次调用；未命中只多一次比较。初值全 0 格 = `(0,0) → (0, 0)`，本身即正确映射。
 pub struct BulletScratch {
     sel: Vec<(i64, u16)>,
+    selected: [u64; BulletPool::CAP.div_ceil(64)],
     kin: Vec<Kin>,
 }
 
@@ -104,6 +105,7 @@ impl BulletScratch {
     pub fn new() -> BulletScratch {
         BulletScratch {
             sel: Vec::new(),
+            selected: [0; BulletPool::CAP.div_ceil(64)],
             kin: vec![
                 Kin {
                     vx: 0,
@@ -137,6 +139,28 @@ pub fn write_bullets(
     rows: &mut [u8],
     scratch: &mut BulletScratch,
 ) -> BulletStats {
+    write_bullets_inner::<false>(w, cap, rows, scratch).0
+}
+
+/// Same selection and bytes as `write_bullets`, with opt-in phase timings.
+pub fn write_bullets_profiled(
+    w: &World,
+    cap: usize,
+    rows: &mut [u8],
+    scratch: &mut BulletScratch,
+) -> (BulletStats, crate::profile::BulletProfile) {
+    write_bullets_inner::<true>(w, cap, rows, scratch)
+}
+
+fn write_bullets_inner<const PROFILE: bool>(
+    w: &World,
+    cap: usize,
+    rows: &mut [u8],
+    scratch: &mut BulletScratch,
+) -> (BulletStats, crate::profile::BulletProfile) {
+    use crate::profile::{BulletProfile, elapsed, start};
+    let mut profile = BulletProfile::default();
+    let gather_start = start::<PROFILE>();
     assert!(
         cap >= 1,
         "bullets cap 必须 >= 1（plan Global Constraints: 1..=8192，由 HELLO 校验）"
@@ -144,22 +168,76 @@ pub fn write_bullets(
     let v = w.view();
     let b = v.bullets();
     let p = &v.players()[0];
-    let BulletScratch { sel, kin } = scratch;
-    let total = b.iter_alive().count();
-    sel.clear();
-    if total <= cap {
-        sel.extend(b.iter_alive().map(|i| (0, i as u16)));
-    } else {
+    let BulletScratch { sel, selected, kin } = scratch;
+    let (mut total, mut used_words) = (0usize, 0usize);
+    for (i, &word) in b.alive_words().iter().enumerate() {
+        total += word.count_ones() as usize;
+        if word != 0 {
+            used_words = i + 1;
+        }
+    }
+    // Below cap, use the world's ascending alive bitmap directly: no candidate Vec.
+    if total > cap {
+        sel.clear();
         sel.extend(
             b.iter_alive()
                 .map(|i| (len_sq(b.x()[i] - p.x, b.y()[i] - p.y), i as u16)),
         );
+        profile.gather = elapsed(gather_start);
+        let nearest_start = start::<PROFILE>();
         sel.select_nth_unstable(cap - 1); // 全序键 (距离², 池索引) ⇒ 结果确定
         sel.truncate(cap);
-        sel.sort_unstable_by_key(|&(_, i)| i);
+        profile.nearest = elapsed(nearest_start);
+        let reorder_start = start::<PROFILE>();
+        selected.fill(0);
+        for &(_, i) in sel.iter() {
+            let i = i as usize;
+            selected[i / 64] |= 1u64 << (i % 64);
+        }
+        profile.reorder = elapsed(reorder_start);
+    } else {
+        profile.gather = elapsed(gather_start);
     }
-    for (k, &(_, i)) in sel.iter().enumerate() {
-        let i = i as usize;
+    let rows_start = start::<PROFILE>();
+    let words = if total > cap {
+        &selected[..used_words]
+    } else {
+        &b.alive_words()[..used_words]
+    };
+    // Counting already located the last live word: do not re-scan the empty tail.
+    let indices = words.iter().enumerate().flat_map(|(w, &word)| {
+        let mut bits = word;
+        std::iter::from_fn(move || {
+            if bits == 0 {
+                return None;
+            }
+            let i = w * 64 + bits.trailing_zeros() as usize;
+            bits &= bits - 1;
+            Some(i)
+        })
+    });
+    let count = write_bullet_rows(b, indices, rows, kin);
+    profile.rows = elapsed(rows_start);
+    (
+        BulletStats {
+            count,
+            total,
+            dropped: total - count,
+        },
+        profile,
+    )
+}
+
+// Both paths share the exact same row writer; only their ascending index source differs.
+fn write_bullet_rows(
+    b: &BulletPool,
+    indices: impl Iterator<Item = usize>,
+    rows: &mut [u8],
+    kin: &mut [Kin],
+) -> usize {
+    let mut count = 0;
+    for (k, i) in indices.enumerate() {
+        count += 1;
         let r = &mut rows[k * 30..(k + 1) * 30];
         r.fill(0);
         let (vx, vy) = (b.vx()[i], b.vy()[i]);
@@ -185,12 +263,7 @@ pub fn write_bullets(
         r[off::bullet::STATE] = u8::from(delay == 0);
         put_u16(r, off::bullet::TYPE, b.sprite()[i]);
     }
-    let count = sel.len();
-    BulletStats {
-        count,
-        total,
-        dropped: total - count,
-    }
+    count
 }
 
 pub fn write_enemies(w: &World, rows: &mut [u8]) -> usize {

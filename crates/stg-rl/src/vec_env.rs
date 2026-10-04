@@ -23,6 +23,7 @@
 use crate::encode::{self, BulletStats};
 use crate::env::{BootCache, EVENTS, Env, EnvConfig, validate};
 use crate::layout::{ENEMIES, ENEMIES_CAP, ITEMS_CAP, LASERS, LASERS_CAP};
+use crate::profile::{BatchProfile, ObservationProfile, WorkProfile, elapsed, start};
 use rayon::prelude::*;
 use std::sync::Arc;
 use stg_core::math::Fx;
@@ -177,6 +178,7 @@ struct Slot {
     sel: encode::BulletScratch,
     nb: usize,
     ni: usize,
+    profile: WorkProfile,
 }
 
 /// 并行工作项：一个 env 与它在调用方缓冲中独占的各段。
@@ -236,6 +238,7 @@ impl VecEnv {
                 sel: encode::BulletScratch::new(),
                 nb: 0,
                 ni: 0,
+                profile: WorkProfile::default(),
             })
             .collect();
         let pool = rayon::ThreadPoolBuilder::new()
@@ -306,7 +309,7 @@ impl VecEnv {
         pool.install(|| {
             works.into_par_iter().for_each(|w| {
                 w.slot.env.reset();
-                write_obs(
+                write_obs::<false>(
                     w.slot,
                     w.player,
                     w.enemies,
@@ -325,7 +328,7 @@ impl VecEnv {
                 *w.start_index = 0;
             });
         });
-        self.compact(buf);
+        self.compact::<false>(buf);
         Ok(())
     }
 
@@ -333,6 +336,25 @@ impl VecEnv {
     ///
     /// `done != 0` 的 env 在其 `Slot` 内已自动 reset（`Env::step`），观测是新局第一帧。
     pub fn step(&mut self, actions: &[u32], buf: &mut BufferSet<'_>) -> Result<(), String> {
+        self.step_inner::<false>(actions, buf).map(|_| ())
+    }
+
+    /// Opt-in diagnostics. Normal `step` is specialized without clock reads.
+    pub fn step_profiled(
+        &mut self,
+        actions: &[u32],
+        buf: &mut BufferSet<'_>,
+    ) -> Result<BatchProfile, String> {
+        self.step_inner::<true>(actions, buf)
+    }
+
+    fn step_inner<const PROFILE: bool>(
+        &mut self,
+        actions: &[u32],
+        buf: &mut BufferSet<'_>,
+    ) -> Result<BatchProfile, String> {
+        let total_start = start::<PROFILE>();
+        let prepare_start = start::<PROFILE>();
         self.check(buf)?;
         if actions.len() != self.slots.len() {
             return Err(format!(
@@ -343,15 +365,21 @@ impl VecEnv {
         }
         let pool = &self.pool;
         let works = build_work(&mut self.slots, buf, |i| actions[i]);
+        let prepare = elapsed(prepare_start);
+        let parallel_start = start::<PROFILE>();
         pool.install(|| {
             works.into_par_iter().for_each(|w| {
-                let out = w.slot.env.step(w.act);
+                let (out, env_profile) = if PROFILE {
+                    w.slot.env.step_profiled(w.act)
+                } else {
+                    (w.slot.env.step(w.act), Default::default())
+                };
                 w.events.copy_from_slice(&out.events);
                 *w.done = out.done;
                 *w.ep_frames = out.ep_frames;
                 *w.warmup_retries = out.warmup_retries;
                 *w.start_index = out.start_index;
-                write_obs(
+                let observation = write_obs::<PROFILE>(
                     w.slot,
                     w.player,
                     w.enemies,
@@ -363,10 +391,27 @@ impl VecEnv {
                     w.bullets_total,
                     w.bullets_dropped,
                 );
+                if PROFILE {
+                    w.slot.profile = WorkProfile {
+                        env: env_profile,
+                        observation,
+                    };
+                }
             });
         });
-        self.compact(buf);
-        Ok(())
+        let parallel_step_observe = elapsed(parallel_start);
+        let mut profile = self.compact::<PROFILE>(buf);
+        profile.prepare = prepare;
+        profile.parallel_step_observe = parallel_step_observe;
+        let aggregate_start = start::<PROFILE>();
+        if PROFILE {
+            for slot in &self.slots {
+                profile.workers += slot.profile;
+            }
+        }
+        profile.aggregate = elapsed(aggregate_start);
+        profile.total = elapsed(total_start);
+        Ok(profile)
     }
 
     /// 课程学习：改起点采样权重（长度须等于起点数、全部有限 ≥ 0、总和 > 0；下一次 reset 生效）。
@@ -422,7 +467,9 @@ impl VecEnv {
     ///    暂存区配对后在专属池里 `copy_from_slice`。
     ///
     /// 结果字节只由 env 索引序与各 `Slot.nb/ni` 决定，与线程数/调度无关。
-    fn compact(&self, buf: &mut BufferSet<'_>) {
+    fn compact<const PROFILE: bool>(&self, buf: &mut BufferSet<'_>) -> BatchProfile {
+        let mut profile = BatchProfile::default();
+        let prefix_start = start::<PROFILE>();
         // 阶段 1（串行）：前缀和。offsets 冻结后，每个 env 的目标区间即确定。
         let n = self.slots.len();
         let mut total_bullets = 0usize;
@@ -437,6 +484,8 @@ impl VecEnv {
             total_items += s.ni;
             buf.items_offsets[i + 1] = total_items as i32;
         }
+        profile.prefix = elapsed(prefix_start);
+        let split_start = start::<PROFILE>();
 
         // 阶段 2（并行）：目标分片互不相交。源切片用 `&[u8]`（`Sync`），目标用 `&mut [u8]`。
         let mut rest = &mut buf.bullets[..total_bullets * 30];
@@ -458,8 +507,10 @@ impl VecEnv {
             rest = tail;
         }
         let item_src: Vec<&[u8]> = self.slots.iter().map(|s| &s.items[..s.ni * 18]).collect();
+        profile.split = elapsed(split_start);
 
         let pool = &self.pool;
+        let scatter_start = start::<PROFILE>();
         pool.install(|| {
             bullet_dst
                 .into_par_iter()
@@ -470,6 +521,8 @@ impl VecEnv {
                 .zip(item_src)
                 .for_each(|(dst, src)| dst.copy_from_slice(src));
         });
+        profile.scatter = elapsed(scatter_start);
+        profile
     }
 }
 
@@ -526,7 +579,7 @@ fn build_work<'a>(
 ///
 /// 并行闭包内调用，`slot` 与各缓冲段均为该 env 独占。
 #[allow(clippy::too_many_arguments)] // 按 BufferSet 字段逐参传入，拆包更难读
-fn write_obs(
+fn write_obs<const PROFILE: bool>(
     slot: &mut Slot,
     player_row: &mut [u8],
     enemies_rows: &mut [u8],
@@ -537,7 +590,9 @@ fn write_obs(
     phase: &mut u32,
     bullets_total: &mut i32,
     bullets_dropped: &mut i32,
-) {
+) -> ObservationProfile {
+    let mut profile = ObservationProfile::default();
+    let small_start = start::<PROFILE>();
     // 拆字段借用：`env.world()` 只读 env，bullets/items/sel 是另外的字段，互不冲突。
     let Slot {
         env,
@@ -546,21 +601,37 @@ fn write_obs(
         sel,
         nb,
         ni,
+        ..
     } = slot;
     let cap = bullets.len() / 30;
     let w = env.world();
     encode::write_player(w, &TABLES_V0, player_row);
     *enemies_count = encode::write_enemies(w, enemies_rows) as i32;
-    *lasers_count = encode::write_lasers(w, lasers_rows) as i32;
     *phase = encode::phase_bits(w);
     *frame = w.frame();
+    profile.small = elapsed(small_start);
+    let laser_start = start::<PROFILE>();
+    *lasers_count = encode::write_lasers(w, lasers_rows) as i32;
+    profile.lasers = elapsed(laser_start);
+    let (stats, bullet_profile) = if PROFILE {
+        encode::write_bullets_profiled(w, cap, bullets, sel)
+    } else {
+        (
+            encode::write_bullets(w, cap, bullets, sel),
+            Default::default(),
+        )
+    };
+    profile.bullets = bullet_profile;
     let BulletStats {
         count,
         total,
         dropped,
-    } = encode::write_bullets(w, cap, bullets, sel);
+    } = stats;
     *nb = count;
     *bullets_total = total as i32;
     *bullets_dropped = dropped as i32;
+    let item_start = start::<PROFILE>();
     *ni = encode::write_items(w, items);
+    profile.items = elapsed(item_start);
+    profile
 }

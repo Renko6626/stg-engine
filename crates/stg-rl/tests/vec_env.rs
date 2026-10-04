@@ -131,6 +131,38 @@ fn deterministic_across_thread_counts() {
 }
 
 #[test]
+fn profiled_step_preserves_observations_and_reset_sequence() {
+    let n = 4;
+    let cap = 8;
+    let mut cfg = game_cfg(5);
+    cfg.bullets_cap = cap;
+    cfg.frame_skip = 3;
+    cfg.max_frames = 50;
+    let mut ordinary = VecEnv::new(cfg.clone(), n, 1).unwrap();
+    let mut profiled = VecEnv::new(cfg, n, 4).unwrap();
+    let (mut a, mut b) = (Owned::new(n, cap), Owned::new(n, cap));
+    ordinary.reset(&mut a.view()).unwrap();
+    profiled.reset(&mut b.view()).unwrap();
+    let (mut saw_reset, mut saw_selection) = (false, false);
+    for s in 0..120 {
+        let act = actions(s, n);
+        ordinary.step(&act, &mut a.view()).unwrap();
+        let p = profiled.step_profiled(&act, &mut b.view()).unwrap();
+        assert_eq!(a.digest(), b.digest(), "step {s}");
+        let resets = b.done.iter().filter(|&&d| d != 0).count() as u64;
+        assert_eq!(p.workers.env.resets, resets);
+        assert!((n as u64..=n as u64 * 3).contains(&p.workers.env.core_frames));
+        saw_reset |= resets > 0;
+        saw_selection |= b.bullets_dropped.iter().any(|&d| d > 0);
+    }
+    assert!(saw_reset, "must exercise automatic reset");
+    assert!(
+        saw_selection,
+        "must exercise nearest selection and index reorder"
+    );
+}
+
+#[test]
 fn different_seed_differs() {
     let n = 4;
     let (mut a, mut b) = (
@@ -289,7 +321,11 @@ sub main() {
     let mut laser_rows = vec![0u8; LASERS_CAP * lst];
     let mut saw = false;
     for s in 0..220u32 {
-        ve.step(&[0u32], &mut buf.view()).unwrap();
+        if s.is_multiple_of(2) {
+            ve.step(&[0u32], &mut buf.view()).unwrap();
+        } else {
+            ve.step_profiled(&[0u32], &mut buf.view()).unwrap();
+        }
         let _ = direct.step(0);
         let k = encode::write_lasers(direct.world(), &mut laser_rows);
         assert_eq!(

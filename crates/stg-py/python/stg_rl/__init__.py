@@ -13,6 +13,7 @@ SB3 SubprocVecEnv / make_vec_env —— 那会把整个 env 复制进子进程�
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
+import logging
 import numpy as np
 from . import _native
 from ._native import CompileError, Image, build_info, bundled_sources, event_columns
@@ -23,6 +24,7 @@ OFFSETS = {name: {f: (off, ty) for f, off, ty in fields} for name, _, fields in 
 CAPS = dict(_native.caps())
 ENEMIES_CAP, LASERS_CAP, ITEMS_CAP = CAPS["enemies"], CAPS["lasers"], CAPS["items"]
 _END_ON = ("phase_ended", "spell_captured", "spell_failed", "stage_cleared")
+_LOG = logging.getLogger(__name__)
 
 
 def hello(bullets_cap: int = 1024) -> str:
@@ -117,7 +119,7 @@ def _flat_numpy(buffers: dict, n: int, cap: int) -> dict:
 class VecEnv:
     def __init__(self, num_envs: int, threads: int, images: dict, starts: list, frame_skip: int = 1,
                  max_frames: int = 3600, warmup_max: int = 120, end_on=_END_ON, bullets_cap: int = 1024,
-                 seed: int = 0, buffers: dict | None = None):
+                 seed: int = 0, buffers: dict | None = None, *, warn_bullet_overflow: bool = False):
         # `usize`/`u64` 参数对负数在 Rust 侧抛 OverflowError；按 spec §3 先在包装层拦成 ValueError。
         for name, v in (("num_envs", num_envs), ("threads", threads), ("frame_skip", frame_skip),
                         ("max_frames", max_frames), ("warmup_max", warmup_max),
@@ -135,15 +137,36 @@ class VecEnv:
             frame_skip, max_frames, warmup_max, list(end_on), bullets_cap, seed)
         self.buffers = buffers if buffers is not None else alloc_buffers(num_envs, bullets_cap, backend="numpy")
         self._flat = _flat_numpy(self.buffers, num_envs, bullets_cap)
+        # Host-only diagnostics: no allocation or array scan per step when disabled.
+        self._bullet_warned = np.zeros(num_envs, dtype=np.bool_) if warn_bullet_overflow else None
 
     def reset(self) -> dict:
         self._native.reset(self._flat)
+        if self._bullet_warned is not None:
+            self._bullet_warned.fill(False)
+            self._warn_bullet_overflow()
         return self.buffers
 
     def step(self, actions) -> dict:
         a = actions.numpy() if hasattr(actions, "numpy") and not isinstance(actions, np.ndarray) else actions
         self._native.step(np.ascontiguousarray(a, dtype=np.uint32).reshape(-1), self._flat)
+        if self._bullet_warned is not None:
+            # done belongs to the old episode; returned observations already belong to the new one.
+            self._bullet_warned[self._flat["done"] != 0] = False
+            self._warn_bullet_overflow()
         return self.buffers
+
+    def _warn_bullet_overflow(self) -> None:
+        totals = self._flat["bullets_total"]
+        first = (totals > self.bullets_cap) & ~self._bullet_warned
+        if not first.any():
+            return
+        self._bullet_warned[first] = True
+        _LOG.warning(
+            "弹数超过观测上限：本批 %d 个环境首次超限，最多 %d 颗，上限 %d，观测省略 %d 颗；世界仍模拟全部弹。",
+            int(first.sum()), int(totals[first].max()), self.bullets_cap,
+            int(self._flat["bullets_dropped"][first].sum(dtype=np.int64)),
+        )
 
     def set_start_weights(self, weights) -> None:
         self._native.set_start_weights([float(w) for w in weights])
