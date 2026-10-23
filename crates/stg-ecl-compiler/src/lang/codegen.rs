@@ -170,6 +170,9 @@ struct Gen<'p> {
     /// xformdef 槽参数恒是编译期常量，故这一路总能判（不像 `fire` 还要先问是不是常量）。
     table: Option<&'p stg_core::tables::WorldTables>,
     errors: Vec<CompileError>,
+    // Reset after each sub; all addresses use SubBuilder's local fixup scheme.
+    labels: BTreeMap<String, usize>,
+    gotos: Vec<(String, usize)>,
 }
 
 impl<'p> Gen<'p> {
@@ -373,6 +376,12 @@ impl<'p> Gen<'p> {
         stmt: &TypedStmt,
     ) {
         match stmt {
+            TypedStmt::Label { name } => {
+                self.labels.insert(name.clone(), b.here());
+            }
+            TypedStmt::Goto { name } => {
+                self.gotos.push((name.clone(), b.raw_jmp()));
+            }
             TypedStmt::Var { name, init, .. } => {
                 self.gen_expr(b, slots, init);
                 b.pop_l(narrow_slot(slots.locals[name]));
@@ -908,6 +917,15 @@ fn walk_mark_scan<'a>(
     latest: &mut [Option<(i32, u32)>; 3],
     out: &mut BTreeMap<i32, AnchorComp>,
 ) {
+    // A goto sub has non-linear top-level flow, just like a structured block.
+    // Its anchors need explicit mark compensation; do not guess by source order.
+    if sub
+        .body
+        .iter()
+        .any(|s| matches!(s, TypedStmt::Label { .. } | TypedStmt::Goto { .. }))
+    {
+        return;
+    }
     for stmt in &sub.body {
         match stmt {
             TypedStmt::ExprStmtVoid { call } => match &call.target {
@@ -1028,6 +1046,8 @@ pub fn generate(
         comp,
         table,
         errors: Vec::new(),
+        labels: BTreeMap::new(),
+        gotos: Vec::new(),
     };
 
     for sub in &ti.subs {
@@ -1041,6 +1061,10 @@ pub fn generate(
         } else {
             b.raw_ret();
         }
+        for (name, pos) in g.gotos.drain(..) {
+            b.patch(pos, g.labels[&name]);
+        }
+        g.labels.clear();
         ib.define_sub(g.name_to_ref[&sub.name], b)
             .map_err(|error| image_error_at(Span { line: 1, col: 1 }, error))?;
     }
@@ -1103,6 +1127,56 @@ mod tests {
             step(&mut w, &TABLES_V0, &image, &InputFrame::empty(f));
         }
         w
+    }
+
+    #[test]
+    fn goto_forward_backward_and_conditional_across_wait() {
+        let src = r#"
+            sub helper() {
+                var n: int = 0;
+                goto tick;
+                set_global(20, 999);
+            tick:
+                n = n + 1;
+                set_global(20, n);
+                wait(2);
+                if (n < 3) { goto tick; }
+                loop { var local: int = 7; set_global(23, local); goto done; }
+            done:
+                set_global(21, $frame);
+            }
+            sub main() { goto tick; set_global(22, 999); tick: helper(); set_global(22, 7); }
+        "#;
+        let early = run(src, 6);
+        assert_eq!(early.body.view().globals()[20], 3);
+        assert_eq!(early.body.view().globals()[21], 0);
+        let done = run(src, 8);
+        assert_eq!(&done.body.view().globals()[20..24], &[3, 7, 7, 7]);
+        assert_eq!(done.body.view().diag().task_faults, 0);
+    }
+
+    #[test]
+    fn goto_rejects_invalid_targets_and_initialization_bypass() {
+        for (src, diagnostic) in [
+            ("sub main() { a: a: }", "重复"),
+            ("sub main() { goto missing; }", "未知标签"),
+            ("sub main() { goto a; } sub other() { a: }", "未知标签"),
+            ("sub main() { if 1 { a: } goto a; }", "顶层"),
+            (
+                "sub main() { goto a; var x: int = 1; a: set_global(20, x); }",
+                "初始化",
+            ),
+            ("sub main() { a: var x: int = 1; }", "初始化"),
+            ("sub main() { mark(1); a: goto a; }", "mark"),
+            ("sub main() { mark(1) { goto a; } a: }", "mark"),
+            ("sub main() { mark(1) { a: } }", "mark"),
+        ] {
+            let errors = compile(src, "goto.ecl").expect_err(src);
+            assert!(
+                errors.iter().any(|e| e.msg.contains(diagnostic)),
+                "{src}: {errors:?}"
+            );
+        }
     }
 
     // ── wait 周期语义 ───────────────────────────────────────────────────

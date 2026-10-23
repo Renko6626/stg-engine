@@ -75,6 +75,12 @@ sub main() {
 类型矩阵的合法/非法组合表、`sub`/`async sub` 的实参槽位硬约束、错误格式契约等完整细节
 一律在 [`docs/ecl-lang.md`](../../docs/ecl-lang.md)，不在这里重复。
 
+**自动导入兼容语法**：支持 sub 顶层 `name:` 与同 sub 内 `goto name;`，不推荐常规手写；
+手写优先使用结构化分支与循环。初始化和 `mark` 边界见
+[任务与时间](../../docs/ecl-lang/2-tasks.md#标签与-goto自动导入兼容语法)。
+此扩展只改前端并复用现有跳转回填，不新增 opcode、syscall 或运行时字段；旧程序的生成路径
+不变，`ENGINE_VER` 保持 24。
+
 ## 编译流水线（crate 内部结构）
 
 ```

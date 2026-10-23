@@ -77,6 +77,12 @@ pub struct TypedExpr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedStmt {
+    Label {
+        name: String,
+    },
+    Goto {
+        name: String,
+    },
     Var {
         name: String,
         ty: Ty,

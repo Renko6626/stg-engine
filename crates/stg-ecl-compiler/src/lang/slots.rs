@@ -207,7 +207,9 @@ fn collect_locals(body: &[TypedStmt], out: &mut Vec<String>) {
             | TypedStmt::ExprStmtVoid { .. }
             | TypedStmt::Return
             | TypedStmt::Break
-            | TypedStmt::Continue => {}
+            | TypedStmt::Continue
+            | TypedStmt::Label { .. }
+            | TypedStmt::Goto { .. } => {}
         }
     }
 }
@@ -299,7 +301,11 @@ fn stmt_depth(s: &TypedStmt) -> usize {
         TypedStmt::ExprStmtDiscard { expr } => expr_depth(expr),
         // 无返回值：dispatch 之后不残留任何值，不需要 `max(..,1)`。
         TypedStmt::ExprStmtVoid { call } => call_args_depth(&call.args),
-        TypedStmt::Return | TypedStmt::Break | TypedStmt::Continue => 0,
+        TypedStmt::Return
+        | TypedStmt::Break
+        | TypedStmt::Continue
+        | TypedStmt::Label { .. }
+        | TypedStmt::Goto { .. } => 0,
         // id 已在 typeck 折叠为原始值（不发求值指令，见 typed_ast 文档）——峰值只看补偿块。
         TypedStmt::Mark { body, .. } => body_depth(body),
     }

@@ -395,6 +395,23 @@ impl<'s> Parser<'s> {
     fn parse_stmt(&mut self) -> Result<Stmt, ()> {
         let kind = self.peek_kind().clone();
         match kind {
+            TokenKind::Ident(ref name) if self.peek_kind_at(1) == Some(&TokenKind::Colon) => {
+                let span = self.current_span();
+                let name = name.clone();
+                self.advance();
+                self.advance();
+                Ok(Stmt::Label { name, span })
+            }
+            // Contextual syntax preserves existing variables/subs named `goto`.
+            TokenKind::Ident(ref name)
+                if name == "goto" && matches!(self.peek_kind_at(1), Some(TokenKind::Ident(_))) =>
+            {
+                let span = self.current_span();
+                self.advance();
+                let name = self.expect_ident("goto 后期待标签名")?;
+                self.expect(TokenKind::Semi, "期待 ';'")?;
+                Ok(Stmt::Goto { name, span })
+            }
             TokenKind::Var => self.parse_var_stmt(),
             TokenKind::If => self.parse_if_stmt(),
             TokenKind::While => self.parse_while_stmt(),

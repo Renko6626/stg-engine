@@ -4,7 +4,9 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-10-04）
+## 现在（2026-10-23）
+
+- **ECL 标签／goto 兼容语法**（2026-10-23）：支持 sub 顶层 `label:` 与同 sub `goto label;`，用于自动导入，不推荐常规手写；保持初始化和作用域边界，mark 混用受限，见 [`docs/ecl-lang/2-tasks.md`](docs/ecl-lang/2-tasks.md)。只改编译前端，复用原有 JMP，**ENGINE_VER 保持 24**。编译器测试、clippy、文档示例检查通过；改前／后 golden 逐字节相同，SHA256 `599e53fd102fbbfcb398822e920cd3aec4cd2cfea1fea8b56ebf17af1ebdda86`。训练仓原型已生成可读 ECL 并恢复简单结构，未升级训练 wheel 或发布。
 
 - **RL 观测适配优化**：补齐模拟/episode/reset、观测选择/编码与 CSR 的诊断计时；超 cap 的池索引排序改为选中位图升序枚举，未超 cap 时 popcount 计数并直接编码，跳过空尾字。选弹集合、并列裁决、行序、协议和 World 不变，**ENGINE_VER 保持 24**。Python/rl-bench 可选超限提醒默认关闭，每环境每局一次、同批合并。三轮固定亲和 A/B：密弹重排 21.31→1.76µs，普通批量吞吐中位数约 +72%；接近 cap 的单环境适配约 −37%，批量收益未确认。详见 [`docs/bench-baseline.md`](docs/bench-baseline.md#位图重排与直接编码2026-10-04)；后续 CSR 直接写入、训练专用输出尚未实施。
 

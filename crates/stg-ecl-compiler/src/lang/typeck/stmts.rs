@@ -71,6 +71,8 @@ impl<'p, 't> Checker<'p, 't> {
         in_loop: bool,
     ) -> Option<TypedStmt> {
         match stmt {
+            Stmt::Label { name, .. } => Some(TypedStmt::Label { name: name.clone() }),
+            Stmt::Goto { name, .. } => Some(TypedStmt::Goto { name: name.clone() }),
             Stmt::Var {
                 name,
                 ty,
@@ -401,7 +403,84 @@ impl<'p, 't> Checker<'p, 't> {
         out
     }
 
+    /// Keep definite initialization lexical: labels never enter a block, and every
+    /// top-level local is initialized before the first possible jump target.
+    fn validate_jumps(&mut self, sub: &SubDef) {
+        let mut labels = std::collections::BTreeSet::new();
+        let mut jumps = Vec::new();
+        let mut jump_span = None;
+        let mut mark_seen = false;
+        let mut pending = vec![(&sub.body, true, false)];
+        while let Some((body, top_level, in_mark)) = pending.pop() {
+            for stmt in body {
+                match stmt {
+                    Stmt::Label { name, span } => {
+                        jump_span = Some(*span);
+                        if in_mark {
+                            self.err(*span, "mark 补偿块不允许 label/goto".into());
+                        } else if !top_level {
+                            self.err(*span, "标签只能声明在 sub 顶层，不能跳入嵌套块".into());
+                        } else if !labels.insert(name.as_str()) {
+                            self.err(*span, format!("标签 '{name}' 重复声明"));
+                        }
+                    }
+                    Stmt::Goto { name, span } => {
+                        jump_span = Some(*span);
+                        jumps.push((name, *span));
+                        if in_mark {
+                            self.err(*span, "mark 补偿块不允许 label/goto".into());
+                        }
+                    }
+                    Stmt::If { then_b, else_b, .. } => {
+                        pending.push((then_b, false, in_mark));
+                        if let Some(body) = else_b {
+                            pending.push((body, false, in_mark));
+                        }
+                    }
+                    Stmt::While { body, .. } | Stmt::Loop { body, .. } | Stmt::For { body, .. } => {
+                        pending.push((body, false, in_mark))
+                    }
+                    Stmt::Mark { block, .. } => {
+                        mark_seen = true;
+                        if let Some(body) = block {
+                            pending.push((body, false, true));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let Some(span) = jump_span else {
+            return;
+        };
+        if mark_seen {
+            self.err(span, "同一 sub 不能混用 mark 与 label/goto".into());
+        }
+        for (name, span) in jumps {
+            if !labels.contains(name.as_str()) {
+                self.err(
+                    span,
+                    format!("未知标签 '{name}'（goto 只能跳到同一 sub 的顶层标签）"),
+                );
+            }
+        }
+        let mut executable_seen = false;
+        for stmt in &sub.body {
+            if let Stmt::Var { span, .. } = stmt {
+                if executable_seen {
+                    self.err(
+                        *span,
+                        "含 label/goto 的 sub：顶层 var 初始化必须位于所有非声明语句之前".into(),
+                    );
+                }
+            } else {
+                executable_seen = true;
+            }
+        }
+    }
+
     pub(super) fn check_sub(&mut self, sub: &'p SubDef) -> TypedSub {
+        self.validate_jumps(sub);
         self.cur_sync_calls = Vec::new();
         self.cur_xform_refs = Vec::new();
         let mut locals = LocalScope::default();

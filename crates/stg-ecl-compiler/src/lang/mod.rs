@@ -642,8 +642,30 @@ sub main() {
         );
     }
 
+    #[test]
+    fn mark_does_not_infer_anchors_from_goto_callee() {
+        use stg_core::input::InputFrame;
+        use stg_core::player::Loadout;
+        use stg_core::step::{World, step};
+        use stg_core::tables::TABLES_V0;
+
+        let img = compile(
+            "sub main() { stage(); mark(1); set_global(20, 1); wait(1); } \
+             sub stage() { goto done; bgm(99); done: }",
+            "m.ecl",
+        )
+        .expect("goto callee");
+        let mut w = World::new_game_at(1, 0, 1, Loadout::default(), &img).unwrap();
+        for frame in 0..2 {
+            step(&mut w, &TABLES_V0, &img, &InputFrame::empty(frame));
+        }
+        assert_eq!(w.body.view().globals()[20], 1, "mark 后的脚本确已执行");
+        assert_eq!(w.body.bgm_id(), 0, "不得补偿被 goto 跳过的 bgm(99)");
+        assert_eq!(w.body.view().diag().task_faults, 0);
+    }
+
     /// ② 作者块顶层手写 bgm 则只注入 bg/bg_phase——逐类独立抑制，手写的那一类不再
-    /// 自动补，未手写的两类（这里 bg_phase 从未声明过，恒 None；bg 未被手写）照常。
+    /// 自动补，未手写的两类（这里 bg_phase 从未声明，本就是 None；bg 未被手写）照常。
     #[test]
     fn mark_manual_override_suppresses_injection_per_kind() {
         const SRC: &str = r#"

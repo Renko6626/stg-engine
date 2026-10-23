@@ -84,6 +84,16 @@ pub struct XfSlotLit {
 /// 语句。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
+    /// 自动导入兼容语法；仅 sub 顶层可声明，名字只在本 sub 内有效。
+    Label {
+        name: String,
+        span: Span,
+    },
+    /// 可从普通嵌套块跳到本 sub 顶层标签；不进入新的局部作用域。
+    Goto {
+        name: String,
+        span: Span,
+    },
     Var {
         name: String,
         ty: Ty,
