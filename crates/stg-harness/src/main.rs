@@ -286,6 +286,8 @@ fn bench_mix(frames: u32) {
         anm_state_frame: 0,
         main_task: 0,
         death_script: 0,
+        script_int: [0; stg_core::enemy::ENEMY_INT_SLOTS],
+        script_fx: [stg_core::math::Fx::ZERO; stg_core::enemy::ENEMY_FX_SLOTS],
         drop_count: stg_core::tables::drop_counts(&stg_core::tables::TABLES_V0, 1).0,
         score: 100,
     };
@@ -511,6 +513,8 @@ fn bench_fill_enemy_grid(w: &mut stg_core::step::World) -> Vec<stg_core::enemy::
                 anm_state_frame: 0,
                 main_task: 0,
                 death_script: 0,
+                script_int: [0; stg_core::enemy::ENEMY_INT_SLOTS],
+                script_fx: [stg_core::math::Fx::ZERO; stg_core::enemy::ENEMY_FX_SLOTS],
                 drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],
                 score: 0,
             });
@@ -739,6 +743,8 @@ fn cmd_golden(rest: &[String]) -> ExitCode {
         anm_state_frame: 0,
         main_task: 0,
         death_script: 0,
+        script_int: [0; stg_core::enemy::ENEMY_INT_SLOTS],
+        script_fx: [stg_core::math::Fx::ZERO; stg_core::enemy::ENEMY_FX_SLOTS],
         drop_count: stg_core::tables::drop_counts(&stg_core::tables::TABLES_V0, 1).0,
         score: 100,
     };
@@ -1360,6 +1366,8 @@ fn build_rainbow_world(
         anm_state_frame: 0,
         main_task: 0,
         death_script: 0,
+        script_int: [0; stg_core::enemy::ENEMY_INT_SLOTS],
+        script_fx: [stg_core::math::Fx::ZERO; stg_core::enemy::ENEMY_FX_SLOTS],
         drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],
         score: 10000,
     });
@@ -1498,6 +1506,8 @@ mod ecl_rainbow_tests {
             anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
+            script_int: [0; stg_core::enemy::ENEMY_INT_SLOTS],
+            script_fx: [stg_core::math::Fx::ZERO; stg_core::enemy::ENEMY_FX_SLOTS],
             drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],
             score: 10000,
         }

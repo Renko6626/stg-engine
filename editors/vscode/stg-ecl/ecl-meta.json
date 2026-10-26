@@ -1,6 +1,10 @@
 {
   "version": 1,
   "builtins": [
+    {"name": "self_int", "signature": "self_int(slot: int) -> int", "ret": "int", "doc": "读取当前敌人的共享整数槽；坏槽返回0并计违约，非敌owner触发Fault", "params": [{"name": "slot", "ty": "int"}]},
+    {"name": "set_self_int", "signature": "set_self_int(slot: int, value: int)", "ret": null, "doc": "写入当前敌人的共享整数槽；坏槽不写入并计违约，非敌owner触发Fault", "params": [{"name": "slot", "ty": "int"}, {"name": "value", "ty": "int"}]},
+    {"name": "self_fx", "signature": "self_fx(slot: int) -> fx", "ret": "fx", "doc": "读取当前敌人的共享定点槽；坏槽返回0并计违约，非敌owner触发Fault", "params": [{"name": "slot", "ty": "int"}]},
+    {"name": "set_self_fx", "signature": "set_self_fx(slot: int, value: fx)", "ret": null, "doc": "写入当前敌人的共享定点槽；坏槽不写入并计违约，非敌owner触发Fault", "params": [{"name": "slot", "ty": "int"}, {"name": "value", "ty": "fx"}]},
     {"name": "accum_start", "signature": "accum_start(slot: int, initial: fx, delta: fx, frames: int)", "ret": null, "doc": "启动任务私有累加槽；下一帧起逐帧加delta，共frames次，之后保持结果", "params": [{"name": "slot", "ty": "int"}, {"name": "initial", "ty": "fx"}, {"name": "delta", "ty": "fx"}, {"name": "frames", "ty": "int"}]},
     {"name": "accel_start", "signature": "accel_start(slot: int, initial: fx, velocity: fx, acceleration: fx, frames: int)", "ret": null, "doc": "启动任务私有加速槽；先加当前velocity，再加acceleration，共frames次", "params": [{"name": "slot", "ty": "int"}, {"name": "initial", "ty": "fx"}, {"name": "velocity", "ty": "fx"}, {"name": "acceleration", "ty": "fx"}, {"name": "frames", "ty": "int"}]},
     {"name": "hermite_start", "signature": "hermite_start(slot: int, start: fx, end: fx, tangent_start: fx, tangent_end: fx, frames: int)", "ret": null, "doc": "启动任务私有Hermite槽；切线对应归一化时间，frames=0立即终点", "params": [{"name": "slot", "ty": "int"}, {"name": "start", "ty": "fx"}, {"name": "end", "ty": "fx"}, {"name": "tangent_start", "ty": "fx"}, {"name": "tangent_end", "ty": "fx"}, {"name": "frames", "ty": "int"}]},

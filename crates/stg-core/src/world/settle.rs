@@ -839,6 +839,8 @@ mod tests {
             anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
+            script_int: [0; crate::enemy::ENEMY_INT_SLOTS],
+            script_fx: [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS],
             drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, 1).0,
             score: 100,
         };
@@ -1274,6 +1276,8 @@ mod tests {
             anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
+            script_int: [0; crate::enemy::ENEMY_INT_SLOTS],
+            script_fx: [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS],
             drop_count: crate::tables::drop_counts(&crate::tables::TABLES_V0, table).0,
             score: 100,
         }

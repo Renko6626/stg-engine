@@ -2341,12 +2341,13 @@ mod tests {
         // ④ SaveBytes 走 derive 自动入档 ⇒ 存档 wire format 变化，`ENGINE_VER` 23→24（见 lib.rs）。
         // 判别面：`world::laser::tests::snapshot_covers_laser_pool`。
         // ENGINE_VER26：任务插值并行数组新增53,248 B，WorldBody不变。
+        // ENGINE_VER27：敌人共享脚本槽每敌48 B ×256，共12,288 B，WorldBody/World同步增加。
         // TaskPool derive覆盖checksum/save，copy_into已同步；D10预算见stg-world-design.md。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (1058328, 1271376);
+        const EXPECTED: (usize, usize) = (1070616, 1283664);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (1058328, 1271376);
+        const EXPECTED: (usize, usize) = (1070616, 1283664);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2376,7 +2377,7 @@ mod tests {
         // cap: bullets 8192 / enemies 256 / shots 1024 / items 1024 / fields 16 / xform 4096 / lasers 256
         let expected = [
             ("bullets", 476_160), // 56 B/弹 ×8192 + gen 16384 + alive 1024  ≈ 465 KiB（v2：+born_frame u32）
-            ("enemies", 30_496), // 117 B/敌 ×256 + gen 512 + alive 32      ≈ 29.8 KiB（引擎第二刀：+dx/dy Fx×2 = +8 B/敌）
+            ("enemies", 42_784), // 165 B/敌 ×256 + gen 512 + alive 32 ≈ 41.8 KiB（共享脚本槽 +48 B/敌）
             ("shots", 28_800),
             ("items", 22_656), // 22 B/道具 ×1024 + gen 2048 + alive 128（F12：512→1024）
             ("fields", 328),
@@ -2414,8 +2415,8 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            26,
-            "25→26：任务私有状态插值槽新增6个syscall及53248 B状态，进checksum/save/copy。bump 必须是有意识决定(评审 + 改本测试)——24→25：语义缓动补齐(2026-10-23)。\
+            27,
+            "26→27：敌人共享脚本槽新增12288 B状态及4个syscall。——前一次25→26：任务私有状态插值槽新增6个syscall及53248 B状态，进checksum/save/copy。bump 必须是有意识决定(评审 + 改本测试)——24→25：语义缓动补齐(2026-10-23)。\
              追加22条曲线(编号8–29)，原本坏参数现在合法；旧0–7编码和表字节保持不变，World布局不变。\
              ——前一次23→24：激光池刀(2026-09-25，spec 2026-09-25-laser-pool-design.md)。\
              新增 LaserPool(cap 256)、相位 5 推进、碰撞行 9/10、syscall 族 8xx；校验和与存档载荷均变化，旧回放失效。\
@@ -2558,6 +2559,8 @@ mod tests {
             anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
+            script_int: [0; crate::enemy::ENEMY_INT_SLOTS],
+            script_fx: [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS],
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 500,
         });

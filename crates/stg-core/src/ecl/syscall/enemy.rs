@@ -267,6 +267,8 @@ pub(super) fn sys_spawn_enemy(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8
         anm_state_frame: ctx.body.frame,
         main_task: 0, // 任务 spawn 后回填（敌句柄先于任务存在）
         death_script: 0,
+        script_int: [0; crate::enemy::ENEMY_INT_SLOTS],
+        script_fx: [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS],
         drop_count,
         score: score as u16,
     };
@@ -404,5 +406,35 @@ pub(super) fn sys_set_anm_state(task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
     let h = self_enemy_handle(task)?;
     let state = pop(task)?;
     ctx.body.set_anm_state(h, state as u16);
+    Ok(())
+}
+
+pub(super) fn sys_self_int(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    let slot = pop(task)?;
+    let value = ctx.body.enemy_script_int(h, slot);
+    push(task, value)
+}
+
+pub(super) fn sys_set_self_int(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    let value = pop(task)?;
+    let slot = pop(task)?;
+    ctx.body.set_enemy_script_int(h, slot, value);
+    Ok(())
+}
+
+pub(super) fn sys_self_fx(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    let slot = pop(task)?;
+    let value = ctx.body.enemy_script_fx(h, slot);
+    push(task, value.raw())
+}
+
+pub(super) fn sys_set_self_fx(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    let h = self_enemy_handle(task)?;
+    let value = pop(task)?;
+    let slot = pop(task)?;
+    ctx.body.set_enemy_script_fx(h, slot, Fx::from_raw(value));
     Ok(())
 }

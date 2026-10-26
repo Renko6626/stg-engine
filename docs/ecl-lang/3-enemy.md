@@ -118,6 +118,48 @@ sub main() {
 只有 `spawn_enemy` 的 `task` 位支持带参；`fire` / `sh_task` / `spell_begin` 的 sub 位仍只收
 无参 async sub，写括号直接编译报错。字节码层的调用约定见 [`ecl-ops.md`](../ecl-ops.md) 210 号。
 
+## 同一敌人的任务共享变量
+
+每只敌自带 `ENEMY_INT_SLOTS`（4）个 int 槽和 `ENEMY_FX_SLOTS`（8）个 fx 槽。主任务、
+同步调用和该敌的 `spawn` / 符卡模式任务通过四个接口双向读写：
+
+```ecl
+async sub attack() {
+    loop {
+        var color: int = self_int(0);
+        var dir: angle = self_int(1) as angle;
+        _ = fire(48, color, $self_x, $self_y, self_fx(0), dir, none, none);
+        set_self_int(2, self_int(2) + 1);
+        wait(20);
+    }
+}
+
+async sub enemy_main() {
+    set_self_int(0, 1);
+    set_self_int(1, 90deg as int);
+    set_self_fx(0, 2.0fx);
+    spawn attack();
+    wait(120);
+    set_self_int(0, 7);       // 后续发射读到新的颜色
+    set_self_fx(0, 3.0fx);
+    wait(120);
+}
+
+sub main() {
+    _ = spawn_enemy(0fx, 60fx, 100, 0, 0, 0, enemy_main);
+    wait(300);
+}
+```
+
+槽属于当前 owner 敌人。同一敌的写入立即生效，任务按已有槽号顺序执行；不同敌彼此隔离。
+新敌的槽全为0，也不会从创建者继承。启动或结束子任务、切换符卡阶段都保留槽值，重置时显式写0。
+`spawn_enemy(..., child(args))` 的参数仍只拷入子任务局部变量；需要时由入口写进共享槽。
+
+`self_int(slot)` / `self_fx(slot)` 返回对应类型，`set_self_int(slot, value)` /
+`set_self_fx(slot, value)` 写入。角度可用 `angle as int` 保存BAM值，读取时转回 `angle`。
+槽号越界时读取0、写入无效，并计一次违约；关卡任务和弹任务调用会Fault。
+`fire` 创建的弹任务以弹为owner，不能借这些接口读取发射者；它仍需要独立的传参方案。
+
 ## 敌人运动（`move_to` + 四条速度动词）
 
 五条动词全是 `self` 作用，无句柄参，够不着别的敌。owner 不是敌的任务调它们一律 Fault(0)、

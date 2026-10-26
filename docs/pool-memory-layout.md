@@ -41,10 +41,12 @@ struct BulletPool {
 | `BulletPool` | 8192 | 56 | 476 160 B ≈ 465 KiB |
 | `XformSegPool` | 4096 | — | 393 472 B ≈ 384 KiB |
 | `ShotPool` | 1024 | — | 28 800 B ≈ 28 KiB |
-| `EnemyPool` | 256 | 117 | 30 496 B ≈ 29.8 KiB（引擎第二刀 2026-09-24：+`dx`/`dy: Fx`×2 = +8 B/敌） |
+| `EnemyPool` | 256 | 165 | 42 784 B ≈ 41.8 KiB（ENGINE_VER27：每敌新增4个 `i32`、8个 `Fx` 脚本共享槽，共+12 288 B） |
 | `ItemPool` | 1024 | 22 | 22 656 B ≈ 22.1 KiB |
 | `FieldPool` | 16 | — | 328 B |
 | `LaserPool`（激光池刀 2026-09-25） | 256 | 80 | 21 024 B ≈ 20.5 KiB（27 字段 + `gen` 2 B×256 + alive 位图 32 B，实测见下） |
+
+敌人的 `script_int` / `script_fx` 各自是一条每敌数组，积分与碰撞相位不读取这些脚本变量；它们仍参与全槽校验、存档与复制。
 
 **这张表由 `step.rs` 的 `pool_size_sentinel_guards_the_layout_doc_account` 押运**：池宽了而
 账没跟，测试就红——这份文档做的是缓存精算，账过期等于第 2 节整篇推论悄悄失效

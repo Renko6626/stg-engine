@@ -82,6 +82,42 @@ use Ty::{Angle, Fx, Int};
 /// v1.1 内建函数全集（源码序即本表序——`lookup` 线性扫描，条目 <30、无序容器无必要）。
 const BUILTINS: &[Builtin] = &[
     Builtin {
+        name: "self_int",
+        syscall: syscall::SYS_SELF_INT,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Int),
+        doc: "读取当前敌人的共享整数槽；坏槽返回0并计违约，非敌owner触发Fault",
+        param_names: &["slot"],
+    },
+    Builtin {
+        name: "set_self_int",
+        syscall: syscall::SYS_SET_SELF_INT,
+        is_op: false,
+        params: &[Val(Int), Val(Int)],
+        ret: None,
+        doc: "写入当前敌人的共享整数槽；坏槽不写入并计违约，非敌owner触发Fault",
+        param_names: &["slot", "value"],
+    },
+    Builtin {
+        name: "self_fx",
+        syscall: syscall::SYS_SELF_FX,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Fx),
+        doc: "读取当前敌人的共享定点槽；坏槽返回0并计违约，非敌owner触发Fault",
+        param_names: &["slot"],
+    },
+    Builtin {
+        name: "set_self_fx",
+        syscall: syscall::SYS_SET_SELF_FX,
+        is_op: false,
+        params: &[Val(Int), Val(Fx)],
+        ret: None,
+        doc: "写入当前敌人的共享定点槽；坏槽不写入并计违约，非敌owner触发Fault",
+        param_names: &["slot", "value"],
+    },
+    Builtin {
         name: "accum_start",
         syscall: syscall::SYS_ACCUM_START,
         is_op: false,
@@ -1439,6 +1475,8 @@ mod tests {
     #[test]
     fn lookup_finds_every_documented_builtin_by_name() {
         let names = [
+            "self_int",
+            "self_fx",
             "accum_start",
             "accum_value",
             "accel_start",
@@ -1456,6 +1494,8 @@ mod tests {
             "move_angle",
             "move_speed",
             "set_anm_state",
+            "set_self_int",
+            "set_self_fx",
             "boss_set",
             "pulse_signal",
             "emit_req",
@@ -1700,6 +1740,8 @@ mod tests {
             "move_angle",
             "move_speed",
             "set_anm_state",
+            "set_self_int",
+            "set_self_fx",
             "boss_set",
             "pulse_signal",
             "emit_req",

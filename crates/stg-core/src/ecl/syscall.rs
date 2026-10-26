@@ -87,6 +87,14 @@ pub const SYS_SELF_X: u16 = 20;
 pub const SYS_SELF_Y: u16 = 21;
 pub const SYS_SELF_HP: u16 = 30;
 pub const SYS_RAND_RANGE: u16 = 150;
+/// 当前敌人的共享整数槽读口。
+pub const SYS_SELF_INT: u16 = 170;
+/// 当前敌人的共享定点槽读口。
+pub const SYS_SELF_FX: u16 = 171;
+/// 当前敌人的共享整数槽写口。
+pub const SYS_SET_SELF_INT: u16 = 450;
+/// 当前敌人的共享定点槽写口。
+pub const SYS_SET_SELF_FX: u16 = 451;
 pub const SYS_ACCUM_VALUE: u16 = 160;
 pub const SYS_ACCEL_VALUE: u16 = 161;
 pub const SYS_HERMITE_VALUE: u16 = 162;
@@ -454,13 +462,13 @@ pub const SYS_SELF_ANGLE: u16 = 25;
 /// （百分区制下号非连续，同 [`crate::ecl::ops::op_implemented`] 的纪律）。不在表内的号
 /// 由 `dispatch` 的兜底臂返 `FAULT_BAD_OP`。
 ///
-/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、102 条结构测试的表是 `cfg(test)`，
+/// **存在的理由是跨 crate**（`dispatch` 是 `pub(crate)`、冻结号表是 `cfg(test)`，
 /// 编译器 crate 两个都够不着）：`stg-ecl-compiler` 的 `builtins::BUILTINS` 要能断言
 /// "`is_op == false` 的条目，其 `syscall` 字段装的确实是个会被派发的号"。见
 /// `builtins.rs::builtin_dispatch_kind_matches_what_the_field_holds`。
 ///
 /// **与 `dispatch` 的同步靠测试押运，不靠自律**：`syscall_whitelist_matches_the_frozen_table`
-/// 断言"全 `u16` 域里为真的号恰好是那 102 条"，漏一条/多一条即红。
+/// 断言"全 `u16` 域里为真的号恰好是冻结表中的113条"，漏一条/多一条即红。
 pub const fn syscall_implemented(no: u16) -> bool {
     matches!(
         no,
@@ -490,6 +498,8 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_ATAN2
             | SYS_DIST
             | SYS_RAND_RANGE
+            | SYS_SELF_INT
+            | SYS_SELF_FX
             // 2xx 造物
             | SYS_CREATE_BULLET
             | SYS_CREATE_BULLETS_BATCH
@@ -516,6 +526,8 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_SET_HITBOX
             | SYS_SET_HURTBOX
             | SYS_SET_ENEMY_FLAG
+            | SYS_SET_SELF_INT
+            | SYS_SET_SELF_FX
             // 5xx 局面·记账·道具
             | SYS_ADD_SCORE
             | SYS_ADD_LIVES
@@ -723,6 +735,8 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         }
         SYS_DIST => sys_dist(task, ctx),
         SYS_RAND_RANGE => sys_rand_range(task, ctx),
+        SYS_SELF_INT => sys_self_int(task, ctx),
+        SYS_SELF_FX => sys_self_fx(task, ctx),
 
         // ── 2xx 造物 ─────────────────────────────────────────────────────────
         SYS_CREATE_BULLET => sys_create_bullet(task, ctx),
@@ -754,6 +768,8 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_SET_HITBOX => sys_set_hitbox(task, ctx),
         SYS_SET_HURTBOX => sys_set_hurtbox(task, ctx),
         SYS_SET_ENEMY_FLAG => sys_set_enemy_flag(task, ctx),
+        SYS_SET_SELF_INT => sys_set_self_int(task, ctx),
+        SYS_SET_SELF_FX => sys_set_self_fx(task, ctx),
 
         // ── 5xx 局面·记账·道具 ──────────────────────────────────────────────
         SYS_ADD_SCORE => sys_add_score(task, ctx),

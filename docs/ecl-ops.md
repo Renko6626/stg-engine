@@ -141,13 +141,12 @@
   状态（复用既有 `Task.born_frame`），对全部 owner 种类（含 STAGE）均有意义。次帧首跑时
   `age==1`（不是 0），见"作者须知" |
 
-### 1xx —— 查询（10）
+### 1xx —— 查询
 
 函数形态的读口 + 纯数学。与 `0xx` 的分界是**语法形态**（`$name` vs `f(...)`），**不是**"读/写"。
-owner 类别全族无限制。
+170/171仅接受敌人owner；其余查询的owner类别无限制。
 
-> ⚠️ `rand_range`(150) 是本族**唯一有副作用者**（推进模拟 PRNG，随快照回滚）——按脚本视角的
-> "取一个值"归族，**不是**纯读口。
+> `rand_range`(150) 推进模拟 PRNG，随快照回滚；170/171的错误处置会更新诊断。查询不保证无副作用。
 
 | 号 | 名 | 参数（压栈序） | 返回 |
 |---|---|---|---|
@@ -162,6 +161,10 @@ owner 类别全族无限制。
 | 140 | `atan2`（小清洗刀 2026-07-31） | y,x | 方向角（BAM）——**参数序是 `(y, x)`**（同 libm/ZUN 惯例；两位同为 `Fx` raw，对调不判型报错、只静默把角度镜像到另一条对角线上，故 `syscall.rs` 侧钉了**两个**取值的判别腿）。派发臂逆序弹出（先 `x` 后 `y`）。**无 P4 分支**：`math::cordic::atan2`（整数 CORDIC，钉死 16 轮）对任意 `(y, x)` 都有定义，含 `(0,0)`（返 0）——没有"坏参数"这个概念，不计 `contract_viol`、不 Fault。owner 类别无限制。与 120 号 `aim_player_angle` 的关系：那条只能瞄自机（0 参、基点写死 self 位置），本条能瞄任意点/任意敌 |
 | 141 | `dist`（小清洗刀 2026-07-31） | dx,dy | 向量 `(dx,dy)` 的**模长**（`Fx` raw）——**不是两点距离**，两点距离由脚本自己减（`dist(bx-ax, by-ay)`）。实现 = `isqrt(len_sq(dx,dy))`：`geom::len_sq` 返 **Q32.32**（`raw²`，不归一化），`isqrt` 开根正好把它变回 **Q16.16**（见 CLAUDE.md「定点乘法规范」）。值域：`len_sq` 恒 ≥0 故 `as u64` 安全；满屏最大约 1.7e15 → 开根 ≈4.1e7，远在 i32 上限内。**收窄回 i32 处饱和不回绕**：上面那句余量论证只覆盖**世界坐标差**这个域，而本条是通用两参 syscall——脚本能直接喂极端 `fx`。`dx = dy = i32::MAX` 时 `len_sq` ≈ 9.22e18（贴着 i64 上限但不溢出），开根 = 3037000498 **超 `i32::MAX`**，裸 `as i32` 会静默回绕成 **-1257966798**（负距离，会往下游传播的无意义值）；故实现是 `isqrt(..).min(i32::MAX as u32) as i32`——确定性降级到最大可表示距离，**钳位是正常语义**，不计 `contract_viol`、不 Fault（同 `add_score`/`add_lives` 族口径）。**无 P4 计数分支**（任意 i32 对都合法）。**为什么不单独暴露 `len_sq`/`isqrt`**（人类裁定）：`len_sq` 返 i64 而脚本值域是 i32 装不下，单独的 `isqrt` 对脚本没有直接用处——`dist` 才是那个有用的组合。owner 类别无限制 |
 | 150 | `rand_range` | n | [0,n) 消耗世界 RNG；n≤0 压 0 不消耗 |
+| 170 | `self_int` | slot | 当前 owner 敌人的整数槽；`slot ∈ [0, ENEMY_INT_SLOTS)`，返回 int |
+| 171 | `self_fx` | slot | 当前 owner 敌人的定点槽；`slot ∈ [0, ENEMY_FX_SLOTS)`，返回 fx raw |
+
+170/171 与450/451共享 EnemyPool 数值区。同一敌人的任务立即共享，任务结束或换阶段保留，创建新敌及复用清零，不隐式继承。owner 非敌 → Fault(0)；坏槽读取0/写入no-op，各计一次 `contract_viol` 并置 `BAD_ARGS`；世界接口失效句柄按 `STALE_HANDLE` 处置。槽号先按完整 i32 检查，负值及大值不回绕。
 
 ### 2xx —— 造物（4）
 
@@ -196,7 +199,7 @@ owner 类别全族无限制。
 |---|---|---|---|
 | 300-330 | 弹 setter 族 | 按 motion.rs 九连 | —（owner 须为弹，否则 Fault） |
 
-### 4xx —— 敌运动·表现状态（6）
+### 4xx —— 敌人控制和共享变量
 
 对齐 ZUN ECL 的 `4xx`（`move` 族）。**self owner 必须是 ENEMY**，否则 Fault(0)；**敌句柄取自
 owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P4-b 校验（悬垂句柄 →
@@ -222,6 +225,8 @@ owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P
 | 441 | `set_hitbox`（同刀） | r | —（self-only 同 440。写**体碰半径** `radius`（碰撞行 3）；`Fx` raw，钳 `[0, MAX_ENTITY_RADIUS]`，钳了计 `contract_viol`，同 `create_enemy` 口径） |
 | 442 | `set_hurtbox`（同刀） | r | —（self-only 同 440。写**受击半径** `hurtbox`（碰撞行 4/7）；钳制同 441） |
 | 443 | `set_enemy_flag`（同刀） | flag,on | —（self-only 同 440。`on != 0` 置位否则清位；`flag` 须为 `ENEMY_NO_BODY(2) \| ENEMY_KILLALL_EXEMPT(4)` 的**非空子集**，含 `ENEMY_DYING` 或未知位或 0 → 整条 no-op + `contract_viol` + `BAD_ARGS`。`ENEMY_NO_BODY` 让碰撞行 3 跳过、仍吃弹） |
+| 450 | `set_self_int` | slot,value | —；当前 owner 敌人的整数槽，逆序弹出 value、slot |
+| 451 | `set_self_fx` | slot,value | —；当前 owner 敌人的定点槽，value 为 fx raw；P4及生命周期同170/171 |
 
 ### 5xx —— 局面·记账·道具（14）
 

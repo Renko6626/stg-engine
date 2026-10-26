@@ -42,6 +42,8 @@ fn frozen_table() -> &'static [(u16, &'static str, u16)] {
         (SYS_ATAN2, "atan2", 1),
         (SYS_DIST, "dist", 1),
         (SYS_RAND_RANGE, "rand_range", 1),
+        (SYS_SELF_INT, "self_int", 1),
+        (SYS_SELF_FX, "self_fx", 1),
         (SYS_CREATE_BULLET, "create_bullet", 2),
         (SYS_CREATE_BULLETS_BATCH, "create_bullets_batch", 2),
         (SYS_SPAWN_ENEMY, "spawn_enemy", 2),
@@ -65,6 +67,8 @@ fn frozen_table() -> &'static [(u16, &'static str, u16)] {
         (SYS_SET_HITBOX, "set_hitbox", 4),
         (SYS_SET_HURTBOX, "set_hurtbox", 4),
         (SYS_SET_ENEMY_FLAG, "set_enemy_flag", 4),
+        (SYS_SET_SELF_INT, "set_self_int", 4),
+        (SYS_SET_SELF_FX, "set_self_fx", 4),
         (SYS_ADD_SCORE, "add_score", 5),
         (SYS_ADD_LIVES, "add_lives", 5),
         (SYS_ADD_BOMBS, "add_bombs", 5),
@@ -160,9 +164,9 @@ fn syscall_table_is_hundred_partitioned_and_unique() {
 
     assert_eq!(
         table.len(),
-        109,
+        113,
         "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 − 玩法刀退役 513 \
-         + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97；激光读口 810–814 = 102；自机判定写口 561 = 103；显式插值槽六条 = 109：增改需同步这个数"
+         + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97；激光读口 810–814 = 102；自机判定写口 561 = 103；显式插值槽六条 = 109；敌人共享槽四条 = 113：增改需同步这个数"
     );
 
     // (a) 族归属：搬错族立刻红
@@ -578,6 +582,8 @@ fn sys_self_reads_dispatch_by_owner_kind() {
         anm_state_frame: 0,
         main_task: 0,
         death_script: 0,
+        script_int: [0; crate::enemy::ENEMY_INT_SLOTS],
+        script_fx: [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS],
         drop_count: [0; crate::items::ITEM_TYPE_COUNT],
         score: 0,
     });

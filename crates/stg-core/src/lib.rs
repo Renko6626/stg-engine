@@ -227,7 +227,8 @@ extern crate self as stg_core;
 /// 旧0–7编码及表字节不变，World布局不变。原作状态型插值不纳入Easing。
 /// **25 → 26**（2026-10-23）：任务私有显式状态插值槽，新增6个syscall；
 /// TaskPool增加53,248 B，checksum/save/copy均变化，旧存档与回放失效。
-pub const ENGINE_VER: u32 = 26;
+/// 27：敌人共享脚本槽新增12 KiB状态及170/171/450/451读写接口。
+pub const ENGINE_VER: u32 = 27;
 
 pub use stg_derive::define_pool;
 

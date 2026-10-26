@@ -1,6 +1,6 @@
-//! 敌人池（D5）——`define_pool!` 第 3 个实例。SoA ~94 B/敌，cap 256。
-//! 本切片：全字段落池 + 直线积分（move_to 插值器/主控 AI 延后，字段惰性）。
-//! `flags` 的 dying 位由 settle 置、cleanup 回收（敌人槽活到相位 8 供死亡脚本/表现层读）。
+//! 敌人池（D5）——`define_pool!` 第 3 个实例。SoA 165 B/敌，cap 256。
+//! 保存运动、判定、表现与脚本共享数值状态；任务由组装层持有。
+//! `flags` 的 dying 位由 settle 置、cleanup 回收（敌人槽活到相位 9 供死亡脚本/表现层读）。
 
 use crate::define_pool;
 use crate::math::{Angle, Fx};
@@ -20,6 +20,11 @@ pub const KILL_DIE: u8 = 1;
 pub const VEL_SPACE_POLAR: u8 = 0;
 /// `vel_space`：笛卡尔插值空间（载体槽 = `(vx.raw(), vy.raw())`）。
 pub const VEL_SPACE_CART: u8 = 1;
+
+/// 每敌整数共享槽数。
+pub const ENEMY_INT_SLOTS: usize = 4;
+/// 每敌定点共享槽数。
+pub const ENEMY_FX_SLOTS: usize = 8;
 
 define_pool! {
     Enemy, cap = 256,
@@ -70,6 +75,8 @@ define_pool! {
         // `tables::drop_counts` 在建敌时展开进本字段，此后无人读表号。
         // 撒的顺序是**类型升序**（I4），见 `world::settle::spill_drops`。
         drop_count: [u8; crate::items::ITEM_TYPE_COUNT],
+        script_int: [i32; ENEMY_INT_SLOTS],
+        script_fx: [Fx; ENEMY_FX_SLOTS],
         score: u16
     }
 }
@@ -144,6 +151,8 @@ pub(crate) mod tests {
             anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
+            script_int: [0; crate::enemy::ENEMY_INT_SLOTS],
+            script_fx: [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS],
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 100,
         }

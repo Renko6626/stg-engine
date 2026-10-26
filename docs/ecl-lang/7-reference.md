@@ -117,6 +117,10 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 `committed_doc_segment_matches_generated` 防漂移测试打回。
 
 <!-- gen:builtins:begin -->
+- `self_int(slot: int) -> int` — 读取当前敌人的共享整数槽；坏槽返回0并计违约，非敌owner触发Fault
+- `set_self_int(slot: int, value: int)` — 写入当前敌人的共享整数槽；坏槽不写入并计违约，非敌owner触发Fault
+- `self_fx(slot: int) -> fx` — 读取当前敌人的共享定点槽；坏槽返回0并计违约，非敌owner触发Fault
+- `set_self_fx(slot: int, value: fx)` — 写入当前敌人的共享定点槽；坏槽不写入并计违约，非敌owner触发Fault
 - `accum_start(slot: int, initial: fx, delta: fx, frames: int)` — 启动任务私有累加槽；下一帧起逐帧加delta，共frames次，之后保持结果
 - `accel_start(slot: int, initial: fx, velocity: fx, acceleration: fx, frames: int)` — 启动任务私有加速槽；先加当前velocity，再加acceleration，共frames次
 - `hermite_start(slot: int, start: fx, end: fx, tangent_start: fx, tangent_end: fx, frames: int)` — 启动任务私有Hermite槽；切线对应归一化时间，frames=0立即终点

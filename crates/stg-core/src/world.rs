@@ -31,6 +31,7 @@ use crate::shots::{ShotHandle, ShotInit, ShotPool};
 
 mod cleanup;
 mod collide;
+mod enemy_vars;
 mod integrate;
 mod laser;
 pub mod motion;
@@ -493,12 +494,14 @@ impl WorldBody {
 
     /// 创建一个敌人（P4-a：池满 → NULL + 诊断计数 + last_status；P4-b：`radius`（体碰）与
     /// `hurtbox`（受击）各自双边钳入 `[0, MAX_ENTITY_RADIUS]`；两者同一调用内都越界也只计
-    /// 一次 `contract_viol`）。
+    /// 一次 `contract_viol`）。脚本共享槽始终清零，不继承传入 Init 或复用前的数值。
     pub fn create_enemy(&mut self, mut init: EnemyInit) -> EnemyHandle {
         let viol = Self::clamp_radius(&mut init.radius) | Self::clamp_radius(&mut init.hurtbox);
         if viol {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
         }
+        init.script_int = [0; crate::enemy::ENEMY_INT_SLOTS];
+        init.script_fx = [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS];
         match self.enemies.alloc(init) {
             Some(h) => h,
             None => {
@@ -1225,6 +1228,8 @@ pub(crate) mod test_support {
             anm_state_frame: w.body.frame,
             main_task: 0,
             death_script: 0,
+            script_int: [0; crate::enemy::ENEMY_INT_SLOTS],
+            script_fx: [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS],
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 100,
         })
@@ -1296,6 +1301,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn enemy_script_vars_reset_on_reuse_and_reject_stale_handles() {
+        let mut w = crate::World::new(1);
+        let old = w.body.create_enemy(min_enemy_init());
+        w.body.set_enemy_script_int(old, 0, 91);
+        w.body.set_enemy_script_fx(old, 7, Fx::from_raw(-123));
+        assert!(w.body.enemies.free(old));
+        let mut init = min_enemy_init();
+        init.script_int = [123; crate::enemy::ENEMY_INT_SLOTS];
+        init.script_fx = [Fx::from_raw(456); crate::enemy::ENEMY_FX_SLOTS];
+        let new = w.body.create_enemy(init);
+        assert_eq!(old.index, new.index);
+        assert_ne!(old.generation, new.generation);
+        assert_eq!(w.body.enemy_script_int(new, 0), 0);
+        assert_eq!(w.body.enemy_script_fx(new, 7), Fx::ZERO);
+        w.body.set_enemy_script_int(new, 0, 42);
+        w.body.set_enemy_script_fx(new, 7, Fx::from_raw(456));
+        let before = w.body.diag.contract_viol;
+        w.body.set_enemy_script_int(old, 0, 99);
+        w.body.set_enemy_script_fx(old, 7, Fx::from_raw(999));
+        assert_eq!(w.body.enemy_script_int(old, 0), 0);
+        assert_eq!(w.body.enemy_script_fx(old, 7), Fx::ZERO);
+        assert_eq!(w.body.last_status, STATUS_STALE_HANDLE);
+        assert_eq!(w.body.diag.contract_viol, before + 4);
+        assert_eq!(w.body.enemy_script_int(new, 0), 42);
+        assert_eq!(w.body.enemy_script_fx(new, 7), Fx::from_raw(456));
+    }
+
     /// 最小合法 `EnemyInit`。
     fn min_enemy_init() -> crate::enemy::EnemyInit {
         crate::enemy::EnemyInit {
@@ -1337,6 +1370,8 @@ mod tests {
             anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
+            script_int: [0; crate::enemy::ENEMY_INT_SLOTS],
+            script_fx: [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS],
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 0,
         }
@@ -1583,6 +1618,8 @@ mod tests {
             anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
+            script_int: [0; crate::enemy::ENEMY_INT_SLOTS],
+            script_fx: [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS],
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 100,
         };
@@ -1720,6 +1757,8 @@ mod tests {
             anm_state_frame: 0,
             main_task: 0,
             death_script: 0,
+            script_int: [0; crate::enemy::ENEMY_INT_SLOTS],
+            script_fx: [Fx::ZERO; crate::enemy::ENEMY_FX_SLOTS],
             drop_count: [0; crate::items::ITEM_TYPE_COUNT],
             score: 0,
         });

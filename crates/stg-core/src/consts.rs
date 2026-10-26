@@ -52,6 +52,8 @@ macro_rules! engine_consts {
 
 engine_consts! {
     structural {
+        ENEMY_INT_SLOTS: usize as int = crate::enemy::ENEMY_INT_SLOTS;
+        ENEMY_FX_SLOTS: usize as int = crate::enemy::ENEMY_FX_SLOTS;
         GVAR_RANK:           u16 as int = 0;
         GLOBALS_SYS_SEGMENT: u16 as int = 16;
         //  通道 B 引擎保留请求 id（分区与 args 约定见 `crate::reqs` 模块文档）

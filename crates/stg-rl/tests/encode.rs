@@ -113,6 +113,8 @@ fn enemy(w: &mut World, x: i32, y: i32, hp: i32, hp_max: i32) -> stg_core::enemy
         anm_state_frame: w.body.frame(),
         main_task: 0,
         death_script: 0,
+        script_int: [0; stg_core::enemy::ENEMY_INT_SLOTS],
+        script_fx: [stg_core::math::Fx::ZERO; stg_core::enemy::ENEMY_FX_SLOTS],
         drop_count: [0; stg_core::items::ITEM_TYPE_COUNT],
         score: 100,
     })
