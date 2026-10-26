@@ -213,6 +213,10 @@ impl NativeVecEnv {
         self.0.set_start_weights(w).map_err(PyValueError::new_err)
     }
 
+    fn current_start_indices(&self) -> Vec<usize> {
+        self.0.current_start_indices()
+    }
+
     fn set_hit_radius_extra(&mut self, px: Vec<f64>) -> PyResult<()> {
         self.0.set_hit_radius_extra(&px).map_err(PyValueError::new_err)
     }

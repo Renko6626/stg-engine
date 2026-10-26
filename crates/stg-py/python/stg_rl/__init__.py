@@ -171,6 +171,10 @@ class VecEnv:
     def set_start_weights(self, weights) -> None:
         self._native.set_start_weights([float(w) for w in weights])
 
+    def current_start_indices(self) -> list[int]:
+        """当前各 env 新一局所选起点索引；与 start_index 输出列（刚结束一局）语义不同。"""
+        return self._native.current_start_indices()
+
     def set_hit_radius_extra(self, px) -> None:
         """每个 env 追加的中弹判定半径（px，长度 = env 数，|x| ≤ 1024；负值即缩小）。
         当前局立即生效，此后每次自动 reset 都按「角色表值 + extra」重设，直到再改；全 0 = 恢复表值、逐位同旧行为。

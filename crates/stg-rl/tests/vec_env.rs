@@ -592,3 +592,23 @@ fn hit_extra_rejects_bad_input() {
     assert!(e.set_hit_radius_extra(&[f64::NAN, 0.0]).is_err());
     assert!(e.set_hit_radius_extra(&[2000.0, 0.0]).is_err());
 }
+
+#[test]
+fn current_start_indices_follow_reset_without_changing_terminal_buffer() {
+    let mut cfg = game_cfg(71);
+    cfg.warmup_max = 0;
+    cfg.max_frames = 1;
+    let mut env = VecEnv::new(cfg, 4, 2).unwrap();
+    let mut buf = Owned::new(4, 256);
+    env.set_start_weights(vec![0.0, 1.0]).unwrap();
+    env.reset(&mut buf.view()).unwrap();
+    assert_eq!(env.current_start_indices(), vec![1; 4]);
+    assert_eq!(buf.start_index, vec![0; 4]);
+    // Reading repeatedly must not advance the seed stream or reset a slot.
+    assert_eq!(env.current_start_indices(), vec![1; 4]);
+    env.set_start_weights(vec![1.0, 0.0]).unwrap();
+    env.step(&[0; 4], &mut buf.view()).unwrap();
+    assert!(buf.done.iter().all(|&x| x != 0));
+    assert_eq!(buf.start_index, vec![1; 4]);
+    assert_eq!(env.current_start_indices(), vec![0; 4]);
+}

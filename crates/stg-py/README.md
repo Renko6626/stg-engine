@@ -36,6 +36,7 @@ env = stg_rl.VecEnv(512, 32, {"game": img}, [stg_rl.Start("game", mark=15)], bul
 env.reset()
 env.step(actions)                                # actions: uint32[N]
 env.set_start_weights([...])                     # 课程学习
+env.current_start_indices()                      # 当前新一局实际所选起点；不改 start_index 输出列语义
 stg_rl.hello(bullets_cap=1024)                   # proto v1 HELLO JSON
 stg_rl.OFFSETS, stg_rl.STRIDES, stg_rl.EVENT_COLUMNS
 stg_rl.build_info()                              # {"version","engine_ver","tables_hash","git_sha"}

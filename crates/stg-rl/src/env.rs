@@ -346,6 +346,11 @@ impl Env {
         self.weights = w;
     }
 
+    /// Current reset-selected start index (read-only; does not advance simulation).
+    pub fn current_start_index(&self) -> usize {
+        self.start_index
+    }
+
     /// 追加中弹判定半径（`Fx`；负值即缩小）。当前局立即生效，此后每次 `reset` 按「表值 + extra」重设，
     /// 直到再改。写入走 `WorldBody::set_player_hit_radius`（钳 `[0, MAX_ENTITY_RADIUS]`）。
     pub fn set_hit_extra(&mut self, extra: Fx) {

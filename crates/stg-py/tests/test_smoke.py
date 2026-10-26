@@ -222,3 +222,20 @@ def test_hit_radius_extra_per_env_and_validation():
     with pytest.raises(ValueError):
         env.set_hit_radius_extra([float("nan"), 0, 0, 0])
 
+
+
+def test_current_start_indices_follow_reset_and_preserve_terminal_start():
+    img = stg_rl.compile_bundled("game")
+    env = stg_rl.VecEnv(4, 2, {"game": img},
+                        [stg_rl.Start("game", mark=10), stg_rl.Start("game", mark=15)],
+                        warmup_max=0, max_frames=1, bullets_cap=256)
+    env.set_start_weights([0, 1])
+    b = env.reset()
+    assert env.current_start_indices() == [1] * 4
+    assert b["start_index"].tolist() == [0] * 4
+    assert env.current_start_indices() == [1] * 4
+    env.set_start_weights([1, 0])
+    env.step(np.zeros(4, dtype=np.uint32))
+    assert np.all(b["done"] != 0)
+    assert b["start_index"].tolist() == [1] * 4
+    assert env.current_start_indices() == [0] * 4

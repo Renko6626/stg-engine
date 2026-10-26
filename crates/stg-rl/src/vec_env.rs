@@ -262,6 +262,14 @@ impl VecEnv {
         self.cap
     }
 
+    /// 当前每个 env 已 reset 选中的实际起点；纯读取，不修改随机数或 env 状态。
+    pub fn current_start_indices(&self) -> Vec<usize> {
+        self.slots
+            .iter()
+            .map(|slot| slot.env.current_start_index())
+            .collect()
+    }
+
     /// 逐字段核对缓冲长度（spec §3.1；形状 / dtype 由 Python 壳层的 numpy 视图保证）。
     fn check(&self, buf: &BufferSet<'_>) -> Result<(), String> {
         let want = buffer_sizes(self.slots.len(), self.cap);
