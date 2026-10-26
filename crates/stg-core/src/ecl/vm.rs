@@ -547,6 +547,9 @@ pub(crate) fn run_tasks(
             continue;
         }
 
+        // Independent of script execution and wait; born/owner/spell gates still apply.
+        tasks.interps[i].tick();
+
         if t.wait > 0 {
             t.wait -= 1;
             tasks.slots[i] = t;

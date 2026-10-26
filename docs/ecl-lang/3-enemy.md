@@ -28,13 +28,13 @@ const COLOR_CYAN: int = 7;
 
 // 飞进来 → 打一轮 → 飞出去 → sub 结束 = 这只敌自动退场（不需要飞到界外）
 async sub zako_dive() {
-    move_to(90, $self_x, 140.0fx, 2);
+    move_to(90, $self_x, 140.0fx, EASE_QUAD_OUT);
     wait(90);
     for i in 0..3 {
         _ = fire(BALL, COLOR_CYAN, $self_x, $self_y, 1.8fx, aim_player(), none, none);
         wait(25);
     }
-    move_to(150, $self_x, 500.0fx, 1);
+    move_to(150, $self_x, 500.0fx, EASE_QUAD_IN);
     wait(150);            // 等 move_to 走完；不等的话敌会在半路上就消失
 }
 
@@ -97,7 +97,7 @@ const BALL: int = 48;
 const COLOR_RED: int = 1;
 
 async sub zako(dir: angle, speed: fx) {
-    move_vel(0, dir, speed, 0);
+    move_vel(0, dir, speed, EASE_LINEAR);
     wait(40);
     _ = fire(BALL, COLOR_RED, $self_x, $self_y, 2.0fx, aim_player(), none, none);
     wait(200);
@@ -138,7 +138,9 @@ sub main() {
 若此刻正有一条同层的缓动在跑，`dur == 0` 会把它当场停掉，新值不会在次帧被旧缓动覆盖回去
 （速度层四条互相之间如此，位置层的 `move_to(0, …)` 对在飞的位置缓动也如此）。
 
-`easing` 是缓动曲线号 `0..=7`（`0` = 线性）。越界的 `easing` 走 P4-b：整条调用 no-op + 计一次
+`easing` 优先使用 `EASE_LINEAR`、`EASE_QUAD_OUT` 等语义常量，完整曲线见
+[速查表](7-reference.md#引擎常量编译器预置注入c14)。数值编码为 `0..=29`（旧0–7不变）。
+越界的 `easing` 走 P4-b：整条调用 no-op + 计一次
 违约，不 Fault、不钳位。写错了敌就是不动，别指望它退化成线性。`dur` 同理，合法范围 `0..=65535`。
 
 > 这条**从 2026-09-03 起才对所有越界值成立**（`ENGINE_VER` 12→13）。此前 `easing`/`dur` 在
@@ -178,7 +180,7 @@ sub main() {
   `2.5·√2 ≈ 3.54` 再涨回 5.0，速度矢量是走直线穿过去的。线性缓动在这条路上就等于恒定加速度。
 
 要匀速转向（扫描弹幕、绕圈）用 `move_vel`。要恒定加速度、或者要保住一个轴，用
-`move_vel_xy`——`move_vel_xy(30, $self_vx, 4.0fx, 2)` 就是 x 分量原样留着、只把 y 缓到 4.0。
+`move_vel_xy`——`move_vel_xy(30, $self_vx, 4.0fx, EASE_QUAD_OUT)` 就是 x 分量原样留着、只把 y 缓到 4.0。
 
 `move_angle` / `move_speed` 是 `move_vel` 的"只动一半"，两条都走极坐标空间。
 
@@ -189,11 +191,11 @@ sub main() {
 
 ```ecl
 async sub weave() {
-    move_vel(0, 90deg, 2.0fx, 0);       // 先给个初速：朝下 2.0
+    move_vel(0, 90deg, 2.0fx, EASE_LINEAR);       // 先给个初速：朝下 2.0
     loop {
-        move_angle(60, $self_angle + 15deg, 3);   // 相对转向：每轮再偏 15°
-        move_speed(30, $self_speed * 2.0fx, 2);   // 相对加速：速率翻倍
-        move_vel_xy(30, $self_vx, 4.0fx, 2);      // 保住 x 分量，只把 y 缓到 4.0
+        move_angle(60, $self_angle + 15deg, EASE_QUAD_IN_OUT);   // 相对转向：每轮再偏 15°
+        move_speed(30, $self_speed * 2.0fx, EASE_QUAD_OUT);   // 相对加速：速率翻倍
+        move_vel_xy(30, $self_vx, 4.0fx, EASE_QUAD_OUT);      // 保住 x 分量，只把 y 缓到 4.0
         wait(90);
     }
 }
@@ -213,8 +215,8 @@ sub main() {
 
 ```ecl
 async sub dive_and_drift() {
-    move_to(40, 80.0fx, 180.0fx, 2);   // 位置：40 帧缓到 (80,180)
-    move_vel(20, 90deg, 3.0fx, 0);     // 速度：20 帧缓到「朝下 3.0」——比位置那条早到期
+    move_to(40, 80.0fx, 180.0fx, EASE_QUAD_OUT);   // 位置：40 帧缓到 (80,180)
+    move_vel(20, 90deg, 3.0fx, EASE_LINEAR);     // 速度：20 帧缓到「朝下 3.0」——比位置那条早到期
     wait(40);                          // 到点。速度动词碰过 ⇒ 不清速
     loop { wait(1); }                  // 此后每帧 y += 3.0，一路飘出下边界
 }
@@ -249,7 +251,7 @@ async sub boss_entry() {
     set_invuln(120);                  // 登场 2 秒打不动
     set_enemy_flag(ENEMY_NO_BODY, 1); // 也撞不死
     set_hurtbox(40.0fx);              // 大体型：受击圈放大
-    move_to(90, 0.0fx, 120.0fx, 2);
+    move_to(90, 0.0fx, 120.0fx, EASE_QUAD_OUT);
     wait(120);
     set_enemy_flag(ENEMY_NO_BODY, 0);
     loop { wait(1); }
@@ -417,7 +419,7 @@ hp 判死（D9 退场时 hp 一点没动，可能还是满的；`enemy_hp` 只�
 ```ecl
 async sub familiar(boss: int) {
     while enemy_alive(boss) == 1 {
-        move_to(1, enemy_x(boss) + 40.0fx, enemy_y(boss), 0);
+        move_to(1, enemy_x(boss) + 40.0fx, enemy_y(boss), EASE_LINEAR);
         wait(1);
     }
 }

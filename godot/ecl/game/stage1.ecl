@@ -12,13 +12,13 @@ async sub zako_dive() {
     sh_speed(0, 1.8fx, 0fx);
     sh_aim(0, 1);
 
-    move_to(90, $self_x, 140.0fx, 2);
+    move_to(90, $self_x, 140.0fx, EASE_QUAD_OUT);
     wait(90);
     for i in 0..3 {
         sh_fire(0);
         wait(25);
     }
-    move_to(150, $self_x, 500.0fx, 1);
+    move_to(150, $self_x, 500.0fx, EASE_QUAD_IN);
     wait(150);
 }
 

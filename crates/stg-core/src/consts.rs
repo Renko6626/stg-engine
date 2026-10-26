@@ -94,12 +94,44 @@ engine_consts! {
         RANK_HARD:           i32 as int = 2;
         RANK_LUNATIC:        i32 as int = 3;
         RANK_EXTRA:          i32 as int = 4;
+        // 缓动名称取自引擎 Easing 枚举；各作品的原生 mode 必须先按曲线语义转换。
+        EASE_LINEAR:        u8 as int = crate::math::easing::Easing::Linear as u8;
+        EASE_QUAD_IN:       u8 as int = crate::math::easing::Easing::QuadIn as u8;
+        EASE_QUAD_OUT:      u8 as int = crate::math::easing::Easing::QuadOut as u8;
+        EASE_QUAD_IN_OUT:   u8 as int = crate::math::easing::Easing::QuadInOut as u8;
+        EASE_CUBIC_IN:      u8 as int = crate::math::easing::Easing::CubicIn as u8;
+        EASE_CUBIC_OUT:     u8 as int = crate::math::easing::Easing::CubicOut as u8;
+        EASE_CUBIC_IN_OUT:  u8 as int = crate::math::easing::Easing::CubicInOut as u8;
+        EASE_SMOOTHSTEP:    u8 as int = crate::math::easing::Easing::Smoothstep as u8;
+        EASE_QUART_IN:      u8 as int = crate::math::easing::Easing::QuartIn as u8;
+        EASE_QUART_OUT:     u8 as int = crate::math::easing::Easing::QuartOut as u8;
+        EASE_QUART_IN_OUT:  u8 as int = crate::math::easing::Easing::QuartInOut as u8;
+        EASE_QUAD_OUT_IN:   u8 as int = crate::math::easing::Easing::QuadOutIn as u8;
+        EASE_CUBIC_OUT_IN:  u8 as int = crate::math::easing::Easing::CubicOutIn as u8;
+        EASE_QUART_OUT_IN:  u8 as int = crate::math::easing::Easing::QuartOutIn as u8;
+        EASE_HOLD:          u8 as int = crate::math::easing::Easing::Hold as u8;
+        EASE_STEP_START:    u8 as int = crate::math::easing::Easing::StepStart as u8;
+        EASE_SINE_IN:       u8 as int = crate::math::easing::Easing::SineIn as u8;
+        EASE_SINE_OUT:      u8 as int = crate::math::easing::Easing::SineOut as u8;
+        EASE_SINE_IN_OUT:   u8 as int = crate::math::easing::Easing::SineInOut as u8;
+        EASE_SINE_OUT_IN:   u8 as int = crate::math::easing::Easing::SineOutIn as u8;
+        EASE_BACK_IN_P25:   u8 as int = crate::math::easing::Easing::BackInP25 as u8;
+        EASE_BACK_IN_P30:   u8 as int = crate::math::easing::Easing::BackInP30 as u8;
+        EASE_BACK_IN_P35:   u8 as int = crate::math::easing::Easing::BackInP35 as u8;
+        EASE_BACK_IN_P38:   u8 as int = crate::math::easing::Easing::BackInP38 as u8;
+        EASE_BACK_IN_P40:   u8 as int = crate::math::easing::Easing::BackInP40 as u8;
+        EASE_BACK_OUT_P25:  u8 as int = crate::math::easing::Easing::BackOutP25 as u8;
+        EASE_BACK_OUT_P30:  u8 as int = crate::math::easing::Easing::BackOutP30 as u8;
+        EASE_BACK_OUT_P35:  u8 as int = crate::math::easing::Easing::BackOutP35 as u8;
+        EASE_BACK_OUT_P38:  u8 as int = crate::math::easing::Easing::BackOutP38 as u8;
+        EASE_BACK_OUT_P40:  u8 as int = crate::math::easing::Easing::BackOutP40 as u8;
         //  每任务的发射器槽数（shooter 刀 D-1 拍死 K=4）。它是 `sh_*` 族（syscall 600-660）
         //  槽号 `id` 的合法上界——越界走 P4-b（no-op + `contract_viol`，不 Fault）。
         //  **注入的理由**（C23 已还，2026-09-03）：它和 `GLOBALS_SYS_SEGMENT` 是同一类东西
         //  ——"脚本必须知道的边界值"——而在此之前只有它没进注入表，于是手册与所有 `.ecl`
         //  都只能把 `4` / `0..=3` 写成字面量，正是 C14 那条"跨语言常量引用缺失"要消灭的形态。
         //  **放①不放②**：K 是 VM/ABI 事实（槽存储在 `TaskPool` 里，定长），与可加载表无关。
+        INTERP_SLOTS_PER_KIND: usize as int = crate::ecl::interp::INTERP_SLOTS_PER_KIND;
         SHOOTERS_PER_TASK:   usize as int = crate::ecl::shooter::SHOOTERS_PER_TASK;
         //  时停固定时长（自机能力刀 spec §9.1）：脚本/手册引用此名而非硬编 180，
         //  数值单一来源 = `crate::player::TIMESTOP_FRAMES`。

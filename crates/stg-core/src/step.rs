@@ -688,11 +688,11 @@ mod tests {
         );
     }
 
-    /// easing id ≥ 8 → BAD_ARGS（作者错误 create 期就拒）。
+    /// 无效easing id → BAD_ARGS（作者错误 create 期就拒）。
     #[test]
     fn create_rejects_bad_easing_id() {
         let mut w = World::new(1);
-        let seq = [slot(0, crate::xform::OP_STEP_SPEED, 65536, 4 | (8 << 16))];
+        let seq = [slot(0, crate::xform::OP_STEP_SPEED, 65536, 4 | (30 << 16))];
         assert_eq!(
             w.body
                 .create_bullet_with_xform(straight(0, 0, 0, 0, 1), &seq),
@@ -2340,11 +2340,13 @@ mod tests {
         // ③ **D10 容量预算适用**（本刀新增池 cap 256，`stg-world-design.md` D10 表已加行）；
         // ④ SaveBytes 走 derive 自动入档 ⇒ 存档 wire format 变化，`ENGINE_VER` 23→24（见 lib.rs）。
         // 判别面：`world::laser::tests::snapshot_covers_laser_pool`。
+        // ENGINE_VER26：任务插值并行数组新增53,248 B，WorldBody不变。
+        // TaskPool derive覆盖checksum/save，copy_into已同步；D10预算见stg-world-design.md。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (1058328, 1218128);
+        const EXPECTED: (usize, usize) = (1058328, 1271376);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (1058328, 1218128);
+        const EXPECTED: (usize, usize) = (1058328, 1271376);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2412,8 +2414,10 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            24,
-            "bump 必须是有意识决定(评审 + 改本测试)——23→24：激光池刀(2026-09-25，spec 2026-09-25-laser-pool-design.md)。\
+            26,
+            "25→26：任务私有状态插值槽新增6个syscall及53248 B状态，进checksum/save/copy。bump 必须是有意识决定(评审 + 改本测试)——24→25：语义缓动补齐(2026-10-23)。\
+             追加22条曲线(编号8–29)，原本坏参数现在合法；旧0–7编码和表字节保持不变，World布局不变。\
+             ——前一次23→24：激光池刀(2026-09-25，spec 2026-09-25-laser-pool-design.md)。\
              新增 LaserPool(cap 256)、相位 5 推进、碰撞行 9/10、syscall 族 8xx；校验和与存档载荷均变化，旧回放失效。\
              WorldBody.lasers 80 B/槽×256 + gen/alive = +21024 B(World 尺寸哨兵实测 1058328/1218128；copy_into 已同步)。\
              ——前一次 22→23：引擎第二刀(2026-09-24)。\

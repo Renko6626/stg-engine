@@ -629,7 +629,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 | 激光池（spec 2026-09-25-laser-pool-design，2026-09-25 激光池刀 T1） | 256 | **80 B**（实测字段和：Fx×13 52 + Angle×2 4 + i16×2 4 + u16×7 14 + u8×2 2 + u32 4 B；另 gen 2 B/槽） | **20.5 KB**（含 gen 2 B×256 + alive 位图 8 B×4 字；World 尺寸哨兵实测 +21 024 B） |
 | 道具池 | **1024**（F12，2026-09-03：512→1024——消弹转星星 1:1 而弹池 8192，demo 收卡一帧 626 颗弹让四个难度档全溢出；`ENGINE_VER` 13→14。**自机能力刀复核（2026-09-03）**：bomb 是这条压力的第二个入口——消弹区持续 120 帧×1:1 转星星、起爆当帧再叠加全屏吸取；实测把弹池灌到 rank-3 峰值量级〔约 814〕、真起一发 bomb 跑满整段效果时长，`diag.pool_full[POOL_ITEM]` 全程为 0（回归测试 `bomb_at_rank3_peak_bullet_count_does_not_overflow_item_pool`，`crates/stg-core/src/world/player.rs`），1024 对当前内容仍有约 210 格余量，本刀未触发再抬 cap 的裁决） | 22 B（实测） | 22.1 KB（含 gen/alive） |
 | FieldPool（通用作用区，M0-8） | 16 | ~18 B（x/y/radius 3×4B + dmg_per_frame 2B + life 2B + owner 1B + flags 1B） | ≈320 B（+ generation/alive）。**自机能力刀（2026-09-03）**：bomb 成为它的首个真租户——每次起爆按 `BombCfg.fields`（角色表驱动，v0 两条：全屏消弹 + 起爆点伤害圆）声明序铺 field，单次起爆占用 cap 的一小部分，未改容量常数。〔2026-09-14 玩法刀：bomb 退役，FieldPool 现仅 ECL `clear_bullets` 使用〕 |
-| 任务池（ECL 类型，住组装层 World） | 512 | ~600 B | 307 KB |
+| 任务池（ECL 类型，住组装层 World；ENGINE_VER26实测布局） | 256 | Task 448 B + shooter 176 B + 插值槽208 B，另存活位图32 B | 213,024 B；本轮插值槽新增53,248 B |
 | globals | 1024 × i32 | | 4 KB |
 | hits | 8192 × 6 B | | 48 KB |
 | frame_events | 512 × 24 B | | 12 KB |

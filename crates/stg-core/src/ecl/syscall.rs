@@ -69,6 +69,13 @@ pub const SYS_SELF_X: u16 = 20;
 pub const SYS_SELF_Y: u16 = 21;
 pub const SYS_SELF_HP: u16 = 30;
 pub const SYS_RAND_RANGE: u16 = 150;
+pub const SYS_ACCUM_VALUE: u16 = 160;
+pub const SYS_ACCEL_VALUE: u16 = 161;
+pub const SYS_HERMITE_VALUE: u16 = 162;
+pub const SYS_ACCUM_START: u16 = 750;
+pub const SYS_ACCEL_START: u16 = 751;
+pub const SYS_HERMITE_START: u16 = 752;
+
 pub const SYS_GET_VAR: u16 = 700;
 pub const SYS_SET_VAR: u16 = 701;
 /// 任务龄（帧数，**M1.5 新增**）：`ctx.frame - task.born_frame`（wrapping）。**语义故意偏离
@@ -379,7 +386,7 @@ pub const SYS_ENEMY_ALIVE: u16 = 103;
 
 // ── 敌人运动动词族（410-421；T4，对标 ZUN ECL `move` 400-447 族）────────────────
 // 四条 syscall 都是 `world/motion.rs` 四个 `set_enemy_*` 写 API 的薄封装：owner 违约
-// （非 ENEMY）→ Fault，悬垂句柄/`easing>=8` 的 P4-b 校验全在世界层做过，本层不重复计数。
+// （非 ENEMY）→ Fault，悬垂句柄/无效缓动编号的 P4-b 校验全在世界层做过，本层不重复计数。
 
 /// 极坐标速度（410；ZUN `404 moveVel` / `405 moveVelTime`）：4 参正序
 /// `dur, angle, speed, easing`。self owner 非 ENEMY → Fault（同 [`SYS_MOVE_ENEMY_TO`]）。
@@ -525,6 +532,8 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_SH_REQ
             | SYS_SH_FIRE
             // 7xx 控制·事件·符卡·globals
+            | SYS_ACCUM_VALUE | SYS_ACCEL_VALUE | SYS_HERMITE_VALUE
+            | SYS_ACCUM_START | SYS_ACCEL_START | SYS_HERMITE_START
             | SYS_GET_VAR
             | SYS_SET_VAR
             | SYS_PULSE_SIGNAL
@@ -794,6 +803,65 @@ fn shooter_mut<'a>(
         return None;
     }
     Some(&mut ctx.tasks.shooters[task_index as usize][id as usize])
+}
+
+/// Decode typed interpolation calls; all validation precedes state mutation.
+fn sys_interp(task: &mut Task, ctx: &mut VmCtx<'_>, no: u16) -> Result<(), u8> {
+    use crate::ecl::interp::{Accel, Accum, Hermite, INTERP_SLOTS_PER_KIND};
+    let count = match no {
+        SYS_ACCUM_START => 4,
+        SYS_ACCEL_START => 5,
+        SYS_HERMITE_START => 6,
+        _ => 1,
+    };
+    let mut args = [0i32; 6];
+    for i in (0..count).rev() {
+        args[i] = pop(task)?;
+    }
+    let slot = args[0];
+    let reading = count == 1;
+    if !(0..INTERP_SLOTS_PER_KIND as i32).contains(&slot)
+        || (!reading && !(0..=u16::MAX as i32).contains(&args[count - 1]))
+    {
+        ctx.body.diag.contract_viol = ctx.body.diag.contract_viol.wrapping_add(1);
+        ctx.body.last_status = crate::world::STATUS_BAD_ARGS;
+        return if reading { push(task, 0) } else { Ok(()) };
+    }
+    let bank = &mut ctx.tasks.interps[ctx.self_index as usize];
+    let slot = slot as usize;
+    match no {
+        SYS_ACCUM_START => {
+            bank.accum[slot] = Accum {
+                value: args[1],
+                delta: args[2],
+                remaining: args[3] as u16,
+            }
+        }
+        SYS_ACCEL_START => {
+            bank.accel[slot] = Accel {
+                value: args[1],
+                velocity: args[2],
+                acceleration: args[3],
+                remaining: args[4] as u16,
+            }
+        }
+        SYS_HERMITE_START => {
+            bank.hermite[slot] = Hermite {
+                value: if args[5] == 0 { args[2] } else { args[1] },
+                start: args[1],
+                end: args[2],
+                tangent_start: args[3],
+                tangent_end: args[4],
+                elapsed: 0,
+                duration: args[5] as u16,
+            }
+        }
+        SYS_ACCUM_VALUE => return push(task, bank.accum[slot].value),
+        SYS_ACCEL_VALUE => return push(task, bank.accel[slot].value),
+        SYS_HERMITE_VALUE => return push(task, bank.hermite[slot].value),
+        _ => unreachable!(),
+    }
+    Ok(())
 }
 
 /// 号表派发。坏号/参数不足 → `Err(fault_code)`（由 `vm::exec` 转 `Exec::Fault`）。
@@ -1299,6 +1367,8 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_SH_FIRE => sys_sh_fire(task, ctx),
 
         // ── 7xx 控制·事件·符卡 ─────────────────────────────────────────────
+        SYS_ACCUM_START | SYS_ACCEL_START | SYS_HERMITE_START | SYS_ACCUM_VALUE
+        | SYS_ACCEL_VALUE | SYS_HERMITE_VALUE => sys_interp(task, ctx, no),
         SYS_GET_VAR => {
             let slot = pop(task)? as u16;
             let v = ctx.body.get_var(slot);
@@ -2605,6 +2675,12 @@ mod tests {
             (SYS_SH_TASK, "sh_task", 6),
             (SYS_SH_REQ, "sh_req", 6),
             (SYS_SH_FIRE, "sh_fire", 6),
+            (SYS_ACCUM_VALUE, "accum_value", 1),
+            (SYS_ACCEL_VALUE, "accel_value", 1),
+            (SYS_HERMITE_VALUE, "hermite_value", 1),
+            (SYS_ACCUM_START, "accum_start", 7),
+            (SYS_ACCEL_START, "accel_start", 7),
+            (SYS_HERMITE_START, "hermite_start", 7),
             (SYS_GET_VAR, "get_var", 7),
             (SYS_SET_VAR, "set_var", 7),
             (SYS_PULSE_SIGNAL, "pulse_signal", 7),
@@ -2663,9 +2739,9 @@ mod tests {
 
         assert_eq!(
             table.len(),
-            103,
+            109,
             "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 − 玩法刀退役 513 \
-             + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97；激光读口 810–814 = 102；自机判定写口 561 = 103：增改需同步这个数"
+             + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97；激光读口 810–814 = 102；自机判定写口 561 = 103；显式插值槽六条 = 109：增改需同步这个数"
         );
 
         // (a) 族归属：搬错族立刻红
@@ -4188,12 +4264,12 @@ mod tests {
             owner_gen: eh.generation,
             ..Task::default()
         };
-        let args = [65535, Fx::from_int(50).raw(), 0, 7]; // dur 上沿 + easing 上沿(7 = 合法最大)
+        let args = [65535, Fx::from_int(50).raw(), 0, 29]; // dur 上沿 + easing 上沿
         assert!(call(&mut w, &ecl, &mut task, SYS_MOVE_ENEMY_TO, &args).is_ok());
         let i = eh.index as usize;
         assert_eq!(w.body.enemies.mv_active[i], 1, "边界合法值必须照常武装");
         assert_eq!(w.body.enemies.mv_dur[i], 65535);
-        assert_eq!(w.body.enemies.mv_easing[i], 7);
+        assert_eq!(w.body.enemies.mv_easing[i], 29);
     }
 
     /// D19：四条速度动词与 `move_enemy_to` **同一条腿**——收窄是共用 helper，五个入口不得分家。

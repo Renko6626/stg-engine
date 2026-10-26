@@ -290,7 +290,7 @@ impl WorldBody {
     }
 
     /// xform 序列合法性（两遍 arity 走格）：长度 ≤16、逐 op 已实现（扩展槽 scratch 不判）、
-    /// STEP 扩展槽空间、easing id < 8、LOOP target 落边界（zero-tail = 合法 END 边界）。
+    /// STEP 扩展槽空间、合法easing id、LOOP target 落边界（zero-tail = 合法 END 边界）。
     /// 纯谓词——计数/status 处置留调用方（create_bullet_with_xform 与 create_bullets_batch 共用）。
     fn xform_args_valid(xform: &[crate::xform::XformSlot]) -> bool {
         // 坏参检查（A1-(2)(3)）：按 arity 走格——扩展槽是 scratch，字节不判 op。
@@ -311,7 +311,7 @@ impl WorldBody {
                     bad = true; // 扩展槽越出段（如 STEP 在槽 15）
                     break;
                 }
-                if ((s.args[1] >> 16) as u8) >= 8 {
+                if crate::math::easing::Easing::from_id((s.args[1] >> 16) as u8).is_none() {
                     bad = true; // easing id 越界
                     break;
                 }
@@ -344,7 +344,7 @@ impl WorldBody {
 
     /// 创建一颗带变换序列的弹（D4）。序列**拷贝**进弹自有段（尾部清零 = 天然 END）。
     /// P4：radius 双边钳入 `[0, MAX_ENTITY_RADIUS]`（与 `create_bullet` 对称）；坏参
-    /// （>16 槽 / 含未知 op / STEP 无扩展槽空间 / easing id ≥ 8 / LOOP target 非边界）
+    /// （>16 槽 / 含未知 op / STEP 无扩展槽空间 / 无效easing id / LOOP target 非边界）
     /// → 整体失败 NULL + BAD_ARGS（宁缺勿哑）；
     /// 先段后弹——段满 → NULL + POOL_FULL(XFORM)；弹池满 → 还段回滚 + POOL_FULL(BULLET)。
     /// `init.transform_head` 恒被本函数覆写（调用方传值无效）。
@@ -629,7 +629,7 @@ impl WorldBody {
             self.last_status = STATUS_STALE_HANDLE;
             return;
         };
-        if easing >= 8 {
+        if crate::math::easing::Easing::from_id(easing).is_none() {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             self.last_status = STATUS_BAD_ARGS;
             return;
@@ -2220,12 +2220,12 @@ mod tests {
     /// 若有人"顺手对齐"两条路径的验证序，第二条红。
     #[test]
     fn contract_viol_counts_once_per_category_within_one_call() {
-        // 坏 xform：ARITY>0 的 op 的 easing id 越界（args[1] 高 16 位 >= 8）
+        // 坏 xform：ARITY>0 的 op 的 easing id 越界（30不在有效枚举集合中）
         let bad_xform = [crate::xform::XformSlot {
             wait: 0,
             op: crate::xform::OP_STEP_SPEED,
             _pad: 0,
-            args: [Fx::from_int(1).raw(), 2 | (8 << 16)],
+            args: [Fx::from_int(1).raw(), 2 | (30 << 16)],
         }];
 
         // ① 单发入口（验证序 radius → xform）：两类各计一次 ⇒ +2

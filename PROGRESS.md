@@ -4,11 +4,19 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-10-23）
+## 现在（2026-10-26）
+
+- **本地提交收口（2026-10-26）**：当前起点查询接口、30条命名缓动曲线与显式状态插值槽纳入本地提交，未推送。提交前复核core／compiler／harness／RL相关测试、fmt／clippy、Python绑定源码检查与已有wheel的起点查询冒烟；harness端口测试在沙箱外通过。新版wheel未重建，原作动态与跨平台对拍仍未执行；此前实施记录中的“未提交”是2026-10-23当时状态。
+
+- **显式状态插值槽（ENGINE_VER26）**：新增 `accum_start/value`、`accel_start/value`、`hermite_start/value`，每任务每类4槽，fx值；启动下一帧推进，wait继续，读取不推进、不自动回写。P4坏参诊断、任务复用清零、checksum/save/copy均覆盖；新增53,248 B。接口及原作差异见[状态插值说明](docs/stateful-interpolation-reference.md)，检查与审阅见[实施记录](docs/superpowers/plans/2026-10-23-stateful-interpolation.md)。未扩展导入器／运动写API，未重建训练wheel，未原作实机或跨平台对拍。
+
+- **语义缓动补齐**（2026-10-23，ENGINE_VER24→25）：用户确认排除TH18 mode7/8/17的状态型操作，`Easing` 从8条扩为30条，追加四次、OUT_IN、保持／跳变、正弦、反向／超调；ECL使用30个 `EASE_*` 名称，三处World入口统一枚举校验。0–7编码及旧表8224字节前缀不变，新增22,616字节，World布局不变；真实运动／弹STEP保留负权重、超调和BAM回绕，终帧精确落点。三方编号与语义见[对照表](docs/easing-reference.md)，命令和审阅见[实施记录](docs/superpowers/plans/2026-10-23-easing-curves.md)。core／compiler／harness集中测试、局部负权重复核、fmt、clippy、verify-tables通过；本机改前后golden逐字节一致，SHA256 `599e53fd102fbbfcb398822e920cd3aec4cd2cfea1fea8b56ebf17af1ebdda86`。未重建训练wheel、未迁移既有训练卡池、未跨平台／原作实机验证。
 
 - **ECL 标签／goto 兼容语法**（2026-10-23）：支持 sub 顶层 `label:` 与同 sub `goto label;`，用于自动导入，不推荐常规手写；保持初始化和作用域边界，mark 混用受限，见 [`docs/ecl-lang/2-tasks.md`](docs/ecl-lang/2-tasks.md)。只改编译前端，复用原有 JMP，**ENGINE_VER 保持 24**。编译器测试、clippy、文档示例检查通过；改前／后 golden 逐字节相同，SHA256 `599e53fd102fbbfcb398822e920cd3aec4cd2cfea1fea8b56ebf17af1ebdda86`。训练仓原型已生成可读 ECL 并恢复简单结构，未升级训练 wheel 或发布。
 
 - **RL 观测适配优化**：补齐模拟/episode/reset、观测选择/编码与 CSR 的诊断计时；超 cap 的池索引排序改为选中位图升序枚举，未超 cap 时 popcount 计数并直接编码，跳过空尾字。选弹集合、并列裁决、行序、协议和 World 不变，**ENGINE_VER 保持 24**。Python/rl-bench 可选超限提醒默认关闭，每环境每局一次、同批合并。三轮固定亲和 A/B：密弹重排 21.31→1.76µs，普通批量吞吐中位数约 +72%；接近 cap 的单环境适配约 −37%，批量收益未确认。详见 [`docs/bench-baseline.md`](docs/bench-baseline.md#位图重排与直接编码2026-10-04)；后续 CSR 直接写入、训练专用输出尚未实施。
+
+- **RL 只读接口补充**：`stg_rl` 0.4.1 新增 `VecEnv.current_start_indices()`，返回各槽当前 reset 后所选起点。原 `start_index` 缓冲保持终局归属与显式 reset 清零语义；用于训练侧逐卡意图采样。仅断层线以上只读 API，未改 World 布局、step 或 RNG，评审结论为 **ENGINE_VER 保持 24**。
 
 - **位置**：**激光池刀落地（本仓 Task 1–6，`ENGINE_VER` 23→24，`stg_rl` 0.2.0→0.3.0）**——
   spec `docs/superpowers/specs/2026-09-25-laser-pool-design.md`：直线激光成为一等实体。
@@ -29,6 +37,8 @@
 - **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
+
+- 2026-10-23：ENGINE_VER26显式状态插值槽，三类独立启动／读取；任务私有，纳入快照与存档。
 
 | 日期 | 里程碑 | 一句话 |
 |---|---|---|

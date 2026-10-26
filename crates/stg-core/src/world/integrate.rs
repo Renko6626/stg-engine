@@ -142,7 +142,7 @@ impl WorldBody {
                 }
                 // ② 位置插值接管位置，否则匀速积分
                 if self.enemies.mv_active[i] != 0 {
-                    // D5 插值器优先：绝对插值（每帧从 from 重算，不累积误差；e≤1.0 白名单乘法）
+                    // D5 插值器优先：绝对插值（每帧从 from 重算，不累积误差；宽乘法保留反向／超调）
                     self.enemies.mv_t[i] += 1;
                     if self.enemies.mv_t[i] >= self.enemies.mv_dur[i] {
                         // 到点即停（精确终点，不吃舍入；清速防残留漂移）
@@ -320,7 +320,7 @@ impl WorldBody {
     fn tick_enemy_vel(&mut self, i: usize) {
         self.enemies.vel_t[i] += 1;
         let done = self.enemies.vel_t[i] >= self.enemies.vel_dur[i];
-        // e ∈ [0,1]：done 帧不参与运算（走 to/delta 直写路径），故只在未完成时求
+        // e可为负或超1：done 帧不参与运算（走 to/delta 直写路径），故只在未完成时求
         let e = if done {
             Fx::ZERO
         } else {
@@ -1003,6 +1003,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn extended_easing_preserves_reverse_and_overshoot_in_enemy_motion() {
+        for (curve, middle, middle_angle) in [(29, 14, 52500), (24, -6, 43036)] {
+            let mut w = crate::step::World::new(1);
+            let handles: Vec<_> = (0..5).map(|_| spawn_enemy(&mut w, 0, 100, 5)).collect();
+            let indices: Vec<_> = handles
+                .iter()
+                .map(|&h| w.body.enemies.get(h).unwrap())
+                .collect();
+            // 半程权重分别为7/4与−3/4；正负两边都保留BAM回绕。
+            w.body
+                .move_enemy_to(handles[0], Fx::from_int(8), Fx::from_int(100), 4, curve);
+            w.body
+                .set_enemy_vel_polar(handles[1], Angle::ZERO, Fx::from_int(8), 4, curve);
+            w.body
+                .set_enemy_vel_cart(handles[2], Fx::from_int(8), Fx::ZERO, 4, curve);
+            w.body.set_enemy_angle(handles[3], Angle(30000), 4, curve);
+            w.body
+                .set_enemy_speed(handles[4], Fx::from_int(8), 4, curve);
+            for f in 0..2 {
+                crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+            }
+            assert_eq!(w.body.enemies.x[indices[0]], Fx::from_int(middle));
+            assert_eq!(w.body.enemies.speed[indices[1]], Fx::from_int(middle));
+            assert_eq!(w.body.enemies.vx[indices[2]], Fx::from_int(middle));
+            assert_eq!(w.body.enemies.angle[indices[3]], Angle(middle_angle));
+            assert_eq!(w.body.enemies.speed[indices[4]], Fx::from_int(middle));
+            for f in 2..4 {
+                crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+            }
+            assert_eq!(w.body.enemies.x[indices[0]], Fx::from_int(8));
+            assert_eq!(w.body.enemies.speed[indices[1]], Fx::from_int(8));
+            assert_eq!(w.body.enemies.vx[indices[2]], Fx::from_int(8));
+            assert_eq!(w.body.enemies.angle[indices[3]], Angle(30000));
+            assert_eq!(w.body.enemies.speed[indices[4]], Fx::from_int(8));
+            assert_eq!(w.body.diag.contract_viol, 0);
+        }
+    }
+
+    #[test]
+    fn hold_and_step_start_apply_on_tick_and_finish_at_the_target() {
+        for (curve, middle) in [(14, 0), (15, 8)] {
+            let mut w = crate::step::World::new(1);
+            let h = spawn_enemy(&mut w, 0, 100, 5);
+            let i = w.body.enemies.get(h).unwrap();
+            w.body
+                .move_enemy_to(h, Fx::from_int(8), Fx::from_int(100), 4, curve);
+            assert_eq!(w.body.enemies.x[i], Fx::ZERO);
+            for f in 0..3 {
+                crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+                assert_eq!(w.body.enemies.x[i], Fx::from_int(middle));
+            }
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(3));
+            assert_eq!(w.body.enemies.x[i], Fx::from_int(8));
+            assert_eq!(w.body.diag.contract_viol, 0);
+        }
+    }
+
     /// 到点即停：完成帧精确终点 + vx/vy 清零 + mv_active 清；此前残留速度不得泄漏。
     #[test]
     fn move_to_arrival_stops_dead() {
@@ -1467,7 +1525,7 @@ mod tests {
         assert_eq!(w.body.enemies.vel_active[i], 0, "到期即解除武装");
     }
 
-    /// P4：悬垂句柄计数；easing≥8 拒绝 no-op。
+    /// P4：悬垂句柄计数；无效easing 拒绝 no-op。
     #[test]
     fn move_to_bad_args_contract() {
         let mut w = crate::step::World::new(1);
@@ -1479,7 +1537,7 @@ mod tests {
         assert_eq!(w.body.last_status, crate::world::STATUS_STALE_HANDLE);
         let h2 = spawn_enemy(&mut w, 0, 100, 5);
         let i2 = w.body.enemies.get(h2).unwrap();
-        w.body.move_enemy_to(h2, Fx::ZERO, Fx::ZERO, 10, 8); // easing 越界
+        w.body.move_enemy_to(h2, Fx::ZERO, Fx::ZERO, 10, 30); // easing 越界
         assert_eq!(w.body.diag.contract_viol, cv0 + 2);
         assert_eq!(w.body.last_status, crate::world::STATUS_BAD_ARGS);
         assert_eq!(w.body.enemies.mv_active[i2], 0, "拒绝即 no-op");

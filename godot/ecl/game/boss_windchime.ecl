@@ -27,9 +27,9 @@ xformdef WIND_CHIME {
 
 async sub patrol() {
     loop {
-        move_to(90, -120fx, 100fx, 2);
+        move_to(90, -120fx, 100fx, EASE_QUAD_OUT);
         wait(90);
-        move_to(90, 120fx, 100fx, 2);
+        move_to(90, 120fx, 100fx, EASE_QUAD_OUT);
         wait(90);
     }
 }
@@ -108,7 +108,7 @@ async sub boss_main() {
     spell_begin(0, SPELL_MOTHERSPLIT, motherspell_pattern, 3600, 150000, 0, 0);
     wait_spell();
     // 终卡也超时未破:退场(顶部飞出,OOB 回收 → boss_battle 的轮询放行;被击破则本任务已随敌亡)
-    move_to(120, 0fx, -600.0fx, 1);
+    move_to(120, 0fx, -600.0fx, EASE_QUAD_IN);
     wait(600);
 }
 

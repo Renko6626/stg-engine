@@ -223,7 +223,11 @@ extern crate self as stg_core;
 /// 旧回放失效。Task 1 先落池骨架（`WorldBody.lasers`，80 B/槽×256 + gen/alive = **+21024 B**，
 /// 尺寸哨兵实测 1037304→1058328 / 1197104→1218128，`copy_into` 已同步；新池从帧 0 起即入
 /// 校验和，哈希全槽 P6），相位推进/碰撞/syscall 由同一刀后续步骤落地，故本刀只 bump 一次。
-pub const ENGINE_VER: u32 = 24;
+/// **24 → 25**（2026-10-23）：缓动追加22条曲线（8–29），此前无效编号成为合法输入；
+/// 旧0–7编码及表字节不变，World布局不变。原作状态型插值不纳入Easing。
+/// **25 → 26**（2026-10-23）：任务私有显式状态插值槽，新增6个syscall；
+/// TaskPool增加53,248 B，checksum/save/copy均变化，旧存档与回放失效。
+pub const ENGINE_VER: u32 = 26;
 
 pub use stg_derive::define_pool;
 

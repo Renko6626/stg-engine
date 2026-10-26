@@ -13,6 +13,7 @@
 /// safe named-entry binding API (Task 3)
 pub mod binding;
 pub mod image;
+pub mod interp;
 pub mod ops;
 /// 预存发射参数集（shooter 刀 2026-07-31）——每任务 4 个发射器槽，存储挂 `TaskPool`。
 pub mod shooter;

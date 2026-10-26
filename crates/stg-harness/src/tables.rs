@@ -22,42 +22,87 @@ pub fn gen_sin_quarter() -> Vec<u8> {
     out
 }
 
-/// easing 曲线函数类型。
-type Curve = fn(f64) -> f64;
-
-/// 8 条 easing 曲线，每条 257 项 Q16.16 归一化 [0,1]（顺序须与 `Easing` 枚举一致）。
+/// 每条曲线257个Q16.16采样；输出保留反向／超调。旧0–7行公式和字节不变。
 pub fn gen_easing() -> Vec<u8> {
-    let curves: [Curve; 8] = [
-        |t| t,                           // Linear
-        |t| t * t,                       // QuadIn
-        |t| 1.0 - (1.0 - t) * (1.0 - t), // QuadOut
-        |t| {
-            if t < 0.5 {
-                2.0 * t * t
-            } else {
-                1.0 - (-2.0 * t + 2.0).powi(2) / 2.0
-            }
-        }, // QuadInOut
-        |t| t * t * t,                   // CubicIn
-        |t| 1.0 - (1.0 - t).powi(3),     // CubicOut
-        |t| {
-            if t < 0.5 {
-                4.0 * t * t * t
-            } else {
-                1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-            }
-        }, // CubicInOut
-        |t| t * t * (3.0 - 2.0 * t),     // Smoothstep
-    ];
-    let mut out = Vec::with_capacity(8 * 257 * 4);
-    for f in curves {
+    use stg_core::math::easing::Easing;
+
+    let mut out = Vec::with_capacity(Easing::ALL.len() * 257 * 4);
+    for curve in Easing::ALL {
         for i in 0..=256i64 {
             let t = (i as f64) / 256.0;
-            let v = (f(t) * 65536.0).round_ties_even() as i32;
+            let value = match curve {
+                Easing::Linear => t,
+                Easing::QuadIn => t * t,
+                Easing::QuadOut => 1.0 - (1.0 - t) * (1.0 - t),
+                Easing::QuadInOut => {
+                    if t < 0.5 {
+                        2.0 * t * t
+                    } else {
+                        1.0 - (-2.0 * t + 2.0).powi(2) / 2.0
+                    }
+                }
+                Easing::CubicIn => t * t * t,
+                Easing::CubicOut => 1.0 - (1.0 - t).powi(3),
+                Easing::CubicInOut => {
+                    if t < 0.5 {
+                        4.0 * t * t * t
+                    } else {
+                        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+                    }
+                }
+                Easing::Smoothstep => t * t * (3.0 - 2.0 * t),
+                Easing::QuartIn => t.powi(4),
+                Easing::QuartOut => 1.0 - (1.0 - t).powi(4),
+                Easing::QuartInOut => {
+                    if t < 0.5 {
+                        8.0 * t.powi(4)
+                    } else {
+                        1.0 - (2.0 - 2.0 * t).powi(4) / 2.0
+                    }
+                }
+                Easing::QuadOutIn => out_in(t, 2),
+                Easing::CubicOutIn => out_in(t, 3),
+                Easing::QuartOutIn => out_in(t, 4),
+                Easing::Hold => 0.0,
+                Easing::StepStart => 1.0,
+                Easing::SineIn => 1.0 - (PI * t / 2.0).cos(),
+                Easing::SineOut => (PI * t / 2.0).sin(),
+                Easing::SineInOut => (1.0 - (PI * t).cos()) / 2.0,
+                Easing::SineOutIn => {
+                    if t < 0.5 {
+                        (PI * t).sin() / 2.0
+                    } else {
+                        1.0 - (PI * t).sin() / 2.0
+                    }
+                }
+                Easing::BackInP25 => back(t, 0.25),
+                Easing::BackInP30 => back(t, 0.30),
+                Easing::BackInP35 => back(t, 0.35),
+                Easing::BackInP38 => back(t, 0.38),
+                Easing::BackInP40 => back(t, 0.40),
+                Easing::BackOutP25 => 1.0 - back(1.0 - t, 0.25),
+                Easing::BackOutP30 => 1.0 - back(1.0 - t, 0.30),
+                Easing::BackOutP35 => 1.0 - back(1.0 - t, 0.35),
+                Easing::BackOutP38 => 1.0 - back(1.0 - t, 0.38),
+                Easing::BackOutP40 => 1.0 - back(1.0 - t, 0.40),
+            };
+            let v = (value * 65536.0).round_ties_even() as i32;
             out.extend_from_slice(&v.to_le_bytes());
         }
     }
     out
+}
+
+fn out_in(t: f64, power: i32) -> f64 {
+    if t < 0.5 {
+        (1.0 - (1.0 - 2.0 * t).powi(power)) / 2.0
+    } else {
+        0.5 + (2.0 * t - 1.0).powi(power) / 2.0
+    }
+}
+
+fn back(t: f64, extremum: f64) -> f64 {
+    (t * t - 2.0 * extremum * t) / (1.0 - 2.0 * extremum)
 }
 
 /// CORDIC 角度常数：`atan(2^-i)`（弧度）转 BAM，16 项 u16。

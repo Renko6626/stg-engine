@@ -200,11 +200,11 @@ owner 类别全族无限制。
 
 对齐 ZUN ECL 的 `4xx`（`move` 族）。**self owner 必须是 ENEMY**，否则 Fault(0)；**敌句柄取自
 owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P4-b 校验（悬垂句柄 →
-`STALE_HANDLE`；`easing >= 8` → `BAD_ARGS`）在世界层做过，绑定层不重复计数。
+`STALE_HANDLE`；无效缓动编号（当前合法0–29） → `BAD_ARGS`）在世界层做过，绑定层不重复计数。
 
 ⚠️ **`dur`/`easing` 的收窄在派发臂、先于世界层**（D19，`ENGINE_VER` 12→13，2026-09-03）：
 栈上是 `i32`，世界层收的是 `u16`/`u8`，这一步走 `u16::try_from` / `u8::try_from`，任一失败即
-**整条 no-op + `contract_viol` +1 + `BAD_ARGS`**（与世界层那条 `easing >= 8` 是同一条腿，
+**整条 no-op + `contract_viol` +1 + `BAD_ARGS`**（与世界层那条 无效缓动编号（当前合法0–29） 是同一条腿，
 判据前移）。**此前是裸 `as`**，于是 `easing = 256` 截断成 `0` 静默变线性、`easing = 264` 落 8
 被正确拒掉——能不能拒取决于越界值模 256 落在哪里；`dur = -1` 变成"缓动 65535 帧"。
 五条**共用同一个 helper**（`narrow_dur_easing`），判别式测试
@@ -212,8 +212,8 @@ owner、不占栈位**。五条都是 `world/motion.rs` 写 API 的薄封装，P
 
 | 号 | 名 | 参数（压栈序） | 返回 |
 |---|---|---|---|
-| 400 | `move_enemy_to` | **dur,x,y,easing** | —（owner 须为敌，否则 Fault(0)；参数序以 syscall.rs 为准，勿凭直觉写 x,y 在前。**P4-b 两码分开**：悬垂 owner 句柄 → no-op + `contract_viol` +1 + **`STALE_HANDLE`**；`easing >= 8` → no-op + `contract_viol` +1 + **`BAD_ARGS`**（不钳位）。`dur == 0` = 瞬移 + 硬停（写位置、清 `vx/vy` 并**回填** `speed`/`angle`、清在飞的位置插值），合法退化不计违约。**到点清速条件化**（敌人运动动词族刀 2026-07-31）：位置插值到点仅在黏滞位 `vel_touched == 0` 时清 `vx/vy`（清完同样回填作者视图）——判据是"脚本这一轮碰没碰过速度动词"，**不是**"速度插值还在不在跑"。⚠️ **本条是一次完整的运动接管**（终审裁定 2026-07-31）：武装时（`dur == 0` 与 `dur > 0` **两条路径**）既清黏滞位 `vel_touched`、**也清在飞的速度插值** `vel_active`——"表达过速度意图"这个事实都作废了，"意图正在执行中"更该作废；不清的话敌到点只停一帧就被旧 `from/to` 写回速度继续飘。要落地后继续飘，把 410-421 写在本条**之后**） |
-| 410 | `move_vel`（敌人运动动词族刀 2026-07-31；ZUN `400 move` 族） | dur,angle,speed,easing | —（**self-only**，同 400 号 `move_to`：敌句柄取自 owner、**不占栈位**，owner 非 ENEMY → **Fault(0)**。四位全部真实压栈，派发臂逆序弹出 `easing,speed,angle,dur`。薄封装 `world::set_enemy_vel_polar`。**`dur == 0` = 立即设**（直接写 `speed`/`angle` 并刷 `vx/vy`，不置插值态，合法退化**不计违约**）；`dur > 0` 武装**极坐标空间**插值——逐帧插 `speed` 与 `angle` 再刷 `vx/vy`，故**匀速扫弧**、角度走**最短弧**（同 `transform.rs` 的 `STEP_ANGLE`）。**P4-b 两码分开**：悬垂 owner 句柄 → **整条 no-op** + `contract_viol` +1 + **`STALE_HANDLE`**；`easing >= 8` → **整条 no-op** + `contract_viol` +1 + **`BAD_ARGS`**。两条都不 Fault、**不钳位**（`enemy_vel_precheck` 与 400 号共用同一份判据，两码也逐条同 400 号）。四条动词（410-421）任一成功执行都置敌身上的黏滞位 `vel_touched=1`（**`dur == 0` 的瞬时腿同样置位**），400 号 `move_to` 武装时把它归零——见 400 号的"到点清速条件化"。**`dur == 0` 还会解除在飞的速度插值**（`vel_active = 0`）：不解除的话瞬时值当帧生效、次帧就被仍在飞的插值器按旧 `from/to` 覆盖回去，脚本的"急停"静默失效 |
+| 400 | `move_enemy_to` | **dur,x,y,easing** | —（owner 须为敌，否则 Fault(0)；参数序以 syscall.rs 为准，勿凭直觉写 x,y 在前。**P4-b 两码分开**：悬垂 owner 句柄 → no-op + `contract_viol` +1 + **`STALE_HANDLE`**；无效缓动编号（当前合法0–29） → no-op + `contract_viol` +1 + **`BAD_ARGS`**（不钳位）。`dur == 0` = 瞬移 + 硬停（写位置、清 `vx/vy` 并**回填** `speed`/`angle`、清在飞的位置插值），合法退化不计违约。**到点清速条件化**（敌人运动动词族刀 2026-07-31）：位置插值到点仅在黏滞位 `vel_touched == 0` 时清 `vx/vy`（清完同样回填作者视图）——判据是"脚本这一轮碰没碰过速度动词"，**不是**"速度插值还在不在跑"。⚠️ **本条是一次完整的运动接管**（终审裁定 2026-07-31）：武装时（`dur == 0` 与 `dur > 0` **两条路径**）既清黏滞位 `vel_touched`、**也清在飞的速度插值** `vel_active`——"表达过速度意图"这个事实都作废了，"意图正在执行中"更该作废；不清的话敌到点只停一帧就被旧 `from/to` 写回速度继续飘。要落地后继续飘，把 410-421 写在本条**之后**） |
+| 410 | `move_vel`（敌人运动动词族刀 2026-07-31；ZUN `400 move` 族） | dur,angle,speed,easing | —（**self-only**，同 400 号 `move_to`：敌句柄取自 owner、**不占栈位**，owner 非 ENEMY → **Fault(0)**。四位全部真实压栈，派发臂逆序弹出 `easing,speed,angle,dur`。薄封装 `world::set_enemy_vel_polar`。**`dur == 0` = 立即设**（直接写 `speed`/`angle` 并刷 `vx/vy`，不置插值态，合法退化**不计违约**）；`dur > 0` 武装**极坐标空间**插值——逐帧插 `speed` 与 `angle` 再刷 `vx/vy`，故**匀速扫弧**、角度走**最短弧**（同 `transform.rs` 的 `STEP_ANGLE`）。**P4-b 两码分开**：悬垂 owner 句柄 → **整条 no-op** + `contract_viol` +1 + **`STALE_HANDLE`**；无效缓动编号（当前合法0–29） → **整条 no-op** + `contract_viol` +1 + **`BAD_ARGS`**。两条都不 Fault、**不钳位**（`enemy_vel_precheck` 与 400 号共用同一份判据，两码也逐条同 400 号）。四条动词（410-421）任一成功执行都置敌身上的黏滞位 `vel_touched=1`（**`dur == 0` 的瞬时腿同样置位**），400 号 `move_to` 武装时把它归零——见 400 号的"到点清速条件化"。**`dur == 0` 还会解除在飞的速度插值**（`vel_active = 0`）：不解除的话瞬时值当帧生效、次帧就被仍在飞的插值器按旧 `from/to` 覆盖回去，脚本的"急停"静默失效 |
 | 411 | `move_vel_xy`（同刀） | dur,vx,vy,easing | —（同 410 号的 owner 门禁 / P4 / `dur==0` 口径，只有插值空间不同：`dur > 0` 时在**笛卡尔空间**插值——`vx`/`vy` 各自线性插、再回填 `speed`/`angle`。**这不是 410 号的语法糖**：同一对端点两条走的轨迹不同（笛卡尔是速度矢量直线穿过、中途速率掉，线性缓动即恒定加速度；极坐标是匀速扫弧）。把这条实现成"转极坐标再插"就退化成 410 号了，`integrate.rs` 的招牌判别式 `polar_and_cartesian_velocity_interpolation_take_different_paths` 就是钉这个的。薄封装 `world::set_enemy_vel_cart`） |
 | 420 | `move_angle`（同刀） | dur,angle,easing | —（**只转向、速率一字不动**：终点 = `(当前 speed, 目标 angle)`，走极坐标空间。3 位压栈。其余口径同 410 号） |
 | 421 | `move_speed`（同刀） | dur,speed,easing | —（**只调速、方向一字不动**：终点 = `(目标 speed, 当前 angle)`，走极坐标空间。3 位压栈。其余口径同 410 号） |
@@ -290,6 +290,12 @@ xform 区间、sub 号在册统统留到 `sh_fire`(660) 那一刻查（同 `fire
 | 722 | `fx_on`（表现契约 v2） | kind,param | —（**self-only**，owner 非敌 → Fault(0)。发 `REQ_FX_ATTACHED, [index, gen, kind, param, 0, 0]`，句柄取自 owner 敌、**裸 index/gen 两位**不打包；壳侧按 `(index, gen)` 每帧跟随（桥面 `entity_pos`）、句柄失效即自毁。对应 ZUN `anmPlay`。即发即忘类） |
 | 723 | `stage_clear`（壳子刀 2026-09-07） | stage | —（owner 无限制。发**事件** `EVT_STAGE_CLEARED{data0 = stage}`——流程信号走通道 A 事实流，不发通道 B 请求；表层 codegen 在它后面追发 `PUSHI 1; WAIT` 让出一帧，故 `stage_clear(n);` 之后的语句在宿主放行后的**第一帧**才执行。手写字节码只发 `SYS 723` 不让出帧。取代 `emit_req(REQ_STAGE_CLEAR, …)` 挂牌协议——那条不让出帧、下一关开头会在挂牌同一帧跑掉） |
 | 730 | `boss_set` | slot,hp_ratio,spell_id,timer,phase_left,active | —（enemy 字段写 NULL，见 boss_ui 契约） |
+| 160 | `accum_value` | slot | fx 当前累加值（读取不推进） |
+| 161 | `accel_value` | slot | fx 当前加速值（读取不推进） |
+| 162 | `hermite_value` | slot | fx 当前 Hermite 值（读取不推进） |
+| 750 | `accum_start` | slot,initial,delta,frames | — |
+| 751 | `accel_start` | slot,initial,velocity,acceleration,frames | — |
+| 752 | `hermite_start` | slot,start,end,tangent_start,tangent_end,frames | — |
 | 740 | `spell_begin`（符卡机构，见下方"符卡计器"） | slot,spell_id,pattern_sub,time_limit,bonus0,flags,hp_threshold | —（owner 须为敌，否则 Fault） |
 | 741 | `spell_end`（符卡机构，见下方"符卡计器"） | — | —（owner 绑定槽走 HP 路径结算；无绑定槽 → no-op，重复调用安全） |
 

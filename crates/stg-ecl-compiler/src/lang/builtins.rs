@@ -81,6 +81,67 @@ use Ty::{Angle, Fx, Int};
 
 /// v1.1 内建函数全集（源码序即本表序——`lookup` 线性扫描，条目 <30、无序容器无必要）。
 const BUILTINS: &[Builtin] = &[
+    Builtin {
+        name: "accum_start",
+        syscall: syscall::SYS_ACCUM_START,
+        is_op: false,
+        params: &[Val(Int), Val(Fx), Val(Fx), Val(Int)],
+        ret: None,
+        doc: "启动任务私有累加槽；下一帧起逐帧加delta，共frames次，之后保持结果",
+        param_names: &["slot", "initial", "delta", "frames"],
+    },
+    Builtin {
+        name: "accel_start",
+        syscall: syscall::SYS_ACCEL_START,
+        is_op: false,
+        params: &[Val(Int), Val(Fx), Val(Fx), Val(Fx), Val(Int)],
+        ret: None,
+        doc: "启动任务私有加速槽；先加当前velocity，再加acceleration，共frames次",
+        param_names: &["slot", "initial", "velocity", "acceleration", "frames"],
+    },
+    Builtin {
+        name: "hermite_start",
+        syscall: syscall::SYS_HERMITE_START,
+        is_op: false,
+        params: &[Val(Int), Val(Fx), Val(Fx), Val(Fx), Val(Fx), Val(Int)],
+        ret: None,
+        doc: "启动任务私有Hermite槽；切线对应归一化时间，frames=0立即终点",
+        param_names: &[
+            "slot",
+            "start",
+            "end",
+            "tangent_start",
+            "tangent_end",
+            "frames",
+        ],
+    },
+    Builtin {
+        name: "accum_value",
+        syscall: syscall::SYS_ACCUM_VALUE,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Fx),
+        doc: "读取累加槽当前fx值，不推进、不回写变量；无效槽返回0并计数",
+        param_names: &["slot"],
+    },
+    Builtin {
+        name: "accel_value",
+        syscall: syscall::SYS_ACCEL_VALUE,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Fx),
+        doc: "读取加速槽当前fx值，不推进、不回写变量；无效槽返回0并计数",
+        param_names: &["slot"],
+    },
+    Builtin {
+        name: "hermite_value",
+        syscall: syscall::SYS_HERMITE_VALUE,
+        is_op: false,
+        params: &[Val(Int)],
+        ret: Some(Fx),
+        doc: "读取Hermite槽当前fx值，不推进、不回写变量；无效槽返回0并计数",
+        param_names: &["slot"],
+    },
     // ── 创建/世界变更（syscall 2xx/4xx/7xx）───────────────────────────────────────
     Builtin {
         name: "fire",
@@ -202,7 +263,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Fx), Val(Fx), Val(Int)],
         ret: None,
-        doc: "同 move_vel 但收笛卡尔分量,且 dur>0 时**在笛卡尔空间插值**(两分量各自线性插,中途速率会掉——线性缓动即恒定加速度);要匀速转向用 move_vel。保住一轴的写法:move_vel_xy(30, $self_vx, 4.0fx, 2)",
+        doc: "同 move_vel 但收笛卡尔分量,且 dur>0 时**在笛卡尔空间插值**(两分量各自线性插,中途速率会掉——线性缓动即恒定加速度);要匀速转向用 move_vel。保住一轴的写法:move_vel_xy(30, $self_vx, 4.0fx, EASE_QUAD_OUT)",
         param_names: &["dur", "vx", "vy", "easing"],
     },
     Builtin {
@@ -211,7 +272,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Angle), Val(Int)],
         ret: None,
-        doc: "只转向、速率一字不动;dur>0 走**最短弧**(350deg→10deg 走 +20deg 不走 -340deg)。相对转向:move_angle(60, $self_angle + 15deg, 3)",
+        doc: "只转向、速率一字不动;dur>0 走**最短弧**(350deg→10deg 走 +20deg 不走 -340deg)。相对转向:move_angle(60, $self_angle + 15deg, EASE_QUAD_IN_OUT)",
         param_names: &["dur", "angle", "easing"],
     },
     Builtin {
@@ -220,7 +281,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Val(Fx), Val(Int)],
         ret: None,
-        doc: "只调速、方向一字不动。相对加速:move_speed(30, $self_speed * 2.0fx, 2)",
+        doc: "只调速、方向一字不动。相对加速:move_speed(30, $self_speed * 2.0fx, EASE_QUAD_OUT)",
         param_names: &["dur", "speed", "easing"],
     },
     // ── 表现契约 v2（2026-09-07）：敌人表现状态号（syscall 430）────────────────
@@ -1378,6 +1439,12 @@ mod tests {
     #[test]
     fn lookup_finds_every_documented_builtin_by_name() {
         let names = [
+            "accum_start",
+            "accum_value",
+            "accel_start",
+            "accel_value",
+            "hermite_start",
+            "hermite_value",
             "fire",
             "batch",
             "spawn_enemy",

@@ -138,14 +138,14 @@ boss_main() { }`——那样敌会在你还没看见它的时候就没了。
 
 ## 第 4 步：让它动
 
-`move_to(dur, x, y, easing)` 把敌在 `dur` 帧内缓动到某个点，`easing` 是曲线号 `0..=7`：
+`move_to(dur, x, y, easing)` 把敌在 `dur` 帧内缓动到某个点，`easing` 使用 `EASE_*` 语义名称（当前编码 `0..=29`）：
 
 ```ecl
 async sub boss_main() {
     loop {
-        move_to(90, -120.0fx, 96.0fx, 2);
+        move_to(90, -120.0fx, 96.0fx, EASE_QUAD_OUT);
         wait(90);
-        move_to(90, 120.0fx, 96.0fx, 2);
+        move_to(90, 120.0fx, 96.0fx, EASE_QUAD_OUT);
         wait(90);
     }
 }
@@ -183,9 +183,9 @@ async sub shoot() {
 async sub boss_main() {
     spawn shoot();
     loop {
-        move_to(90, -120.0fx, 96.0fx, 2);
+        move_to(90, -120.0fx, 96.0fx, EASE_QUAD_OUT);
         wait(90);
-        move_to(90, 120.0fx, 96.0fx, 2);
+        move_to(90, 120.0fx, 96.0fx, EASE_QUAD_OUT);
         wait(90);
     }
 }
@@ -227,9 +227,9 @@ async sub shoot() {
 async sub boss_main() {
     spawn shoot();
     loop {
-        move_to(90, -120.0fx, 96.0fx, 2);
+        move_to(90, -120.0fx, 96.0fx, EASE_QUAD_OUT);
         wait(90);
-        move_to(90, 120.0fx, 96.0fx, 2);
+        move_to(90, 120.0fx, 96.0fx, EASE_QUAD_OUT);
         wait(90);
     }
 }
@@ -295,13 +295,13 @@ const COLOR_RED: int = 2;
 const MARK_BOSS: int = 1;
 
 async sub zako() {
-    move_to(90, $self_x, 140.0fx, 2);
+    move_to(90, $self_x, 140.0fx, EASE_QUAD_OUT);
     wait(90);
     for i in 0..3 {
         _ = fire(BALL, COLOR_RED, $self_x, $self_y, 1.8fx, aim_player(), none, none);
         wait(25);
     }
-    move_to(150, $self_x, 500.0fx, 1);
+    move_to(150, $self_x, 500.0fx, EASE_QUAD_IN);
     wait(150);                       // 等它走完；不等的话敌会在半路上就退场
 }
 
@@ -320,9 +320,9 @@ async sub shoot() {
 async sub boss_main() {
     spawn shoot();
     loop {
-        move_to(90, -120.0fx, 96.0fx, 2);
+        move_to(90, -120.0fx, 96.0fx, EASE_QUAD_OUT);
         wait(90);
-        move_to(90, 120.0fx, 96.0fx, 2);
+        move_to(90, 120.0fx, 96.0fx, EASE_QUAD_OUT);
         wait(90);
     }
 }

@@ -739,6 +739,54 @@ mod tests {
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(3), "完成后值冻结");
     }
 
+    #[test]
+    fn extended_curves_work_through_bullet_step_creation_and_ticks() {
+        for (curve, middle) in [(14, 0), (15, 8), (29, 14), (24, -6)] {
+            let mut w = crate::step::World::new(1);
+            let i = xf_bullet(
+                &mut w,
+                &[
+                    slot(0, OP_STEP_SPEED, Fx::from_int(8).raw(), 4 | (curve << 16)),
+                    slot(0, OP_END, 0, 0),
+                ],
+            );
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+            assert_eq!(w.body.bullets.speed[i], Fx::ZERO, "发射帧不推进");
+            for f in 1..=2 {
+                crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+            }
+            assert_eq!(w.body.bullets.speed[i], Fx::from_int(middle));
+            for f in 3..=4 {
+                crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+            }
+            assert_eq!(w.body.bullets.speed[i], Fx::from_int(8));
+            assert_eq!(w.body.diag.contract_viol, 0);
+        }
+
+        for (curve, middle_angle) in [(29, 52500), (24, 43036)] {
+            let mut w = crate::step::World::new(1);
+            let i = xf_bullet(
+                &mut w,
+                &[
+                    slot(0, OP_STEP_ANGLE, 30000, 4 | (curve << 16)),
+                    slot(0, OP_END, 0, 0),
+                ],
+            );
+            for f in 0..=2 {
+                crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+            }
+            assert_eq!(
+                w.body.bullets.angle[i],
+                Angle(middle_angle),
+                "角度超调保留BAM回绕"
+            );
+            for f in 3..=4 {
+                crate::world::test_support::step_t(&mut w, &InputFrame::empty(f));
+            }
+            assert_eq!(w.body.bullets.angle[i], Angle(30000));
+        }
+    }
+
     /// A1-(1) ARITY 步进判别：STEP 双槽——游标必须跳过扩展槽，直接发射其后的 op。
     /// 若步进错成 1，游标会把 scratch 当 op 读（垃圾/END）→ SET_SPRITE 永不发射。
     #[test]

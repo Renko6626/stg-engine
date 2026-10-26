@@ -15,8 +15,8 @@ xformdef WIND_CHIME { set_speed(2.0fx); @30 turn(90deg); }
 
 async sub patrol() {
     loop {
-        move_to(180, -120fx, 100fx, 2); wait(180);
-        move_to(180,  120fx, 100fx, 2); wait(180);
+        move_to(180, -120fx, 100fx, EASE_QUAD_OUT); wait(180);
+        move_to(180,  120fx, 100fx, EASE_QUAD_OUT); wait(180);
     }
 }
 

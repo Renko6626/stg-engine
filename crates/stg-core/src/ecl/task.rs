@@ -11,6 +11,8 @@
 //! `world_size_sentinel` 对齐后取实测值。`docs/superpowers/specs/2026-07-18-m1-ecl-vm-design.md`
 //! 里那串旧数字**不动**——那是冻结的设计记录。）
 //!
+//! ENGINE_VER 26 增加状态插值并行数组53,248 B：TaskPool为213,024 B，World为1,271,376 B。
+//!
 //! **为何手写而非 `define_pool!`**：`define_pool!` 把每个字段展开成独立 SoA 数组
 //! （`[T; CAP]` per field），适合"细粒度字段各自成阵列"的场景；`Task` 本身已是一块含定长
 //! 栈/locals 的扁平内存（I5：协程完整状态 ip+栈+局部位于可 memcpy 内存），拆成 SoA 对它
@@ -26,6 +28,7 @@ pub const OWNER_STAGE: u8 = 0;
 pub const OWNER_ENEMY: u8 = 1;
 pub const OWNER_BULLET: u8 = 2;
 use crate::ecl::image::SubId;
+use crate::ecl::interp::InterpSlots;
 use crate::ecl::shooter::{SHOOTERS_PER_TASK, ShooterSlot};
 
 /// 一个 ECL 任务（协程）的完整可 memcpy 状态（I5：模拟协程完整状态位于可 memcpy 的扁平内存）。
@@ -108,6 +111,8 @@ pub struct TaskPool {
     /// 不该为这个塞 176 B 进去。
     /// `spawn` 负责重置（复用槽写满纪律，撑"校验和哈希全槽不掩码"）。
     pub(crate) shooters: [[ShooterSlot; SHOOTERS_PER_TASK]; TASK_CAP],
+    /// 每任务每类4个值槽（208 B/任务）；spawn重置，checksum/save/copy覆盖。
+    pub(crate) interps: [InterpSlots; TASK_CAP],
     pub(crate) alive: [u64; TASK_CAP / 64],
 }
 
@@ -132,6 +137,7 @@ impl TaskPool {
         TaskPool {
             slots: [Task::default(); TASK_CAP],
             shooters: [[ShooterSlot::default(); SHOOTERS_PER_TASK]; TASK_CAP],
+            interps: [InterpSlots::default(); TASK_CAP],
             alive: [0; TASK_CAP / 64],
         }
     }
@@ -182,6 +188,7 @@ impl TaskPool {
                 // 复用槽写满：新任务的发射器一律回默认值。漏这步会让上一个任务的发射器
                 // 参数泄漏给新任务——而且因为校验和哈希全槽,泄漏值还会进校验和。
                 self.shooters[idx] = [ShooterSlot::default(); SHOOTERS_PER_TASK];
+                self.interps[idx] = InterpSlots::default();
                 return Some(idx as u16);
             }
         }
@@ -242,6 +249,7 @@ impl TaskPool {
     pub(crate) fn copy_into(&self, dst: &mut TaskPool) {
         dst.slots.copy_from_slice(&self.slots);
         dst.shooters.copy_from_slice(&self.shooters);
+        dst.interps.copy_from_slice(&self.interps);
         dst.alive.copy_from_slice(&self.alive);
     }
 }
@@ -256,6 +264,26 @@ impl Default for TaskPool {
 mod tests {
     use super::*;
     use crate::checksum::Checksum;
+
+    #[test]
+    fn reused_task_clears_all_interpolation_banks() {
+        let mut pool = TaskPool::new();
+        let idx = pool
+            .spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 0)
+            .unwrap() as usize;
+        pool.interps[idx].accum[3].value = 11;
+        pool.interps[idx].accel[3].velocity = 12;
+        pool.interps[idx].hermite[3].tangent_end = 13;
+        pool.kill(idx);
+        assert_eq!(
+            pool.spawn(SubId::default(), 0, (OWNER_STAGE, 0, 0), 0, 1),
+            Some(idx as u16)
+        );
+        assert_eq!(
+            pool.interps[idx].checksum(),
+            InterpSlots::default().checksum()
+        );
+    }
 
     #[test]
     fn spawn_is_lowest_free_and_writes_all_fields() {

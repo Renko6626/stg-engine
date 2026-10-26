@@ -295,7 +295,7 @@ impl WorldBody {
         self.aim_at_player_at(i, delta);
     }
 
-    /// 四条速度动词共用的前置校验（P4-b）：悬垂 → None + 计数；`easing >= 8` → None + 计数。
+    /// 四条速度动词共用的前置校验（P4-b）：悬垂 → None + 计数；无效缓动编号 → None + 计数。
     /// **两条都必须在任何字段落地之前**——坏参数是 no-op，不能留半个武装好的插值器。
     fn enemy_vel_precheck(&mut self, h: crate::enemy::EnemyHandle, easing: u8) -> Option<usize> {
         let Some(i) = self.enemies.get(h) else {
@@ -303,7 +303,7 @@ impl WorldBody {
             self.last_status = STATUS_STALE_HANDLE;
             return None;
         };
-        if easing >= 8 {
+        if crate::math::easing::Easing::from_id(easing).is_none() {
             self.diag.contract_viol = self.diag.contract_viol.wrapping_add(1);
             self.last_status = STATUS_BAD_ARGS;
             return None;
@@ -914,7 +914,7 @@ mod tests {
         let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
         let before = w.body.diag.contract_viol;
         w.body
-            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(5), 10, 8);
+            .set_enemy_vel_polar(h, Angle::QUARTER, Fx::from_int(5), 10, 30);
         let i = w.body.enemies.get(h).unwrap();
         assert_eq!(w.body.enemies.vel_active[i], 0, "坏参数不得武装");
         assert_eq!(w.body.enemies.vel_touched[i], 0, "坏参数不算表达过意图");
@@ -927,7 +927,7 @@ mod tests {
         let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
         let before = w.body.diag.contract_viol;
         w.body
-            .set_enemy_vel_cart(h, Fx::from_int(3), Fx::from_int(4), 10, 8);
+            .set_enemy_vel_cart(h, Fx::from_int(3), Fx::from_int(4), 10, 30);
         assert_eq!(
             w.body.diag.contract_viol,
             before + 1,
@@ -936,7 +936,7 @@ mod tests {
 
         let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
         let before = w.body.diag.contract_viol;
-        w.body.set_enemy_angle(h, Angle::QUARTER, 10, 8);
+        w.body.set_enemy_angle(h, Angle::QUARTER, 10, 30);
         assert_eq!(
             w.body.diag.contract_viol,
             before + 1,
@@ -945,7 +945,7 @@ mod tests {
 
         let h = crate::world::test_support::spawn_enemy(&mut w, 0, 0, 5);
         let before = w.body.diag.contract_viol;
-        w.body.set_enemy_speed(h, Fx::from_int(2), 10, 8);
+        w.body.set_enemy_speed(h, Fx::from_int(2), 10, 30);
         assert_eq!(
             w.body.diag.contract_viol,
             before + 1,

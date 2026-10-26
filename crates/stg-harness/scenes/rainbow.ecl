@@ -57,9 +57,9 @@ xformdef WIND_CHIME {
 
 async sub patrol() {
     loop {
-        move_to(90, -120fx, 100fx, 2); // QuadOut 左
+        move_to(90, -120fx, 100fx, EASE_QUAD_OUT); // QuadOut 左
         wait(90);
-        move_to(90, 120fx, 100fx, 2); // QuadOut 右
+        move_to(90, 120fx, 100fx, EASE_QUAD_OUT); // QuadOut 右
         wait(90);
     }
 }

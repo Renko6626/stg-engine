@@ -349,6 +349,65 @@ mod tests {
         }
     }
 
+    #[test]
+    fn named_easing_compiles_to_existing_motion_bytecode() {
+        for (name, id) in [
+            ("EASE_LINEAR", 0),
+            ("EASE_QUAD_IN", 1),
+            ("EASE_QUAD_OUT", 2),
+            ("EASE_QUAD_IN_OUT", 3),
+            ("EASE_CUBIC_IN", 4),
+            ("EASE_CUBIC_OUT", 5),
+            ("EASE_CUBIC_IN_OUT", 6),
+            ("EASE_SMOOTHSTEP", 7),
+            ("EASE_QUART_IN", 8),
+            ("EASE_QUART_OUT", 9),
+            ("EASE_QUART_IN_OUT", 10),
+            ("EASE_QUAD_OUT_IN", 11),
+            ("EASE_CUBIC_OUT_IN", 12),
+            ("EASE_QUART_OUT_IN", 13),
+            ("EASE_HOLD", 14),
+            ("EASE_STEP_START", 15),
+            ("EASE_SINE_IN", 16),
+            ("EASE_SINE_OUT", 17),
+            ("EASE_SINE_IN_OUT", 18),
+            ("EASE_SINE_OUT_IN", 19),
+            ("EASE_BACK_IN_P25", 20),
+            ("EASE_BACK_IN_P30", 21),
+            ("EASE_BACK_IN_P35", 22),
+            ("EASE_BACK_IN_P38", 23),
+            ("EASE_BACK_IN_P40", 24),
+            ("EASE_BACK_OUT_P25", 25),
+            ("EASE_BACK_OUT_P30", 26),
+            ("EASE_BACK_OUT_P35", 27),
+            ("EASE_BACK_OUT_P38", 28),
+            ("EASE_BACK_OUT_P40", 29),
+        ] {
+            let source = |ease: &str| {
+                format!(
+                    "const TIMING: int = 30 + 65536 * {ease};
+                    xformdef CURVE {{ step_speed(1fx, TIMING); }}
+                    async sub motion() {{
+                        move_to(30, 0fx, 100fx, {ease});
+                        move_vel(30, 90deg, 2fx, {ease});
+                        move_vel_xy(30, 1fx, 2fx, {ease});
+                        move_angle(30, 45deg, {ease});
+                        move_speed(30, 1fx, {ease});
+                        _ = fire(0, 0, 0fx, 100fx, 1fx, 0deg, CURVE, none);
+                    }}
+                    sub main() {{ spawn motion(); }}"
+                )
+            };
+            let named =
+                compile(&source(name), "motion.ecl").unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            let numeric = compile(&source(&id.to_string()), "motion.ecl").unwrap();
+            assert_eq!(
+                named, numeric,
+                "{name} must preserve existing motion behavior"
+            );
+        }
+    }
+
     /// 编译器确定性（全管线级别，plan 明文钉死）：同源码两次 `compile` 必须产出逐字节相同
     /// 的镜像（`EclImage` derive 了 `PartialEq`，整体比较即可）。
     #[test]

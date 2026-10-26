@@ -30,13 +30,13 @@ const COLOR_RED: int = 0;
 
 // 杂兵冲进来，撂一发爆散，走人
 async sub zako_burst() {
-    move_to(60, $self_x, 160.0fx, 2);
+    move_to(60, $self_x, 160.0fx, EASE_QUAD_OUT);
     wait(60);
     _ = batch(RICE, COLOR_RED, $self_x, $self_y,
               16, 0deg, 4096 as angle,     // 16 路整周：65536 / 16 = 4096
               3, 1.2fx, 0.4fx);            // 3 层速度：1.20 / 1.60 / 2.00
     wait(30);
-    move_to(90, $self_x, 500.0fx, 1);
+    move_to(90, $self_x, 500.0fx, EASE_QUAD_IN);
     wait(90);
 }
 

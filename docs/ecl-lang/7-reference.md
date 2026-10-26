@@ -36,6 +36,26 @@
 
 ## 引擎常量（编译器预置注入，C14）
 
+缓动参数优先写下面的语义名称，值直接来自 Rust `Easing` 枚举。这里的编号是我方
+引擎编码，不能直接填入 TH06/NC 或 TH18 的原生 mode；导入时先确认曲线含义再选择名称。
+
+TH06/NC opcode、TH18 mode 的逐项功能与全部30条曲线见[缓动语义对照表](../easing-reference.md)。
+
+| 名称 | 曲线（`t` 为已完成的时间比例） |
+|---|---|
+| `EASE_LINEAR` | `t`，匀速 |
+| `EASE_QUAD_IN` | `t²`，二次加速 |
+| `EASE_QUAD_OUT` | `1 − (1−t)²`，二次减速 |
+| `EASE_QUAD_IN_OUT` | 二次加速后减速 |
+| `EASE_CUBIC_IN` | `t³`，三次加速 |
+| `EASE_CUBIC_OUT` | `1 − (1−t)³`，三次减速 |
+| `EASE_CUBIC_IN_OUT` | 三次加速后减速 |
+| `EASE_SMOOTHSTEP` | `3t² − 2t³`，平滑起停 |
+
+例如 `move_to(90, 0fx, 100fx, EASE_QUAD_OUT);`。这组名称适用于所有敌人运动动词；
+它们仍是编译期 `int` 常量，没有新增 ECL 类型。旧数字写法继续兼容。四次曲线使用 `EASE_QUART_IN/OUT/IN_OUT/OUT_IN`，不再用三次曲线代替。
+全部名称、公式和内部编码见上面的缓动语义对照表；反向／超调曲线允许暂时越过端点。
+
 编译器在处理脚本自己的 `const`/`xformdef`/`sub` **之前**，先把一批 Rust 侧命名常量当作
 "第 1 行前已声明的 `const`" 预填进类型检查的常量表。脚本表达式、`const` 初始值、xformdef
 槽参数（编译期常量位置）处都能直接引用，不用再手写字面量镜像：
@@ -97,6 +117,12 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 `committed_doc_segment_matches_generated` 防漂移测试打回。
 
 <!-- gen:builtins:begin -->
+- `accum_start(slot: int, initial: fx, delta: fx, frames: int)` — 启动任务私有累加槽；下一帧起逐帧加delta，共frames次，之后保持结果
+- `accel_start(slot: int, initial: fx, velocity: fx, acceleration: fx, frames: int)` — 启动任务私有加速槽；先加当前velocity，再加acceleration，共frames次
+- `hermite_start(slot: int, start: fx, end: fx, tangent_start: fx, tangent_end: fx, frames: int)` — 启动任务私有Hermite槽；切线对应归一化时间，frames=0立即终点
+- `accum_value(slot: int) -> fx` — 读取累加槽当前fx值，不推进、不回写变量；无效槽返回0并计数
+- `accel_value(slot: int) -> fx` — 读取加速槽当前fx值，不推进、不回写变量；无效槽返回0并计数
+- `hermite_value(slot: int) -> fx` — 读取Hermite槽当前fx值，不推进、不回写变量；无效槽返回0并计数
 - `fire(shape: int, color: int, x: fx, y: fx, speed: fx, angle: angle, xf: xform|none, task: sub|none) -> int` — 发一颗弹;shape/color 查外观表(越界/空格 编译期或 Fault);xf/task 为 xformdef/sub 名或 none;返弹句柄,失败 -1
 - `batch(shape: int, color: int, x: fx, y: fx, n_angle: int, angle0: angle, angle_step: angle, n_speed: int, speed0: fx, speed_step: fx) -> int` — N-way 批量发环;shape/color 同 fire;返实际创建数
 - `spawn_enemy(x: fx, y: fx, hp: int, drop_table: int, score: int, sprite: int, task: sub|none) -> int` — 造敌;判定 12/16 默认;task 为敌主任务 async sub 名或 none,可写 name(实参…) 按签名带参(实参当帧求值拷进新任务 locals)(owner=新敌;敌死任务亡,任务跑完敌也亡——静默退场,不掉道具不发死亡事件);返敌号(不透明值,别猜数值/别做算术;两个敌号相等 ⇒ 同一只敌),失败 -1
@@ -104,9 +130,9 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `drop_item(x: fx, y: fx, item_type: int) -> int` — 掉一颗道具(带随机喷发速度,消耗模拟 RNG);返句柄,失败 -1
 - `move_to(dur: int, x: fx, y: fx, easing: int)` — 敌自身(self owner 非 ENEMY → Fault)按 easing 缓动、dur 帧内平移到 (x,y);四参数皆真实压栈(不同于下方弹 setter 族的占位 handle 首参)
 - `move_vel(dur: int, angle: angle, speed: fx, easing: int)` — 敌自身(self owner 非 ENEMY → Fault)按 easing 在 dur 帧内把速度缓动到「angle 方向、speed 速率」;dur=0 = 立即设。**极坐标空间插值**(匀速扫弧,速率按曲线走)——要笛卡尔直线插值用 move_vel_xy
-- `move_vel_xy(dur: int, vx: fx, vy: fx, easing: int)` — 同 move_vel 但收笛卡尔分量,且 dur>0 时**在笛卡尔空间插值**(两分量各自线性插,中途速率会掉——线性缓动即恒定加速度);要匀速转向用 move_vel。保住一轴的写法:move_vel_xy(30, $self_vx, 4.0fx, 2)
-- `move_angle(dur: int, angle: angle, easing: int)` — 只转向、速率一字不动;dur>0 走**最短弧**(350deg→10deg 走 +20deg 不走 -340deg)。相对转向:move_angle(60, $self_angle + 15deg, 3)
-- `move_speed(dur: int, speed: fx, easing: int)` — 只调速、方向一字不动。相对加速:move_speed(30, $self_speed * 2.0fx, 2)
+- `move_vel_xy(dur: int, vx: fx, vy: fx, easing: int)` — 同 move_vel 但收笛卡尔分量,且 dur>0 时**在笛卡尔空间插值**(两分量各自线性插,中途速率会掉——线性缓动即恒定加速度);要匀速转向用 move_vel。保住一轴的写法:move_vel_xy(30, $self_vx, 4.0fx, EASE_QUAD_OUT)
+- `move_angle(dur: int, angle: angle, easing: int)` — 只转向、速率一字不动;dur>0 走**最短弧**(350deg→10deg 走 +20deg 不走 -340deg)。相对转向:move_angle(60, $self_angle + 15deg, EASE_QUAD_IN_OUT)
+- `move_speed(dur: int, speed: fx, easing: int)` — 只调速、方向一字不动。相对加速:move_speed(30, $self_speed * 2.0fx, EASE_QUAD_OUT)
 - `set_anm_state(state: int)` — 敌自身(self owner 非 ENEMY → Fault)写表现状态号 anm_state 并无条件盖 anm_state_frame=当前帧(同状态重设=重播,即 ZUN anmInterrupt 的电平版);世界不解释状态号,表现层按 (sprite,anm_state,state_age) 选帧
 - `set_invuln(frames: int)` — 敌自身无敌 frames 帧(覆写;0 取消;期间自机弹不掉血不发命中事件,自机弹本就穿透不消耗);self 非 ENEMY → Fault;frames 越出 [0,65535] no-op+计数
 - `set_hitbox(r: fx)` — 敌自身体碰半径(撞自机那一圈,生成默认 12);钳 [0,1024]+计数;self 非 ENEMY → Fault。ZUN setHitbox(w,h) 的 w 是直径还是半径待验

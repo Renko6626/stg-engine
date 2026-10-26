@@ -50,6 +50,11 @@
 
 槽数 = `1 + ARITY[op]`；双槽 op 的第二槽是引擎 scratch（作者写 0 占位即可）。
 
+曲线id使用当前 `Easing` 枚举（30条，0–29），ECL优先引用 `EASE_*` 名称。
+STEP的第二参数仍是打包值：`frames + 65536 * EASE_QUART_OUT`。
+反向／超调输出不钳制；终帧仍写精确目标，`EASE_HOLD` 到时也会落到目标。
+完整曲线及原作语义见[缓动对照表](easing-reference.md)。
+
 ## 关键语义（踩过坑的都在这）
 
 - **LOOP 计数**：`count = 0` 无限；`count = N` 循环体**总共执行 N 次**（不是跳 N 次）。
