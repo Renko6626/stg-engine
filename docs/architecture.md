@@ -57,13 +57,13 @@
 | `stg-core/world` | WorldBody 字段所有权 + 各相位函数 + 写 API + 场界 + 双通道读出口（`view()` 通道 A / `take_requests()` 通道 B / `frame_events()`） | ✅ M0-M2前置 | [stg-world-design](../stg-world-design.md) Part III |
 | `stg-core/tables` | `WorldTables` 数据层（shottype/道具/外观/角色）+ 规范字节 serde + content_hash | ✅ M0-17/**C11** | [本文子系统](#资产管线-c11) |
 | `stg-core/consts` | 脚本可见引擎常量注册表（① 结构常量 / ② 表符号） | ✅ C14 | [ecl-lang](ecl-lang.md) |
-| `stg-core/ecl` | 栈机 VM（协程池 256）+ op 表 + syscall 白名单沙箱 + EclImage + 安全绑定层 | ✅ M1 | [ecl-ops](ecl-ops.md) |
+| `stg-core/ecl` | 栈机 VM（协程池 256）+ op 表 + EclImage + 安全绑定层；`syscall.rs` 保留号表、白名单与统一派发，`syscall/` 按领域放私有实现 | ✅ M1 | [ecl-ops](ecl-ops.md) |
 | `stg-core/{checksum,rng}` | vendored FNV-1a64 校验和 + vendored PCG32 | ✅ M0 | [checksum-mechanism](checksum-mechanism.md) |
 | `stg-core/step` | **组装层**：§3.5 宪法顺序唯一持有者 + World{body,tasks} + 快照 + `new_game`/`new_game_at` 正典开机 | ✅ M0 | design_doc §3.5 |
-| `stg-core/spell` | 符卡计器机构（计时/衰减/破卡血线/结算入分/boss_ui 自动喂） | ✅ 2026-07-24 | `spell.rs` 顶注 |
+| `stg-core/spell` + `world/spell` | 根 `spell.rs` 定义符卡 POD 状态与常量；`world/spell.rs` 持有宣言、计时、结算与 boss_ui 喂值，仍由原相位调用 | ✅ 2026-07-24 | `world/spell.rs` 顶注 |
 | `stg-core/timeline` | World 之上的时间线层：`SnapshotRing` 快照环 + 遡行兑现 + 影子世界 `preview` + `InputLog`/`Playback` 回放。World 对它无知 | ✅ M3 | spec `2026-09-07-timeline-…` |
 | `stg-derive` | `#[derive(Checksum)]` + `define_pool!` proc-macro | ✅ M0 | — |
-| `stg-ecl-compiler` | `.ecl` 表层语言（lex/parse/typeck/slots/codegen）→ EclImage；离线编译 | ✅ M1.9 | [ecl-lang](ecl-lang.md) |
+| `stg-ecl-compiler` | `.ecl` 表层语言（lex/parse/typeck/slots/codegen）→ EclImage；离线编译，builtin 专用降低集中在 `lang/codegen/builtin.rs` | ✅ M1.9 | [ecl-lang](ecl-lang.md) |
 | `stg-harness` | CLI：金向量对拍 + bench 基线 + 烘焙表 bake/verify + serve WebSocket 查看器(通道 A/B 首个交互消费者) | ✅ M0 | [bench-baseline](bench-baseline.md) |
 | `stg-godot` + `godot/` | gdext WorldBridge（boot/frame/puppets/save/timeline）+ 真工程（三层 MultiMesh + 敌人木偶 + fx + HUD + GameFlow 壳） | ✅ M2 + 壳子刀 | [render-contract](render-contract.md) / [bridge-adaptation-notes](bridge-adaptation-notes.md) |
 | `stg-rl` | RL 批量 env 核心（断层线以上）：`layout`（proto v1 表布局）/`encode`（行编码）/`env`（单 env 生命周期）/`vec_env`（专属 rayon 池批量 step + CSR 压实） | ✅ M5 起步 | spec `2026-09-15-stg-rl-env-design.md` |

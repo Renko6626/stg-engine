@@ -6,35 +6,13 @@
 
 ## 现在（2026-10-26）
 
-- **本地提交收口（2026-10-26）**：当前起点查询接口、30条命名缓动曲线与显式状态插值槽纳入本地提交，未推送。提交前复核core／compiler／harness／RL相关测试、fmt／clippy、Python绑定源码检查与已有wheel的起点查询冒烟；harness端口测试在沙箱外通过。新版wheel未重建，原作动态与跨平台对拍仍未执行；此前实施记录中的“未提交”是2026-10-23当时状态。
-
-- **显式状态插值槽（ENGINE_VER26）**：新增 `accum_start/value`、`accel_start/value`、`hermite_start/value`，每任务每类4槽，fx值；启动下一帧推进，wait继续，读取不推进、不自动回写。P4坏参诊断、任务复用清零、checksum/save/copy均覆盖；新增53,248 B。接口及原作差异见[状态插值说明](docs/stateful-interpolation-reference.md)，检查与审阅见[实施记录](docs/superpowers/plans/2026-10-23-stateful-interpolation.md)。未扩展导入器／运动写API，未重建训练wheel，未原作实机或跨平台对拍。
-
-- **语义缓动补齐**（2026-10-23，ENGINE_VER24→25）：用户确认排除TH18 mode7/8/17的状态型操作，`Easing` 从8条扩为30条，追加四次、OUT_IN、保持／跳变、正弦、反向／超调；ECL使用30个 `EASE_*` 名称，三处World入口统一枚举校验。0–7编码及旧表8224字节前缀不变，新增22,616字节，World布局不变；真实运动／弹STEP保留负权重、超调和BAM回绕，终帧精确落点。三方编号与语义见[对照表](docs/easing-reference.md)，命令和审阅见[实施记录](docs/superpowers/plans/2026-10-23-easing-curves.md)。core／compiler／harness集中测试、局部负权重复核、fmt、clippy、verify-tables通过；本机改前后golden逐字节一致，SHA256 `599e53fd102fbbfcb398822e920cd3aec4cd2cfea1fea8b56ebf17af1ebdda86`。未重建训练wheel、未迁移既有训练卡池、未跨平台／原作实机验证。
-
-- **ECL 标签／goto 兼容语法**（2026-10-23）：支持 sub 顶层 `label:` 与同 sub `goto label;`，用于自动导入，不推荐常规手写；保持初始化和作用域边界，mark 混用受限，见 [`docs/ecl-lang/2-tasks.md`](docs/ecl-lang/2-tasks.md)。只改编译前端，复用原有 JMP，**ENGINE_VER 保持 24**。编译器测试、clippy、文档示例检查通过；改前／后 golden 逐字节相同，SHA256 `599e53fd102fbbfcb398822e920cd3aec4cd2cfea1fea8b56ebf17af1ebdda86`。训练仓原型已生成可读 ECL 并恢复简单结构，未升级训练 wheel 或发布。
-
-- **RL 观测适配优化**：补齐模拟/episode/reset、观测选择/编码与 CSR 的诊断计时；超 cap 的池索引排序改为选中位图升序枚举，未超 cap 时 popcount 计数并直接编码，跳过空尾字。选弹集合、并列裁决、行序、协议和 World 不变，**ENGINE_VER 保持 24**。Python/rl-bench 可选超限提醒默认关闭，每环境每局一次、同批合并。三轮固定亲和 A/B：密弹重排 21.31→1.76µs，普通批量吞吐中位数约 +72%；接近 cap 的单环境适配约 −37%，批量收益未确认。详见 [`docs/bench-baseline.md`](docs/bench-baseline.md#位图重排与直接编码2026-10-04)；后续 CSR 直接写入、训练专用输出尚未实施。
-
-- **RL 只读接口补充**：`stg_rl` 0.4.1 新增 `VecEnv.current_start_indices()`，返回各槽当前 reset 后所选起点。原 `start_index` 缓冲保持终局归属与显式 reset 清零语义；用于训练侧逐卡意图采样。仅断层线以上只读 API，未改 World 布局、step 或 RNG，评审结论为 **ENGINE_VER 保持 24**。
-
-- **位置**：**激光池刀落地（本仓 Task 1–6，`ENGINE_VER` 23→24，`stg_rl` 0.2.0→0.3.0）**——
-  spec `docs/superpowers/specs/2026-09-25-laser-pool-design.md`：直线激光成为一等实体。
-  ① `LaserPool`（cap 256，27 字段，D10 +21 KB）+ `math::geom::seg_box_dist_sq`（平方点线距，不开根）；
-  ② 相位 5 新增一趟（在敌人之后：三态时序、omega、挂靠跟随/脱钩、`dx/dy/dang` 观测）；
-  ③ 碰撞行 9（激光 × 自机，仅 state 1 判）与行 10（清弹 field 取消激光，趟一）；
-  ④ syscall 族 8xx（`laser`/`lz_*`，编译器内建 + 手册第 9 篇 + `gen-ecl-meta`）；
-  ⑤ Tier 0 新增 `lasers` 行缓冲（64 行，此前只有计数；proto 不改）；金向量加激光场景三平台对拍；
-  ⑥ Godot 激光层（`LAYER_LASERS=3`/`LAYER_COUNT=4`，`laser.gdshader` 程序化截面，不走图集）。
-  实施相对 spec 的 10 条修订见 spec §12；待办见 follow-ups D27。
-- **下一步**：**训练仓 `stg-rl-train` 侧**——TH06 转写接激光（宽度减半、每帧转 → `lz_omega`，
-  spec §9.1）与模型加激光 token（spec §9.2，指向训练仓）。引擎侧剩余：`docs/rl-perf-roadmap.md`
-  §1/§4/§6 与 follow-ups D25/D27。
-- **上一位置**：**引擎第二刀（本仓 Task 1–4，`ENGINE_VER` 22→23，`stg_rl` 0.1.1→0.2.0）**——
-  弹 `BULLET_STEP_LIVE` 跳过位 + ECL VM 加载时校验 + `CART_FX` 极坐标惰性化 + 敌人池一等字段
-  `dx/dy` 进 Tier 0 `vx`/`vy`（proto 仓同步，C 侧暂写 0，记 D25）；再往前：RL 卡池第一批入库
-  （训练仓 `cards/`，TH06 第 1–3 关 45 张）、TH06 批量转写流水线、stg-rl-train 第一刀落地。
-- **待办**：见 [`docs/follow-ups.md`](docs/follow-ups.md)。
+- **当前整理**：syscall 拆为8个私有领域实现与独立测试，根文件保留号表/白名单/派发；builtin 降低集中到 `lang/codegen/builtin.rs`；符卡世界逻辑集中到 `world/spell.rs`，根 `spell.rs` 保留POD和常量。公开接口、状态布局、行为与 ENGINE_VER26 保持。见[设计](docs/superpowers/specs/2026-10-26-core-module-cleanup-design.md)与[实施记录](docs/superpowers/plans/2026-10-26-core-module-cleanup.md)。
+- **审阅与验证**：3位Sol medium并行实现、3位Sol high审阅通过，无待修项；core/compiler/harness已有测试、fmt/clippy、表校验通过，golden改前/改后逐字节一致（SHA256 `75d6a0e3dbff13e7ccb736f5240142ca0407a293d61cd8adc87cc129bd50d706`）。未新增永久测试或运行浏览器。
+- **工作区**：整理改动在 `codex/core-module-cleanup`，尚未提交/推送；保留本地 `dist/` 产物。未做跨平台/原作动态对拍、Godot或训练验证，未重建wheel。
+- **已提交基线**：`18c2fca` 为RL当前起点查询，`270500c` 为30条命名缓动与显式状态插值槽；两笔仅本地提交，未推送。旧实施记录中的“未提交”描述2026-10-23当时状态。
+- **ECL能力**：已支持导入用标签/goto、30条 `EASE_*` 曲线，以及每任务每类4槽的accum/accel/Hermite显式值插值；启动次帧推进、wait继续、不自动回写。[缓动对照](docs/easing-reference.md)与[状态插值边界](docs/stateful-interpolation-reference.md)保存原作差异，新增能力尚未接入导入器或迁移旧卡池。
+- **既有底座**：直线激光池、敌人位移读口、RL观测适配优化与当前起点查询均已落地；性能与历史证据见里程碑史及[基线](docs/bench-baseline.md)。
+- **后续范围**：本批只整理已确认的三处代码；原作转换规则、EX出生态、共享状态/时钟和曲线激光仍为独立待办，需按具体方案继续确认。技术债详单见[follow-ups](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
 

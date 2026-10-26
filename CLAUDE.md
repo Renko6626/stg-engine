@@ -144,15 +144,16 @@ crates/
     src/xform.rs      变换段池（D4；手写特例，段即分配单位）
     src/{input,events,reqs}.rs                 输入抽象 / hits+events 缓冲 / 通道 B 请求（RenderReq）
     src/consts.rs    脚本可见引擎常量注册表（C14：①结构常量/②表符号；lib.rs 另有 ENGINE_VER）
-    src/spell.rs     符卡计器机构（记账归引擎：SpellSlot 计时/衰减/破卡血线/伤害下钳/结算入分
-                     /boss_ui 自动喂；模式随卡生死靠 spell_bound+epoch；控制归脚本，2026-07-24）
+    src/spell.rs     符卡 POD 状态 SpellSlot 与常量；宣言/计时/结算/boss_ui 逻辑在 world/spell.rs，
+                     伤害下钳仍在 world/settle.rs；模式随卡生死靠 spell_bound+epoch，控制归脚本
     src/world.rs     WorldBody 字段所有权 + 写 API + 读口(frame/frame_events/take_requests/rand_range
                      /表现锚点四读口 bgm_id·bg_id·bg_phase·bg_phase_frame) + push_* + PhaseGuard + 场界常量(pub)
     src/world/       【模块结构镜像相位骨架】player(相1+3，shottype 发弹 / 停止 / 跳躍冷却 / 死亡即遡行) / transform(相4)
                      / integrate(相5) / collide(相6) / settle(相7) / cleanup(相9) / motion(D3 运动写 API)
+                     / spell(符卡宣言/计时/结算，仍由既有相位调用)
                      / view(通道 A `WorldView` 零拷贝只读视图)
     src/ecl/         【M1】栈机 VM：task(协程池 256) / ops(op 表+ARITY) / vm(解释核+相2调度租户)
-                     / image(EclImage) / syscall(号表+白名单沙箱绑定)
+                     / image(EclImage) / syscall(号表+白名单+统一派发，私有按域实现放 syscall/)
     src/step.rs      P2 组装层：§3.5 宪法顺序的唯一持有者 + World{body,tasks} + 快照
                      + 正典开机 new_game/new_game_at(Loadout 装备 + mark 中段启动,2026-07-25)
     src/timeline.rs  【M3】World 之上的时间线层：SnapshotRing 快照环 / Timeline::advance 认领遡行
@@ -160,7 +161,8 @@ crates/
                      线性 log + cuts 字节格式 v1 + replay。World 对它无知（P1/P5）
   stg-derive/       proc-macro：#[derive(Checksum)] + define_pool!
   stg-ecl-compiler/ ECL 编译器：src/lang/【M1.9 表层语言】lex/parse/typeck(三型)/slots(静态槽分配)
-                    /codegen(含 mark 垫片降低+锚点自动补偿)/units(多文件编译单元,目录整取按名排序)
+                    /codegen(含 mark 垫片降低+锚点自动补偿，builtin 专用降低放 codegen/builtin.rs)
+                    /units(多文件编译单元,目录整取按名排序)
                     —— .ecl 源码启动时编译成 EclImage；lib.rs builder = codegen 后端
   stg-harness/      CLI：golden 两段金向量（scenes/rainbow.ecl 符卡）+ bench 基线 + 烘焙表 bake/verify（允许浮点）
                     + replay（重放 .stgr 输入日志，storm 的时间线版）+ rl-bench（批量 env 吞吐）
