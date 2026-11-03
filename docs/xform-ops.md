@@ -25,7 +25,7 @@
 ## op 表
 
 | ID | 名 | args[0] | args[1] | 槽数 | 效果 | 状态 |
-<!-- 族号制 v2：十位=族号（1x 速率 / 2x 角度 / 3x 状态 / 4x 连续 / 5x 控制 / 6x 派生 / 7x 预留笛卡尔族） -->
+<!-- 族号制 v2：十位=族号（1x 速率 / 2x 角度 / 3x 状态 / 4x 连续 / 5x 控制 / 6x 派生 / 7x 笛卡尔族） -->
 |---|---|---|---|---|---|---|
 | 0 | `END` | — | — | 1 | 序列终止（零初始化段天然 END） | ✅ M0-11a |
 | 10 | `SET_SPEED` | speed (Fx raw) | — | 1 | 置速率，回填 `vx/vy` | ✅ |
@@ -43,10 +43,16 @@
 | 41 | `SET_ACCEL` | a (Fx raw/帧²) | — | 1 | 沿向加速，开 `POLAR_FX`（清 CART） | ✅ |
 | 42 | `SET_GRAVITY` | ax (Fx raw/帧²) | ay (Fx raw/帧²) | 1 | 笛卡尔加速，开 `CART_FX`（清 POLAR）——重力/漂移 | ✅ |
 | 43 | `STOP_FX` | — | — | 1 | 清两模式位（连续效果全停） | ✅ |
+| 44 | `STEP_ANG_VEL` | target (BAM/帧，i16 语义) | frames (低16) \| easing id (高8) | **2** | 缓动角速度，按有符号标量插值 | ✅ ENGINE_VER29 |
+| 45 | `STEP_ACCEL` | target (Fx raw/帧²) | 同上 | **2** | 缓动沿向加速度，写入时开 POLAR（清 CART） | ✅ ENGINE_VER29 |
 | 50 | `LOOP` | target_slot (0..16) | count | 1 | 游标跳回 target；count 语义见下 | ✅ |
 | 51 | `WAIT_SIGNAL` | ch (0..8) | — | 1 | 停驻等信号脉冲（边沿触发，"全场齐转向"） | ✅ M0-11b |
 | 52 | `BOUNCE_ARM` | walls 掩码（低 4 位：左/右/上/下） | n (≤3) | 1 | 反弹待命（场界折返镜像） | ✅ M0-11b |
 | 60 | `SPAWN_PATTERN` | pattern_id | Δangle | 1 | 按图样描述符表发一批子弹 | 📋 预留（随图样表另立一刀） |
+| 70 | `STEP_VX` | target (Fx raw/帧) | frames (低16) \| easing id (高8) | **2** | 缓动水平速度，保留 vy，回填 speed/angle，不切换运动模式 | ✅ ENGINE_VER29 |
+| 71 | `STEP_VY` | target (Fx raw/帧) | 同上 | **2** | 缓动垂直速度，保留 vx，回填 speed/angle，不切换运动模式 | ✅ ENGINE_VER29 |
+| 72 | `STEP_AX` | target (Fx raw/帧²) | 同上 | **2** | 缓动水平加速度，保留 ay；写入时开 CART（清 POLAR） | ✅ ENGINE_VER29 |
+| 73 | `STEP_AY` | target (Fx raw/帧²) | 同上 | **2** | 缓动垂直加速度，保留 ax；写入时开 CART（清 POLAR） | ✅ ENGINE_VER29 |
 
 槽数 = `1 + ARITY[op]`；双槽 op 的第二槽是引擎 scratch（作者写 0 占位即可）。
 
@@ -54,6 +60,11 @@
 STEP的第二参数仍是打包值：`frames + 65536 * EASE_QUART_OUT`。
 反向／超调输出不钳制；终帧仍写精确目标，`EASE_HOLD` 到时也会落到目标。
 完整曲线及原作语义见[缓动对照表](easing-reference.md)。
+
+所有 STEP 使用同一两槽布局与时序；`STEP_ANG_VEL` 写入时与 `SET_ANG_VEL` 一样开启 POLAR、清 CART。
+每帧先按物理槽升序推进活跃 STEP，再执行当帧序列指令，随后进行运动积分。
+冲突属性的混用不受支持；不检测、不取消、不接管，后续写入直接覆盖当时的值。
+`STOP_FX` 只清运动模式，不取消 STEP；仍活跃的加速度／角速度 STEP 在后续写入时会重新开启对应模式。
 
 ## 关键语义（踩过坑的都在这）
 
@@ -83,7 +94,7 @@ STEP的第二参数仍是打包值：`frames + 65536 * EASE_QUART_OUT`。
   槽的 `args[0]` 低 4 位：bit0=左/bit1=右/bit2=上/bit3=下），剩余次数住 `flags` 位 3-4（≤3）；
   每帧每轴至多反弹一次，位移后同帧折返（`x' = 2·墙−x`）；未武装的墙或次数耗尽 = 直接穿出，
   交由越界回收（cleanup）兜底，不会卡墙。
-- **STEP 发射帧不 tick + 精确终值**：`STEP_SPEED`/`STEP_ANGLE` 发射当帧只初始化 scratch（起点值
+- **STEP 发射帧不 tick + 精确终值**：所有 STEP 发射当帧只初始化 scratch（起点值
   + active 位），不推进插值，从下一帧起才 tick；终帧（`elapsed == frames`）写精确目标值，不吃
   插值舍入；`LOOP` 重访 STEP 视同重新发射，自动从当前值重新武装 scratch。
 - **部分设（`SET_SHAPE`/`SET_COLOR`）的 stride 为什么住 `args[1]`**：两个 op 要把 `sprite`

@@ -173,18 +173,13 @@ impl WorldBody {
                 self.set_gravity_at(i, Fx::from_raw(slot.args[0]), Fx::from_raw(slot.args[1]))
             }
             OP_STOP_FX => self.stop_fx_at(i),
-            OP_STEP_SPEED | OP_STEP_ANGLE => {
+            op if is_step(op) => {
                 let frames = (slot.args[1] & 0xFFFF) as u32;
                 if frames == 0 {
                     // 合法退化：瞬时 SET
-                    if slot.op == OP_STEP_SPEED {
-                        self.set_speed_at(i, Fx::from_raw(slot.args[0]));
-                    } else {
-                        self.set_angle_at(i, Angle(slot.args[0] as u16));
-                    }
+                    self.write_step_value(i, slot.op, slot.args[0]);
                 } else {
                     // scratch 无条件重初始化（LOOP 重访 = 自动重新武装）
-                    self.materialize_polar(i); // 读 speed/angle 起点之前先补齐陈值
                     let idx = self.bullets.xform_next[i] as usize;
                     if idx + 1 >= SLOTS_PER_SEG {
                         // P4-b：末槽 STEP 无扩展槽空间（create 期空间校验属后续任务；此为发射期兜底）
@@ -192,11 +187,7 @@ impl WorldBody {
                         return FireResult::Terminate;
                     }
                     let seg = self.bullets.transform_head[i];
-                    let start = if slot.op == OP_STEP_SPEED {
-                        self.bullets.speed[i].raw()
-                    } else {
-                        self.bullets.angle[i].raw() as i32
-                    };
+                    let start = self.read_step_value(i, slot.op);
                     let ext = &mut self.xforms.seg_slots_mut(seg)[idx + 1];
                     ext.args[0] = start;
                     ext.args[1] = STEP_ACTIVE; // elapsed = 0
@@ -264,8 +255,7 @@ impl WorldBody {
             if main.op == OP_END {
                 break;
             }
-            let is_step = main.op == OP_STEP_SPEED || main.op == OP_STEP_ANGLE;
-            if is_step && s + 1 < SLOTS_PER_SEG {
+            if is_step(main.op) && s + 1 < SLOTS_PER_SEG {
                 let ext = self.xforms.seg_slots(seg)[s + 1];
                 if ext.args[1] & STEP_ACTIVE != 0 {
                     self.tick_one_step(i, seg, s, main, ext);
@@ -287,16 +277,21 @@ impl WorldBody {
         let t = crate::math::Fx::from_raw(((elapsed << 16) / frames) as i32);
         let e =
             crate::math::easing::ease(crate::math::easing::from_id((main.args[1] >> 16) as u8), t);
-        if main.op == OP_STEP_SPEED {
-            let (start, target) = (Fx::from_raw(ext.args[0]), Fx::from_raw(main.args[0]));
+        if main.op != OP_STEP_ANGLE {
+            let start = ext.args[0];
+            let target = if main.op == OP_STEP_ANG_VEL {
+                main.args[0] as i16 as i32
+            } else {
+                main.args[0]
+            };
             let v = if done {
                 target // 终帧写精确终值（不吃插值舍入）
             } else {
                 // 负 i64 >> 为算术右移（向负无穷取整）——确定性，两平台一致
-                let d = ((target.raw() as i64 - start.raw() as i64) * e.raw() as i64) >> 16;
-                Fx::from_raw((start.raw() as i64 + d) as i32)
+                let d = ((target as i64 - start as i64) * e.raw() as i64) >> 16;
+                (start as i64 + d) as i32
             };
-            self.set_speed_at(i, v);
+            self.write_step_value(i, main.op, v);
         } else {
             let start = Angle(ext.args[0] as u16);
             let delta = (main.args[0] as u16).wrapping_sub(start.raw()) as i16; // 最短弧带方向
@@ -314,6 +309,48 @@ impl WorldBody {
         } else {
             STEP_ACTIVE | elapsed as i32
         };
+    }
+
+    fn read_step_value(&mut self, i: usize, op: u8) -> i32 {
+        match op {
+            OP_STEP_SPEED | OP_STEP_ANGLE => {
+                self.materialize_polar(i);
+                if op == OP_STEP_SPEED {
+                    self.bullets.speed[i].raw()
+                } else {
+                    self.bullets.angle[i].raw() as i32
+                }
+            }
+            OP_STEP_ANG_VEL => self.bullets.ang_vel[i] as i32,
+            OP_STEP_ACCEL => self.bullets.accel[i].raw(),
+            OP_STEP_VX => self.bullets.vx[i].raw(),
+            OP_STEP_VY => self.bullets.vy[i].raw(),
+            OP_STEP_AX => self.bullets.ax[i].raw(),
+            OP_STEP_AY => self.bullets.ay[i].raw(),
+            _ => unreachable!("STEP 分类与读取不一致"),
+        }
+    }
+
+    /// 每条 STEP 按槽序直接写入；不取消其它 STEP，也不协调冲突属性。
+    fn write_step_value(&mut self, i: usize, op: u8, value: i32) {
+        let fx = Fx::from_raw(value);
+        match op {
+            OP_STEP_SPEED => self.set_speed_at(i, fx),
+            OP_STEP_ANGLE => self.set_angle_at(i, Angle(value as u16)),
+            OP_STEP_ANG_VEL => self.set_ang_vel_at(i, value as i16),
+            OP_STEP_ACCEL => self.set_accel_at(i, fx),
+            OP_STEP_VX | OP_STEP_VY => {
+                if op == OP_STEP_VX {
+                    self.bullets.vx[i] = fx;
+                } else {
+                    self.bullets.vy[i] = fx;
+                }
+                self.backfill_polar(i);
+            }
+            OP_STEP_AX => self.set_gravity_at(i, fx, self.bullets.ay[i]),
+            OP_STEP_AY => self.set_gravity_at(i, self.bullets.ax[i], fx),
+            _ => unreachable!("STEP 分类与写入不一致"),
+        }
     }
 
     /// 武装墙掩码：扫弹自有段已发射区间的首个 BOUNCE_ARM（升序，I4），读 args[0] 低 4 位。
@@ -760,6 +797,85 @@ mod tests {
         );
         crate::world::test_support::step_t(&mut w, &InputFrame::empty(5));
         assert_eq!(w.body.bullets.speed[i], Fx::from_int(3), "完成后值冻结");
+    }
+
+    #[test]
+    fn scalar_steps_use_existing_curves_and_preserve_the_other_axis() {
+        for (op, start, target, midpoint) in [
+            (OP_STEP_VX, 65536, -65536, 32768),
+            (OP_STEP_VY, 131072, -131072, 65536),
+            (OP_STEP_AX, 65536, -65536, 32768),
+            (OP_STEP_AY, 131072, -131072, 65536),
+            (OP_STEP_ACCEL, 65536, -65536, 32768),
+            // The unsigned BAM encoding must still interpolate signed angular velocity.
+            (OP_STEP_ANG_VEL, 400, (-400i16 as u16) as i32, 200),
+        ] {
+            let mut w = crate::step::World::new(1);
+            let i = xf_bullet(&mut w, &[slot(0, op, target, 2 | (1 << 16))]);
+            w.body.bullets.vx[i] = Fx::from_int(1);
+            w.body.bullets.vy[i] = Fx::from_int(2);
+            w.body.backfill_polar(i);
+            w.body.bullets.ax[i] = Fx::from_int(1);
+            w.body.bullets.ay[i] = Fx::from_int(2);
+            w.body.bullets.accel[i] = Fx::from_int(1);
+            w.body.bullets.ang_vel[i] = 400;
+            let end = if op == OP_STEP_ANG_VEL { -400 } else { target };
+            for (frame, expected) in [start, midpoint, end, end].into_iter().enumerate() {
+                crate::world::test_support::step_t(&mut w, &InputFrame::empty(frame as u32));
+                let actual = match op {
+                    OP_STEP_VX => w.body.bullets.vx[i].raw(),
+                    OP_STEP_VY => w.body.bullets.vy[i].raw(),
+                    OP_STEP_AX => w.body.bullets.ax[i].raw(),
+                    OP_STEP_AY => w.body.bullets.ay[i].raw(),
+                    OP_STEP_ACCEL => w.body.bullets.accel[i].raw(),
+                    OP_STEP_ANG_VEL => w.body.bullets.ang_vel[i] as i32,
+                    _ => unreachable!(),
+                };
+                assert_eq!(actual, expected, "op {op}, frame {frame}");
+                match op {
+                    OP_STEP_VX => assert_eq!(w.body.bullets.vy[i], Fx::from_int(2)),
+                    OP_STEP_VY => assert_eq!(w.body.bullets.vx[i], Fx::from_int(1)),
+                    OP_STEP_AX => assert_eq!(w.body.bullets.ay[i], Fx::from_int(2)),
+                    OP_STEP_AY => assert_eq!(w.body.bullets.ax[i], Fx::from_int(1)),
+                    _ => {}
+                }
+            }
+            assert_eq!(w.body.diag.contract_viol, 0);
+        }
+    }
+
+    #[test]
+    fn scalar_steps_zero_frames_write_immediately() {
+        for (op, target) in [
+            (OP_STEP_VX, -65536),
+            (OP_STEP_VY, -131072),
+            (OP_STEP_AX, -32768),
+            (OP_STEP_AY, 16384),
+            (OP_STEP_ACCEL, -16384),
+            (OP_STEP_ANG_VEL, -512),
+        ] {
+            let mut w = crate::step::World::new(1);
+            let i = xf_bullet(&mut w, &[slot(0, op, target, 0)]);
+            crate::world::test_support::step_t(&mut w, &InputFrame::empty(0));
+            let actual = match op {
+                OP_STEP_VX => w.body.bullets.vx[i].raw(),
+                OP_STEP_VY => w.body.bullets.vy[i].raw(),
+                OP_STEP_AX => w.body.bullets.ax[i].raw(),
+                OP_STEP_AY => w.body.bullets.ay[i].raw(),
+                OP_STEP_ACCEL => w.body.bullets.accel[i].raw(),
+                OP_STEP_ANG_VEL => w.body.bullets.ang_vel[i] as i32,
+                _ => unreachable!(),
+            };
+            assert_eq!(actual, target, "op {op}");
+            if op == OP_STEP_VX {
+                assert_eq!(w.body.bullets.speed[i], Fx::from_int(1));
+                assert_eq!(w.body.bullets.angle[i], Angle::HALF);
+            }
+            assert_eq!(
+                w.body.bullets.flags[i] & crate::bullets::BULLET_STEP_LIVE,
+                0
+            );
+        }
     }
 
     #[test]

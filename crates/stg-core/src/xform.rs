@@ -16,7 +16,7 @@ pub(crate) const XFORM_NONE: u16 = 0xFFFF;
 
 // ── op 编号（冻结；族号制 v2，2026-07-16 重排拍板——回放格式出生前的免费窗口）──
 // 十位 = 族号：1x 速率 / 2x 角度 / 3x 状态 / 4x 连续效果 / 5x 控制·事件 / 6x 派生 /
-// 7x 预留（笛卡尔族，若将来立项）。族内留空隙：新 op 落族内、永不乱序追加。
+// 7x 笛卡尔族。族内留空隙：新 op 落族内、永不乱序追加。
 pub const OP_END: u8 = 0;
 pub const OP_SET_SPEED: u8 = 10;
 pub const OP_ADD_SPEED: u8 = 11;
@@ -36,10 +36,30 @@ pub const OP_SET_ANG_VEL: u8 = 40;
 pub const OP_SET_ACCEL: u8 = 41;
 pub const OP_SET_GRAVITY: u8 = 42;
 pub const OP_STOP_FX: u8 = 43;
+pub const OP_STEP_ANG_VEL: u8 = 44;
+pub const OP_STEP_ACCEL: u8 = 45;
 pub const OP_LOOP: u8 = 50;
 pub const OP_WAIT_SIGNAL: u8 = 51; // M0-11b
 pub const OP_BOUNCE_ARM: u8 = 52; // M0-11b
 pub const OP_SPAWN_PATTERN: u8 = 60; // 预留（随图样描述符表另立一刀）
+pub const OP_STEP_VX: u8 = 70;
+pub const OP_STEP_VY: u8 = 71;
+pub const OP_STEP_AX: u8 = 72;
+pub const OP_STEP_AY: u8 = 73;
+
+pub(crate) const fn is_step(op: u8) -> bool {
+    matches!(
+        op,
+        OP_STEP_SPEED
+            | OP_STEP_ANGLE
+            | OP_STEP_ANG_VEL
+            | OP_STEP_ACCEL
+            | OP_STEP_VX
+            | OP_STEP_VY
+            | OP_STEP_AX
+            | OP_STEP_AY
+    )
+}
 
 /// 本刀（M0-11a）已实现的 op 集——**按表查而非比大小**（族号制下编号非连续）。
 /// 创建期用它拒收未实现 op；11b 落地时把对应 op 加进来即可。
@@ -64,17 +84,29 @@ pub(crate) const fn op_implemented(op: u8) -> bool {
             | OP_WAIT_SIGNAL
             | OP_STEP_SPEED
             | OP_STEP_ANGLE
+            | OP_STEP_ANG_VEL
+            | OP_STEP_ACCEL
+            | OP_STEP_VX
+            | OP_STEP_VY
+            | OP_STEP_AX
+            | OP_STEP_AY
             | OP_BOUNCE_ARM
     )
 }
 
 /// 扩展槽数（游标步进 = 1 + ARITY[op]）。**全 u8 域**——任意 op 值可安全索引，
 /// `fire_op` 的未知臂不再是不越界的唯一屏障（终审 M-A#4 拆除）。
-/// STEP 族预置 1（11b 实现时游标步进直接正确）；其余 0。
+/// 所有 STEP 使用 1 个扩展槽；其余 0。
 pub(crate) const ARITY: [u8; 256] = {
     let mut a = [0u8; 256];
     a[OP_STEP_SPEED as usize] = 1;
     a[OP_STEP_ANGLE as usize] = 1;
+    a[OP_STEP_ANG_VEL as usize] = 1;
+    a[OP_STEP_ACCEL as usize] = 1;
+    a[OP_STEP_VX as usize] = 1;
+    a[OP_STEP_VY as usize] = 1;
+    a[OP_STEP_AX as usize] = 1;
+    a[OP_STEP_AY as usize] = 1;
     a
 };
 
@@ -223,10 +255,15 @@ mod tests {
         );
         assert_eq!((OP_LOOP, OP_WAIT_SIGNAL, OP_BOUNCE_ARM), (50, 51, 52));
         assert_eq!(OP_SPAWN_PATTERN, 60);
+        assert_eq!((OP_STEP_ANG_VEL, OP_STEP_ACCEL), (44, 45));
+        assert_eq!(
+            (OP_STEP_VX, OP_STEP_VY, OP_STEP_AX, OP_STEP_AY),
+            (70, 71, 72, 73)
+        );
     }
 
     /// 有效性按表查而非比大小：11a+11b(WAIT_SIGNAL/STEP_SPEED/STEP_ANGLE/BOUNCE_ARM) +
-    /// 颜色轴刀 T7(OP_SET_SHAPE/OP_SET_COLOR) 已实现集恰为 19 个；未实现/垃圾值一律 false；
+    /// 颜色轴和单值 STEP 扩展；未实现/垃圾值一律 false；
     /// ARITY 全 u8 域可索引（终审 M-A#4 的脆弱性就此拆除）。
     #[test]
     fn op_implemented_table_and_arity_full_domain() {
@@ -239,6 +276,12 @@ mod tests {
             OP_TURN,
             OP_AIM_PLAYER,
             OP_STEP_ANGLE,
+            OP_STEP_ANG_VEL,
+            OP_STEP_ACCEL,
+            OP_STEP_VX,
+            OP_STEP_VY,
+            OP_STEP_AX,
+            OP_STEP_AY,
             OP_SET_SPRITE,
             OP_SET_LIFE,
             OP_SET_SHAPE,

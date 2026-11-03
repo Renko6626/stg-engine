@@ -247,7 +247,7 @@ impl WorldBody {
             OP_WAIT_SIGNAL => {
                 values[0].is_some_and(|v| !(0..super::SIGNAL_CHANNELS as i32).contains(&v))
             }
-            OP_STEP_SPEED | OP_STEP_ANGLE => {
+            op if is_step(op) => {
                 values[1].is_some_and(|v| crate::math::Easing::from_id((v >> 16) as u8).is_none())
             }
             _ => false,

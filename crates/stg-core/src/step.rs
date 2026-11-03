@@ -2415,8 +2415,8 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            28,
-            "27→28：xform 运行时表达式新增45056 B状态与202/653两个syscall，捕获及进入标记进checksum/save/copy。前一次26→27：敌人共享脚本槽新增12288 B状态及4个syscall。——前一次25→26：任务私有状态插值槽新增6个syscall及53248 B状态，进checksum/save/copy。bump 必须是有意识决定(评审 + 改本测试)——24→25：语义缓动补齐(2026-10-23)。\
+            29,
+            "28→29：新增六个双槽单值STEP，保持固定槽序写入与World布局。前一次27→28：xform 运行时表达式新增45056 B状态与202/653两个syscall，捕获及进入标记进checksum/save/copy。前一次26→27：敌人共享脚本槽新增12288 B状态及4个syscall。——前一次25→26：任务私有状态插值槽新增6个syscall及53248 B状态，进checksum/save/copy。bump 必须是有意识决定(评审 + 改本测试)——24→25：语义缓动补齐(2026-10-23)。\
              追加22条曲线(编号8–29)，原本坏参数现在合法；旧0–7编码和表字节保持不变，World布局不变。\
              ——前一次23→24：激光池刀(2026-09-25，spec 2026-09-25-laser-pool-design.md)。\
              新增 LaserPool(cap 256)、相位 5 推进、碰撞行 9/10、syscall 族 8xx；校验和与存档载荷均变化，旧回放失效。\

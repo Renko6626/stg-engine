@@ -1,6 +1,6 @@
 //! xformdef 操作名 → 字节码映射的**单一权威表**（slots 趟与 codegen 趟共用）。
 //!
-//! `physical` = 该 op 实际占用的 xform 槽数：STEP 族（`step_speed`/`step_angle`）是双槽
+//! `physical` = 该 op 实际占用的 xform 槽数：所有 STEP 操作都是双槽
 //! op——第二槽是引擎 scratch（`docs/xform-ops.md`："双槽 op 的第二槽是引擎 scratch"）。
 //! **表层语言把 scratch 完全藏起来**：作者一条 `step_speed(...)` 即一条语义 op，
 //! slots 趟按 `physical` 计区宽、codegen staging 自动补零 scratch 槽——不补则运行期
@@ -50,6 +50,12 @@ pub(crate) fn lookup(name: &str) -> Option<XformOp> {
         "turn" => Some(Op(xform::OP_TURN, 1, 1)),
         "aim_player" => Some(Op(xform::OP_AIM_PLAYER, 1, 1)),
         "step_angle" => Some(Op(xform::OP_STEP_ANGLE, 2, 2)),
+        "step_ang_vel" => Some(Op(xform::OP_STEP_ANG_VEL, 2, 2)),
+        "step_accel" => Some(Op(xform::OP_STEP_ACCEL, 2, 2)),
+        "step_vx" => Some(Op(xform::OP_STEP_VX, 2, 2)),
+        "step_vy" => Some(Op(xform::OP_STEP_VY, 2, 2)),
+        "step_ax" => Some(Op(xform::OP_STEP_AX, 2, 2)),
+        "step_ay" => Some(Op(xform::OP_STEP_AY, 2, 2)),
         "set_sprite" => Some(XformOp::OpFold2(xform::OP_SET_SPRITE, 1)),
         "set_shape" => Some(XformOp::OpWithStride(xform::OP_SET_SHAPE, 1)),
         "set_color" => Some(XformOp::OpWithStride(xform::OP_SET_COLOR, 1)),

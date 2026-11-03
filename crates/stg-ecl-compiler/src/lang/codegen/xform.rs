@@ -48,6 +48,51 @@ mod tests {
     }
 
     #[test]
+    fn xform_scalar_steps_compile_and_run_static_and_dynamic_targets() {
+        let src = r#"
+            xformdef VELOCITY {
+                step_vx(4fx, 4);
+                step_vy(-2fx, 4);
+            }
+            xformdef GRAVITY(amount: fx) {
+                step_ax(at_spawn(amount), 4);
+                step_ay(at_effect(amount * 2fx), 4);
+            }
+            xformdef POLAR {
+                step_accel(1fx, 4);
+                step_ang_vel(-4deg, 4);
+            }
+            sub main() {
+                _ = fire(0,0,0fx,40fx,0fx,0deg,VELOCITY,none);
+                _ = fire(0,0,0fx,80fx,0fx,0deg,GRAVITY(0.5fx),none);
+                _ = fire(0,0,0fx,120fx,0fx,0deg,POLAR,none);
+            }
+        "#;
+        let image = compile(src, "scalar-steps.ecl").unwrap();
+        let mut w = World::new(1);
+        w.start_main(&image).unwrap();
+        advance(&mut w, &image, 1); // Fire requests are consumed next frame.
+        advance(&mut w, &image, 1); // Arm without advancing interpolation.
+        let b = w.view().bullets();
+        assert_eq!(b.vx()[0], stg_core::math::Fx::ZERO);
+        assert_eq!(b.ax()[1], stg_core::math::Fx::ZERO);
+        assert_eq!(b.ang_vel()[2], 0);
+        advance(&mut w, &image, 2);
+        let b = w.view().bullets();
+        assert_eq!((b.vx()[0].raw(), b.vy()[0].raw()), (131072, -65536));
+        assert_eq!((b.ax()[1].raw(), b.ay()[1].raw()), (16384, 32768));
+        assert_eq!(b.accel()[2].raw(), 32768);
+        assert_eq!(b.ang_vel()[2], -364);
+        advance(&mut w, &image, 2);
+        let b = w.view().bullets();
+        assert_eq!((b.vx()[0].raw(), b.vy()[0].raw()), (262144, -131072));
+        assert_eq!((b.ax()[1].raw(), b.ay()[1].raw()), (32768, 65536));
+        assert_eq!(b.accel()[2].raw(), 65536);
+        assert_eq!(b.ang_vel()[2], -728);
+        assert_eq!(w.view().diag().contract_viol, 0);
+    }
+
+    #[test]
     fn xform_two_shooters_capture_independently_and_fire_uses_same_stages() {
         let src = r#"
             xformdef T(extra: fx) {

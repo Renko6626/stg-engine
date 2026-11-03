@@ -332,8 +332,17 @@ fn arg_type(op: u8, index: usize) -> Ty {
         xform::OP_SET_SPEED | xform::OP_ADD_SPEED | xform::OP_SET_ACCEL | xform::OP_SET_GRAVITY => {
             Ty::Fx
         }
-        xform::OP_STEP_SPEED if index == 0 => Ty::Fx,
-        xform::OP_STEP_ANGLE if index == 0 => Ty::Angle,
+        xform::OP_STEP_SPEED
+        | xform::OP_STEP_ACCEL
+        | xform::OP_STEP_VX
+        | xform::OP_STEP_VY
+        | xform::OP_STEP_AX
+        | xform::OP_STEP_AY
+            if index == 0 =>
+        {
+            Ty::Fx
+        }
+        xform::OP_STEP_ANGLE | xform::OP_STEP_ANG_VEL if index == 0 => Ty::Angle,
         xform::OP_SET_ANGLE | xform::OP_TURN | xform::OP_AIM_PLAYER | xform::OP_SET_ANG_VEL => {
             Ty::Angle
         }

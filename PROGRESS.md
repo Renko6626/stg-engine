@@ -6,6 +6,8 @@
 
 ## 现在（2026-11-03）
 
+- **单值 STEP 扩展**：新增 `step_vx/vy`、`step_ax/ay`、`step_accel`、`step_ang_vel`，每条两槽，复用现有曲线、动态采样与非阻塞时序；单轴保留另一分量，角速度按有符号标量插值。按用户确认保留固定槽序写入，冲突组合不受支持，不增加检测、取消或接管。ENGINE_VER29，World布局不变。见[设计](docs/superpowers/specs/2026-11-03-xform-scalar-steps-design.md)与[实施记录](docs/superpowers/plans/2026-11-03-xform-scalar-steps.md)。
+- **单值 STEP 验证**：核心行为、编译器/harness/RL相关测试通过；版本锚点同步至29后定向复验通过，viewer端口用例获准沙箱外重跑通过。fmt/clippy、表校验与本机三场景golden完成，独立只读审阅无待修项。用户随后授权提交、推送并合入 `main`，交付提交以Git历史为准；未做跨平台、Godot运行或wheel构建。
 - **动态xform（2026-11-03）**：按值形参、绑定/出生/效果分阶段求值已接入。公式在镜像共享，必要旧值留段尾；每段新增4 B、发射器绑定36 B，World净增44 KiB，ENGINE_VER28。支持纯三型表达式、短路、受限数学读口，保持旧静态ABI和操作时序；容量仍为8逻辑缓存与16物理槽。见[设计](docs/superpowers/specs/2026-11-03-xform-runtime-expressions-design.md)与[实施记录](docs/superpowers/plans/2026-11-03-xform-runtime-expressions.md)。
 - **动态xform验证**：core/compiler/harness/RL相关检查、fmt/clippy、release变换测试、表校验与三场景golden通过；harness端口用例获准沙箱外重跑。独立审阅两项修复有真实复现。2048弹每帧触发的p50为常量42.8µs、直接101.2µs、组合122.8µs；STEP稳态约55.3–55.7µs；出生档及静态调度对照详见[性能基线](docs/bench-baseline.md)。未做Godot/wheel/真实训练/跨平台验证。
 
@@ -21,6 +23,8 @@
 - **后续范围**：敌人共享槽尚未接入原作导入器；弹任务带参、共享shooter、共享时钟、原作转换规则、EX出生态和曲线激光仍为独立待办，需按具体方案继续确认。技术债详单见[follow-ups](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
+
+- 2026-11-03：ENGINE_VER29单值STEP扩展，六个新操作复用两槽布局；固定槽序、不处理冲突，World布局不变。
 
 - 2026-11-03：ENGINE_VER28动态xform，按值形参、出生/效果采样、共享公式与段尾捕获；World新增44 KiB。
 
