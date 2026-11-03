@@ -132,6 +132,7 @@ impl EntryInit {
 }
 
 pub struct ImageParts {
+    pub xforms: crate::xform::program::XformPrograms,
     pub code: Vec<u32>,
     pub subs: Vec<SubInit>,
     pub entries: Vec<EntryInit>,
@@ -269,6 +270,7 @@ pub enum BadCodeReason {
 /// 构造期将可读的初始化记录压紧成不可变运行表，运行期不再持有名字 `String` 或参数 `Vec`。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EclImage {
+    xforms: crate::xform::program::XformPrograms,
     code: Box<[u32]>,
     subs: Box<[RuntimeSubMeta]>,
     param_types: Box<[EclValueType]>,
@@ -281,8 +283,12 @@ pub struct EclImage {
 }
 
 impl EclImage {
+    pub fn xforms(&self) -> &crate::xform::program::XformPrograms {
+        &self.xforms
+    }
     pub fn empty() -> EclImage {
         EclImage {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: Box::new([]),
             subs: Box::new([]),
             param_types: Box::new([]),
@@ -333,6 +339,7 @@ impl EclImage {
         {
             return Ok(Self {
                 content_hash: parts.content_hash,
+                xforms: parts.xforms,
                 ..Self::empty()
             });
         }
@@ -494,6 +501,7 @@ impl EclImage {
             })?)),
             marks: parts.marks.into_boxed_slice(),
             content_hash: parts.content_hash,
+            xforms: parts.xforms,
         };
         validate_code(&img)?;
         Ok(img)
@@ -761,6 +769,7 @@ pub(crate) fn test_image(
     root: Option<u16>,
 ) -> EclImage {
     EclImage::try_from_parts(ImageParts {
+        xforms: crate::xform::program::XformPrograms::empty(),
         code,
         subs,
         entries,
@@ -785,6 +794,7 @@ mod tests {
     #[test]
     fn image_freezes_compact_tables_and_resolves_async_names() {
         let image = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0, 0, 0],
             subs: vec![
                 SubInit::new(0, SubKind::Async, vec![EclValueType::Fx]),
@@ -822,6 +832,7 @@ mod tests {
 
     fn parts_with_entries(entries: Vec<EntryInit>) -> ImageParts {
         ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0, 0, 0],
             subs: vec![
                 SubInit::new(0, SubKind::Async, vec![]),
@@ -884,6 +895,7 @@ mod tests {
     fn accepts_only_the_exact_empty_sentinel_without_a_root() {
         assert_eq!(
             EclImage::try_from_parts(ImageParts {
+                xforms: crate::xform::program::XformPrograms::empty(),
                 code: vec![],
                 subs: vec![],
                 entries: vec![],
@@ -895,6 +907,7 @@ mod tests {
         );
 
         let nonempty = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: vec![SubInit::new(0, SubKind::CallOnly, vec![])],
             entries: vec![],
@@ -908,6 +921,7 @@ mod tests {
     #[test]
     fn rejects_multiple_roots_root_mismatch_and_root_parameters() {
         let multiple = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: vec![
                 SubInit::new(0, SubKind::Root, vec![]),
@@ -921,6 +935,7 @@ mod tests {
         assert_eq!(multiple, Err(ImageBuildError::MultipleRoots));
 
         let mismatch = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: vec![
                 SubInit::new(0, SubKind::Root, vec![]),
@@ -934,6 +949,7 @@ mod tests {
         assert_eq!(mismatch, Err(ImageBuildError::RootIndexMismatch));
 
         let params = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: vec![SubInit::new(0, SubKind::Root, vec![EclValueType::Int])],
             entries: vec![],
@@ -947,6 +963,7 @@ mod tests {
     #[test]
     fn rejects_entries_that_do_not_name_exactly_one_async_sub() {
         let wrong_kind = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0, 0],
             subs: vec![
                 SubInit::new(0, SubKind::Root, vec![]),
@@ -982,6 +999,7 @@ mod tests {
     #[test]
     fn rejects_parameter_count_and_flattened_table_overflow() {
         let per_sub = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0, 0],
             subs: vec![
                 SubInit::new(0, SubKind::Root, vec![]),
@@ -1011,6 +1029,7 @@ mod tests {
             (2..=u16::MAX).map(|_| SubInit::new(0, SubKind::CallOnly, vec![EclValueType::Int])),
         );
         let overflow = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs,
             entries: vec![],
@@ -1030,6 +1049,7 @@ mod tests {
         max_subs.push(SubInit::new(0, SubKind::Root, vec![]));
         max_subs.extend((1..=u16::MAX).map(|_| SubInit::new(0, SubKind::CallOnly, vec![])));
         let image = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: max_subs,
             entries: vec![],
@@ -1041,6 +1061,7 @@ mod tests {
         assert_eq!(image.sub_id(u16::MAX).unwrap().get(), u16::MAX);
 
         let too_many_subs = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: (0..65_537)
                 .map(|_| SubInit::new(0, SubKind::CallOnly, vec![]))
@@ -1056,6 +1077,7 @@ mod tests {
         );
 
         let too_many_entries = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: (0..65_537).map(|_| EntryInit::new("x", 0)).collect(),
@@ -1082,6 +1104,7 @@ mod tests {
             vec![EclValueType::Int; 2],
         ));
         let image = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs,
             entries: vec![],
@@ -1100,6 +1123,7 @@ mod tests {
     #[test]
     fn rejects_code_entry_and_entry_sub_out_of_range() {
         let code_entry = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: vec![SubInit::new(1, SubKind::Root, vec![])],
             entries: vec![],
@@ -1116,6 +1140,7 @@ mod tests {
         );
 
         let entry_sub = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![EntryInit::new("worker", 1)],
@@ -1133,6 +1158,7 @@ mod tests {
     fn rejects_names_longer_than_u16() {
         let name = "a".repeat(u16::MAX as usize + 1);
         let result = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0, 0],
             subs: vec![
                 SubInit::new(0, SubKind::Root, vec![]),
@@ -1156,6 +1182,7 @@ mod tests {
 
     fn parts_for_marks(marks: Vec<(i32, u32)>) -> ImageParts {
         ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0, 0, 0],
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],
@@ -1196,6 +1223,7 @@ mod tests {
     /// 以单个 Root sub（入口 0）包装 code，走 try_from_parts（同 ecl/mod.rs fuzz 的镜像形状）。
     fn parts_one_sub(code: Vec<u32>) -> Result<EclImage, ImageBuildError> {
         EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code,
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],

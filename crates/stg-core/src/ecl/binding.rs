@@ -731,6 +731,7 @@ mod tests {
     fn start_main_rejects_image_table_hash_mismatch() {
         use crate::ecl::image::{EclImage, ImageParts, SubInit, SubKind};
         let image = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],
@@ -754,6 +755,7 @@ mod tests {
     fn start_main_allows_matching_hash() {
         use crate::ecl::image::{EclImage, ImageParts, SubInit, SubKind};
         let image = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![0],
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],
@@ -785,6 +787,7 @@ mod tests {
     fn root_and_async_image_with_hash(content_hash: u64) -> EclImage {
         use crate::ecl::image::ImageParts;
         EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![OP_END as u32],
             subs: vec![
                 SubInit::new(0, SubKind::Root, vec![]),

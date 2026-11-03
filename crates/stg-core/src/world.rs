@@ -40,6 +40,8 @@ mod settle;
 mod spell;
 mod transform;
 mod view;
+mod xform_bind;
+mod xform_eval;
 
 pub use view::WorldView;
 
@@ -368,6 +370,7 @@ impl WorldBody {
             self.last_status = STATUS_POOL_FULL;
             return BulletHandle::NULL;
         };
+        self.xforms.program_states[seg as usize] = Default::default();
         let dst = self.xforms.seg_slots_mut(seg);
         dst[..xform.len()].copy_from_slice(xform);
         dst[xform.len()..].fill(Default::default()); // 尾零 = 天然 END（复用段写满义务）
@@ -443,6 +446,7 @@ impl WorldBody {
                     match self.xforms.alloc() {
                         None => POOL_XFORM,
                         Some(seg) => {
+                            self.xforms.program_states[seg as usize] = Default::default();
                             let dst = self.xforms.seg_slots_mut(seg);
                             dst[..xform.len()].copy_from_slice(xform);
                             dst[xform.len()..].fill(Default::default());

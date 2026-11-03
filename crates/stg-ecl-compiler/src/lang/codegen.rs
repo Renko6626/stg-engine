@@ -1,8 +1,7 @@
 //! ECL 表层语言 codegen 趟（M1.9 T3 Commit B）——把类型趟/槽分配趟的产物
-//! （[`TypedInfo`]/[`SlotMap`]）连同原始 AST（[`Program`]，codegen 需要它拿
-//! `xformdef` 的原始 `Expr` 序列做编译期常量折叠——T2 明确把这块留给本趟，见
-//! `lang::typeck`/`lang::slots` 模块文档"xformdef 序列体不在本趟校验范围"）一起
-//! 降低为 [`EclImage`]。入口 [`generate`]。
+//! （[`TypedInfo`]/[`SlotMap`]）连同原始AST（旧静态xform的常量折叠）降低为
+//! [`EclImage`]。动态模板已由xform判型产出中立IR；本趟挂入共享表并生成立即传参ABI。
+//! 入口 [`generate`]。
 //!
 //! ## 后端：复用 T3 前置刀（`ImageBuilder`/`SubBuilder`）的回填器，不另起炉灶
 //!
@@ -64,10 +63,11 @@ use crate::{BuilderSubRef, ImageBuilder, SubBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 use stg_core::ecl::image::{EclImage, EclValueType, ImageBuildError, SubKind};
 use stg_core::ecl::syscall;
-use stg_core::xform;
+use stg_core::xform as xform_ops;
 use stg_core::xform::XformSlot;
 
 mod builtin;
+mod xform;
 
 // xformdef 操作名映射表已上移 `lang::xform_map`（slots 趟与本趟共用的单一权威，含物理
 // 槽数与 STEP 族 scratch 语义）；`loop`/`END` 不开放的已知限制也记录在该模块文档。
@@ -111,6 +111,7 @@ struct LoopCtx {
 
 struct Gen<'p> {
     sm: &'p SlotMap,
+    xform_program_ids: BTreeMap<String, u16>,
     xformdefs: BTreeMap<String, &'p crate::lang::ast::XformDef>,
     name_to_ref: BTreeMap<String, BuilderSubRef>,
     sub_params: BTreeMap<String, Vec<String>>,
@@ -190,7 +191,10 @@ impl<'p> Gen<'p> {
             let Some(xfdef) = self.xformdefs.get(xf_name.as_str()).copied() else {
                 continue; // 未知 xformdef 名：typeck 已经拦过，防御性跳过不重复报错
             };
-            let (off, _cnt) = slots.xform_regions[xf_name];
+            let crate::lang::slots::XformRegion::Legacy { off, .. } = slots.xform_regions[xf_name]
+            else {
+                continue;
+            };
             let mut built = Vec::with_capacity(xfdef.slots.len());
             for s in &xfdef.slots {
                 match crate::lang::xform_map::lookup(&s.op_name) {
@@ -268,9 +272,9 @@ impl<'p> Gen<'p> {
                         // 拿到形状判据（错判据比拒收更糟：编译通过但语义错）。两道保险：
                         // debug 就地断言炸出来，release 退化成一条明确的编译错误（不是
                         // 猜一个判据）。
-                        let check = if op == xform::OP_SET_COLOR {
+                        let check = if op == xform_ops::OP_SET_COLOR {
                             crate::lang::atlas::check_color_only(table, vals[0])
-                        } else if op == xform::OP_SET_SHAPE {
+                        } else if op == xform_ops::OP_SET_SHAPE {
                             crate::lang::atlas::check_shape_only(table, vals[0])
                         } else {
                             debug_assert!(
@@ -443,7 +447,10 @@ impl<'p> Gen<'p> {
                 for a in &call.args {
                     match a {
                         CallArg::Val(e) => self.gen_expr(b, slots, e),
-                        CallArg::XformRef(_) | CallArg::SubRef(_) | CallArg::SubRefArgs(..) => {
+                        CallArg::XformRef(_)
+                        | CallArg::XformRefArgs(..)
+                        | CallArg::SubRef(_)
+                        | CallArg::SubRefArgs(..) => {
                             unreachable!("spawn 目标是 sub，参数恒 Val（typeck 已保证）")
                         }
                     }
@@ -673,7 +680,10 @@ impl<'p> Gen<'p> {
                             self.gen_expr(b, slots, e);
                             b.pop_l(param_slots[i]);
                         }
-                        CallArg::XformRef(_) | CallArg::SubRef(_) | CallArg::SubRefArgs(..) => {
+                        CallArg::XformRef(_)
+                        | CallArg::XformRefArgs(..)
+                        | CallArg::SubRef(_)
+                        | CallArg::SubRefArgs(..) => {
                             unreachable!("sub 调用参数恒 Val（typeck 已保证）")
                         }
                     }
@@ -887,9 +897,27 @@ pub fn generate(
     let xformdefs: BTreeMap<String, &crate::lang::ast::XformDef> =
         prog.xformdefs.iter().map(|x| (x.name.clone(), x)).collect();
     let comp = scan_mark_compensation(ti);
+    let xform_program_ids = ti
+        .xforms
+        .keys()
+        .enumerate()
+        .map(|(i, n)| (n.clone(), i as u16))
+        .collect();
+    let programs =
+        stg_core::xform::program::XformPrograms::try_new(ti.xforms.values().cloned().collect())
+            .map_err(|e| {
+                vec![CompileError {
+                    line: 1,
+                    col: 1,
+                    msg: format!("xform program: {e:?}"),
+                    src_line: String::new(),
+                }]
+            })?;
+    ib.set_xform_programs(programs);
 
     let mut g = Gen {
         sm,
+        xform_program_ids,
         xformdefs,
         name_to_ref,
         sub_params,
@@ -1659,15 +1687,15 @@ mod tests {
     // ── 错误路径：xformdef 参数非编译期常量 ─────────────────────────────
 
     #[test]
-    fn xformdef_non_const_arg_is_a_compile_error() {
+    fn xformdef_dynamic_angle_requires_an_explicit_cast() {
         let src = "xformdef BAD { turn($frame); }\n\
                     sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, BAD, none); }";
         let errors = match compile(src, "bad.ecl") {
             Err(e) => e,
-            Ok(_) => panic!("期望编译失败（xformdef 参数非常量）"),
+            Ok(_) => panic!("期望编译失败（动态角度缺少显式转换）"),
         };
         assert!(
-            errors.iter().any(|e| e.msg.contains("编译期常量")),
+            errors.iter().any(|e| e.msg.contains("类型不匹配")),
             "{errors:?}"
         );
     }

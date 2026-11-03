@@ -21,6 +21,7 @@ pub enum CallArg {
     Val(TypedExpr),
     /// `Some(name)` = 引用了该 xformdef；`None` = 字面量 `none`。
     XformRef(Option<String>),
+    XformRefArgs(String, Vec<TypedExpr>),
     /// `Some(name)` = 引用了该 sub；`None` = 字面量 `none`。
     SubRef(Option<String>),
     /// `name(实参…)`：带参 sub 引用——**只由 `spawn_enemy` 的 task 位产生**（boss 换段刀 spec §4.1）。
@@ -154,6 +155,7 @@ pub struct TypedSub {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedInfo {
+    pub xforms: std::collections::BTreeMap<String, stg_core::xform::program::XformProgramInit>,
     /// 与 `Program.subs` 同序同长。
     pub subs: Vec<TypedSub>,
     /// 折叠后的常量：名 / 声明型 / 原始值（源码序）。
@@ -169,6 +171,9 @@ pub(crate) fn const_val(a: &CallArg) -> Option<i32> {
             TypedExprKind::IntLit(v) | TypedExprKind::ConstRef(v) => Some(*v),
             _ => None,
         },
-        CallArg::XformRef(_) | CallArg::SubRef(_) | CallArg::SubRefArgs(..) => None,
+        CallArg::XformRef(_)
+        | CallArg::XformRefArgs(..)
+        | CallArg::SubRef(_)
+        | CallArg::SubRefArgs(..) => None,
     }
 }

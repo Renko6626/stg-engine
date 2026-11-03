@@ -6,6 +6,9 @@
 use crate::checksum::{Checksum, Fnv1a64};
 use crate::save::{LoadError, SaveBytes, SaveReader};
 
+pub mod expr;
+pub mod program;
+
 pub(crate) const SEG_CAP: usize = 2048;
 pub(crate) const SLOTS_PER_SEG: usize = 16;
 /// 哑弹哨兵（与 `bullets.transform_head` 既用值一致）。
@@ -88,6 +91,7 @@ pub struct XformSlot {
 /// 段池本体。inline 数组住 WorldBody（I7 无堆容器；World 整体 alloc_zeroed）。全零 = 合法空池。
 #[repr(C)]
 pub struct XformSegPool {
+    pub(crate) program_states: [program::XformSegmentState; SEG_CAP],
     pub(crate) occupied: [u64; SEG_CAP / 64],
     pub(crate) slots: [XformSlot; SEG_CAP * SLOTS_PER_SEG],
 }
@@ -141,6 +145,7 @@ impl XformSegPool {
 
     /// 快照拷贝（copy_into 家族）。
     pub(crate) fn copy_into(&self, dst: &mut XformSegPool) {
+        dst.program_states.copy_from_slice(&self.program_states);
         dst.occupied.copy_from_slice(&self.occupied);
         dst.slots.copy_from_slice(&self.slots);
     }
@@ -149,6 +154,7 @@ impl XformSegPool {
 /// P6：全量入校验和——占用位图 + **全部**槽（哈希全槽不看占用），小端、声明序。
 impl Checksum for XformSegPool {
     fn hash_into(&self, h: &mut Fnv1a64) {
+        self.program_states.hash_into(h);
         for w in &self.occupied {
             w.hash_into(h);
         }
@@ -166,6 +172,7 @@ impl Checksum for XformSegPool {
 /// 纪律——`define_pool!` 池的 SaveBytes 是宏生成，本池手写特例故手写这半边）。
 impl SaveBytes for XformSegPool {
     fn write_bytes(&self, out: &mut Vec<u8>) {
+        self.program_states.write_bytes(out);
         for w in &self.occupied {
             w.write_bytes(out);
         }
@@ -178,6 +185,7 @@ impl SaveBytes for XformSegPool {
         }
     }
     fn read_bytes(&mut self, r: &mut SaveReader<'_>) -> Result<(), LoadError> {
+        self.program_states.read_bytes(r)?;
         for w in &mut self.occupied {
             w.read_bytes(r)?;
         }

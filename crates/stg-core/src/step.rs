@@ -419,7 +419,7 @@ pub fn step_with_director<F: FnMut(&mut WorldBody)>(
     }
     director(b);
     b.update_players(tables); // 3
-    b.run_transforms(); // 4
+    b.run_transforms(ecl.xforms(), tables); // 4
     b.integrate(tables); // 5
     b.collide(tables); // 6
     b.settle(tables); // 7
@@ -2345,9 +2345,9 @@ mod tests {
         // TaskPool derive覆盖checksum/save，copy_into已同步；D10预算见stg-world-design.md。
         // 以下两值均为 `cargo test -p stg-core world_size_sentinel` 实测输出，非手算。
         #[cfg(debug_assertions)]
-        const EXPECTED: (usize, usize) = (1070616, 1283664);
+        const EXPECTED: (usize, usize) = (1078808, 1328720);
         #[cfg(not(debug_assertions))]
-        const EXPECTED: (usize, usize) = (1070616, 1283664);
+        const EXPECTED: (usize, usize) = (1078808, 1328720);
         assert_eq!(sizes, EXPECTED, "先按测试文档注释核对三件套,再更新哨兵数字");
     }
 
@@ -2381,7 +2381,7 @@ mod tests {
             ("shots", 28_800),
             ("items", 22_656), // 22 B/道具 ×1024 + gen 2048 + alive 128（F12：512→1024）
             ("fields", 328),
-            ("xform", 393_472),
+            ("xform", 401_664),
             ("lasers", 21_024), // 80 B/激光 ×256 + gen 512 + alive 32 ≈ 20.5 KiB（激光池刀 2026-09-25 T1）
         ];
         assert_eq!(
@@ -2415,8 +2415,8 @@ mod tests {
     fn engine_ver_anchored() {
         assert_eq!(
             crate::ENGINE_VER,
-            27,
-            "26→27：敌人共享脚本槽新增12288 B状态及4个syscall。——前一次25→26：任务私有状态插值槽新增6个syscall及53248 B状态，进checksum/save/copy。bump 必须是有意识决定(评审 + 改本测试)——24→25：语义缓动补齐(2026-10-23)。\
+            28,
+            "27→28：xform 运行时表达式新增45056 B状态与202/653两个syscall，捕获及进入标记进checksum/save/copy。前一次26→27：敌人共享脚本槽新增12288 B状态及4个syscall。——前一次25→26：任务私有状态插值槽新增6个syscall及53248 B状态，进checksum/save/copy。bump 必须是有意识决定(评审 + 改本测试)——24→25：语义缓动补齐(2026-10-23)。\
              追加22条曲线(编号8–29)，原本坏参数现在合法；旧0–7编码和表字节保持不变，World布局不变。\
              ——前一次23→24：激光池刀(2026-09-25，spec 2026-09-25-laser-pool-design.md)。\
              新增 LaserPool(cap 256)、相位 5 推进、碰撞行 9/10、syscall 族 8xx；校验和与存档载荷均变化，旧回放失效。\
@@ -2508,6 +2508,7 @@ mod tests {
         use crate::ecl::image::ImageParts;
 
         let image = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![OP_PUSHI as u32, 5, OP_WAIT as u32, OP_JMP as u32, 0],
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],
@@ -2842,6 +2843,7 @@ mod tests {
     fn new_game_at_moves_root_pc_to_mark_landing() {
         use crate::ecl::image::ImageParts;
         let image = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code: vec![OP_END as u32, OP_END as u32, OP_END as u32],
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],

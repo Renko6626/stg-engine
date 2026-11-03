@@ -73,14 +73,9 @@
 //! - **`const` 折叠范围**：只支持字面量 + 更早声明的 `const` 引用 + 一元 `-` + 二元算术/比较/
 //!   逻辑（求值委托 `crate::lang::const_eval::evaluate`，复用 `type_rules::binary_result`
 //!   同一张矩阵）；**不支持** `$` 引擎变量/`global()`/函数调用（非编译期可求值）。
-//! - **`xformdef` 序列体不在本趟校验范围**：`ast.rs` 模块文档写"slots 里的 Expr 必须是常量
-//!   表达式，T2 折叠校验"，但 Task 2 checklist 的实际测试点只考"被引用才占槽 / 3×cnt 对齐 /
-//!   off+cnt 上界"——这些是 `lang::slots` 的槽分配职责，不是判型职责。Global Constraints 原文
-//!   "序列折叠为 3 字/槽常量"字面归在 **T3 codegen** 段落（`sub 入口 staging（PUSHI+POPL 序列）`
-//!   ——那正是 T3 才知道的字节码细节）。故本趟**不**递归校验 `XformDef.slots[].args` 的常量性/
-//!   合法 op 名——留给 T3；本趟只处理 `fire(...)` 的 `xf` 参数标识符解析（是否是已声明
-//!   `xformdef` 名或 `none`），见 `exprs::check_builtin_call_args`。此为有意收窄范围的选择，
-//!   非疏漏，报告中列为 T3 交接注意事项。
+//! - **动态xform**：`xforms`检查形参作用域、完整参数标记、纯函数白名单和数值语义，
+//!   将表达式降低为core-owned受限IR并确定阶段缓存/持久集合。零形参全常量声明保留
+//!   原codegen常量折叠路径与raw参数兼容性。引用位接受NAME(args)或none。
 
 use crate::lang::ast::{Block, CompileError, Program, Span, Stmt, Ty};
 use checker::Checker;
@@ -94,6 +89,7 @@ mod exprs;
 mod scope;
 mod stmts;
 mod typed_ast;
+mod xforms;
 
 pub use crate::lang::type_rules::{BinIntent, CastIntent, UnIntent};
 pub(crate) use typed_ast::const_val;
@@ -119,7 +115,7 @@ pub fn check(
 ) -> Result<TypedInfo, Vec<CompileError>> {
     let mut c = Checker {
         subs: BTreeMap::new(),
-        xformdefs: BTreeSet::new(),
+        xformdefs: BTreeMap::new(),
         consts: BTreeMap::new(),
         engine_const_names: BTreeSet::new(),
         errors: Vec::new(),
@@ -135,7 +131,12 @@ pub fn check(
     }
 
     for xf in &prog.xformdefs {
-        c.xformdefs.insert(xf.name.clone());
+        if c.check_not_reserved_sugar_name(xf.span, &xf.name) {
+            continue;
+        }
+        if c.xformdefs.insert(xf.name.clone(), xf).is_some() {
+            c.err(xf.span, format!("xformdef '{}' 重复定义", xf.name));
+        }
     }
 
     for s in &prog.subs {
@@ -153,6 +154,7 @@ pub fn check(
         c.check_const_def(cdef);
     }
 
+    let xforms = c.check_xforms(prog);
     c.errors.extend(validate_marks(prog, &c.consts));
 
     let mut typed_subs = Vec::with_capacity(prog.subs.len());
@@ -167,6 +169,7 @@ pub fn check(
             .map(|(k, (ty, v))| (k.clone(), *ty, *v))
             .collect();
         Ok(TypedInfo {
+            xforms,
             subs: typed_subs,
             consts,
         })

@@ -137,3 +137,14 @@ STEP的第二参数仍是打包值：`frames + 65536 * EASE_QUART_OUT`。
   那条**是同一笔账**；段满同样尽力而为 + 短路，计 `pool_full[XFORM]`。
   区别只在**颗数不写在同一行**：`sh_count` 与 `sh_fire` 分处两句，循环里的 `sh_fire(0)`
   看不出它吃多少段。作者视角见 [`ecl-lang.md`](ecl-lang.md)"发射器"节坑④。
+
+
+## 运行时表达式与段尾数据（ENGINE_VER28）
+
+带参或动态声明使用共享只读程序。未标记动态参数在绑定时求值，`at_spawn`在出生时求值，`at_effect`每次进入操作时求值。具体值仍写入原args并执行现有操作。操作输入已知时校验动态通道、easing及外观；绑定失败保留旧发射器，出生失败不建弹，效果失败记contract_viol与BAD_ARGS并终止序列，弹保持最后有效运动状态。
+
+每段仍为16×12 B，新增独立4 B程序/进入状态。出生后需保留C个i32旧值时，段尾使用ceil(C/2)个数据槽：`M + ceil(C/2) <= 16`，M含操作与STEP scratch。数据槽头为END，首个数据槽兼作终止位置；LOOP目标不得进入scratch或其它数据槽。运行参数、LOOP计数和BOUNCE墙掩码不被借作捕获存储。
+
+`set_sprite(shape,color)`保留两个语义轴，允许分别在出生和效果时采样，组合前分别校验并拒绝图集空格。`set_shape/set_color`只查对应轴，继续允许部分设置落到空格；args[1]仍存表派生stride。动态路径向相位4传入中立WorldTables以验证外观，保留旧静态槽ABI。
+
+完整例子见[带参变换与求值时点](ecl-lang/4-bullets.md)。

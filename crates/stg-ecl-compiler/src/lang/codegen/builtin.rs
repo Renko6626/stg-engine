@@ -65,6 +65,7 @@ impl Gen<'_> {
         bi: &'static builtins::Builtin,
         args: &[CallArg],
     ) {
+        let mut program_call = false;
         let discard_first_handle = is_self_bullet_setter(bi.name);
         // 颜色轴糖：表层 (shape, color) 两参 → 字节码单个 appearance 值。折叠掉两位，
         // 故循环改成索引推进式（`zip(...).enumerate()` 一位一步走不了这个合并）。
@@ -104,16 +105,27 @@ impl Gen<'_> {
                     }
                 }
                 (CallArg::XformRef(name_opt), ParamKind::XformRef) => match name_opt {
-                    Some(name) => {
-                        let (off, cnt) = slots.xform_regions[name];
-                        b.push_i(off as i32);
-                        b.push_i(cnt as i32);
-                    }
+                    Some(name) => match slots.xform_regions[name] {
+                        crate::lang::slots::XformRegion::Legacy { off, cnt } => {
+                            b.push_i(off as i32);
+                            b.push_i(cnt as i32);
+                        }
+                        crate::lang::slots::XformRegion::ProgramArgs { off, argc } => {
+                            b.push_i(self.xform_program_ids[name] as i32);
+                            b.push_i(off as i32);
+                            b.push_i(argc as i32);
+                            program_call = true;
+                        }
+                    },
                     None => {
                         b.push_i(0);
                         b.push_i(0);
                     }
                 },
+                (CallArg::XformRefArgs(name, exprs), ParamKind::XformRef) => {
+                    self.gen_xform_program_ref(b, slots, name, exprs);
+                    program_call = true;
+                }
                 (CallArg::SubRef(name_opt), ParamKind::SubRef) => {
                     match name_opt {
                         Some(name) => b.push_task_ref(Some(self.name_to_ref[name])),
@@ -146,7 +158,19 @@ impl Gen<'_> {
             );
             b.raw_emit_op(bi.syscall as u8);
         } else {
-            b.sys(bi.syscall);
+            b.sys(if program_call {
+                match bi.syscall {
+                    stg_core::ecl::syscall::SYS_CREATE_BULLET => {
+                        stg_core::ecl::syscall::SYS_CREATE_BULLET_PROGRAM
+                    }
+                    stg_core::ecl::syscall::SYS_SH_XFORM => {
+                        stg_core::ecl::syscall::SYS_SH_XFORM_PROGRAM
+                    }
+                    _ => unreachable!("xform program used outside fire/sh_xform"),
+                }
+            } else {
+                bi.syscall
+            });
             if emits_kill_self_after(bi.name) {
                 // `die()` 降低成两条指令：`SYS(SYS_DIE)` 跑死亡效果，`OP_KILL_SELF` 终止本
                 // 任务（人类裁定 D-4）。这样做是因为 `syscall::dispatch` 的签名是

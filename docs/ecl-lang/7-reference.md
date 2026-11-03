@@ -201,7 +201,7 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 - `sh_count(id: int, n_angle: int, n_speed: int)` — 设发弹阵列规模:角度向 n_angle 颗 × 速度向 n_speed 层;双边钳 [0,255] 不回绕
 - `sh_aim(id: int, on: int)` — 开/关自机狙(on!=0 为开):开则 sh_angle 的 angle0 是相对自机方向的偏移,而非绝对方向
 - `sh_ring(id: int, on: int)` — 开/关整周环(on!=0 为开):开则 n_angle 颗自动均分整周;关则是以基准方向为中心对称展开的 fan
-- `sh_xform(id: int, xf: xform|none)` — 给发射器挂 xformdef(名或 none);开火时每颗弹都带上
+- `sh_xform(id: int, xf: xform|none)` — 给发射器挂 xformdef(名、NAME(args)或none);动态实参绑定时按值保存，开火时每颗弹独立采样
 - `sh_task(id: int, sub: sub|none)` — 给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹
 - `sh_req(id: int, req_id: int)` — 设开火时顺带发的通道 B 请求 id(音效等);0 = 不发
 - `sh_fire(id: int)` — 用发射器槽 id 的参数开火;无返回值;池满走 P4-a 计数
@@ -225,3 +225,8 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 ---
 
 **下一篇** → [8 · 报错与限制](8-errors.md)：什么会 Fault、什么静默降级、怎么最快定位。
+
+
+## xform求值标记
+
+`NAME(args)`为按值模板引用，可用于`fire`与`sh_xform`的xf位。`at_spawn(expr)`与`at_effect(expr)`只在xform完整操作参数外层使用，分别选择出生采样与操作进入采样；它们不是普通sub中的运行时函数。限制与例子见[带参变换与求值时点](4-bullets.md)。

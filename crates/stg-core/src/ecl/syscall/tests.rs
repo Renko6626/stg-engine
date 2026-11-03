@@ -45,6 +45,7 @@ fn frozen_table() -> &'static [(u16, &'static str, u16)] {
         (SYS_SELF_INT, "self_int", 1),
         (SYS_SELF_FX, "self_fx", 1),
         (SYS_CREATE_BULLET, "create_bullet", 2),
+        (SYS_CREATE_BULLET_PROGRAM, "create_bullet_program", 2),
         (SYS_CREATE_BULLETS_BATCH, "create_bullets_batch", 2),
         (SYS_SPAWN_ENEMY, "spawn_enemy", 2),
         (SYS_DROP_ITEM, "drop_item", 2),
@@ -97,6 +98,7 @@ fn frozen_table() -> &'static [(u16, &'static str, u16)] {
         (SYS_SH_AIM, "sh_aim", 6),
         (SYS_SH_RING, "sh_ring", 6),
         (SYS_SH_XFORM, "sh_xform", 6),
+        (SYS_SH_XFORM_PROGRAM, "sh_xform_program", 6),
         (SYS_SH_TASK, "sh_task", 6),
         (SYS_SH_REQ, "sh_req", 6),
         (SYS_SH_FIRE, "sh_fire", 6),
@@ -164,9 +166,9 @@ fn syscall_table_is_hundred_partitioned_and_unique() {
 
     assert_eq!(
         table.len(),
-        113,
+        115,
         "74 + 自机能力刀两条（513/560）+ 表现契约 v2 三条（430/721/722）+ 壳子刀 723 − 玩法刀退役 513 \
-         + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97；激光读口 810–814 = 102；自机判定写口 561 = 103；显式插值槽六条 = 109；敌人共享槽四条 = 113：增改需同步这个数"
+         + boss 换段刀八条（026/131/440/441/442/443/531/541）= 87；激光池刀 8xx 十条 = 97；激光读口 810–814 = 102；自机判定写口 561 = 103；显式插值槽六条 = 109；敌人共享槽四条 = 113；xform 程序入口两条 = 115：增改需同步这个数"
     );
 
     // (a) 族归属：搬错族立刻红

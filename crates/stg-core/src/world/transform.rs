@@ -16,7 +16,11 @@ pub(crate) enum FireResult {
 pub(crate) const STEP_ACTIVE: i32 = 1 << 31;
 
 impl WorldBody {
-    pub(crate) fn run_transforms(&mut self) {
+    pub(crate) fn run_transforms(
+        &mut self,
+        programs: &program::XformPrograms,
+        tables: &crate::tables::WorldTables,
+    ) {
         self.phase_enter(super::PH_XFORM);
         // C 组：xform 游标（`xform_wait`/`xform_next`）随场景一起冻结——它是弹幕演化的
         // 一部分，跑了就等于时停期间弹还在"变形"。
@@ -45,13 +49,18 @@ impl WorldBody {
                     }
                     // 递减归零：当帧放行（wait=W ⇒ 恰 W 帧后发射）
                 }
-                self.advance_cursor(i);
+                self.advance_cursor(i, programs, tables);
             }
         }
     }
 
     /// 游标推进：从 xform_next 起连发直到 wait 门/终止/LOOP 护栏。
-    fn advance_cursor(&mut self, i: usize) {
+    fn advance_cursor(
+        &mut self,
+        i: usize,
+        programs: &program::XformPrograms,
+        tables: &crate::tables::WorldTables,
+    ) {
         if self.bullets.xform_next[i] as usize >= SLOTS_PER_SEG {
             return; // 已终止（哨兵 16）——短路，含伪造段号已终止后的重复调用
         }
@@ -67,8 +76,17 @@ impl WorldBody {
             if next >= SLOTS_PER_SEG {
                 return; // 已终止（哨兵 16）
             }
-            let slot = self.xforms.seg_slots(seg)[next];
+            let slot = match self.resolve_xform_slot(i, programs, tables) {
+                Ok(slot) => slot,
+                Err(_) => {
+                    self.xform_bad_args();
+                    self.xforms.program_states[seg as usize].sampled_slot_plus_one = 0;
+                    self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
+                    return;
+                }
+            };
             if slot.op == OP_END {
+                self.xforms.program_states[seg as usize].sampled_slot_plus_one = 0;
                 self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
                 return;
             }
@@ -86,13 +104,18 @@ impl WorldBody {
             } else {
                 match self.fire_op(i, slot) {
                     FireResult::Terminate => {
+                        self.xforms.program_states[seg as usize].sampled_slot_plus_one = 0;
                         self.bullets.xform_next[i] = SLOTS_PER_SEG as u8;
                         return;
                     }
-                    FireResult::Jumped => return, // LOOP 护栏：本帧到此为止
+                    FireResult::Jumped => {
+                        self.xforms.program_states[seg as usize].sampled_slot_plus_one = 0;
+                        return;
+                    } // LOOP 护栏：本帧到此为止
                     FireResult::Continue => {}
                 }
             }
+            self.xforms.program_states[seg as usize].sampled_slot_plus_one = 0;
             self.bullets.xform_wait[i] = slot.wait;
             self.bullets.xform_next[i] = (next + 1 + ARITY[slot.op as usize] as usize) as u8;
             if slot.wait > 0 {
@@ -919,14 +942,20 @@ mod tests {
         {
             w.body.phase_guard = crate::world::PH_XFORM;
         }
-        w.body.run_transforms();
+        w.body.run_transforms(
+            &crate::xform::program::XformPrograms::empty(),
+            &crate::tables::TABLES_V0,
+        );
         assert_eq!(w.body.bullets.sprite[i], 41, "SET_COLOR 必须保住形状位");
 
         #[cfg(debug_assertions)]
         {
             w.body.phase_guard = crate::world::PH_XFORM;
         }
-        w.body.run_transforms();
+        w.body.run_transforms(
+            &crate::xform::program::XformPrograms::empty(),
+            &crate::tables::TABLES_V0,
+        );
         assert_eq!(w.body.bullets.sprite[i], 57, "SET_SHAPE 必须保住颜色位");
     }
 
@@ -957,7 +986,10 @@ mod tests {
         {
             w.body.phase_guard = crate::world::PH_XFORM;
         }
-        w.body.run_transforms();
+        w.body.run_transforms(
+            &crate::xform::program::XformPrograms::empty(),
+            &crate::tables::TABLES_V0,
+        );
 
         assert_eq!(w.body.bullets.sprite[i], 37, "坏 stride 必须 no-op");
         assert_eq!(
@@ -995,7 +1027,10 @@ mod tests {
         {
             w.body.phase_guard = crate::world::PH_XFORM;
         }
-        w.body.run_transforms(); // 不 panic 即达标（这是本测试存在的第一理由）
+        w.body.run_transforms(
+            &crate::xform::program::XformPrograms::empty(),
+            &crate::tables::TABLES_V0,
+        ); // 不 panic 即达标（这是本测试存在的第一理由）
 
         // 32i32.wrapping_add(i32::MAX) 的位模式是 0x8000_001F；`as u16` 截断到低 16 位
         // = 0x001F = 31——手算值，不是照抄实现表达式，真正独立验证"确定"而非"不崩就行"。
@@ -1032,7 +1067,10 @@ mod tests {
         {
             w.body.phase_guard = crate::world::PH_XFORM;
         }
-        w.body.run_transforms(); // 不 panic 即达标
+        w.body.run_transforms(
+            &crate::xform::program::XformPrograms::empty(),
+            &crate::tables::TABLES_V0,
+        ); // 不 panic 即达标
 
         assert_eq!(
             w.body.bullets.sprite[i], 4,

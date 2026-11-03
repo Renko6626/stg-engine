@@ -308,6 +308,23 @@ impl<'s> Parser<'s> {
         let span = self.current_span();
         self.advance(); // 'xformdef'
         let name = self.expect_ident("期待 xformdef 名")?;
+        let mut params = Vec::new();
+        if *self.peek_kind() == TokenKind::LParen {
+            self.advance();
+            if *self.peek_kind() != TokenKind::RParen {
+                loop {
+                    let pname = self.expect_ident("期待参数名")?;
+                    self.expect(TokenKind::Colon, "期待 ':'")?;
+                    let ty = self.parse_ty()?;
+                    params.push((pname, ty));
+                    if *self.peek_kind() != TokenKind::Comma {
+                        break;
+                    }
+                    self.advance();
+                }
+            }
+            self.expect(TokenKind::RParen, "期待 ')'")?;
+        }
         self.expect(TokenKind::LBrace, "期待 '{'")?;
         let mut slots = Vec::new();
         while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
@@ -317,7 +334,12 @@ impl<'s> Parser<'s> {
             }
         }
         self.expect(TokenKind::RBrace, "期待 '}'")?;
-        Ok(XformDef { name, slots, span })
+        Ok(XformDef {
+            name,
+            params,
+            slots,
+            span,
+        })
     }
 
     /// `[@wait] op_name(args);`（计划 Global Constraints 选定的 wait 前缀语法）。

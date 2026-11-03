@@ -14,11 +14,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// / `Stmt::Var`）统一在声明处调用 [`Checker::check_not_reserved_sugar_name`] 拒绝，把
 /// "同名碰撞"从静默行为错变成编译期错误，不需要在 parser 里逐个猜"这个名字是不是被
 /// 用户重新声明过"。
-pub(super) const RESERVED_SUGAR_NAMES: &[&str] = &["wait_spell", "mark"];
+pub(super) const RESERVED_SUGAR_NAMES: &[&str] = &["wait_spell", "mark", "at_spawn", "at_effect"];
 
 pub(super) struct Checker<'p, 't> {
     pub(super) subs: BTreeMap<String, &'p SubDef>,
-    pub(super) xformdefs: BTreeSet<String>,
+    pub(super) xformdefs: BTreeMap<String, &'p crate::lang::ast::XformDef>,
     pub(super) consts: BTreeMap<String, (Ty, i32)>,
     pub(super) engine_const_names: BTreeSet<String>,
     pub(super) errors: Vec<CompileError>,

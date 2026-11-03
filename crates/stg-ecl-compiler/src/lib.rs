@@ -668,12 +668,19 @@ struct SubDecl {
 
 #[derive(Default)]
 pub struct ImageBuilder {
+    xforms: stg_core::xform::program::XformPrograms,
     subs: Vec<SubDecl>,
 }
 
 impl ImageBuilder {
+    pub fn set_xform_programs(&mut self, programs: stg_core::xform::program::XformPrograms) {
+        self.xforms = programs;
+    }
     pub fn new() -> Self {
-        Self { subs: Vec::new() }
+        Self {
+            subs: Vec::new(),
+            xforms: stg_core::xform::program::XformPrograms::empty(),
+        }
     }
 
     pub fn declare_sub(
@@ -892,6 +899,7 @@ impl ImageBuilder {
             }
         }
         EclImage::try_from_parts(ImageParts {
+            xforms: self.xforms,
             code,
             subs,
             entries,

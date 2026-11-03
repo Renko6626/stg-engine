@@ -77,6 +77,12 @@ use crate::lang::typeck::{CallArg, TypedExpr, TypedExprKind, TypedInfo, TypedStm
 use std::collections::BTreeMap;
 use stg_core::ecl::task::{EVAL_DEPTH, LOCALS};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XformRegion {
+    Legacy { off: usize, cnt: usize },
+    ProgramArgs { off: usize, argc: usize },
+}
+
 /// 一个 `sub` 的槽分配结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubSlots {
@@ -85,11 +91,9 @@ pub struct SubSlots {
     /// 参数 / `var` / `for` 归纳变量名 → 绝对槽号（直接可用作 `PUSHL`/`POPL` 操作数，
     /// 不需要调用方再加 `base`）。
     pub locals: BTreeMap<String, usize>,
-    /// `fire(...)` 引用到的 xformdef 名 → `(off, cnt)`（`off` 绝对槽号，`cnt` = 该 xformdef
-    /// 的 op 槽数；3 字/槽，区间宽度 = `cnt*3`）。未被任何 `fire` 引用的 xformdef 不出现
-    /// （也不出现在任何 sub 里）。
-    pub xform_regions: BTreeMap<String, (usize, usize)>,
-    /// 本 sub 槽区间总宽度（`locals.len() + Σ cnt*3`）——`base+width` = 下一个可用槽。
+    /// 引用名到locals区间：Legacy暂存3字/物理槽；ProgramArgs只暂存实参，调用时立即消费。
+    pub xform_regions: BTreeMap<String, XformRegion>,
+    /// 本 sub 槽区间总宽度（locals、静态模板及动态实参暂存）——`base+width` = 下一个可用槽。
     pub width: usize,
     /// 本 sub 求值栈深上界（表达式树后序模拟 + 调用实参压栈峰值，见 [`body_depth`]）。
     pub max_stack: usize,
@@ -255,6 +259,16 @@ fn call_args_depth(args: &[CallArg]) -> usize {
         let (d, words) = match a {
             CallArg::Val(t) => (expr_depth(t), 1),
             CallArg::XformRef(_) => (2, 2),
+            CallArg::XformRefArgs(_, exprs) => (
+                exprs
+                    .iter()
+                    .enumerate()
+                    .map(|(k, e)| k + expr_depth(e))
+                    .max()
+                    .unwrap_or(0)
+                    .max(3),
+                3,
+            ),
             CallArg::SubRef(_) => (1, 1),
             // task 号 1 字 + 实参逐个驻留 + 末尾 argc 1 字（boss 换段刀，spawn_enemy 带参）。
             CallArg::SubRefArgs(_, exprs) => {
@@ -448,7 +462,7 @@ pub fn allocate(prog: &Program, ti: &TypedInfo) -> Result<SlotMap, Vec<CompileEr
                 ));
             }
             xform_order.push((xf_name.clone(), cnt));
-            xform_width += cnt * 3;
+            xform_width += ti.xforms.get(xf_name).map_or(cnt * 3, |p| p.argc as usize);
         }
 
         let width = names.len() + xform_width;
@@ -493,8 +507,19 @@ pub fn allocate(prog: &Program, ti: &TypedInfo) -> Result<SlotMap, Vec<CompileEr
         let mut xform_regions = BTreeMap::new();
         let mut off = base + layout.locals_order.len();
         for (name, cnt) in &layout.xform_order {
-            xform_regions.insert(name.clone(), (off, *cnt));
-            off += cnt * 3;
+            if let Some(program) = ti.xforms.get(name) {
+                xform_regions.insert(
+                    name.clone(),
+                    XformRegion::ProgramArgs {
+                        off,
+                        argc: program.argc as usize,
+                    },
+                );
+                off += program.argc as usize;
+            } else {
+                xform_regions.insert(name.clone(), XformRegion::Legacy { off, cnt: *cnt });
+                off += cnt * 3;
+            }
         }
 
         let end = base + layout.width;
@@ -744,7 +769,9 @@ mod tests {
              sub main() { var x: int = 1; _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, RING, none); }");
         let main = &sm.subs["main"];
         assert_eq!(main.locals["x"], 0, "变量先占槽");
-        let (off, cnt) = main.xform_regions["RING"];
+        let XformRegion::Legacy { off, cnt } = main.xform_regions["RING"] else {
+            panic!("expected legacy region")
+        };
         assert_eq!(cnt, 2, "RING 有 2 条 op");
         assert_eq!(
             off,
@@ -786,7 +813,9 @@ mod tests {
         let sm = ok("xformdef S { step_speed(2.0fx, 4); turn(90deg); } \
              sub main() { _ = fire(0, 0, 0fx, 0fx, 1.0fx, 0deg, S, none); }");
         let main = &sm.subs["main"];
-        let (_off, cnt) = main.xform_regions["S"];
+        let XformRegion::Legacy { off: _off, cnt } = main.xform_regions["S"] else {
+            panic!("expected legacy region")
+        };
         assert_eq!(cnt, 3, "step_speed 物理 2 槽 + turn 1 槽");
         assert_eq!(
             main.width,

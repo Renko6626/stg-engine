@@ -92,9 +92,16 @@ pub(super) fn sys_clear_bullets(_task: &mut Task, ctx: &mut VmCtx) -> Result<(),
 /// 创建失败（appearance/xform 校验过关后，池满或 xform 内容仍被 `create_bullet_with_xform`
 /// 拒绝）→ 押 -1，不派生任务。
 pub(super) fn sys_create_bullet(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    create_bullet_impl(task, ctx, false)
+}
+pub(super) fn sys_create_bullet_program(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
+    create_bullet_impl(task, ctx, true)
+}
+fn create_bullet_impl(task: &mut Task, ctx: &mut VmCtx, program: bool) -> Result<(), u8> {
     let task_script = pop(task)?;
     let xform_cnt = pop(task)?;
     let xform_off = pop(task)?;
+    let program_id = if program { Some(pop(task)?) } else { None };
     let angle_raw = pop(task)?;
     let speed_raw = pop(task)?;
     let y_raw = pop(task)?;
@@ -113,7 +120,15 @@ pub(super) fn sys_create_bullet(task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
     // xform 区间越界（LOCALS 边界）→ Fault；内容层面的坏 xform（>16 槽/未知 op/...）留给
     // `create_bullet_with_xform` 自己的 P4-b 处置（NULL + BAD_ARGS，见下方"押 -1"分支）。
     let mut xform_buf = [XformSlot::default(); 16];
-    let xform_len: usize = if xform_cnt == 0 {
+    let binding = if let Some(id) = program_id {
+        match bind_program(task, ctx, id, xform_off, xform_cnt)? {
+            Some(b) => Some(b),
+            None => return push(task, -1),
+        }
+    } else {
+        None
+    };
+    let xform_len: usize = if program || xform_cnt == 0 {
         0
     } else {
         if xform_cnt < 0 || xform_cnt as usize > 16 || xform_off < 0 {
@@ -184,7 +199,10 @@ pub(super) fn sys_create_bullet(task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         born_frame: ctx.body.frame,
     };
 
-    let handle = if xform_len == 0 {
+    let handle = if let Some(binding) = binding {
+        ctx.body
+            .create_bullet_with_bound_xform(init, &binding, ctx.ecl.xforms(), ctx.tables)
+    } else if xform_len == 0 {
         ctx.body.create_bullet(init)
     } else {
         ctx.body

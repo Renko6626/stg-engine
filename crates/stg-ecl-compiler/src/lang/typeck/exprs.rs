@@ -11,7 +11,6 @@ use crate::lang::builtins::{self, Builtin, ParamKind};
 use crate::lang::type_rules::{CastIntent, UnIntent, binary_result, op_symbol};
 
 enum RefKind {
-    Xform,
     Sub,
 }
 
@@ -299,17 +298,10 @@ impl<'p, 't> Checker<'p, 't> {
                     Some(t) => out.push(CallArg::Val(t)),
                     None => ok = false,
                 },
-                ParamKind::XformRef => {
-                    match self.resolve_ident_ref(a, span, RefKind::Xform, b.name) {
-                        Some(r) => {
-                            if let Some(n) = &r {
-                                self.push_xform_ref(n.clone());
-                            }
-                            out.push(CallArg::XformRef(r));
-                        }
-                        None => ok = false,
-                    }
-                }
+                ParamKind::XformRef => match self.check_xform_ref(a, span, locals) {
+                    Some(arg) => out.push(arg),
+                    None => ok = false,
+                },
                 ParamKind::SubRef => match a {
                     Expr::Call {
                         name,
@@ -422,7 +414,6 @@ impl<'p, 't> Checker<'p, 't> {
                     return Some(None);
                 }
                 let known = match kind {
-                    RefKind::Xform => self.xformdefs.contains(name),
                     RefKind::Sub => self.subs.contains_key(name),
                 };
                 if known {
@@ -458,7 +449,6 @@ impl<'p, 't> Checker<'p, 't> {
                     Some(Some(name.clone()))
                 } else {
                     let what = match kind {
-                        RefKind::Xform => "xformdef",
                         RefKind::Sub => "sub",
                     };
                     self.err(*vspan, format!("未知的 {what} 名 '{name}'"));

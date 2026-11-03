@@ -41,6 +41,7 @@ mod query;
 mod shooter;
 mod spell;
 mod stage;
+mod xform;
 
 use bullet::*;
 use enemy::*;
@@ -50,6 +51,7 @@ use query::*;
 use shooter::*;
 use spell::*;
 use stage::*;
+use xform::*;
 
 // ── syscall 号表（冻结；百分区制，2026-07-31 重排拍板）─────────────────────────
 // 百位 = 族号：0xx `$` 引擎变量 / 1xx 查询 / 2xx 造物 / 3xx 弹操作 / 4xx 敌运动 /
@@ -135,6 +137,8 @@ pub const SYS_ENEMY_HP: u16 = 100;
 // 7xx 控制·符卡三族，物理顺序沿用历史累加顺序，不代表族边界）
 /// 丙方案 8 参（正序压栈）：`appearance, x, y, speed, angle, xform_off, xform_cnt, task_script`。
 pub const SYS_CREATE_BULLET: u16 = 200;
+/// Program-backed create; xform arguments are consumed immediately.
+pub const SYS_CREATE_BULLET_PROGRAM: u16 = 202;
 /// 9 参：`appearance, x, y, n_angle, angle0, angle_step, n_speed, speed0, speed_step`（无 xform）。
 pub const SYS_CREATE_BULLETS_BATCH: u16 = 201;
 /// v1 直参 5 个：`x, y, hp, drop_table, score`（appearance 敌表后补，见 follow-ups）；
@@ -317,6 +321,8 @@ pub const SYS_SH_COUNT: u16 = 632;
 pub const SYS_SH_AIM: u16 = 640;
 pub const SYS_SH_RING: u16 = 641;
 pub const SYS_SH_XFORM: u16 = 650;
+/// Program-backed shooter binding with by-value arguments.
+pub const SYS_SH_XFORM_PROGRAM: u16 = 653;
 pub const SYS_SH_TASK: u16 = 651;
 pub const SYS_SH_REQ: u16 = 652;
 /// 开火（660）：用发射器槽 `id` 的参数造弹。**无返回值**（人类裁定 D-8——本语言要求值必须
@@ -502,6 +508,7 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_SELF_FX
             // 2xx 造物
             | SYS_CREATE_BULLET
+            | SYS_CREATE_BULLET_PROGRAM
             | SYS_CREATE_BULLETS_BATCH
             | SYS_SPAWN_ENEMY
             | SYS_DROP_ITEM
@@ -558,6 +565,7 @@ pub const fn syscall_implemented(no: u16) -> bool {
             | SYS_SH_AIM
             | SYS_SH_RING
             | SYS_SH_XFORM
+            | SYS_SH_XFORM_PROGRAM
             | SYS_SH_TASK
             | SYS_SH_REQ
             | SYS_SH_FIRE
@@ -740,6 +748,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
 
         // ── 2xx 造物 ─────────────────────────────────────────────────────────
         SYS_CREATE_BULLET => sys_create_bullet(task, ctx),
+        SYS_CREATE_BULLET_PROGRAM => sys_create_bullet_program(task, ctx),
         SYS_CREATE_BULLETS_BATCH => sys_create_bullets_batch(task, ctx),
         SYS_SPAWN_ENEMY => sys_spawn_enemy(task, ctx),
         SYS_DROP_ITEM => sys_drop_item(task, ctx),
@@ -809,6 +818,7 @@ pub(crate) fn dispatch(no: u16, task: &mut Task, ctx: &mut VmCtx) -> Result<(), 
         SYS_SH_AIM => sys_sh_aim(task, ctx),
         SYS_SH_RING => sys_sh_ring(task, ctx),
         SYS_SH_XFORM => sys_sh_xform(task, ctx),
+        SYS_SH_XFORM_PROGRAM => sys_sh_xform_program(task, ctx),
         SYS_SH_TASK => sys_sh_task(task, ctx),
         SYS_SH_REQ => sys_sh_req(task, ctx),
         SYS_SH_FIRE => sys_sh_fire(task, ctx),

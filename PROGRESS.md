@@ -4,19 +4,25 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-10-26）
+## 现在（2026-11-03）
+
+- **动态xform（2026-11-03）**：按值形参、绑定/出生/效果分阶段求值已接入。公式在镜像共享，必要旧值留段尾；每段新增4 B、发射器绑定36 B，World净增44 KiB，ENGINE_VER28。支持纯三型表达式、短路、受限数学读口，保持旧静态ABI和操作时序；容量仍为8逻辑缓存与16物理槽。见[设计](docs/superpowers/specs/2026-11-03-xform-runtime-expressions-design.md)与[实施记录](docs/superpowers/plans/2026-11-03-xform-runtime-expressions.md)。
+- **动态xform验证**：core/compiler/harness/RL相关检查、fmt/clippy、release变换测试、表校验与三场景golden通过；harness端口用例获准沙箱外重跑。独立审阅两项修复有真实复现。2048弹每帧触发的p50为常量42.8µs、直接101.2µs、组合122.8µs；STEP稳态约55.3–55.7µs；出生档及静态调度对照详见[性能基线](docs/bench-baseline.md)。未做Godot/wheel/真实训练/跨平台验证。
+
 
 - **敌人共享变量**：每敌4个int、8个fx槽，`self_int` / `set_self_int` / `self_fx` / `set_self_fx` 已接入编译器、syscall与世界层；同敌任务双向共享、换阶段保留，新敌及复用清零，不隐式继承。状态+12 KiB，**ENGINE_VER27**，旧存档与回放失效。见[设计](docs/superpowers/specs/2026-10-26-enemy-script-vars-design.md)与[计划](docs/superpowers/plans/2026-10-26-enemy-script-vars.md)。
 - **已完成整理**：syscall 拆为8个私有领域实现与独立测试，根文件保留号表/白名单/派发；builtin 降低集中到 `lang/codegen/builtin.rs`；符卡世界逻辑集中到 `world/spell.rs`，根 `spell.rs` 保留POD和常量。该整理本身保持公开接口、状态布局、行为与 ENGINE_VER26。见[设计](docs/superpowers/specs/2026-10-26-core-module-cleanup-design.md)与[实施记录](docs/superpowers/plans/2026-10-26-core-module-cleanup.md)。
 - **共享变量验证**：Sol medium实现，Sol high审阅规格与代码质量通过，无待修项；core/compiler/harness/RL相关测试、fmt/clippy、表校验通过；新增4项真实脚本集成测试及1项复用/旧句柄测试。新golden三场景完成，SHA256 `8beb3e7e1872fcb1895d2b38e6ca4acad31831c96179618a304d2988731cb1d0`；新增全槽数值状态使其与26版不同。
 - **整理验证记录**：3位Sol medium并行实现、3位Sol high审阅通过，无待修项；core/compiler/harness已有测试、fmt/clippy、表校验通过，golden改前/改后逐字节一致（SHA256 `75d6a0e3dbff13e7ccb736f5240142ca0407a293d61cd8adc87cc129bd50d706`）。未新增永久测试或运行浏览器。
-- **工作区**：整理及共享变量在 `codex/core-module-cleanup`；2026-10-26用户要求阶段性提交推送，按模块整理与共享变量功能分两笔提交，远端目标为 `origin/codex/core-module-cleanup`。保留本地 `dist/` 产物。未做跨平台/原作动态对拍、Godot或训练验证，未重建wheel。
+- **交付分支**：2026-11-03用户追加要求阶段性提交推送，并将 `codex/core-module-cleanup` 合并回 `main`；提交号以Git历史为准。本次包含既有模块整理、敌人共享变量及动态xform功能，保留本地 `dist/` 产物。未做跨平台/原作动态对拍、Godot或训练验证，未重建wheel。
 - **已提交基线**：`18c2fca` 为RL当前起点查询，`270500c` 为30条命名缓动与显式状态插值槽；两笔纳入当前整理分支历史。旧实施记录中的“未提交”描述2026-10-23当时状态。
 - **ECL能力**：已支持导入用标签/goto、30条 `EASE_*` 曲线，以及每任务每类4槽的accum/accel/Hermite显式值插值；启动次帧推进、wait继续、不自动回写。[缓动对照](docs/easing-reference.md)与[状态插值边界](docs/stateful-interpolation-reference.md)保存原作差异，新增能力尚未接入导入器或迁移旧卡池。
 - **既有底座**：直线激光池、敌人位移读口、RL观测适配优化与当前起点查询均已落地；性能与历史证据见里程碑史及[基线](docs/bench-baseline.md)。
 - **后续范围**：敌人共享槽尚未接入原作导入器；弹任务带参、共享shooter、共享时钟、原作转换规则、EX出生态和曲线激光仍为独立待办，需按具体方案继续确认。技术债详单见[follow-ups](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
+
+- 2026-11-03：ENGINE_VER28动态xform，按值形参、出生/效果采样、共享公式与段尾捕获；World新增44 KiB。
 
 - 2026-10-26：ENGINE_VER27敌人共享脚本变量，4个int与8个fx槽；同敌任务共享，纳入校验、存档与复制。
 

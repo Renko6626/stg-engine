@@ -63,10 +63,11 @@ pub struct SubDef {
 }
 
 /// `xformdef NAME { [@wait] op(args); ... }`（计划级补遗选定语法，见 `lang::parse` 文档）—
-/// 编译期全常量（`slots` 里的 `Expr` 必须是常量表达式，T2 折叠校验；T1 只负责语法形状）。
+/// 可选按值形参；操作参数支持绑定、at_spawn和at_effect阶段。parser只保存语法形状。
 #[derive(Debug, Clone, PartialEq)]
 pub struct XformDef {
     pub name: String,
+    pub params: Vec<(String, Ty)>,
     pub slots: Vec<XfSlotLit>,
     pub span: Span,
 }

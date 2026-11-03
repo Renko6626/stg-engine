@@ -85,7 +85,7 @@
     {"name": "sh_count", "signature": "sh_count(id: int, n_angle: int, n_speed: int)", "ret": null, "doc": "设发弹阵列规模:角度向 n_angle 颗 × 速度向 n_speed 层;双边钳 [0,255] 不回绕", "params": [{"name": "id", "ty": "int"}, {"name": "n_angle", "ty": "int"}, {"name": "n_speed", "ty": "int"}]},
     {"name": "sh_aim", "signature": "sh_aim(id: int, on: int)", "ret": null, "doc": "开/关自机狙(on!=0 为开):开则 sh_angle 的 angle0 是相对自机方向的偏移,而非绝对方向", "params": [{"name": "id", "ty": "int"}, {"name": "on", "ty": "int"}]},
     {"name": "sh_ring", "signature": "sh_ring(id: int, on: int)", "ret": null, "doc": "开/关整周环(on!=0 为开):开则 n_angle 颗自动均分整周;关则是以基准方向为中心对称展开的 fan", "params": [{"name": "id", "ty": "int"}, {"name": "on", "ty": "int"}]},
-    {"name": "sh_xform", "signature": "sh_xform(id: int, xf: xform|none)", "ret": null, "doc": "给发射器挂 xformdef(名或 none);开火时每颗弹都带上", "params": [{"name": "id", "ty": "int"}, {"name": "xf", "ty": "xform|none"}]},
+    {"name": "sh_xform", "signature": "sh_xform(id: int, xf: xform|none)", "ret": null, "doc": "给发射器挂 xformdef(名、NAME(args)或none);动态实参绑定时按值保存，开火时每颗弹独立采样", "params": [{"name": "id", "ty": "int"}, {"name": "xf", "ty": "xform|none"}]},
     {"name": "sh_task", "signature": "sh_task(id: int, sub: sub|none)", "ret": null, "doc": "给发射器挂弹任务 async sub(名或 none);开火时每颗弹都派一个,owner=该弹", "params": [{"name": "id", "ty": "int"}, {"name": "sub", "ty": "sub|none"}]},
     {"name": "sh_req", "signature": "sh_req(id: int, req_id: int)", "ret": null, "doc": "设开火时顺带发的通道 B 请求 id(音效等);0 = 不发", "params": [{"name": "id", "ty": "int"}, {"name": "req_id", "ty": "int"}]},
     {"name": "sh_fire", "signature": "sh_fire(id: int)", "ret": null, "doc": "用发射器槽 id 的参数开火;无返回值;池满走 P4-a 计数", "params": [{"name": "id", "ty": "int"}]},

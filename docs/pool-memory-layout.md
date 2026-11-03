@@ -39,7 +39,7 @@ struct BulletPool {
 | 池 | cap | 每槽字节 | 池总量 |
 |---|---|---|---|
 | `BulletPool` | 8192 | 56 | 476 160 B ≈ 465 KiB |
-| `XformSegPool` | 4096 | — | 393 472 B ≈ 384 KiB |
+| `XformSegPool` | 2048 | 每段16×12 B，加4 B程序状态 | 401 664 B ≈ 392.3 KiB |
 | `ShotPool` | 1024 | — | 28 800 B ≈ 28 KiB |
 | `EnemyPool` | 256 | 165 | 42 784 B ≈ 41.8 KiB（ENGINE_VER27：每敌新增4个 `i32`、8个 `Fx` 脚本共享槽，共+12 288 B） |
 | `ItemPool` | 1024 | 22 | 22 656 B ≈ 22.1 KiB |
@@ -82,3 +82,7 @@ struct BulletPool {
 ---
 
 *出处：M0-3 池框架落地后的缓存精算（开发机 i7-8750H）。数据尺寸随 cap/字段变，缓存尺寸随 CPU 变，但"SoA 流式 + 每相位子集驻 L2 + 预取藏延迟"的结论对现代 CPU 通用。*
+
+## ENGINE_VER28：动态 xform 状态
+
+每段增加4 B程序编号/进入采样标记，共8 KiB。每个 ShooterSlot 由44 B增为80 B，256任务×4槽新增36 KiB。World合计新增44 KiB，实测尺寸由哨兵验证：WorldBody 1,078,808 B，World 1,328,720 B。必要捕获复用段尾，每槽存两个i32；共享表达式在EclImage中，不进入World快照。

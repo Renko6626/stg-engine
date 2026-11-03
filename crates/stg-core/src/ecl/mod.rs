@@ -177,6 +177,7 @@ mod fuzz_smoke {
             raw_random_code(rng, strip_effects)
         };
         EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code,
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],
@@ -338,6 +339,7 @@ mod fuzz_smoke {
     fn exec_faults_deterministically_when_pc_lands_mid_instruction() {
         let code = vec![ops::OP_PUSHI as u32, 50, ops::OP_END as u32];
         let img = EclImage::try_from_parts(ImageParts {
+            xforms: crate::xform::program::XformPrograms::empty(),
             code,
             subs: vec![SubInit::new(0, SubKind::Root, vec![])],
             entries: vec![],

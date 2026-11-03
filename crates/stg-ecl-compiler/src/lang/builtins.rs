@@ -975,7 +975,7 @@ const BUILTINS: &[Builtin] = &[
         is_op: false,
         params: &[Val(Int), Xf],
         ret: None,
-        doc: "给发射器挂 xformdef(名或 none);开火时每颗弹都带上",
+        doc: "给发射器挂 xformdef(名、NAME(args)或none);动态实参绑定时按值保存，开火时每颗弹独立采样",
         param_names: &["id", "xf"],
     },
     Builtin {

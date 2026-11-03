@@ -160,6 +160,7 @@ pub(super) fn sys_sh_xform(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     let off = pop(task)?;
     let id = pop(task)?;
     if let Some(s) = shooter_mut(id, ctx.self_index, ctx) {
+        s.binding = Default::default();
         s.xform_off = off.clamp(0, u16::MAX as i32) as u16;
         s.xform_cnt = cnt.clamp(0, u8::MAX as i32) as u8;
     }
@@ -372,7 +373,10 @@ pub(super) fn sys_sh_fire(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
                 xform_next: 0,
                 born_frame: ctx.body.frame,
             };
-            let handle = if xform_len == 0 {
+            let handle = if sh.binding.program_plus_one != 0 {
+                ctx.body
+                    .create_bullet_with_bound_xform(init, &sh.binding, ctx.ecl.xforms(), tables)
+            } else if xform_len == 0 {
                 ctx.body.create_bullet(init)
             } else {
                 ctx.body

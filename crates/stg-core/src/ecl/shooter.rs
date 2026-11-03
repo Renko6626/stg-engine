@@ -13,14 +13,14 @@
 //! 撞名比无关撞名难受得多，故取 `-Slot` 后缀：既落进本仓 `XformSlot`/`SpellSlot`/`BossUiSlot`
 //! 的家规，又自带"可变的槽"语义。模块名与 `TaskPool.shooters` 字段名保持复数、不带后缀。
 //!
-//! **字段顺序按 4 字节对齐紧排**（`Fx` 在前、`u16` 居中、`u8` 收尾），`repr(C)` 下恰好 44 B。
+//! **字段顺序按 4 字节对齐紧排**（`Fx` 在前、`u16` 居中、`u8` 收尾），ENGINE_VER28起另含36 B动态绑定，`repr(C)`下共80 B。
 //! 改字段顺序会改槽宽 → 改快照尺寸 → 改存档格式，动前先看 `size_of` 那条测试。
 
 use crate::math::{Angle, Fx};
 
 /// 每任务的 shooter 槽数（spec D-1）。脚本用 `id ∈ 0..SHOOTERS_PER_TASK`。
 /// 4 是"一个 boss 典型并发 2-3 种弹（主环/点射/收尾）再留一格"的取值；
-/// 容量账：44 B × 4 × 256 = 45056 B，见 spec §4.2。
+/// 容量账：80 B × 4 × 256 = 81920 B，其中动态绑定新增36864 B。
 pub const SHOOTERS_PER_TASK: usize = 4;
 
 /// `flags` 位：`angle0` 是**相对自机方向的偏移**（而非绝对方向）。
@@ -37,6 +37,7 @@ pub const SH_NO_TASK: u16 = 0xFFFF;
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct ShooterSlot {
+    pub binding: crate::xform::program::XformBinding,
     pub off_x: Fx,
     pub off_y: Fx,
     /// 极坐标偏移的半径；与 `off_x/off_y` **永远叠加**，不存在覆盖关系（ZUN 626 明写 stacks）。
@@ -66,6 +67,7 @@ pub struct ShooterSlot {
 impl Default for ShooterSlot {
     fn default() -> Self {
         ShooterSlot {
+            binding: Default::default(),
             off_x: Fx::ZERO,
             off_y: Fx::ZERO,
             polar_r: Fx::ZERO,
@@ -93,10 +95,10 @@ impl Default for ShooterSlot {
 mod tests {
     use super::*;
 
-    /// 槽宽是容量账的一部分（spec §4.2：44 B × 4 × 256 = 45056 B）。变了就要重算预算表。
+    /// ENGINE_VER28槽宽80 B：旧44 B字段加36 B按值绑定。
     #[test]
-    fn shooter_is_44_bytes() {
-        assert_eq!(core::mem::size_of::<ShooterSlot>(), 44);
+    fn shooter_is_80_bytes() {
+        assert_eq!(core::mem::size_of::<ShooterSlot>(), 80);
     }
 
     /// 默认值：`n_angle`/`n_speed` 是 **1×1** 而不是 0——刚重置的 shooter 开火发**一颗**弹，
