@@ -4,7 +4,7 @@ use crate::input::InputFrame;
 use crate::math::{Angle, Fx};
 use crate::step::{World, step};
 use crate::tables::TABLES_V0;
-use crate::xform::expr::{XformExpr, XformRead};
+use crate::xform::expr::{XformBinary, XformExpr, XformInstr, XformRead, XformUnary};
 
 fn image(init: XformProgramInit) -> EclImage {
     EclImage::try_from_parts(ImageParts {
@@ -50,7 +50,7 @@ fn init() -> BulletInit {
         born_frame: 0,
     }
 }
-fn bind(w: &World, image: &EclImage, args: &[i32]) -> XformBinding {
+fn bind(w: &mut World, image: &EclImage, args: &[i32]) -> XformBinding {
     w.body
         .bind_xform(
             image.xforms(),
@@ -110,7 +110,7 @@ fn xform_samples_bind_spawn_and_effect_at_distinct_times() {
     let image = image(p);
     let mut w = World::new(1);
     w.body.set_var(20, 65536);
-    let b = bind(&w, &image, &[]);
+    let b = bind(&mut w, &image, &[]);
     w.body.set_var(20, 2 * 65536);
     let h = w
         .body
@@ -138,7 +138,15 @@ fn xform_step_reentry_resamples_without_resetting_loop_count() {
         vec![XformOpParams {
             slot: 0,
             args: vec![
-                XformParam::Effect(XformExpr::Read(XformRead::Global(20))),
+                XformParam::Effect(
+                    XformExpr::try_code(vec![
+                        XformInstr::Read(XformRead::Global(20)),
+                        XformInstr::Constant(1),
+                        XformInstr::Unary(XformUnary::Rand),
+                        XformInstr::Binary(XformBinary::Add),
+                    ])
+                    .unwrap(),
+                ),
                 XformParam::Constant(2),
             ],
         }],
@@ -148,7 +156,7 @@ fn xform_step_reentry_resamples_without_resetting_loop_count() {
     let image = image(p);
     let mut w = World::new(1);
     w.body.set_var(20, 4 * 65536);
-    let b = bind(&w, &image, &[123]);
+    let b = bind(&mut w, &image, &[123]);
     let h = w
         .body
         .create_bullet_with_bound_xform(init(), &b, image.xforms(), &TABLES_V0);
@@ -167,6 +175,10 @@ fn xform_step_reentry_resamples_without_resetting_loop_count() {
     assert_eq!(w.body.bullets.xform_next[i], 16);
     assert_eq!(w.body.xforms.seg_slots(seg)[3].args[0], 123);
     assert_eq!(w.body.diag.contract_viol, 0);
+    let mut reference = World::new(1);
+    reference.body.rand_range(1); // One draw on each STEP entry, none during interpolation.
+    reference.body.rand_range(1);
+    assert_eq!(w.body.rand_range(1000), reference.body.rand_range(1000));
 }
 
 #[test]
@@ -192,7 +204,7 @@ fn xform_wait_signal_sampling_and_persistent_data_survive_restore() {
     p.persistent = vec![0];
     let image = image(p);
     let mut w = World::new(1);
-    let b = bind(&w, &image, &[3 * 65536]);
+    let b = bind(&mut w, &image, &[3 * 65536]);
     let h = w
         .body
         .create_bullet_with_bound_xform(init(), &b, image.xforms(), &TABLES_V0);

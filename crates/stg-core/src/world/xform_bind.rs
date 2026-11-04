@@ -8,7 +8,7 @@ use crate::xform::*;
 
 impl WorldBody {
     pub fn bind_xform(
-        &self,
+        &mut self,
         programs: &XformPrograms,
         id: XformProgramId,
         args: &[i32],
@@ -82,7 +82,7 @@ impl WorldBody {
     }
 
     fn materialize_bound_xform(
-        &self,
+        &mut self,
         init: &BulletInit,
         binding: &XformBinding,
         programs: &XformPrograms,
@@ -154,11 +154,14 @@ impl WorldBody {
             generation: self.bullets.generation[i],
         };
         if let Some(params) = program.init.params.iter().find(|p| p.slot == next) {
-            let captures = XformCaptureView::Segment {
-                slots: self.xforms.seg_slots(seg),
-                data_start: program.data_start,
-                count: program.persistent_count() as u8,
-            };
+            // Keep capture reads independent of mutable world access during RNG sampling.
+            let mut values = [0; 8];
+            let count = program.persistent_count();
+            for (k, value) in values[..count].iter_mut().enumerate() {
+                *value =
+                    self.xforms.seg_slots(seg)[program.data_start as usize + k / 2].args[k % 2];
+            }
+            let captures = XformCaptureView::Values(&values[..count]);
             let mut resolved = [None; 2];
             for (k, p) in params.args.iter().enumerate() {
                 resolved[k] = Some(match p {

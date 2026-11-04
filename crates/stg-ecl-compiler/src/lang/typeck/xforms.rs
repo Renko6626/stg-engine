@@ -1,4 +1,4 @@
-//! Xform-local scope, phase checks, and lowering typed pure expressions to core IR.
+//! Xform-local scope, phase checks, and lowering staged expressions to core IR.
 use super::checker::Checker;
 use super::scope::LocalScope;
 use super::typed_ast::{CallArg, TypedExpr, TypedExprKind};
@@ -159,8 +159,8 @@ impl Checker<'_, '_> {
                     }
                     _ => (0, raw),
                 };
-                if !pure(expr) {
-                    self.err(ast::expr_span(raw).unwrap_or(source.span), "xform 体仅允许 global/sin/cos/atan2/dist/aim_player；at_spawn/at_effect 只能位于完整参数外层，不能嵌套".into());
+                if !allowed_in_xform(expr) {
+                    self.err(ast::expr_span(raw).unwrap_or(source.span), "xform 体仅允许 global/sin/cos/atan2/dist/aim_player/rand；at_spawn/at_effect 只能位于完整参数外层，不能嵌套".into());
                     return None;
                 }
                 let typed = self.type_expr(expr, &scope)?;
@@ -314,16 +314,16 @@ impl Checker<'_, '_> {
     }
 }
 
-fn pure(e: &Expr) -> bool {
+fn allowed_in_xform(e: &Expr) -> bool {
     match e {
         Expr::Call { name, args, .. } => {
             matches!(
                 name.as_str(),
-                "global" | "sin" | "cos" | "atan2" | "dist" | "aim_player"
-            ) && args.iter().all(pure)
+                "global" | "sin" | "cos" | "atan2" | "dist" | "aim_player" | "rand"
+            ) && args.iter().all(allowed_in_xform)
         }
-        Expr::Binary { l, r, .. } => pure(l) && pure(r),
-        Expr::Unary { e, .. } | Expr::Cast { e, .. } => pure(e),
+        Expr::Binary { l, r, .. } => allowed_in_xform(l) && allowed_in_xform(r),
+        Expr::Unary { e, .. } | Expr::Cast { e, .. } => allowed_in_xform(e),
         _ => true,
     }
 }
@@ -358,7 +358,7 @@ fn make_expr(code: Vec<XformInstr>) -> Result<XformExpr, XformEvalError> {
         }
     }
     let e = XformExpr::try_code(code)?;
-    // Constant folding never observes world state. Short-circuited reads are safe to omit.
+    // Constant folding never observes world state or consumes random draws.
     if let Some(v) = constant_eval(&e) {
         Ok(XformExpr::Constant(v))
     } else {
@@ -373,7 +373,7 @@ fn constant_eval(e: &XformExpr) -> Option<i32> {
     if code.iter().any(|i| {
         matches!(
             i,
-            XformInstr::Read(_) | XformInstr::Unary(XformUnary::Global)
+            XformInstr::Read(_) | XformInstr::Unary(XformUnary::Global | XformUnary::Rand)
         )
     }) {
         return None;
@@ -465,6 +465,7 @@ fn lower(e: &TypedExpr, names: &BTreeMap<String, u8>, out: &mut Vec<XformInstr>)
             }
             out.push(match c.name.as_str() {
                 "global" => Unary(XformUnary::Global),
+                "rand" => Unary(XformUnary::Rand),
                 "sin" => Unary(XformUnary::Sin),
                 "cos" => Unary(XformUnary::Cos),
                 "atan2" => Binary(XformBinary::Atan2),
@@ -478,7 +479,7 @@ fn lower(e: &TypedExpr, names: &BTreeMap<String, u8>, out: &mut Vec<XformInstr>)
         && !out[start..].iter().any(|i| {
             matches!(
                 i,
-                Read(_) | Jump(_) | JumpIfZero(_) | Unary(XformUnary::Global)
+                Read(_) | Jump(_) | JumpIfZero(_) | Unary(XformUnary::Global | XformUnary::Rand)
             )
         })
         && let Some(v) =

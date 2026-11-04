@@ -48,6 +48,116 @@ mod tests {
     }
 
     #[test]
+    fn xform_rand_samples_each_phase_on_the_shared_stream() {
+        let src = r#"
+            xformdef T {
+                @2 set_speed((rand(8) + 1) as fx);
+                @2 set_speed(at_spawn((rand(8) + 1) as fx));
+                set_speed(at_effect((rand(8) + 1) as fx));
+            }
+            sub main() {
+                sh_reset(0); sh_count(0, 2, 1);
+                sh_xform(0, T);
+                set_global(16, rand(1000));
+                sh_fire(0);
+                set_global(17, rand(1000));
+            }
+        "#;
+        let image = compile(src, "xform-rand-phases.ecl").unwrap();
+        let mut w = World::new(17);
+        let mut reference = World::new(17);
+        let bind = (reference.body.rand_range(8) + 1) as i32 * 65536;
+        let before = reference.body.rand_range(1000) as i32;
+        let spawn = (0..2)
+            .map(|_| (reference.body.rand_range(8) + 1) as i32 * 65536)
+            .collect::<Vec<_>>();
+        let after = reference.body.rand_range(1000) as i32;
+        let effect = (0..2)
+            .map(|_| (reference.body.rand_range(8) + 1) as i32 * 65536)
+            .collect::<Vec<_>>();
+        w.start_main(&image).unwrap();
+        advance(&mut w, &image, 2);
+        assert_eq!(speeds(&w), vec![bind, bind]);
+        assert_eq!(&w.view().globals()[16..18], &[before, after]);
+        advance(&mut w, &image, 2);
+        assert_eq!(speeds(&w), spawn);
+        advance(&mut w, &image, 2);
+        assert_eq!(speeds(&w), effect);
+        assert_eq!(w.body.rand_range(1000), reference.body.rand_range(1000));
+        assert_eq!(w.view().diag().contract_viol, 0);
+    }
+
+    #[test]
+    fn xform_rand_preserves_call_order_short_circuit_and_nonpositive_bounds() {
+        let src = r#"
+            xformdef T {
+                set_speed(at_effect((rand(8) * 0 + rand(8) + rand(0) + rand(-1)) as fx));
+                set_angle(at_effect((rand(65536) - rand(65536)) as angle));
+                set_color(at_effect(0 && rand(8)));
+                set_shape(at_effect((1 || rand(8)) * 16));
+            }
+            sub main() { _ = fire(0,0,0fx,40fx,0fx,0deg,T,none); }
+        "#;
+        let image = compile(src, "xform-rand-order.ecl").unwrap();
+        let mut w = World::new(17);
+        let mut reference = World::new(17);
+        reference.body.rand_range(8); // Multiplication by zero still consumes the first call.
+        let speed = reference.body.rand_range(8) as i32 * 65536;
+        let left = reference.body.rand_range(65536);
+        let right = reference.body.rand_range(65536);
+        let angle = left.wrapping_sub(right) as u16;
+        w.start_main(&image).unwrap();
+        advance(&mut w, &image, 2);
+        assert_eq!(speeds(&w), vec![speed]);
+        let b = w.view().bullets();
+        let i = b.iter_alive().next().unwrap();
+        assert_eq!(b.polar(i).1.raw(), angle);
+        assert_eq!(b.sprite()[i], 16);
+        assert_eq!(w.body.rand_range(1000), reference.body.rand_range(1000));
+        assert_eq!(w.view().diag().contract_viol, 0);
+    }
+
+    #[test]
+    fn xform_rand_step_and_signal_hold_samples_across_restore() {
+        let src = r#"
+            xformdef T {
+                @4 step_speed(at_effect((rand(8) + 1) as fx), 4);
+                wait_signal(at_effect(rand(2)));
+                set_speed(at_effect((rand(8) + 1) as fx));
+            }
+            sub main() {
+                _ = fire(0,0,0fx,40fx,0fx,0deg,T,none);
+                wait(10); pulse_signal(0); pulse_signal(1); wait(100);
+            }
+        "#;
+        let image = compile(src, "xform-rand-hold.ecl").unwrap();
+        let mut w = World::new(17);
+        let mut reference = World::new(17);
+        let target = (reference.body.rand_range(8) + 1) as i32 * 65536;
+        reference.body.rand_range(2); // Channel sampled once on WAIT_SIGNAL entry.
+        let released = (reference.body.rand_range(8) + 1) as i32 * 65536;
+        w.start_main(&image).unwrap();
+        advance(&mut w, &image, 2);
+        assert_eq!(speeds(&w), vec![0]);
+        advance(&mut w, &image, 6);
+        assert_eq!(speeds(&w), vec![target]);
+        let bytes = w.save_bytes(&image);
+        let mut restored = World::load_bytes(&bytes, &TABLES_V0, &image).unwrap();
+        let mut copied = World::new(99);
+        w.copy_into(&mut copied);
+        for state in [&mut w, &mut restored, &mut copied] {
+            advance(state, &image, 2);
+            assert_eq!(speeds(state), vec![target]);
+            advance(state, &image, 4);
+            assert_eq!(speeds(state), vec![released]);
+        }
+        assert_eq!(w.checksum(), restored.checksum());
+        assert_eq!(w.checksum(), copied.checksum());
+        assert_eq!(w.body.rand_range(1000), reference.body.rand_range(1000));
+        assert_eq!(w.view().diag().contract_viol, 0);
+    }
+
+    #[test]
     fn xform_scalar_steps_compile_and_run_static_and_dynamic_targets() {
         let src = r#"
             xformdef VELOCITY {
@@ -161,7 +271,7 @@ mod tests {
         for body in [
             "set_speed(at_spawn($self_speed) + 1fx);",
             "set_speed(at_effect(at_spawn($self_speed)));",
-            "set_speed(rand(2) as fx);",
+            "set_speed(self_fx(0));",
             "set_speed(local);",
             "set_speed(at_effect(1));",
         ] {

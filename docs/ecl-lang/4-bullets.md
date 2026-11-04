@@ -612,6 +612,32 @@ sub main() {
 
 模板只看见const、形参和允许的引擎读口，调用者局部变量须通过实参按值传入。绑定后修改局部值、重置或重绑发射器、结束创建任务，不影响已经出生的弹。出生/效果阶段的`$self_age`为弹龄；绑定阶段为调用任务龄。`$player_x/y`读取1P；`aim_player()`查询最近可瞄自机，无目标时回退1P最后位置。
 
-标记必须包住完整参数，不能嵌套。例如`at_effect($self_speed + extra)`合法，`at_spawn($self_speed) + extra`给编译错误。体内允许global/sin/cos/atan2/dist/aim_player、现有`$`变量、三型运算与cast；禁止rand、写操作、插值槽查询和任意sub。随机值可以在模板实参中先求出。
+标记必须包住完整参数，不能嵌套。例如`at_effect($self_speed + extra)`合法，`at_spawn($self_speed) + extra`给编译错误。体内允许global/sin/cos/atan2/dist/aim_player、现有`$`变量、三型运算与cast；ENGINE_VER30起也允许rand。禁止写操作、插值槽查询和任意sub。
 
 形参、绑定采样与出生采样合计最多8个i32逻辑缓存值；效果表达式最多128条指令、临时栈32字。公式共享，出生后不再需要的形参不随弹保留；仍需读取的历史值每两个占一个段尾数据槽。操作及STEP scratch与数据区合计不超过16槽，STEP每条占2槽。旧零形参全常量声明继续使用原有编码与静态入口。
+
+### 随机表达式（ENGINE_VER30）
+
+`rand(n)` 沿用普通脚本的模拟随机流，返回 `[0,n)` 的 int；`n<=0` 返回0且不消耗随机流。取样时点由原有标记决定：
+
+```ecl
+xformdef RANDOM_TURNS {
+    @30 set_angle(rand(65536) as angle);
+    @30 set_angle(at_spawn(rand(65536) as angle));
+    set_angle(at_effect(rand(65536) as angle));
+}
+sub main() {
+    sh_reset(0);
+    sh_count(0, 16, 1);
+    sh_speed(0, 1fx, 0fx);
+    sh_xform(0, RANDOM_TURNS);
+    sh_fire(0);
+}
+```
+
+第一条在绑定时只抽一次，同一配置的弹共享结果；第二条每弹出生时各抽一次，但30帧后才使用；第三条每弹走到该操作时各抽一次。
+`NAME(rand(...))` 实参仍在绑定/单发调用处先求值；需要同轮共享随机值时也可在普通 sub 的原取样位置保存后传参。
+
+表达式和操作参数按源码顺序求值，每次调用独立抽样；`rand(n)*0` 仍消耗随机数，短路跳过的分支不消耗。
+STEP目标与WAIT_SIGNAL通道进入时抽好并保持，运行/等待期间不重抽；LOOP重新进入操作时重抽。
+所有阶段共用World RNG，状态随快照/存档保存。后续参数非法而使操作no-op时，已执行的随机取样不回滚，与普通脚本先求参数再调用写口一致。

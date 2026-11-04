@@ -159,3 +159,7 @@ STEP的第二参数仍是打包值：`frames + 65536 * EASE_QUART_OUT`。
 `set_sprite(shape,color)`保留两个语义轴，允许分别在出生和效果时采样，组合前分别校验并拒绝图集空格。`set_shape/set_color`只查对应轴，继续允许部分设置落到空格；args[1]仍存表派生stride。动态路径向相位4传入中立WorldTables以验证外观，保留旧静态槽ABI。
 
 完整例子见[带参变换与求值时点](ecl-lang/4-bullets.md)。
+
+ENGINE_VER30扩展：表达式允许`rand(n)`，绑定/出生/效果三个阶段共用World RNG；正界限每次调用消耗一次，n<=0不消耗。
+效果只在操作进入时抽样，STEP运行与WAIT_SIGNAL等待期间保持，LOOP重入重新抽样；随机调用不做常量折叠或合并，短路跳过的分支不抽样。
+已执行的取样不因后续参数检查失败回滚，操作的no-op+计数规则不变；未增加World字段、捕获槽或独立随机流。

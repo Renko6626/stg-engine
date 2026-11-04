@@ -229,7 +229,8 @@ extern crate self as stg_core;
 /// TaskPool增加53,248 B，checksum/save/copy均变化，旧存档与回放失效。
 /// 27：敌人共享脚本槽新增12 KiB状态及170/171/450/451读写接口。
 /// 29：新增六个单值 STEP 操作，沿用两槽 ABI 与固定槽顺序，World 布局不变。
-pub const ENGINE_VER: u32 = 29;
+/// 30：xform 表达式支持 rand，按绑定/出生/操作进入阶段消耗现有世界 RNG；World 布局不变。
+pub const ENGINE_VER: u32 = 30;
 
 pub use stg_derive::define_pool;
 

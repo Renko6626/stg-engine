@@ -4,7 +4,10 @@
 > 细节不进本文：历史细节归 git log 与 `docs/superpowers/plans/`，技术债归
 > [`docs/follow-ups.md`](docs/follow-ups.md)。维护规矩见文末。
 
-## 现在（2026-11-03）
+## 现在（2026-11-04）
+
+- **xform rand**：用户确认三阶段统一支持现有`rand(n)`；未标记在绑定时抽样，at_spawn每弹出生抽样，at_effect每次操作进入抽样。复用World RNG，保持源码顺序、短路及STEP/WAIT_SIGNAL锁定，LOOP重入重抽；n<=0不消耗，不新增World字段。ENGINE_VER30，见[设计](docs/superpowers/specs/2026-11-04-xform-rand-design.md)与[计划/验证](docs/superpowers/plans/2026-11-04-xform-rand.md)。
+- **rand验证与接入**：3项真实编译执行用例先拒绝再通过，扩展原LOOP用例核随机消费；core/compiler/harness/RL相关测试、fmt、clippy、表校验通过，本机三场景golden与改前逐字节一致。独立只读审阅无待修项；训练侧接入0.4.4 wheel，最终消费侧证据见计划。用户随后授权阶段性提交并推送main，交付提交以Git历史为准；未发布上游Release，未进行跨平台、GPU、Godot或原作实机对拍。
 
 - **单值 STEP 扩展**：新增 `step_vx/vy`、`step_ax/ay`、`step_accel`、`step_ang_vel`，每条两槽，复用现有曲线、动态采样与非阻塞时序；单轴保留另一分量，角速度按有符号标量插值。按用户确认保留固定槽序写入，冲突组合不受支持，不增加检测、取消或接管。ENGINE_VER29，World布局不变。见[设计](docs/superpowers/specs/2026-11-03-xform-scalar-steps-design.md)与[实施记录](docs/superpowers/plans/2026-11-03-xform-scalar-steps.md)。
 - **单值 STEP 验证**：核心行为、编译器/harness/RL相关测试通过；版本锚点同步至29后定向复验通过，viewer端口用例获准沙箱外重跑通过。fmt/clippy、表校验与本机三场景golden完成，独立只读审阅无待修项。用户随后授权提交、推送并合入 `main`，交付提交以Git历史为准；未做跨平台、Godot运行或wheel构建。
@@ -23,6 +26,8 @@
 - **后续范围**：敌人共享槽尚未接入原作导入器；弹任务带参、共享shooter、共享时钟、原作转换规则、EX出生态和曲线激光仍为独立待办，需按具体方案继续确认。技术债详单见[follow-ups](docs/follow-ups.md)。
 
 ## 里程碑史（每条一行，只增不改）
+
+- 2026-11-04：ENGINE_VER30开放xform三阶段rand，沿用World随机流、源码顺序与进入采样，无新增World状态。
 
 - 2026-11-03：ENGINE_VER29单值STEP扩展，六个新操作复用两槽布局；固定槽序、不处理冲突，World布局不变。
 

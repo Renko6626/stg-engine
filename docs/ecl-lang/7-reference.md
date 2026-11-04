@@ -230,3 +230,5 @@ C11（`WorldTables` 文件加载）落地后，appearance/道具等表驱动的�
 ## xform求值标记
 
 `NAME(args)`为按值模板引用，可用于`fire`与`sh_xform`的xf位。`at_spawn(expr)`与`at_effect(expr)`只在xform完整操作参数外层使用，分别选择出生采样与操作进入采样；它们不是普通sub中的运行时函数。限制与例子见[带参变换与求值时点](4-bullets.md)。
+
+ENGINE_VER30起，xform表达式允许现有`rand(n)`；未标记、at_spawn、at_effect分别在绑定、每弹出生、操作进入时抽样，沿用World随机流及普通rand的参数规则。

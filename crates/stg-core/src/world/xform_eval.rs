@@ -1,4 +1,4 @@
-//! Read-only expression evaluation with a temporary, core-owned self context.
+//! Staged expression evaluation with a temporary self context and the world's RNG.
 use super::WorldBody;
 use crate::math::{Fx, atan2};
 use crate::xform::expr::{XformEvalError, XformExpr, XformRead};
@@ -6,7 +6,7 @@ use crate::xform::program::{XformCaptureView, XformEvalContext, XformEvalOwner};
 
 impl WorldBody {
     pub(crate) fn eval_xform_expr(
-        &self,
+        &mut self,
         expr: &XformExpr,
         captures: XformCaptureView<'_>,
         owner: XformEvalContext<'_>,
@@ -15,7 +15,7 @@ impl WorldBody {
     }
 
     fn read_xform(
-        &self,
+        &mut self,
         read: XformRead,
         captures: XformCaptureView<'_>,
         ctx: XformEvalContext<'_>,
@@ -23,6 +23,13 @@ impl WorldBody {
         use XformRead::*;
         match read {
             Capture(k) => return captures.get(k),
+            RandRange(n) => {
+                return Ok(if n > 0 {
+                    self.rand_range(n as u32) as i32
+                } else {
+                    0
+                });
+            }
             Global(k) => {
                 return self
                     .globals

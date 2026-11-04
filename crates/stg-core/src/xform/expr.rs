@@ -1,4 +1,4 @@
-//! Bounded, pure expression bytecode shared by xform instances.
+//! Bounded expression bytecode shared by xform instances, including staged RNG draws.
 
 pub const MAX_EXPR_INSTRUCTIONS: usize = 128;
 pub const EXPR_STACK: usize = 32;
@@ -21,6 +21,8 @@ pub enum XformRead {
     AimPlayer,
     Capture(u8),
     Global(u16),
+    /// An evaluated bound; this request consumes the world's simulation RNG when positive.
+    RandRange(i32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +35,7 @@ pub enum XformUnary {
     Sin,
     Cos,
     Global,
+    Rand,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,6 +231,7 @@ impl XformExpr {
                         XformUnary::Sin => crate::math::sin(crate::math::Angle(v as u16)).raw(),
                         XformUnary::Cos => crate::math::cos(crate::math::Angle(v as u16)).raw(),
                         XformUnary::Global => read_global(v, &mut read)?,
+                        XformUnary::Rand => read(XformRead::RandRange(v))?,
                     };
                 }
                 XformInstr::Binary(op) => {
@@ -307,7 +311,7 @@ fn read_global(
     read(XformRead::Global(index as u16))
 }
 
-/// Fold a validated expression without exposing any world reads.
+/// Fold a validated expression without exposing world reads or RNG draws.
 pub fn evaluate_constant(expr: &XformExpr) -> Option<i32> {
     expr.validate(0).ok()?;
     expr.eval(|_| Err(XformEvalError::BadArgs)).ok()
