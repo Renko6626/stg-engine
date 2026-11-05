@@ -72,6 +72,7 @@ pub enum EndOn {
 /// 单个 env 的静态配置（`Arc` 共享）。
 #[derive(Clone)]
 pub struct EnvConfig {
+    pub collision_rules: stg_core::collision::CollisionRules,
     pub images: Vec<Image>,
     pub starts: Vec<Start>,
     pub frame_skip: u32,
@@ -268,7 +269,7 @@ impl BootCache {
             let mut map = self.templates.lock().unwrap();
             let tmpl = map.entry(key).or_insert_with(|| {
                 Arc::new(
-                    World::new_game_at(
+                    World::new_game_at_with_rules(
                         0,
                         start.rank,
                         start.mark,
@@ -276,6 +277,7 @@ impl BootCache {
                             character: 1,
                             ..Default::default()
                         },
+                        cfg.collision_rules,
                         cfg.images[start.image].0.as_ref(),
                     )
                     .expect("new_game_at 失败：EnvConfig 未通过 validate()"),

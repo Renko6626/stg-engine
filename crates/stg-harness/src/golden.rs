@@ -1,0 +1,661 @@
+//! 三组确定性金向量场景，供 CI 逐帧对拍。
+
+use std::process::ExitCode;
+
+use crate::scenes::build_rainbow_world;
+
+/// 从 `rest` 中解析 `--out FILE`。
+fn parse_out(rest: &[String]) -> Option<String> {
+    rest.iter()
+        .position(|a| a == "--out")
+        .and_then(|i| rest.get(i + 1).cloned())
+}
+
+/// 金向量 —— 真实 step 演化的碰撞病态诊断场景，逐帧 World 校验和（CI 跨平台对拍的数据源）。
+///
+/// 导演每 60 帧把敌人补到顶部固定 3 位（场外 (ex, -100) 生 + `move_enemy_to` 40 帧 QuadOut
+/// 飘入原位——压大边界内存活 + move_to 插值路径，飘入途中同样可被自机弹打中/体碰），每 8 帧从
+/// 顶部中心铺一圈 10 发敌弹（rng 抖动 → 压 sincos + PCG32），每 150 帧全屏消弹一次
+/// （`FIELD_RADIUS_FULLSCREEN` 作用区，`life=1`）。脚本自机全程射击、90 帧周期
+/// 上冲吃弹/下退喘息，串联自机弹杀敌→dying→EnemyDied→cleanup 回收→导演补位、敌弹中弹→
+/// 决死窗口→死亡→重生、graze 累积等碰撞/结算全链路。
+///
+/// D3 加戏（每帧压运动双表示）：每 40 帧铺一圈 8 发螺旋弹（POLAR_FX，ang_vel 驱动逐帧
+/// sincos 回填 v）；每 90 帧发 3 发上抛重力弹（CART_FX，逐帧 CORDIC atan2 + isqrt 回填
+/// 作者视图，顶点前后扫过 `BACKFILL_MIN_SPEED` 阈值两侧）；每 75 帧对螺旋圈最近一发 setter
+/// 骚扰（turn/aim/set_vel 轮转，句柄可能已随生死回收变成悬垂——P4-b no-op 路径顺带入金向量）。
+///
+/// D4 加戏（变换游标压段池/游标推进）：每 50 帧（`frame % 50 == 10`）发一对之字加速弹
+/// （LOOP 跳回 TURN ±90° 无限循环 + 开局 SET_ACCEL 常量加速，压单游标多 op 连发与段池长驻）；
+/// 每 70 帧（`frame % 70 == 30`）发一发 SET_LIFE 自爆弹——排程于相位 4，45 帧后寿命改判 1；
+/// 相位 5 integrate **同帧**减到 0；相位 9 cleanup **当帧**回收（不是"下一帧"）→还段路径入对拍。
+///
+/// 11b 加戏（三压力源，续 D4 编号）：每 40 帧偏移 25（`frame % 40 == 25`）停驻一发双重
+/// WAIT_SIGNAL 弹（两级 TURN 各挂一道信号门，形成"双重驻停链"，第一道门后 `wait: 1` 隔开
+/// 同帧边沿的连锁放行）；每 120 帧偏移 60（`frame % 120 == 60`）在信号通道 0 上
+/// `pulse_signal`——两段停驻、两次脉冲各放行一段，真双停驻、轨迹可见变化（黑板齐转语义
+/// 压 signals 数组 + 边沿命中路径）。每 90 帧偏移 45
+/// （`frame % 90 == 45`）发一发 BOUNCE_ARM 三墙武装弹（左右上，`n=3`），POLAR 速度域入
+/// 墙反弹镜像对拍。每 65 帧偏移 20（`frame % 65 == 20`）发一发 STEP_SPEED 缓动弹——
+/// Smoothstep（easing id 7）40 帧从 0.5 缓到 3.0，压连续插值 scratch 与游标并发路径。
+///
+/// 道具趟加戏（续 11b 编号）：导演敌人 `drop_table` 由 0 改 1（标准杂鱼表），敌死走 settle
+/// 趟二自动按表掉落——散布 RNG、重力/终速下落物理、近距/PoC/`attract_all_items` 三源磁吸、
+/// 拾取入账全部进对拍流。块 ⑫ 每 200 帧偏移 90（`frame % 200 == 90`）额外调一次全场磁吸
+/// （导演/bomb 入口），排在相位 3 `update_players` 之前——自机彼时若非 ALIVE（决死窗口/
+/// 等待重生），走确定性 P4-b no-op + 计数，与块 ⑥ setter 骚扰 `spiral_h` 悬垂同款哲学。
+///
+/// batch 压力源（续 ⑫ 编号，M0-14 `create_bullets_batch` 三态直通）：⑬ 每 90 帧偏移 35
+/// （`frame % 90 == 35`）铺一发 32-way 哑弹整环（`n_speed=1`，角步 2048=65536/32 整环闭合，
+/// 速 1.2px/帧）——压批量哑弹分配序、径向匀散必越界回收。⑭ 每 110 帧偏移 70
+/// （`frame % 110 == 70`）发一列 5 重速度正下弹（`n_angle=1`、`Angle(16384)` 竖直向下，
+/// 1.0→3.0px/帧步 0.5）——压批量单角度速度轴列、匀速直线必越界回收。⑮ 每 150 帧偏移 130
+/// （`frame % 150 == 130`）发 3 角 × 4 速 12 发扇形网格弹，每发自带两槽 xform
+/// （`SET_ANG_VEL(256)` + 隐式尾零 END）——段消耗账 12 段/次入对拍，压批量 xform 分支的
+/// 逐颗先段后弹路径；出生点刻意贴近下边界（常量角速度令轨迹趋近小半径圆弧，center-ish
+/// 出生半径不足以够到任一边界，靠近边界出生才能让扇面多数越界回收，慢速小半径个别残留
+/// 打转无损确定性）。
+///
+/// 消弹转星星（M0-15，**导演零改动**）：块 ③ 每 150 帧的全屏消弹自动逐弹原位转星
+/// （一律转化）——星星雨/出生即磁吸/30 分入账/可能的道具池满降级全链入对拍
+/// （实测改前后首个分歧帧 = 150，与首次消弹帧吻合）。
+///
+/// 火力拔档（M0-17 T5，续 ⑮ 编号 ⑯）：帧 200 导演经 `set_player_power(0, 250)`
+/// （拔到 tier 2，shottype 两路弹型入流）、帧 400 拔到 400（tier 4，三路本体 + 1 路
+/// 子机入流）——诊断场景导演直写档位合法，压相位 3 解释器逐档分支 + 子机弹随即参与
+/// 碰撞/擦弹结算链，换档瞬时生效。
+/// 600 帧 @ 60Hz。
+///
+/// 金向量三号（T5 激光）：独立全新 World + 独立种子，`# scene: laser` 标记段界。三种形态各
+/// 一条（预警扫射挂 omega / 自机狙 aim / 飞出棒子 speed），外加一条挂靠在直线移动敌上、带
+/// omega 的常驻扫射激光；自机保持默认位置（会被扫到），覆盖激光判定→中弹→遡行整链。
+/// 600 帧 @ 60Hz，参数全部字面量、只走公开写 API。
+pub(crate) fn cmd_golden(rest: &[String]) -> ExitCode {
+    use stg_core::bullets::{BulletHandle, BulletInit};
+    use stg_core::ecl::image::EclImage;
+    use stg_core::enemy::EnemyInit;
+    use stg_core::field::{FIELD_CLEAR_BULLETS, FIELD_RADIUS_FULLSCREEN, FieldInit};
+    use stg_core::input::{BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SHOT, BTN_SLOW, BTN_UP, InputFrame};
+    use stg_core::math::{Angle, Fx, polar_to_vec};
+    use stg_core::step::{World, step_with_director};
+    use stg_core::xform::{
+        OP_BOUNCE_ARM, OP_END, OP_LOOP, OP_SET_ACCEL, OP_SET_ANG_VEL, OP_SET_ANGLE, OP_SET_LIFE,
+        OP_SET_SPEED, OP_STEP_SPEED, OP_TURN, OP_WAIT_SIGNAL, XformSlot,
+    };
+
+    const FRAMES: u32 = 600; // 10 秒 @ 60Hz
+    const SEED: u64 = 0x5147_4f4c_4445_4e00; // "GOLDEN"
+    let mut world = World::new(SEED);
+    let ecl = EclImage::empty(); // 一号场景无脚本：显式传空镜像（零任务零成本，T2 不变门）
+    let mut lines = String::new();
+    // D3 压力源状态：螺旋圈最近一发的句柄，供 setter 骚扰块追打（可能随生命周期死亡/回收）。
+    let mut spiral_h = BulletHandle::NULL;
+
+    // 全字段 EnemyInit 助手（顶部三敌人固定位；move_to/挂钩惰性）。
+    let enemy_at = |x: i32, y: i32| EnemyInit {
+        x: Fx::from_int(x),
+        y: Fx::from_int(y),
+        vx: Fx::ZERO,
+        vy: Fx::ZERO,
+        dx: Fx::ZERO,
+        dy: Fx::ZERO,
+        speed: Fx::ZERO,
+        angle: Angle::ZERO,
+        vel_from_0: 0,
+        vel_from_1: 0,
+        vel_to_0: 0,
+        vel_to_1: 0,
+        vel_t: 0,
+        vel_dur: 0,
+        vel_easing: 0,
+        vel_active: 0,
+        vel_space: 0,
+        vel_touched: 0,
+        mv_from_x: Fx::ZERO,
+        mv_from_y: Fx::ZERO,
+        mv_to_x: Fx::ZERO,
+        mv_to_y: Fx::ZERO,
+        mv_t: 0,
+        mv_dur: 0,
+        mv_easing: 0,
+        mv_active: 0,
+        hp: 5,
+        hp_max: 5,
+        radius: Fx::from_int(12),
+        hurtbox: Fx::from_int(16),
+        invuln: 0,
+        hit_flash: 0,
+        flags: 0,
+        sprite: 0,
+        anm_state: 0,
+        anm_state_frame: 0,
+        main_task: 0,
+        death_script: 0,
+        script_int: [0; stg_core::enemy::ENEMY_INT_SLOTS],
+        script_fx: [stg_core::math::Fx::ZERO; stg_core::enemy::ENEMY_FX_SLOTS],
+        drop_count: stg_core::tables::drop_counts(&stg_core::tables::TABLES_V0, 1).0,
+        score: 100,
+    };
+
+    // 全字段 BulletInit 助手（D3 压力源哑弹：静止、半径 3、life 走满、无变换挂钩）。
+    let bullet_at = |x: i32, y: i32| BulletInit {
+        x: Fx::from_int(x),
+        y: Fx::from_int(y),
+        vx: Fx::ZERO,
+        vy: Fx::ZERO,
+        speed: Fx::ZERO,
+        angle: Angle::ZERO,
+        ang_vel: 0,
+        accel: Fx::ZERO,
+        ax: Fx::ZERO,
+        ay: Fx::ZERO,
+        sprite: 0,
+        radius: Fx::from_int(3),
+        delay: 0,
+        life: 0xFFFF,
+        flags: 0,
+        grazed_by: 0,
+        transform_head: 0xFFFF,
+        xform_wait: 0,
+        xform_next: 0,
+        born_frame: 0,
+    };
+
+    for frame in 0..FRAMES {
+        // 脚本化输入：多数时间上冲吃弹 + 全程射击（确定性触发中弹/擦弹/杀敌）。
+        let mut input = InputFrame::empty(frame);
+        let mut btn = BTN_SHOT; // 全程射击 → 自机弹上飞杀顶部敌人（行 4）
+        // 每 90 帧一个周期：前 50 帧上冲（吃弹/擦弹/逼近敌体），后 40 帧下退（喘息）
+        let phase = frame % 90;
+        if phase < 50 {
+            btn |= BTN_UP;
+        } else {
+            btn |= BTN_DOWN;
+        }
+        // 左右缓移增加位形多样性
+        btn |= if (frame / 45) % 2 == 0 {
+            BTN_RIGHT
+        } else {
+            BTN_LEFT
+        };
+        if (frame / 120) % 2 == 0 {
+            btn |= BTN_SLOW;
+        }
+        input.actions[0].buttons = btn;
+        step_with_director(
+            &mut world,
+            &stg_core::tables::TABLES_V0,
+            &ecl,
+            &input,
+            |b| {
+                // ① 每 60 帧把敌人补到 3 个（顶部固定三点；被自机弹打死→cleanup 回收→补位 churn）。
+                // 场外飘入：出生在 (ex, -100)——旧共用界（y∈[-64,512]）外必死、新敌人大边界
+                // （y∈[-256,704]，ENEMY_OOB_MARGIN=256）内存活——再 `move_enemy_to` 40 帧
+                // QuadOut 飘到原位 (ex, 80)。到位时序因此推迟：补位帧起飞入途中一切照旧参与
+                // 演化（可被自机弹打中/体碰/擦弹），只是 40 帧后才真正落在旧的静止靶位。
+                if frame % 60 == 0 {
+                    let alive = b.view().enemies().iter_alive().count();
+                    let slots = [(-80, 80), (0, 80), (80, 80)];
+                    for &(ex, ey) in slots.iter().skip(alive) {
+                        let h = b.create_enemy(enemy_at(ex, -100));
+                        b.move_enemy_to(h, Fx::from_int(ex), Fx::from_int(ey), 40, 2); // QuadOut
+                    }
+                }
+                // ② 每 8 帧从顶部中心铺一圈 10 发敌弹（rng 抖动；部分下行抵达自机 → 中弹/擦弹）
+                if frame % 8 == 0 {
+                    let base = (frame.wrapping_mul(797) & 0xFFFF) as u16;
+                    let n: u16 = 10;
+                    let astep = (65536u32 / n as u32) as u16;
+                    for k in 0..n {
+                        let spread = b.rand_range(384) as u16;
+                        let a = Angle(
+                            base.wrapping_add(k.wrapping_mul(astep))
+                                .wrapping_add(spread),
+                        );
+                        let (vx, vy) = polar_to_vec(Fx::from_int(2), a);
+                        b.create_bullet(BulletInit {
+                            x: Fx::ZERO,
+                            y: Fx::from_int(100),
+                            vx,
+                            vy,
+                            speed: Fx::from_int(2),
+                            angle: a,
+                            ang_vel: 0,
+                            accel: Fx::ZERO,
+                            ax: Fx::ZERO,
+                            ay: Fx::ZERO,
+                            sprite: 0,
+                            radius: Fx::from_int(3),
+                            delay: 0,
+                            life: 300,
+                            flags: 0,
+                            grazed_by: 0,
+                            transform_head: 0xFFFF,
+                            xform_wait: 0,
+                            xform_next: 0,
+                            born_frame: b.frame(),
+                        });
+                    }
+                }
+                // ③ 每 150 帧全屏消弹一次（压消弹标记/回收 churn + 聚合事件路径）
+                if frame % 150 == 0 && frame > 0 {
+                    b.create_field(FieldInit {
+                        x: Fx::ZERO,
+                        y: Fx::from_int(224), // 场心
+                        radius: FIELD_RADIUS_FULLSCREEN,
+                        dmg_per_frame: 0,
+                        life: 1, // 只活本帧
+                        owner: 0,
+                        flags: FIELD_CLEAR_BULLETS,
+                    });
+                }
+                // ④ D3 压力源一：螺旋圈（POLAR_FX——每帧 sincos 查表路径）
+                if frame % 40 == 0 {
+                    for k in 0..8u16 {
+                        let h = b.create_bullet(bullet_at(0, 60));
+                        b.set_bullet_speed(h, Fx::from_raw(98_304)); // 1.5 px/帧
+                        b.set_bullet_angle(h, Angle(k * 8192)); // 八方位
+                        b.set_bullet_ang_vel(h, if k % 2 == 0 { 512 } else { -512 });
+                        spiral_h = h;
+                    }
+                }
+                // ⑤ D3 压力源二：上抛重力弹（CART_FX——每帧 CORDIC+isqrt 回填，顶点扫过阈值两侧）
+                if frame % 90 == 0 {
+                    for k in 0..3i32 {
+                        let h = b.create_bullet(bullet_at(-60 + 60 * k, 200));
+                        b.set_bullet_vel(h, Fx::ZERO, Fx::from_int(-3));
+                        b.set_bullet_gravity(h, Fx::ZERO, Fx::from_raw(16_384)); // 0.25 px/帧²
+                    }
+                }
+                // ⑥ D3 压力源三：setter 骚扰（句柄可能已死——P4-b 路径顺带入金向量，确定性无损）
+                if frame % 75 == 0 {
+                    match (frame / 75) % 3 {
+                        0 => b.turn_bullet(spiral_h, Angle::QUARTER),
+                        1 => b.aim_bullet_at_player(spiral_h, Angle::ZERO),
+                        _ => b.set_bullet_vel(spiral_h, Fx::from_int(2), Fx::from_int(1)),
+                    }
+                }
+                // ⑦ D4 压力源一：之字加速弹——"单游标天然并发"招牌（LOOP TURN ±90° + 开局 SET_ACCEL）
+                if frame % 50 == 10 {
+                    let zig = [
+                        XformSlot {
+                            wait: 0,
+                            op: OP_SET_SPEED,
+                            _pad: 0,
+                            args: [65_536, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_SET_ACCEL,
+                            _pad: 0,
+                            args: [1_638, 0],
+                        },
+                        XformSlot {
+                            wait: 20,
+                            op: OP_TURN,
+                            _pad: 0,
+                            args: [16_384, 0],
+                        },
+                        XformSlot {
+                            wait: 20,
+                            op: OP_TURN,
+                            _pad: 0,
+                            args: [-16_384_i32, 0],
+                        },
+                        XformSlot {
+                            wait: 0,
+                            op: OP_LOOP,
+                            _pad: 0,
+                            args: [2, 0],
+                        }, // 无限之字
+                    ];
+                    b.create_bullet_with_xform(bullet_at(-100, 60), &zig);
+                    b.create_bullet_with_xform(bullet_at(100, 60), &zig);
+                }
+                // ⑧ D4 压力源二：SET_LIFE 自爆弹——排程改寿命 + 弹死还段路径入流
+                if frame % 70 == 30 {
+                    let fuse = [
+                        XformSlot {
+                            wait: 0,
+                            op: OP_SET_SPEED,
+                            _pad: 0,
+                            args: [131_072, 0],
+                        },
+                        XformSlot {
+                            wait: 45,
+                            op: OP_SET_LIFE,
+                            _pad: 0,
+                            args: [1, 0],
+                        },
+                    ];
+                    b.create_bullet_with_xform(bullet_at(0, 150), &fuse);
+                }
+                // ⑨ 11b 压力源一：真双停驻——两段信号门各自停驻，被两次不同脉冲分别放行
+                if frame % 40 == 25 {
+                    b.create_bullet_with_xform(
+                        bullet_at(-120, 90),
+                        &[
+                            XformSlot {
+                                wait: 0,
+                                op: OP_SET_SPEED,
+                                _pad: 0,
+                                args: [49_152, 0],
+                            },
+                            XformSlot {
+                                wait: 0,
+                                op: OP_WAIT_SIGNAL,
+                                _pad: 0,
+                                args: [0, 0],
+                            },
+                            XformSlot {
+                                wait: 1,
+                                op: OP_TURN,
+                                _pad: 0,
+                                args: [32_768, 0],
+                            },
+                            XformSlot {
+                                wait: 0,
+                                op: OP_WAIT_SIGNAL,
+                                _pad: 0,
+                                args: [0, 0],
+                            },
+                            XformSlot {
+                                wait: 0,
+                                op: OP_TURN,
+                                _pad: 0,
+                                args: [32_768, 0],
+                            },
+                        ],
+                    );
+                }
+                if frame % 120 == 60 {
+                    b.pulse_signal(0);
+                }
+                // ⑩ 11b 压力源二：三墙反弹弹（左右上，n=3）——POLAR 域镜像入对拍
+                if frame % 90 == 45 {
+                    b.create_bullet_with_xform(
+                        bullet_at(0, 120),
+                        &[
+                            XformSlot {
+                                wait: 0,
+                                op: OP_SET_SPEED,
+                                _pad: 0,
+                                args: [196_608, 0],
+                            },
+                            XformSlot {
+                                wait: 0,
+                                op: OP_SET_ANGLE,
+                                _pad: 0,
+                                args: [6_000, 0],
+                            },
+                            XformSlot {
+                                wait: 0,
+                                op: OP_SET_ANG_VEL,
+                                _pad: 0,
+                                args: [0, 0],
+                            },
+                            XformSlot {
+                                wait: 0,
+                                op: OP_BOUNCE_ARM,
+                                _pad: 0,
+                                args: [0b0111, 3],
+                            },
+                        ],
+                    );
+                }
+                // ⑪ 11b 压力源三：STEP 缓动弹——Smoothstep 40 帧从 0.5 缓到 3.0
+                if frame % 65 == 20 {
+                    b.create_bullet_with_xform(
+                        bullet_at(60, 70),
+                        &[
+                            XformSlot {
+                                wait: 0,
+                                op: OP_SET_SPEED,
+                                _pad: 0,
+                                args: [32_768, 0],
+                            },
+                            XformSlot {
+                                wait: 0,
+                                op: OP_SET_ANGLE,
+                                _pad: 0,
+                                args: [16_384, 0],
+                            },
+                            XformSlot {
+                                wait: 0,
+                                op: OP_STEP_SPEED,
+                                _pad: 0,
+                                args: [196_608, 40 | (7 << 16)],
+                            },
+                            XformSlot {
+                                wait: 0,
+                                op: OP_END,
+                                _pad: 0,
+                                args: [0, 0],
+                            }, // 扩展槽占位
+                        ],
+                    );
+                }
+                // ⑫ 道具趟压力源：每 200 帧偏移 90 全场磁吸一次（导演/bomb 入口，drop_table=1
+                // 已令敌死掉落进流——散布 RNG、下落物理、拾取入账全部入对拍）。自机彼时非
+                // ALIVE（决死窗口/等待重生）→ 确定性 P4-b no-op + 计数，与 ⑥ setter 骚扰
+                // spiral_h 悬垂同款哲学：坏时机调用不崩、结果确定、计数入校验和。
+                if frame % 200 == 90 {
+                    b.attract_all_items(0);
+                }
+                // ⑬ batch 压力源一：32-way 哑弹整环（create_bullets_batch 环路径——n_speed=1，
+                // 角步 2048=65536/32 整环闭合，速 1.2px/帧；32 发径向匀散，池分配序连号）。
+                if frame % 90 == 35 {
+                    b.create_bullets_batch(
+                        bullet_at(0, 60),
+                        &[],
+                        32,
+                        Angle::ZERO,
+                        2048,
+                        1,
+                        Fx::from_raw(78_643), // 1.2px/帧
+                        Fx::ZERO,
+                    );
+                }
+                // ⑭ batch 压力源二：5 重速度正下列（n_angle=1，Angle(16384) 竖直向下——
+                // 1.0→3.0px/帧步 0.5；压批量单角度速度轴列，匀速直线必越界回收）。
+                if frame % 110 == 70 {
+                    b.create_bullets_batch(
+                        bullet_at(-150, 40),
+                        &[],
+                        1,
+                        Angle(16384),
+                        0,
+                        5,
+                        Fx::from_int(1),
+                        Fx::from_raw(32_768), // 步 0.5
+                    );
+                }
+                // ⑮ batch 压力源三：3 角 × 4 速扇形网格（12 发/次，每发自带两槽 xform
+                // `SET_ANG_VEL(256)`+隐式尾零 END——段消耗账 12 段/次）。常量角速度令轨迹
+                // 趋近小半径圆弧（周期 65536/256=256 帧，半径∝speed/ang_vel，约 41~102px）——
+                // 出生点贴近下边界（y=460）让扇面高速侧越界回收；实测 600 帧内 4/12 扇位
+                // （speed 1.0 全部三角 + 18432@1.5，max_y 492~508 差临门一脚够不到 y=512）
+                // 永久打转、弹+段常驻——这是有意保留的长驻段占用压力（段位图入校验和），
+                // 有界：600 帧共 4 次触发 ≤16 弹/段，远小于池容量；金向量若延长需重估。
+                if frame % 150 == 130 {
+                    b.create_bullets_batch(
+                        bullet_at(0, 460),
+                        &[XformSlot {
+                            wait: 0,
+                            op: OP_SET_ANG_VEL,
+                            _pad: 0,
+                            args: [256, 0],
+                        }],
+                        3,
+                        Angle(14_336),
+                        2048,
+                        4,
+                        Fx::from_int(1),
+                        Fx::from_raw(32_768), // 步 0.5
+                    );
+                }
+                // ⑯ M0-17 T5：导演直写火力拔档（诊断场景合法）——帧 200 拔到 250（tier 2，
+                // shottype 两路入流）、帧 400 拔到 400（tier 4，三路本体 + 1 路子机入流，
+                // 子机弹随即参与相位 6/7 碰撞/擦弹结算链）。换档瞬时生效，无过渡状态。
+                if frame == 200 {
+                    b.set_player_power(0, 250);
+                }
+                if frame == 400 {
+                    b.set_player_power(0, 400);
+                }
+            },
+        );
+        lines.push_str(&format!("{frame} {:016x}\n", world.checksum()));
+    }
+
+    // ── 金向量二号：彩虹风铃卡（M1 T4）——续接一号场景之后，同一 `--out` 文件追加段 ──
+    // 一号场景（上方 `world`/`lines`/`FRAMES`/`SEED`）逐字节不动；本段用独立全新 World +
+    // 独立种子，`# scene: ecl-rainbow` 分隔行标记段界（CI 零改动：三平台仍只 diff 同一份
+    // 文件的逐行文本，两段各自逐帧校验和天然对拍）。
+    //
+    // 输入拍板（brief 二选一）：全程持 BTN_SHOT + 左右缓移（非全程 idle）——让弹幕的
+    // 碰撞/擦弹路径真的被自机踩到，符卡本体仍是主角，移动只是"不空闲"。
+    {
+        const FRAMES2: u32 = 600;
+        const SEED2: u64 = 0x524E_424F_5701; // "RNBW"
+
+        lines.push_str("# scene: ecl-rainbow\n");
+
+        let (mut world2, image, _boss) = build_rainbow_world(SEED2);
+
+        for frame in 0..FRAMES2 {
+            let mut input = InputFrame::empty(frame);
+            let mut btn = BTN_SHOT;
+            btn |= if (frame / 60) % 2 == 0 {
+                BTN_LEFT
+            } else {
+                BTN_RIGHT
+            };
+            input.actions[0].buttons = btn;
+            step_with_director(
+                &mut world2,
+                &stg_core::tables::TABLES_V0,
+                &image,
+                &input,
+                |_| {},
+            );
+            lines.push_str(&format!("{frame} {:016x}\n", world2.checksum()));
+        }
+    }
+
+    // ── 金向量三号：激光（T5）——三种形态各一条 + 一条挂靠直线移动敌、带 omega 的常驻激光 ──
+    // 一号/二号场景（上方 `world`/`world2`）逐字节不动；本段用独立全新 World + 独立种子，
+    // `# scene: laser` 分隔行标记段界（CI 仍只 diff 同一份文件的逐行文本）。
+    {
+        use stg_core::lasers::{ANCHOR_NONE, LaserInit};
+
+        const FRAMES3: u32 = 600;
+        const SEED3: u64 = 0x4C41_5345_5201; // "LASER"
+
+        lines.push_str("# scene: laser\n");
+
+        let mut world3 = World::new(SEED3);
+        // 全字段 LaserInit 助手（形态一初值；state/timer/anchor 等派生字段由 create_laser 定）。
+        let laser_at = |ox: i32,
+                        oy: i32,
+                        angle: u16,
+                        len: i32,
+                        width: i32,
+                        warn: u16,
+                        active: u16,
+                        fade: u16| LaserInit {
+            ox: Fx::from_int(ox),
+            oy: Fx::from_int(oy),
+            angle: Angle(angle),
+            omega: 0,
+            start: Fx::ZERO,
+            end: Fx::from_int(len),
+            start_len: Fx::from_int(len),
+            speed: Fx::ZERO,
+            width: Fx::from_int(width),
+            sprite: 0,
+            warn,
+            active,
+            fade,
+            timer: 0,
+            state: 0,
+            anchor_idx: ANCHOR_NONE,
+            anchor_gen: 0,
+            ax: Fx::ZERO,
+            ay: Fx::ZERO,
+            dx: Fx::ZERO,
+            dy: Fx::ZERO,
+            dang: 0,
+            px: Fx::ZERO,
+            py: Fx::ZERO,
+            pang: Angle::ZERO,
+            flags: 0,
+            born_frame: 0,
+        };
+
+        // 挂靠目标：从 (-160, 200) 以 1px/帧向右直线缓移（600 帧内不出屏），全程免伤，
+        // 让"挂靠跟随移动敌"整段入流。
+        let anchor_enemy = world3.body.create_enemy(enemy_at(-160, 200));
+        world3
+            .body
+            .set_enemy_vel_cart(anchor_enemy, Fx::from_int(1), Fx::ZERO, 0, 0);
+        world3.body.set_enemy_invuln(anchor_enemy, 600);
+
+        // 形态一：90° 竖线，预警 30 → 生效 120 → 收缩 16，omega 60 bam/帧慢扫。
+        let l0 = world3
+            .body
+            .create_laser(laser_at(0, 96, 16_384, 500, 32, 30, 120, 16));
+        world3.body.laser_set_omega(l0, 60);
+        // 形态二：自机狙，预警 24，出生即瞄向自机 0。
+        let l1 = world3
+            .body
+            .create_laser(laser_at(-160, 200, 0, 400, 24, 24, 90, 12));
+        world3.body.laser_aim(l1, Angle(0));
+        // 形态三：飞出去的棒子，warn 0 出生即生效，speed 4、棒长 192（start 越过 640 自回收）。
+        let l2 = world3
+            .body
+            .create_laser(laser_at(0, 96, 16_384, 0, 6, 0, 9999, 0));
+        world3
+            .body
+            .laser_set_speed(l2, Fx::from_int(4), Fx::from_int(192));
+        // 挂靠移动敌、带 omega 的常驻扫射激光（active 给足，整段常驻）。
+        let l3 = world3
+            .body
+            .create_laser(laser_at(0, 0, 0, 300, 16, 0, 9999, 0));
+        world3
+            .body
+            .laser_anchor(l3, anchor_enemy, Fx::ZERO, Fx::from_int(8));
+        world3.body.laser_set_omega(l3, -200);
+
+        for frame in 0..FRAMES3 {
+            let mut input = InputFrame::empty(frame);
+            let mut btn = BTN_SHOT;
+            btn |= if (frame / 90) % 2 == 0 {
+                BTN_LEFT
+            } else {
+                BTN_RIGHT
+            };
+            input.actions[0].buttons = btn;
+            step_with_director(
+                &mut world3,
+                &stg_core::tables::TABLES_V0,
+                &ecl,
+                &input,
+                |_| {},
+            );
+            lines.push_str(&format!("{frame} {:016x}\n", world3.checksum()));
+        }
+    }
+
+    match parse_out(rest) {
+        Some(path) => {
+            if let Err(e) = std::fs::write(&path, lines) {
+                eprintln!("error: 写入 {path} 失败: {e}");
+                return ExitCode::FAILURE;
+            }
+            eprintln!("golden: 三段场景校验和已写入 {path}");
+        }
+        None => print!("{lines}"),
+    }
+    ExitCode::SUCCESS
+}

@@ -191,7 +191,7 @@ pub fn encode_layer(
                     fx_f32(ys[i]),
                     cos,
                     sin,
-                    sprites[i],
+                    tables.bullet_sprite(sprites[i]),
                     bullet_age(frame, born[i]),
                 );
                 n += 1;
@@ -356,6 +356,25 @@ sub main() {
                 angles[i].raw()
             );
         }
+    }
+
+    #[test]
+    fn bullets_layer_resolves_logical_appearance_to_physical_sprite() {
+        let g = stepped_game();
+        let mut tables = stg_core::tables::build_tables_v0();
+        tables.appearances[1].sprite = 37;
+        let mut out = vec![0.0; layer_cap(LAYER_BULLETS) * FLOATS_PER_INSTANCE];
+        let n = encode_layer(
+            g.world().view(),
+            &tables,
+            g.world().frame(),
+            LAYER_BULLETS,
+            &mut out,
+        );
+        assert_eq!(n, 2);
+        assert_eq!(g.world().view().bullets().sprite()[0], 1);
+        assert_eq!(out[8], 37.0);
+        assert_eq!(out[FLOATS_PER_INSTANCE + 8], 37.0);
     }
 
     /// 判别腿：朝**正上方**飞的弹（BAM 49152，`polar_to_vec` 得 (0,-1)）必须**不旋转**

@@ -96,7 +96,7 @@ time/rank_mask/param_mask 字段（时间轴混编 + 难度过滤 + 栈引用替
 
 ## 游戏指令迁移对照（boss 换段与敌人钩子刀，2026-09-14）
 
-> 来源：TH18 原版 22 个 ECL 的迁移差距评估（spec `docs/superpowers/specs/2026-09-14-boss-phase-enemy-hooks-design.md` §1）。
+> 来源：TH18 原版 22 个 ECL 的迁移差距评估（spec `docs/archive/specs/2026-09-14-boss-phase-enemy-hooks-design.md` §1）。
 > 只列本刀补上口子的那几条；其余 et*/move*/anm* 的逐条判定见该评估。
 
 | ZUN（TH18） | 原版用量 | 我们 | 注意 |

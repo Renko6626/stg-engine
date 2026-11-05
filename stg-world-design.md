@@ -131,7 +131,7 @@ pub struct WorldBody {
 > settle 尾"符卡趟"，相位数不变）。理由：记账是机械/数据驱动/确定性/无回调的，与道具经济
 > （M0-12）同性质，全脚本方案迫使每卡作者重写轮询记账且脚本层无自机资源读口。模式任务随卡
 > 生死（`spell_bound` + epoch 代际戳）+ 三 syscall（`spell_begin/end/timer`）+ `wait_spell` 糖。
-> 详见 `docs/superpowers/specs/2026-07-24-spell-meter-design.md`。`boss_ui` 仍是表现公告板、
+> 详见 `docs/archive/specs/2026-07-24-spell-meter-design.md`。`boss_ui` 仍是表现公告板、
 > 世界逻辑不读它——只是 active 符卡期间由机构自动覆写其余字段（`boss_set` 在非符卡段照旧全权）。
 
 ```rust
@@ -718,7 +718,7 @@ cleanup（相位9）同帧回收，次帧 collide（相位6）根本看不到任
 
 每条都设计为**纯增量**，不推翻本文档任何决定：
 
-1. **激光池** —— **已落地（2026-09-25，spec `docs/superpowers/specs/2026-09-25-laser-pool-design.md`）**：
+1. **激光池** —— **已落地（2026-09-25，spec `docs/archive/specs/2026-09-25-laser-pool-design.md`）**：
    走 D2"新增池标准动作"五步（`LaserPool` cap 256）；判定形状（线段盒）已扩碰撞矩阵行 9/10（D8）+ 新距离原语
    `math::geom::seg_box_dist_sq`（平方点线距，仍不开根）；相位 5 新增一趟（在敌人之后）、syscall 族 8xx、
    Tier 0 `lasers` 表与 Godot 激光层同刀落地。

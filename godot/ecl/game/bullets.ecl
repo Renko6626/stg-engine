@@ -1,5 +1,7 @@
 // demo 内容包的弹型/颜色词表——**引擎不注册这些名字**（mod 作者用自己的一份，
 // 地位对等；见 spec §5）。值 = 行号 × BULLET_COLOR_STRIDE / 列号。
+// 此文件保留旧192项词表；按作品区分的新弹型见同目录touhou-bullets.ecl与docs/bullet-catalog.md。
+// 物理图集现为64px格，旧16px图块居中留白；下文12行说明只指旧逻辑前缀。
 //
 // 图集：`godot/assets/bullets.png`（16 列 × 12 行 × 16px），由
 // `godot/tools/slice_bullet_sheet.gd` 从弹片切出；行序即下表顺序。

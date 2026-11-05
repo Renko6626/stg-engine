@@ -1,152 +1,8 @@
 # 技术债与待办清单
 
-> **这是什么**：历次代码复审判定「可延后」的发现，逐条核实后的存活清单。
-> **为什么在这**：这些发现原本只活在 `.superpowers/sdd/progress.md`（**git-ignored 的临时账本**），
-> 后续者看不到、`git clean -fdx` 一下就没。持久的部分必须入库。
->
-> **维护规矩**：解决一条就删一条（别留"已完成"的墓碑，git log 才是历史）。新增的复审 follow-up
-> 往这里写，别只写账本。**写之前先核实**——本清单每条都经过代码核对，不是复述当年的复审原文。
->
-> **玩法刀（2026-09-14）销 1 条、新记 1 条**：销 **F19**（时停键占 D——停止合并后 X = 停止，
-> D/V 退场）；新记 **F25**（2P 同帧双死只认领一条遡行请求）。
->
-> **壳子刀（2026-09-11）销 2 条**：**A8**（GAME OVER 已是独立覆盖页 + 续关 `BTN_CONTINUE` 世界内
-> 落地、计分按东方惯例，深度流程债兑现）/ **F20**（`effects.clear_after(F)` 按出生帧清理，遡行落地
-> 改走它）。**F23** 未动（自机仍单张图，`player.png` 32×32 只有一格，等美术给帧）。
->
-> **表现纪律刀（2026-09-11，纯文档）新记 F20–F23**（fx 按出生帧清理 / 敌人退场残影 / 动画时长
-> 单一来源 / 自机动画帧 + 三件套命名对齐）；规矩本体在 `render-contract.md` §0 第 6 条与 §0.5。
->
-> **M3 时间机制内核刀（2026-09-07）新记 F15–F19**（影子层只有弹 / 跳过帧的 B 请求丢弃口径 /
-> `Boot::Snapshot` 的 log 不可从头重放 / 键位 D 临时 / 回放头无脚本身份哈希）；**D20 追第四次**
-> （`PlayerState.hit_frame: u32` 被尾部 4 B padding 吃掉）；**A7 追注**（遡行落地 = 一次读档，
-> `_sync_anchors` 的第二个真消费者已落地）；余晖拖尾（策划案 7.5）记进 F16 一并。
->
-> 最后核实：2026-09-07（表现契约 v2 刀收口：B18/B26 随首次有头目验整条销——`visible_instances`
-> 有真值、可玩性四件人眼确认；A9 ⑤ 销；F4 部分销改余项；新记 F14）。
-> 上一次：2026-07-26（Godot 场景刀收口：A5 整条销——乙案 `spawn_enemy` task 参/`enemy_hp`
-> 已落地，练习模式定式移一句进 `docs/ecl-lang.md`；B18 收窄为独苗（`visible_instances`）；
-> B22 销（两处 smoke 脚本已对称修复）；B23 补全另两对实测 UV 配对；B16①③④ 复核触发点仍未到，
-> 措辞刷新；新记 A6-A9/B24-B25/D9/F4——场景刀本刀发现的债：`.ecl` 导出 PCK 过滤坑/宿主读档口
-> 缺失/GAME_OVER 三态裁定/演出打磨小件四包（以上四条 A 组）、冒烟 `enemy_seen` 判别盲区/
-> `spawn_enemy`&`fire` task 号三拒绝支路零测试（以上两条 B 组）、敌"主协程返回即自燃"承诺
-> 未落地为代码（D9）、逐帧全缓冲上传性能账未记（F4））
->
-> 终审全分支修复波追记（2026-07-26）：A8 措辞刷新（残机耗尽最小处置已落地，深度流程降级
-> 待办）；A9 补第⑤件（effects.gd 三处）；F4 数值订正（468.75KB→468KB整=479232B）；新记
-> **B26**（B18/B23/DoD 可玩目验三件套合并单，均卡在"首个有 GPU/X 环境"）。
->
-> 弹幕颜色轴刀收口追记（2026-07-26）：B23/B26①追注占位图集已改上下不对称（判决程序不变，
-> 只是不必再临时加测试格）；C11 追注 `color_stride` 已进表、乙案符号段仍开放；C14 追注
-> `APPEARANCE_*` 系 ② 段符号已随本刀退场（`APPEARANCE_MEDIUM`/`APPEARANCE_STAR=3` 两处
-> 历史举例订正为当前状态），注入面现为"①⧺②(空)⧺表派生 `BULLET_COLOR_STRIDE`"；新记
-> **B27**（`OP_SET_SHAPE` 缺近 `i32::MAX` 溢出判别式测试，与 `OP_SET_COLOR` 不对称）、
-> **C22**（`tables.rs::validate` 的 ② join 校验循环随 ② 段清空而空转，机制保留但非活防护）、
-> **D10**（部分设运行期不查 `valid`，编译期空格闸只覆盖 `.ecl` 源码路径，直接构造
-> `XformSlot` 的未来消费者不受保护）。
->
-> 最后核实：2026-07-27（P4 覆盖刀销账：逐条核实后整条删除 **B1**〔四个 `create_*` 池满
-> 测试〕/**B2**〔`push_event` 溢出测试〕/**B4**〔overkill hp 断言〕/**B11**〔越界
-> `drop_table` 测试〕/**B12**〔`credit_item` `saturating_add`+`>=` 修复与测试〕/**B14**
-> 〔`storm --saves 0` 守卫+去重+测试〕/**B25**〔`spawn_enemy`/`fire` task 号支路①③四条
-> 测试，`main_task` doc 注释已随该刀补在 `enemy.rs`〕，七条均已在代码里核实落地）。
->
-> 最后核实：2026-07-30（**ECL 复刻刀**销账：逐条核实后整条删除 **D9**〔`vm::run_tasks` 的
-> `Exec::End` 分支已自燃 + 四条测试 + `enemy.rs`/`world.rs`/`cleanup.rs` 三处注释改口径 +
-> demo 杂兵退场点改回场内〕/**B19**〔`SYS_CLEAR_BULLETS`=54 + 表层 `clear_bullets()` +
-> 两条测试；语义拍板"直接消 + 消弹转星星"，不做护盾帧——那归 bomb〕/**B20**〔55/56/57 三个
-> syscall + `add_lives`/`add_bombs`/`add_power` 三个内建 + 四条测试；形态拍板为**增量**
-> `add_*`，`set_*` 不做，绝对赋值归 `Loadout`〕。三条的语义均已写进 `docs/ecl-lang.md`
-> 手写节与 `docs/ecl-ops.md` 号表。）
->
-> shooter 刀收口追记（2026-07-31）：新记两条，均为**本刀有意不做/有意不对齐**的记档，不是
-> 缺陷单——**D13**（ZUN 随机 aimmode `6`/`7`/`8` 不做：消耗世界 RNG，抽取发数与顺序直接进
-> 校验和，要单独一份 spec 钉死）、**D14**（`sh_fire` 与 `create_bullets_batch` 的两处口径
-> 差异：弹池满不做剩余批量补计 / 退化网格与 appearance 的校验先后序相反——**两处都影响
-> 进校验和的值，别"顺手对齐"**）。本刀顺带删掉 `builtins::folds_shape_color`（两个真消费者
-> 已转投 `fold_start`，它只剩测试在调且答的是没用的那一半）。
->
-> shooter 刀**整支复审修复波**再追一条（2026-07-31）：**C23**（`SHOOTERS_PER_TASK` 没作为
-> C14 引擎常量注入 ⇒ 手册与所有脚本硬编码 `0..=3`，而它每个兄弟都是注入的）。同波顺带
-> 订正、**不入清单**（已改完，不留墓碑）的四处：`ecl/task.rs` 模块文档的容量数字过时 ·
-> `bench-baseline.md` 文件头"贴在旧表上方"与实际的向下追加自相矛盾 ·
-> `ecl-ops.md`/`ecl-lang.md`/`xform-ops.md` 三处漏枚举 `sh_fire` 的 **xform 段池**压力 ·
-> `ecl-ops.md` 75 号补记 `sh_req` 为何与 `emit_req` 收窄口径不同（钳 vs no-op）。
->
-> 敌坐标读口刀收口（2026-07-31）：销掉 C12⑤ 里上一刀（小清洗刀）自己追记的那条小缺口
-> ——`SYS_ENEMY_X`(80)/`SYS_ENEMY_Y`(81) + 同名表层内建落地，`nearest_enemy → 探活 →
-> 读坐标 → atan2 → fire` 已有一条 `.ecl` 源码级 e2e 押着（`codegen.rs`）。**只删这一句**：
-> C12⑤ 原文点名的另两项（`last_status`/`attract_all_items`）与"`SPAWN` owner 来源枚举
-> 简化为恒继承"仍未做，条目保留。`ENGINE_VER` 6→7（纯号表理由）。
->
-> 敌人死亡效果刀 T1 追记（2026-07-30）：新记 **D11**——掉落从"生成时定死的表索引"迁成
-> "敌身上按类型计数的可变状态"后，掉落表的**条目顺序不再影响任何东西**（撒的顺序由
-> `spill_drops` 的类型升序决定），而 `validate()` 不要求条目升序 ⇒ 非升序的内容包表会
-> **静默**改变 RNG 消耗顺序，无任何检查会红。
+本清单保留待核实的遗留事项、既有裁定和明确暂缓的功能；条目不自动成为本轮需求。处理对应模块时先核对现状，再决定是否实施，避免照旧行号和历史假设直接修改。
 
-> **道具池刀（2026-09-03）销账 1 条**：**F12**——判决程序跑完，**结论与条目里的假设相反**。
-> 条目猜的是"长跑 + 零拾取导致池积压（harness 场景性质，无害）"，实测反证：`run` 的 item
-> 列在**每个采样点都是 0**，峰值只出现在**帧 4954 那一帧**（509/512），~450 帧内回落到 0
-> ⇒ 不是慢慢垫满，是**一帧之内被打满**，与自机吃不吃道具无关（那些格子在"能被吃"之前就
-> 已经分配失败了）。真因：帧 4954 是收卡消弹，弹 626 → 0、道具 0 → 509，而**消弹转星星是
-> 1:1**（`world/settle.rs` 趟一逐颗调 `spawn_star_at`），弹池 8192 而道具池 512。**四个难度
-> 档全部命中**（Easy 3 / Normal 37 / Hard 67 / Lunatic 104）——条目写的"Lunatic 下"只是数字
-> 最大的一档。真人局同样会中：那一刻场上有多少弹由脚本和难度决定，不由玩家操作决定。
-> 处置由人类拍板取 **1+3**：cap 512 → 1024（`ENGINE_VER` 13→14，World +11 328 B，金向量
-> **预期改变**——哈希全槽不用 alive 掩码，多出的 512 个空槽从帧 0 就进哈希）+ 把"消弹转星星
-> 是 best-effort、道具池是它的限流器"写成正式口径（`spawn_star_at` 文档 / `ecl-ops.md` 540 号
-> / 手册 `6-spell-and-stage.md` 与 `8-errors.md`）。**不取 2**（给转换设上限）——那动的是玩家
-> 看得见的经济，为一个罕见边界不值得。顺带补 `star_pool_full_counts_every_missing_star`：
-> `spawn_star_at` 文档明写"逐颗计数、循环不短路"而此前无测试，判别力=灌满池后消 3 颗弹须
-> 恰好 +3（短路或整批只计一次都给 +1）。**1024 不是结构性保证只是把线挪远**,这句连同
-> 溢出后的 P4-a 处置一起进了文档,故 F12 整条删除、不留残余单。
-
-> **瞄准口径统一刀（2026-09-03）销账 1 条**：**F8**——引擎唯一的"瞄谁"口径落成
-> `WorldBody::aim_target`（`world/motion.rs`），`aim_player()`(120) 与 `sh_fire`(6xx) 两条
-> 改走它，`nearest_aimable_player` 的两个旧消费者（xform op / 弹 setter）一行未改。
-> 口径由人类拍板：**只统一"瞄谁"，"一个可瞄的都没有时"按路径性质分**——必须产出角度的
-> （查询/发射）回退 1P 最后坐标，能拒绝的（弹上 setter）保持 no-op。**单人局逐位不变**
-> （`players[1]` 恒 ABSENT ⇒ 两种口径给出同一个人），金向量 md5 与 base 相同、`ENGINE_VER`
-> 不动，修的是 co-op 下"P1 已 game over、P2 还活着时朝尸体喷"。顺带把 **B8** 记的并列取低
-> 索引缺口补成判别式测试（等距反向摆位，`<` 写成 `<=` 当场红）——B8 条目随之删除。
-> `$player_x`/`$player_y`（010/011）**有意不改**：它是坐标读、不是瞄准原语，恒给 1P，
-> 这条已写进 `docs/ecl-ops.md` 与 `docs/ecl-lang/4-bullets.md`。
-
-> **技术债零风险批（2026-09-03）销账 17 条**，逐条在代码里核实过、金向量逐字节不变
-> （`17fe7e32…` 与 base 相同）：**A10**〔`wait` 常量越界编译期闸 + 两条判别式测试〕/
-> **B6**〔delay 门补 `accel≠0` 腿——原版对 speed 冻结无判别力〕/**B9**〔`contract_viol`
-> 跨类别各计一次 + 顺带钉住两条路径验证序相反〕/**B10**〔LOOP 回跳收缩 fired-region ⇒
-> walls 读 0 一帧，判别式测试 + `xform-ops.md` 语义句〕/**B27**〔`OP_SET_SHAPE` 近
-> `i32::MAX` 对称腿〕/**C3**+**F7**〔相位常量族按 `#[cfg(debug_assertions)]` 整体裁，
-> 复核发现是 5 条 warning 不是 1 条〕/**C6**+**C20③**〔两处 `isqrt` 窄化补 P4-c debug 护栏〕/
-> **C9**〔负 speed = 倒飞，三入口逐位相反数 + 批量负步跨零〕/**C20①②**〔`Angle::FULL_TURN`
-> + 派生 `Ord` 是线性序非环形序的警示〕/**C21**〔池布局账目实测重算 + **池尺寸哨兵**押运，
-> 弹池 625KB→433KB、敌池 `~94B`→105B〕/**C23**〔`SHOOTERS_PER_TASK` 进 ① 段注入〕/
-> **D2**〔`events` → `frame_events`，设计与代码同名〕/**D11**〔掉落表条目严格升序进
-> `validate`〕/**D18**〔`builtins::ENGINE_VARS` 成唯一真相源，`gen-ecl-meta` 加第三个
-> sink，手册那张表改成生成段，扩展补上 `$` 补全与 hover〕/**F9**〔`FAULT_NAMES` 进 core，
-> harness 不再抄第二份〕/**F10**〔`sh_task` 与 xformdef 差 1 帧并进 `4-bullets.md` 主干〕。
->
-> **D19 紧随其后单独一刀销账**（2026-09-03，人类裁定"收窄成拒收"）：五条运动动词的
-> `dur`/`easing` 统一走 `try_from`，越界即 P4-b 整条 no-op；`ENGINE_VER` 12→13
-> （同一份镜像在新旧两版产出不同世界演化，旧回放必须拒载）。内容侧零改动，金向量实测
-> 逐字节不变（两段场景压不到这条新路径）。两条变异实证：改回裸截断 / 拒收改成钳位，
-> 各自转红。
-
-> **自机能力刀（2026-09-03）销账**：整节删除 **E. bomb 那一刀开工前**——三条逐条核实
-> 已兑现（`try_bomb` 已接 deathbomb 救人路径 / graze 与消弹的口径注释原样保留、未被本刀
-> 触碰 / bomb 已成为 `FieldPool` 的首个真租户，铺 `FIELD_CLEAR_BULLETS | FIELD_DAMAGE`
-> 两条 field）。本刀新记 **D20**——`world_size_sentinel_guards_copy_into_field_list`
-> 这条尺寸哨兵本刀又被对齐 padding 吃掉三次真实字段新增（`freeze_left`/`time_stops`/
-> `prev_input`）而未响，`PlayerState` 复审实测只剩 1 字节空档，下一个 `u8` 还会重演；
-> 真正逮住这三次改动的全程是金向量而非这条哨兵，候选修法（押字段数 / 押存档 payload
-> 长度）记在条目里，留人裁定。道具池第二压力入口（bomb 消弹×120帧 1:1 转星星 + 全屏
-> 吸取）已实测：灌到 rank-3 峰值量级（约 814 颗弹）、真起一发 bomb、跑满整段效果时长，
-> `diag.pool_full[POOL_ITEM]` 全程为 0（`bomb_at_rank3_peak_bullet_count_does_not_overflow_item_pool`，
-> `crates/stg-core/src/world/player.rs`）——1024 的道具池对当前内容仍有约 210 格
-> （~20%）余量，**未触发**需要人类裁定 cap 的场景。
-
----
+已完成事项不再追加复审流水账；过去的更新记录见[历史追记](archive/follow-ups-history.md)。本轮仅归档开头的追记，正文尚未逐项重新核验。
 
 ## A. 有触发条件的（动到对应模块前先做）
 
@@ -175,7 +31,7 @@ start_main` 三步——"唯一正典入口"的防分歧保证对该路径有洞
 `bg_phase` 切段，段内 wait/loop/jump 随便，跨段转移只认 `bg_phase` 边沿；寻位配方
 `local_t = 世界帧 - bg_phase_frame`，从该段入口重新解析执行到 `local_t`（段是无记忆的，
 读档/中段启动后历史丢失也能重建；变长 boss 段 = 段尾无限 loop、phase 切换破环）。详见
-`docs/superpowers/specs/2026-07-25-game-flow-midstart-design.md` §7。
+`docs/archive/specs/2026-07-25-game-flow-midstart-design.md` §7。
 
 ### A6. `.ecl` 是非 Godot 原生资源扩展名——导出 PCK 须显式 `include_filter`（场景刀 T7 记档，2026-07-26）
 
@@ -203,7 +59,7 @@ UI/按键仍未建，本条保留。）
 
 ### A9. 演出打磨小件五包——spec 写了、实施未接（场景刀 T7 记档，2026-07-26；终审补第⑤件）
 
-`docs/superpowers/specs/2026-07-25-godot-scene-design.md` §7 的请求分发表比 `main.gd`
+`docs/archive/specs/2026-07-25-godot-scene-design.md` §7 的请求分发表比 `main.gd`
 `_wire_requests` 实际落地的处理器多写了几笔，均属可玩性不受影响的表现层打磨：
 ① `REQ_SPELL_RESULT`——spec 写"取得/失败横幅 + bonus 飘字"，`main.gd` 只有横幅，没有
 `effects.gd` 式的 bonus 数字飘字；② `REQ_BGM`——spec 写"HUD 曲名标签 + 日志（无音频资产）"，
@@ -445,7 +301,7 @@ harness 端到端自证：从磁盘加载 `tables_v0.bin` 跑一遍（挂弹+移
 `fire(1, ...)` → `fire(APPEARANCE_MEDIUM, ...)`（`var appearance = i % 4` 那类有意轮转
 全表的写法保留不换）；校验和不变（纯换书写不换值，两次 golden 对拍 + 编辑前后对拍均逐位
 相同）。详见 `docs/ecl-lang.md`"引擎常量"节、
-`docs/superpowers/specs/2026-07-21-ecl-const-injection-design.md`。**追注（颜色轴刀，
+`docs/archive/specs/2026-07-21-ecl-const-injection-design.md`。**追注（颜色轴刀，
 2026-07-26）**：`APPEARANCE_MEDIUM` 一类 ② 段符号已随颜色轴刀退场——`fire`/`batch`
 现收两参（`shape`/`color`），`rainbow.ecl` 已改写成 `fire(OUTLINE, COLOR_CYAN, ...)`
 这类调用，`OUTLINE`/`COLOR_CYAN` 是脚本自己用 `const` 声明的内容包词汇（真美术接入后
@@ -815,7 +671,7 @@ padding）而非内存内 `size_of`——这与四件套里"④ 存档格式"那
    `pack_handle` 回绕问题的处理方式见本条第 2 点，不单独在 roadmap 开新条目。roadmap 剩下的
    §1、§4、§6 维持原状（本刀不动）。
 
-来源：`docs/superpowers/specs/2026-09-24-engine-rl-round2-design.md` §7。
+来源：`docs/archive/specs/2026-09-24-engine-rl-round2-design.md` §7。
 
 ### D26. 引擎第二刀的小问题（2026-09-24，终审后记档）
 
@@ -1001,7 +857,7 @@ PC 推进，操作数永远不会被当成 opcode 解码，**运行期不存在�
 `checksum()` 与 debug 的 **`checksum_report()` —— 逐字段哈希清单 `[(字段路径, u64)]`**，
 原文称它是"字段级方案相对整块哈希的杀手级红利"（desync 时 CI 自动改跑 report 模式，直接
 定位"`bullets.vx` 在第 N 帧分歧"）。**只有前者实现了**：全仓 grep 无 `fn checksum_report`，
-`docs/superpowers/plans/2026-07-14-m0-2-checksum-derive.md:273` 当年就把它列进"未覆盖
+`docs/archive/plans/2026-07-14-m0-2-checksum-derive.md:273` 当年就把它列进"未覆盖
 （明确留后）"，但**此后没进过任何待办清单**，于是对后来者不可见——本条就是把它入库。
 
 **后果不是"少个功能"，是排障成本**：现在任何"整块校验和不相等"的测试（跨平台闸门、

@@ -42,6 +42,7 @@ fn img(src: &str) -> Image {
 }
 fn cfg(images: Vec<Image>, end_on: Vec<EndOn>) -> EnvConfig {
     EnvConfig {
+        collision_rules: Default::default(),
         images,
         starts: vec![Start {
             image: 0,
@@ -326,4 +327,27 @@ fn hit_extra_turns_grazing_rain_lethal_and_persists() {
         base + stg_core::math::Fx::from_int(24),
         "自动 reset 后新局仍是放大的判定"
     );
+}
+
+#[test]
+fn collision_rules_and_graze_switch_persist_through_reset() {
+    use stg_core::collision::{CollisionMode, CollisionRules};
+    let image =
+        img("sub main() { _ = fire(0, 0, 10fx, 384fx, 0fx, 0deg, none, none); loop { wait(1); } }");
+    for enabled in [false, true] {
+        let rules = CollisionRules::new(CollisionMode::Modern, enabled);
+        let mut c = cfg(vec![image.clone()], vec![]);
+        c.collision_rules = rules;
+        let mut env = Env::new(Arc::new(c), 0, Arc::new(BootCache::new()));
+        for _ in 0..2 {
+            env.reset();
+            assert_eq!(env.world().collision_rules(), rules);
+            let outs = run(&mut env, 5, 0);
+            assert_eq!(
+                outs.iter().map(|o| o.events[1]).sum::<i32>(),
+                i32::from(enabled)
+            );
+            assert_eq!(env.world().view().players()[0].graze, u32::from(enabled));
+        }
+    }
 }

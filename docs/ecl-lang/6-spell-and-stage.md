@@ -205,7 +205,7 @@ sub main() {
 
 字节码层完整规则（syscall 号、越界/坏参数处置、事件/请求 id）见
 [`ecl-ops.md`](../ecl-ops.md)"符卡计器"节；世界侧机构设计（结算矩阵、伤害下钳、逐卡血条公式）
-见 `docs/superpowers/specs/2026-07-24-spell-meter-design.md`。
+见 `docs/archive/specs/2026-07-24-spell-meter-design.md`。
 
 ## mark（中段启动标记）
 

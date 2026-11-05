@@ -35,6 +35,7 @@ define_pool! {
         speed: Fx, angle: Angle,
         ang_vel: i16, accel: Fx,
         ax: Fx, ay: Fx,
+        // sprite保存逻辑appearance；表现端通过WorldTables映射物理图集格。
         sprite: u16, radius: Fx,
         delay: u8, life: u16, flags: u8, grazed_by: u8,
         transform_head: u16, xform_wait: u16, xform_next: u8,

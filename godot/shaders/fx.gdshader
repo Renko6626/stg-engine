@@ -5,7 +5,8 @@ shader_type canvas_item;
 // kind:0 消弹淡出(采样弹图集格 sprite) / 1 爆炸环 / 2 命中火花 / 3 通用闪点 / 4 依附光环。
 uniform sampler2D bullet_atlas : filter_nearest;
 uniform float grid_cols = 16.0;
-uniform float grid_rows = 12.0;
+uniform float grid_rows = 1.0;
+uniform float bullet_cell_px = 64.0;
 uniform float quad_px = 64.0;
 // 各 kind 寿命(帧),与 content_tables.gd FX_LIFE 同值——改一边必须改另一边。
 uniform vec4 life_0_3 = vec4(12.0, 20.0, 7.0, 30.0);
@@ -31,7 +32,7 @@ void vertex() {
 	int k = int(cst.x + 0.5);
 	float s = 1.0;
 	if (k == 0) {
-		s = (16.0 / quad_px) * (1.0 + 0.6 * t); // 弹格 16px,淡出时微放大
+		s = (bullet_cell_px / quad_px) * (1.0 + 0.6 * t); // 格内留白保持原弹尺寸
 	} else if (k == 2) {
 		s = 16.0 / quad_px;                       // 火花:16px 内的小圆
 	} else if (k == 4) {

@@ -13,12 +13,9 @@ extends SubViewportContainer
 # 2026-09-25(激光池刀):加 3: 256,跟 lasers.rs cap 一起改。
 const CAPS := { 0: 8192, 1: 1024, 2: 1024, 3: 256 } # key = WorldBridge.LAYER_*(bullets/shots/items/lasers)
 # cell 尺寸 = 该层图集的格边长(也是 QuadMesh 边长,1px=1unit)。
-# bullets = 16:原作弹片本就是 16×16 网格,取 16 即精确切割、零留白,渲染出来正好是
-# 东方在 384×448 场界里的原生比例。将来若补 32×32 大玉,整张图要改按 32 排、小图元
-# 居中留白(1:1 不缩放),这里同步改 32——见 docs/render-contract.md §3。
-const CELLS := { 0: 16, 1: 32, 2: 32 }
+# bullets 使用64px格，小弹居中留白，保持1px=1unit。
+const CELLS := { 0: 64, 1: 32, 2: 32 }
 const COLS := { 0: 16, 1: 4, 2: 8 }
-const ROWS := { 0: 12, 1: 1, 2: 1 }
 const TEXTURES := {
 	0: "res://assets/bullets.png", 1: "res://assets/shots.png", 2: "res://assets/items.png",
 }
@@ -101,7 +98,7 @@ func _make_layer(kind: int) -> MultiMeshInstance2D:
 	mat.shader = load("res://shaders/layer.gdshader")
 	mat.set_shader_parameter("atlas", mmi.texture)
 	mat.set_shader_parameter("grid_cols", float(COLS[kind]))
-	mat.set_shader_parameter("grid_rows", float(ROWS[kind]))
+	mat.set_shader_parameter("grid_rows", float(mmi.texture.get_height()) / CELLS[kind])
 	if kind == 0:
 		mat.set_shader_parameter("spawn_flash_frames", BULLET_SPAWN_FLASH_FRAMES)
 	mmi.material = mat
@@ -154,7 +151,7 @@ func _make_ghost() -> MultiMeshInstance2D:
 	mat.shader = load("res://shaders/ghost.gdshader")
 	mat.set_shader_parameter("atlas", mmi.texture)
 	mat.set_shader_parameter("grid_cols", float(COLS[0]))
-	mat.set_shader_parameter("grid_rows", float(ROWS[0]))
+	mat.set_shader_parameter("grid_rows", float(mmi.texture.get_height()) / CELLS[0])
 	mmi.material = mat
 	var buf := PackedFloat32Array()
 	buf.resize(CAPS[0] * 12)

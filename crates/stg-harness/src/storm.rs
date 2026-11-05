@@ -99,7 +99,7 @@ fn save_points(frames: u32, saves: usize) -> Result<Vec<u32>, String> {
 }
 
 pub(crate) fn run_storm(frames: u32, saves: usize, seed: u64) -> Result<(), String> {
-    let (mut w, image, _boss) = crate::build_rainbow_world(seed);
+    let (mut w, image, _boss) = crate::scenes::build_rainbow_world(seed);
     let inputs = gen_inputs(frames, seed);
     let save_at = save_points(frames, saves)?;
 
@@ -226,7 +226,7 @@ mod tests {
         const SAVE_AT: u32 = 30;
         const FLIP_AT: u32 = 40;
 
-        let (mut w, image, _boss) = crate::build_rainbow_world(0xAB);
+        let (mut w, image, _boss) = crate::scenes::build_rainbow_world(0xAB);
         let inputs = gen_inputs(FRAMES, 0xAB);
 
         let mut stream = Vec::with_capacity(FRAMES as usize);

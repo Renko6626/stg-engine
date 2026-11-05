@@ -168,7 +168,7 @@ fn bundled_game_pack_compiles() {
         .iter()
         .map(|(n, s)| (n.to_string(), s.to_string()))
         .collect();
-    assert_eq!(units.len(), 5);
+    assert_eq!(units.len(), 6); // 追加按作品命名的touhou-bullets.ecl内容词表。
     assert!(units.windows(2).all(|w| w[0].0 < w[1].0), "按文件名排序");
     stg_ecl_compiler::lang::compile_units(&units).expect("内置 game 包必须能编译");
     assert!(stg_rl::bundled::bundled_sources("nope").is_none());

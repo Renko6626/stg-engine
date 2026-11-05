@@ -1,7 +1,7 @@
-//! 图集坐标（弹型 × 颜色）的编译期判据——**typeck 与 codegen 共用的单一权威**。
+//! 逻辑弹型坐标（弹型 × 颜色）的编译期判据——**typeck 与 codegen 共用的单一权威**。
 //!
-//! 五个入口写的是同一个数域（`id = 弹型 × color_stride + 色号`，表索引 ≡ 图集格号 ≡ 池
-//! `sprite` 值，identity）：
+//! 五个入口写的是同一个数域（`id = 弹型 × color_stride + 色号`，表索引 ≡ 池
+//! `sprite` 值；物理图集格通过 `AppearanceCfg.sprite` 映射，可以由多个逻辑项共用）：
 //! - `fire(shape, color, …)` / `batch(shape, color, …)`——判据在 `lang::typeck::exprs`
 //!   （实参可能是运行期表达式，只对编译期常量对施加）；
 //! - xformdef 的 `set_sprite(shape, color)`——判据在 `lang::codegen` 的 `OpFold2` staging
@@ -211,7 +211,7 @@ mod tests {
 
         // 形状基址非法（不是 stride 的倍数 / 越界）→ 拒
         assert!(check_shape_only(t, 5).is_err());
-        assert!(check_shape_only(t, 12 * 16).is_err());
+        assert!(check_shape_only(t, t.appearances.len() as i32).is_err());
         // 合法形状 → 过，**即使它是稀疏弹型**（第 9 形有空格色）
         assert!(
             check_shape_only(t, 9 * 16).is_ok(),

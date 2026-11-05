@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use stg_core::World;
 use stg_core::input::InputFrame;
+use stg_core::tables::WorldTables;
 
 pub(crate) const WIRE_VERSION: u8 = 1;
 
@@ -32,7 +33,7 @@ fn alive_count(words: &[u64]) -> u32 {
 /// 玩家段的生死/无敌两字段实名为 `PlayerState::life_state`/`invuln`（brief 草稿写
 /// `life`/`invuln`，`life` 按实况对齐为 `life_state`，`invuln` 本就同名——机械对齐，不算
 /// 偏离；`life_state` 语义见 `stg_core::player` 的 `LIFE_*` 常量）。
-pub(crate) fn encode_frame(w: &World) -> Vec<u8> {
+pub(crate) fn encode_frame(w: &World, tables: &WorldTables) -> Vec<u8> {
     let v = w.view();
     let mut out = Vec::with_capacity(16 * 1024);
     out.push(WIRE_VERSION);
@@ -61,7 +62,7 @@ pub(crate) fn encode_frame(w: &World) -> Vec<u8> {
     for_each_alive(b.alive_words(), |i| {
         out.extend_from_slice(&b.x()[i].raw().to_le_bytes());
         out.extend_from_slice(&b.y()[i].raw().to_le_bytes());
-        out.extend_from_slice(&b.sprite()[i].to_le_bytes());
+        out.extend_from_slice(&tables.bullet_sprite(b.sprite()[i]).to_le_bytes());
     });
 
     // 自机弹（同 10 B）
@@ -133,7 +134,7 @@ fn build_viewer_world(
     match ecl {
         Some(p) => crate::run::build_ecl_world(p, seed, rank).map(|(w, i, _n)| (w, i)),
         None => {
-            let (w, i, _boss) = crate::build_rainbow_world(seed);
+            let (w, i, _boss) = crate::scenes::build_rainbow_world(seed);
             Ok((w, i))
         }
     }
@@ -194,7 +195,7 @@ pub(crate) fn cmd_dump(rest: &[String]) -> ExitCode {
             };
         let input = mask_to_input(f, mask);
         stg_core::step(&mut w, &stg_core::tables::TABLES_V0, &image, &input);
-        let fb = encode_frame(&w);
+        let fb = encode_frame(&w, &stg_core::tables::TABLES_V0);
         buf.extend_from_slice(&(fb.len() as u32).to_le_bytes());
         buf.extend_from_slice(&fb);
     }
@@ -370,7 +371,9 @@ fn handle_conn(
             stg_core::step(&mut w, &stg_core::tables::TABLES_V0, &image, &input);
             // 限（Minor，M3 前不修）：ws.send 无写超时——单客户端本地查看器工具，对端
             // 卡死会阻塞本线程；当前应对是杀进程重启，M3 泛化成多客户端/联机时需重议。
-            ws.send(tungstenite::Message::Binary(encode_frame(&w).into()))?;
+            ws.send(tungstenite::Message::Binary(
+                encode_frame(&w, &stg_core::tables::TABLES_V0).into(),
+            ))?;
             stepped += 1;
             next += tick;
             if next > Instant::now() || stepped >= 3 {
@@ -423,7 +426,7 @@ mod tests {
     /// 才真正判别 boss 段内部字段顺序/宽度/字节序。
     #[test]
     fn encode_frame_layout_v1_static_open() {
-        let (mut w, _image, _boss) = crate::build_rainbow_world(42);
+        let (mut w, _image, _boss) = crate::scenes::build_rainbow_world(42);
         w.body.boss_set(
             0,
             stg_core::boss::BossUiSlot {
@@ -444,7 +447,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let buf = encode_frame(&w);
+        let buf = encode_frame(&w, &stg_core::tables::TABLES_V0);
         let mut o = 0;
         assert_eq!(read_u8(&buf, &mut o), WIRE_VERSION);
         assert_eq!(read_u32(&buf, &mut o), 0, "未 step，frame=0");
@@ -479,7 +482,7 @@ mod tests {
     /// 跑起来后：总长 = 头 + Σ(计数×记录宽) 精确对账（判别：任何记录宽错即红）。
     #[test]
     fn encode_frame_width_accounting_after_steps() {
-        let (mut w, image, _boss) = crate::build_rainbow_world(42);
+        let (mut w, image, _boss) = crate::scenes::build_rainbow_world(42);
         for f in 0..240u32 {
             step(&mut w, &TABLES_V0, &image, &InputFrame::empty(f));
         }
@@ -492,7 +495,18 @@ mod tests {
         );
         let nr = w.take_requests().len();
         assert!(nb > 0, "240 帧风铃卡应已起弹（场景前提）");
-        let buf = encode_frame(&w);
+        let mut tables = stg_core::tables::build_tables_v0();
+        for appearance in &mut tables.appearances {
+            appearance.sprite = 900;
+        }
+        let buf = encode_frame(&w, &tables);
+        // 头、玩家和 boss 段之后是弹数与各弹的 x/y/物理图号。
+        let mut offset = 5 + 12 + 19;
+        assert_eq!(read_u16(&buf, &mut offset) as usize, nb);
+        for _ in 0..nb {
+            offset += 8;
+            assert_eq!(read_u16(&buf, &mut offset), 900);
+        }
         let expect = (1 + 4)
             + (1 + 11)
             + (1 + 18)

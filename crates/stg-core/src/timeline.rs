@@ -1,5 +1,5 @@
 //! timeline —— World 之上的时间线层（时间机制内核刀 2026-09-07，spec
-//! `docs/superpowers/specs/2026-09-07-timeline-observe-jump-rewind-design.md` §3）。
+//! `docs/archive/specs/2026-09-07-timeline-observe-jump-rewind-design.md` §3）。
 //!
 //! 住 `step.rs` 同层（组装层之上）：快照环 + 遡行兑现 + 影子世界（観測）+ 输入日志/回放。
 //! **World 对它无知**（P1/P5）——世界侧只有 `commit_death` 发请求、`rewind_landed` 收落地两个口，
@@ -13,6 +13,7 @@
 //! 内存：`RING_DEPTH` × ~1 MB 环 + 1 MB 影子，全部在构造时分配一次（F1：不新增 std 触点，
 //! `Box<World>` 分配落点与 `World::new` 同一处）。
 
+use crate::collision::CollisionRules;
 use crate::ecl::binding::TaskStartError;
 use crate::ecl::image::EclImage;
 use crate::events::EVT_REWIND_REQUESTED;
@@ -50,6 +51,7 @@ pub enum Boot {
         rank: i32,
         start: i32,
         loadout: Loadout,
+        rules: CollisionRules,
     },
     /// 从一份存档载入（`load_state` 之后）；只记载入那一刻世界的校验和。**不可从头重放**
     /// （`Timeline::replay` 返 `BootNotReplayable`）——练习模式要把快照嵌进 log（follow-ups）。
@@ -137,6 +139,7 @@ pub enum ReplayError {
     TrailingBytes {
         left: usize,
     },
+    InvalidCollisionRules,
     BadBootTag {
         got: u8,
     },
@@ -250,7 +253,18 @@ impl Timeline {
         loadout: Loadout,
         image: EclImage,
     ) -> Result<Timeline, TaskStartError> {
-        let world = World::new_game_at(seed, rank, start, loadout, &image)?;
+        Self::new_game_at_with_rules(seed, rank, start, loadout, Default::default(), image)
+    }
+
+    pub fn new_game_at_with_rules(
+        seed: u64,
+        rank: i32,
+        start: i32,
+        loadout: Loadout,
+        rules: CollisionRules,
+        image: EclImage,
+    ) -> Result<Timeline, TaskStartError> {
+        let world = World::new_game_at_with_rules(seed, rank, start, loadout, rules, &image)?;
         Ok(Self::from_world(
             world,
             image,
@@ -259,6 +273,7 @@ impl Timeline {
                 rank,
                 start,
                 loadout,
+                rules,
             },
         ))
     }
@@ -462,12 +477,13 @@ impl Timeline {
             rank,
             start,
             loadout,
+            rules,
         } = log.boot
         else {
             return Err(ReplayError::BootNotReplayable);
         };
-        let t =
-            Timeline::new_game_at(seed, rank, start, loadout, image).map_err(ReplayError::Boot)?;
+        let t = Timeline::new_game_at_with_rules(seed, rank, start, loadout, rules, image)
+            .map_err(ReplayError::Boot)?;
         Ok((
             t,
             Playback {
@@ -536,7 +552,7 @@ impl Timeline {
 // 纪律同 `save.rs`：小端、无 padding、定长自描述。
 
 pub(crate) const LOG_MAGIC: [u8; 4] = *b"STGR";
-pub(crate) const LOG_FILE_VER: u8 = 2;
+pub(crate) const LOG_FILE_VER: u8 = 3;
 
 impl InputLog {
     pub fn to_bytes(&self, tables_hash: u64, image_hash: u64) -> Vec<u8> {
@@ -553,6 +569,7 @@ impl InputLog {
                 rank,
                 start,
                 loadout,
+                rules,
             } => {
                 out.push(0);
                 out.extend_from_slice(&seed.to_le_bytes());
@@ -562,6 +579,7 @@ impl InputLog {
                 out.extend_from_slice(&loadout.power.to_le_bytes());
                 out.push(loadout.lives);
                 out.push(loadout.bombs);
+                crate::save::SaveBytes::write_bytes(&rules, &mut out);
             }
             Boot::Snapshot { world_checksum } => {
                 out.push(1);
@@ -663,10 +681,15 @@ impl InputLog {
                 let power = u16::from_le_bytes(take(&mut r, 2)?.try_into().unwrap());
                 let lives = take(&mut r, 1)?[0];
                 let bombs = take(&mut r, 1)?[0];
+                let mode = take(&mut r, 1)?[0];
+                let graze = take(&mut r, 1)?[0];
+                let rules = CollisionRules::from_wire(mode, graze)
+                    .ok_or(ReplayError::InvalidCollisionRules)?;
                 Boot::NewGameAt {
                     seed,
                     rank,
                     start,
+                    rules,
                     loadout: Loadout {
                         character,
                         power,
@@ -741,6 +764,43 @@ mod tests {
         )
     }
 
+    #[test]
+    fn collision_rules_survive_snapshot_save_preview_and_replay() {
+        use crate::collision::{CollisionMode, CollisionRules};
+        let rules = CollisionRules::new(CollisionMode::Modern, false);
+        let image = root_image();
+        let mut live =
+            Timeline::new_game_at_with_rules(42, 2, 0, Loadout::default(), rules, image.clone())
+                .unwrap();
+        for _ in 0..5 {
+            live.advance(&InputFrame::empty(0));
+        }
+        let checksum = live.world().checksum();
+        let mut copy = World::new(0);
+        live.world().copy_into(&mut copy);
+        assert_eq!(copy.collision_rules(), rules);
+        assert_eq!(copy.checksum(), checksum);
+        let saved = live.world().save_bytes(&image);
+        let restored = World::load_bytes(&saved, &crate::tables::TABLES_V0, &image).unwrap();
+        assert_eq!(restored.collision_rules(), rules);
+        assert_eq!(restored.checksum(), checksum);
+        assert_eq!(live.preview(3).collision_rules(), rules);
+        assert_eq!(live.world().checksum(), checksum);
+        let log = InputLog::from_bytes(
+            &live.log_bytes(),
+            crate::tables::TABLES_V0.content_hash,
+            image.content_hash(),
+        )
+        .unwrap();
+        let replayed = Timeline::replay(&log, image).unwrap();
+        assert_eq!(replayed.world().collision_rules(), rules);
+        assert_eq!(replayed.world().checksum(), checksum);
+        assert_ne!(
+            World::new_with_rules(42, rules).checksum(),
+            World::new(42).checksum()
+        );
+    }
+
     /// 空镜像时间线（手摆场景用）。
     fn bare(seed: u64) -> Timeline {
         Timeline::from_world(
@@ -750,6 +810,7 @@ mod tests {
                 seed,
                 rank: 0,
                 start: 0,
+                rules: Default::default(),
                 loadout: Loadout::default(),
             },
         )
@@ -1222,6 +1283,7 @@ mod tests {
                 seed: 21,
                 rank: 1,
                 start: 0,
+                rules: Default::default(),
                 loadout: ld,
             },
             frames: (0..40).map(InputFrame::empty).collect(),
@@ -1276,6 +1338,7 @@ mod tests {
                 seed: 13,
                 rank: 0,
                 start: 0,
+                rules: Default::default(),
                 loadout: ld,
             },
             frames: (0..20).map(InputFrame::empty).collect(),

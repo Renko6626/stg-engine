@@ -1,6 +1,6 @@
 //! ECL 表层语言前端总入口（M1.9 T1）——`.ecl` 源码手感的编译器前端：手写 lexer，接一层
 //! 递归下降与 Pratt 结合的 parser，产出 AST。**没有类型检查、没有 codegen**（分别是 T2/T3
-//! 的刀，见 `docs/superpowers/plans/2026-07-18-m19-ecl-language.md`）。
+//! 的刀，见 `docs/archive/plans/2026-07-18-m19-ecl-language.md`）。
 //!
 //! 编译器全程无 IO、无时钟、只用 `Vec`/`String`（不用 `HashMap` 等无序容器参与任何影响输出
 //! 顺序的路径）——同源码两次编译必须逐字节产出同一份 AST（本刀先钉住 `Program` 的确定性，

@@ -125,6 +125,7 @@ fn build_cfg(o: &Opts) -> Result<EnvConfig, String> {
     };
     let image = compile(&units).map_err(|e| format!("workload 脚本编译失败:\n{e}"))?;
     Ok(EnvConfig {
+        collision_rules: Default::default(),
         images: vec![image],
         starts: vec![Start {
             image: 0,

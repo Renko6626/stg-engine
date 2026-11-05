@@ -7,6 +7,7 @@
 //! 行9 激光(仅 state 1)×自机(hit_radius，半高 width/2)、行10 清弹作用区×激光(state 0/1 → 切收缩)。
 
 use super::WorldBody;
+use crate::collision::CollisionMode;
 use crate::events::{
     ROW_BODY_PLAYER_HIT, ROW_BULLET_PLAYER_GRAZE, ROW_BULLET_PLAYER_HIT, ROW_FIELD_BULLET,
     ROW_FIELD_ENEMY, ROW_FIELD_LASER, ROW_ITEM_PLAYER, ROW_LASER_PLAYER_HIT, ROW_SHOT_ENEMY,
@@ -16,6 +17,15 @@ use crate::field::{FIELD_CLEAR_BULLETS, FIELD_DAMAGE};
 use crate::math::Fx;
 use crate::math::geom::{len_sq, seg_box_dist_sq};
 use crate::tables::WorldTables;
+
+#[inline]
+fn circle_hit_threshold_sq<const MODERN: bool>(object: i64, player: i64) -> i64 {
+    if MODERN {
+        object * object + player * player
+    } else {
+        (object + player) * (object + player)
+    }
+}
 
 impl WorldBody {
     pub(crate) fn collide(&mut self, tables: &WorldTables) {
@@ -28,8 +38,16 @@ impl WorldBody {
             self.collide_stop_touch(); // 行 8：停止冻结中只收触碰消弹（玩法刀）
             return;
         }
-        self.collide_bullets_player(); // 行 1/2：敌弹 × 自机
-        self.collide_body_player(); // 行 3：敌体 × 自机
+        // 按局配置在遍历外分派；常量参数使弹循环不再选择模式或擦弹开关。
+        match (
+            self.collision_rules.mode(),
+            self.collision_rules.graze_enabled(),
+        ) {
+            (CollisionMode::Legacy, false) => self.collide_player_contacts::<false, false>(),
+            (CollisionMode::Legacy, true) => self.collide_player_contacts::<false, true>(),
+            (CollisionMode::Modern, false) => self.collide_player_contacts::<true, false>(),
+            (CollisionMode::Modern, true) => self.collide_player_contacts::<true, true>(),
+        }
         self.collide_shot_enemy(); // 行 4：自机弹 × 敌人
         self.collide_item_player(tables); // 行 5：道具 × 自机拾取圈
         self.collide_field_bullet(); // 行 6：作用区 × 敌弹（消弹）
@@ -38,8 +56,13 @@ impl WorldBody {
         self.collide_field_laser(); // 行 10：清弹作用区 × 激光（state 0/1 → 切收缩）
     }
 
+    fn collide_player_contacts<const MODERN: bool, const GRAZE: bool>(&mut self) {
+        self.collide_bullets_player::<MODERN, GRAZE>();
+        self.collide_body_player::<MODERN>();
+    }
+
     /// 行 8：停止冻结中，自机判定圆 × 冻住的敌弹。只 ALIVE 参与、**不看 `invuln`**（停止本身
-    /// 就是无敌窗，落地无敌帧不该让触碰失效）；delay 弹跳过（与行 1 同口径）。半径和比较同行 1。
+    /// 就是无敌窗，落地无敌帧不该让触碰失效）；delay 弹跳过。沿用半径和触碰规则，不随模式切换。
     fn collide_stop_touch(&mut self) {
         for p in 0..crate::MAX_PLAYERS {
             if self.players[p].life_state != crate::player::LIFE_ALIVE {
@@ -66,8 +89,8 @@ impl WorldBody {
         }
     }
 
-    /// 行 1（hit）+ 行 2（graze）：敌弹 × 自机。一次 len_sq 复用两半径。
-    fn collide_bullets_player(&mut self) {
+    /// 行 1（hit）+ 行 2（graze）：敌弹 × 自机。一次 len_sq 复用于两个阈值。
+    fn collide_bullets_player<const MODERN: bool, const GRAZE: bool>(&mut self) {
         for p in 0..crate::MAX_PLAYERS {
             if self.players[p].life_state != crate::player::LIFE_ALIVE
                 || self.players[p].invuln != 0
@@ -76,7 +99,6 @@ impl WorldBody {
             }
             let (px, py) = (self.players[p].x, self.players[p].y);
             let hit_r = self.players[p].hit_radius;
-            let graze_r = self.players[p].graze_radius;
             let nw = self.bullets.alive.len();
             for w in 0..nw {
                 let mut bits = self.bullets.alive[w];
@@ -89,16 +111,23 @@ impl WorldBody {
                     let dx = self.bullets.x[b] - px;
                     let dy = self.bullets.y[b] - py;
                     let d2 = len_sq(dx, dy);
-                    let br = self.bullets.radius[b];
-                    let graze_sum = (br + graze_r).raw() as i64;
-                    let hit_sum = (br + hit_r).raw() as i64;
-                    // 两圈**各自**判：原先只在擦弹圈内才查中弹，隐含「hit ≤ graze」；局中写口
-                    // `set_player_hit_radius` 能把判定放到擦弹圈外，那一环会被漏判（2026-09-25 实测）。
-                    // hit ⊆ graze 时推入顺序（先 GRAZE 后 HIT）与旧实现逐位相同。
-                    if d2 <= graze_sum * graze_sum {
-                        self.push_hit(ROW_BULLET_PLAYER_GRAZE, b as u16, p as u16);
+                    let br = self.bullets.radius[b].raw() as i64;
+                    let pr = hit_r.raw() as i64;
+                    // 有意保留独立判定：同帧可以既擦弹又中弹，计分仍每弹每玩家一次。
+                    if GRAZE {
+                        let threshold = if MODERN {
+                            let margin = (40i64 << 16).max(br * 2 / 5);
+                            br * br + (pr + margin) * (pr + margin)
+                        } else {
+                            let radius = br + pr + (20i64 << 16);
+                            radius * radius
+                        };
+                        if d2 < threshold {
+                            self.push_hit(ROW_BULLET_PLAYER_GRAZE, b as u16, p as u16);
+                        }
                     }
-                    if d2 <= hit_sum * hit_sum {
+                    let threshold = circle_hit_threshold_sq::<MODERN>(br, pr);
+                    if d2 < threshold {
                         self.push_hit(ROW_BULLET_PLAYER_HIT, b as u16, p as u16);
                     }
                 }
@@ -110,7 +139,7 @@ impl WorldBody {
     /// **不查 `ENEMY_DYING`**——人类裁定 D-9（spec `2026-07-30-enemy-death-effect-design.md`
     /// §3/§6）：dying 敌当帧仍参与体碰、仍撞得死自机。别顺手加 dying 门禁；
     /// `tests::collide_dying_enemy_still_body_hits_player` 就是为此钉的。
-    fn collide_body_player(&mut self) {
+    fn collide_body_player<const MODERN: bool>(&mut self) {
         for p in 0..crate::MAX_PLAYERS {
             if self.players[p].life_state != crate::player::LIFE_ALIVE
                 || self.players[p].invuln != 0
@@ -131,8 +160,11 @@ impl WorldBody {
                     let dx = self.enemies.x[e] - px;
                     let dy = self.enemies.y[e] - py;
                     let d2 = len_sq(dx, dy);
-                    let sum = (self.enemies.radius[e] + hit_r).raw() as i64;
-                    if d2 <= sum * sum {
+                    let threshold = circle_hit_threshold_sq::<MODERN>(
+                        self.enemies.radius[e].raw() as i64,
+                        hit_r.raw() as i64,
+                    );
+                    if d2 < threshold {
                         self.push_hit(ROW_BODY_PLAYER_HIT, e as u16, p as u16);
                     }
                 }
@@ -372,25 +404,105 @@ mod tests {
         assert_eq!(player_hits_at(&mut w), 0, "改回表值后恢复");
     }
 
-    /// 判别式：判定放到擦弹圈（16）之外——弹在 24 px、判定 30 ⇒ 必中、且不算擦弹。
-    /// 旧实现只在擦弹圈内查中弹，这里会漏判（stg-rl `hit_extra_turns_grazing_rain_lethal_and_persists` 抓到的）。
+    /// 不收集擦弹时仍要独立判中，覆盖旧实现把命中嵌在擦弹分支内的问题。
     #[test]
-    fn hit_radius_larger_than_graze_still_hits() {
+    fn graze_disabled_still_hits_with_large_radius() {
+        use crate::collision::{CollisionMode, CollisionRules};
         use crate::events::ROW_BULLET_PLAYER_GRAZE;
-        let mut w = crate::step::World::new(1);
-        w.body.players[0].x = Fx::ZERO;
-        w.body.players[0].y = Fx::from_int(384);
-        bullet_at(&mut w, 24, 384);
-        assert!(
-            w.body.players[0].graze_radius < Fx::from_int(22),
-            "前提：弹在擦弹圈外"
+        let mut w = crate::step::World::new_with_rules(
+            1,
+            CollisionRules::new(CollisionMode::Legacy, false),
         );
+        bullet_at(&mut w, 24, 384);
         w.body.set_player_hit_radius(0, Fx::from_int(30));
-        assert_eq!(player_hits_at(&mut w), 1, "判定大于擦弹圈时也必须判中");
-        let graze = (0..w.body.hits_len as usize)
-            .filter(|&k| w.body.hits[k].row == ROW_BULLET_PLAYER_GRAZE)
-            .count();
-        assert_eq!(graze, 0, "擦弹圈外不算擦弹");
+        assert_eq!(player_hits_at(&mut w), 1);
+        assert!(
+            !w.body.hits[..w.body.hits_len as usize]
+                .iter()
+                .any(|h| h.row == ROW_BULLET_PLAYER_GRAZE)
+        );
+    }
+
+    #[test]
+    fn collision_modes_use_native_circle_thresholds() {
+        use crate::collision::{
+            CollisionMode::{Legacy, Modern},
+            CollisionRules,
+        };
+        use crate::events::ROW_BULLET_PLAYER_GRAZE;
+        // 半径4与3：Legacy命中界7、擦弹界27；Modern命中界5、擦弹界sqrt(1865)。
+        for (mode, radius, distance, hit, graze) in [
+            (Legacy, 4, 6, 1, true),
+            (Legacy, 4, 7, 0, true),
+            (Legacy, 4, 26, 0, true),
+            (Legacy, 4, 27, 0, false),
+            (Modern, 4, 4, 1, true),
+            (Modern, 4, 5, 0, true),
+            (Modern, 4, 6, 0, true),
+            (Modern, 4, 43, 0, true),
+            (Modern, 4, 44, 0, false),
+            // 大弹使br/2.5超过40：sqrt(150²+63²)介于162和163。
+            (Modern, 150, 162, 0, true),
+            (Modern, 150, 163, 0, false),
+        ] {
+            let mut w = crate::step::World::new_with_rules(1, CollisionRules::new(mode, true));
+            w.body.set_player_hit_radius(0, Fx::from_int(3));
+            let b = bullet_at(&mut w, distance, 384);
+            w.body.bullets.radius[b.index as usize] = Fx::from_int(radius);
+            assert_eq!(player_hits_at(&mut w), hit, "{mode:?}, d={distance}");
+            assert_eq!(
+                w.body.hits[..w.body.hits_len as usize]
+                    .iter()
+                    .any(|h| h.row == ROW_BULLET_PLAYER_GRAZE),
+                graze,
+                "{mode:?}, d={distance}"
+            );
+        }
+    }
+
+    #[test]
+    fn body_contact_uses_selected_circle_rule_without_graze() {
+        use crate::collision::{
+            CollisionMode::{Legacy, Modern},
+            CollisionRules,
+        };
+        use crate::events::{ROW_BODY_PLAYER_HIT, ROW_BULLET_PLAYER_GRAZE};
+        for (mode, expected) in [(Legacy, true), (Modern, false)] {
+            let mut w = crate::step::World::new_with_rules(1, CollisionRules::new(mode, true));
+            w.body.set_player_hit_radius(0, Fx::from_int(3));
+            let e = spawn_enemy(&mut w, 6, 384, 100);
+            w.body.set_enemy_hitbox(e, Fx::from_int(4));
+            player_hits_at(&mut w);
+            let hits = &w.body.hits[..w.body.hits_len as usize];
+            assert_eq!(hits.iter().any(|h| h.row == ROW_BODY_PLAYER_HIT), expected);
+            assert!(!hits.iter().any(|h| h.row == ROW_BULLET_PLAYER_GRAZE));
+        }
+    }
+
+    #[test]
+    fn disabling_graze_preserves_pickup_and_leaves_graze_unmarked() {
+        use crate::collision::{CollisionMode, CollisionRules};
+        use crate::events::{ROW_BULLET_PLAYER_GRAZE, ROW_ITEM_PLAYER};
+        use crate::tables::TABLES_V0;
+        let mut w = crate::step::World::new_with_rules(
+            1,
+            CollisionRules::new(CollisionMode::Modern, false),
+        );
+        let b = bullet_at(&mut w, 10, 384);
+        w.body.drop_item(
+            Fx::ZERO,
+            Fx::from_int(384),
+            crate::items::ITEM_POWER,
+            &TABLES_V0,
+        );
+        assert_eq!(player_hits_at(&mut w), 0);
+        let hits = &w.body.hits[..w.body.hits_len as usize];
+        assert!(hits.iter().any(|h| h.row == ROW_ITEM_PLAYER));
+        assert!(!hits.iter().any(|h| h.row == ROW_BULLET_PLAYER_GRAZE));
+        w.body.settle(&TABLES_V0);
+        assert!(w.body.players[0].power > 0);
+        assert_eq!(w.body.players[0].graze, 0);
+        assert_eq!(w.body.bullets.grazed_by[b.index as usize], 0);
     }
 
     #[test]

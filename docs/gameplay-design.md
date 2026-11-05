@@ -194,7 +194,7 @@ V1/V3 的 harness 探针是这个引擎白送的：确定性 + 快照克隆 = �
 
 ## 10. 引擎侧改动入口（给下一刀的 spec 用，非规格）
 
-> **落地状态（2026-09-14 玩法刀）**：1–4、6、7 已落地（spec `docs/superpowers/specs/2026-09-14-gameplay-tools-design.md`）；
+> **落地状态（2026-09-14 玩法刀）**：1–4、6、7 已落地（spec `docs/archive/specs/2026-09-14-gameplay-tools-design.md`）；
 > 5（harness `probe-jump` / `replay --cut-gaps`）待探针刀。
 
 1. **停止合并**：`time_stops` 退役、`bombs` 即停止库存；`try_bomb` 与 `try_time_stop` 合为一条

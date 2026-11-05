@@ -104,7 +104,7 @@ Cargo.toml                       workspace（resolver=3, edition=2024）
 rust-toolchain.toml              钉死 1.94.0 + rustfmt/clippy（可复现）
 Cargo.lock                       【提交】—— 确定性须锁依赖版本
 CLAUDE.md  README.md
-PROGRESS.md                      【进度入口】当前位置/下一步/里程碑史的唯一权威（milestone 收口必更）
+PROGRESS.md                      【进度入口】当前状态与下一步；历史交付见 docs/archive/
 design_doc.md  stg-world-design.md   权威设计（勿轻改，改动过评审）
 docs/follow-ups.md               【接手先读】技术债与待办（复审判定可延后的，逐条核实过）
 docs/gameplay-design.md          【玩法权威】停止/観測→跳躍/死亡即遡行的数字规格 + 第 1 关可实施稿
@@ -112,7 +112,7 @@ docs/gameplay-design.md          【玩法权威】停止/観測→跳躍/死亡
 docs/setting.md                  设定集（東方時環晷 世界观/剧情/Boss/美术/音乐/预算/合规；v0.5 原貌不回溯改）
 docs/architecture.md             一页架构地图（断层线/不变量/crate 表/相位流水线/接缝），构思下一步工程用
 docs/art-brief.md                美术交接包（画师直接看：风格圣经/咲夜·蕾米 brief/立绘与点阵规格/流程条款/验收），§9 内部备注交出去前删
-docs/superpowers/{specs,plans}/  brainstorm 产出的设计与实施计划（历史记录）
+docs/archive/                   历史设计、实施计划和进度；只供查证，不作为当前执行指令
 docs/fixed-point-corners.md      定点数（Fx/Angle）坑与规范速查
 docs/checksum-mechanism.md       校验和机制 + "新字段默认入校验" 保证
 docs/pool-memory-layout.md       池 SoA 布局与缓存精算（热路径驻 L2）
@@ -137,6 +137,7 @@ crates/
     src/math/        定点核：fx/angle/trig/cordic/easing/geom/isqrt/codec
     src/math/tables/ 烘焙表原始字节（harness 生成并 commit，core 只 include_bytes!）
     src/checksum.rs  vendored FNV-1a 64（D11）
+    src/collision.rs 按局碰撞模式/擦弹开关；几何与既有门禁的适用范围见 docs/collision-rules.md
     src/rng.rs       vendored PCG32（I3）
     src/{bullets,shots,enemy,field,items,player}.rs  实体数据模块（前五个是 define_pool! 实例；池即层）
     src/{boss,tables}.rs  boss 公告板（A2）/ WorldTables 静态数据层（shottype+道具+角色参数+规则套件 Kit+appearance；
@@ -154,6 +155,7 @@ crates/
                      / view(通道 A `WorldView` 零拷贝只读视图)
     src/ecl/         【M1】栈机 VM：task(协程池 256) / ops(op 表+ARITY) / vm(解释核+相2调度租户)
                      / image(EclImage) / syscall(号表+白名单+统一派发，私有按域实现放 syscall/)
+                     syscall/tests.rs 保留共用测试辅助；tests/ 按号表、查询、弹幕、敌人、发射器、关卡符卡、激光分组
     src/step.rs      P2 组装层：§3.5 宪法顺序的唯一持有者 + World{body,tasks} + 快照
                      + 正典开机 new_game/new_game_at(Loadout 装备 + mark 中段启动,2026-07-25)
     src/timeline.rs  【M3】World 之上的时间线层：SnapshotRing 快照环 / Timeline::advance 认领遡行
@@ -164,8 +166,10 @@ crates/
                     /codegen(含 mark 垫片降低+锚点自动补偿，builtin 专用降低放 codegen/builtin.rs)
                     /units(多文件编译单元,目录整取按名排序)
                     —— .ecl 源码启动时编译成 EclImage；lib.rs builder = codegen 后端
-  stg-harness/      CLI：golden 两段金向量（scenes/rainbow.ecl 符卡）+ bench 基线 + 烘焙表 bake/verify（允许浮点）
+  stg-harness/      CLI：golden 三段金向量（含 scenes/rainbow.ecl 符卡）+ bench 基线 + 烘焙表 bake/verify（允许浮点）
                     + replay（重放 .stgr 输入日志，storm 的时间线版）+ rl-bench（批量 env 吞吐）
+                    src/main.rs 命令入口；bench.rs 性能基准；golden.rs 金向量；scenes.rs 共用风铃场景
+                    tests.rs 编译检查与整局脚本测试；基准、风铃和表加载测试随对应模块维护
   stg-rl/           【M5 起步】RL 批量 env 核心（断层线以上）：layout(proto v1 表布局) / encode(行编码，按 proto
                     字段名/偏移) / env(单 env：起点加权采样/种子流/开机模板缓存+reseed/随机预热/events 8 列
                     /done 0-3) / vec_env(专属 rayon 池批量 step 释放 GIL + 17 缓冲 + CSR 压实)
@@ -239,7 +243,7 @@ cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 
   `docs/setting.md` 重定义，联机回滚是附带收益）`stg_core::timeline`（快照环 +
   遡行兑现 + 影子世界 + `InputLog` 回放）+ 核内 `LIFE_JUMPING` 缺席态/`BTN_JUMP`/`BTN_REWIND`（玩法刀 2026-09-14 退役：死亡即遡行）
   + 桥 `preview`/`view_ring`/`replay_bytes` + 壳 観測/跳躍/遡行状态机；harness `replay` 闸。
-  spec `docs/superpowers/specs/2026-09-07-timeline-observe-jump-rewind-design.md`。
+  spec `docs/archive/specs/2026-09-07-timeline-observe-jump-rewind-design.md`。
 - **M4** `stg-net`（UDP + 会话/重同步）—— **phase 2 起点**。
 - **M5**（起步：**stg-rl env 刀**，2026-09-15）`stg-rl`（proto v1 观测编码 / 机体 1 / 专属 rayon
   批量 env）+ `stg-py`（PyO3 abi3 wheel `stg_rl`，`wheels.yml` tag 出包）；
@@ -251,9 +255,9 @@ cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 
 
 ## 开发工作流（全流程）
 
-- **每个 milestone 走 superpowers 环**：需要设计先 brainstorming → writing-plans → executing-plans
-  （TDD + 复审检查点）→ requesting-code-review → finishing-a-development-branch。
-- **TDD 强制**：确定性项目里测试即规格；金向量本身就是 §9 的回归向量，回归集只增不减。
+- **按任务范围工作**：重要架构或模块边界变更先展示方案并取得用户确认；局部整理沿用已有结构，不因技能流程扩大范围。
+- **测试按实际风险选择**：默认运行相关已有检查；新增测试应对应具体 bug、关键行为或不变量缺口。整理测试时保留有效行为断言，不机械新增或要求数量只增不减。金向量对拍验证跨平台确定性，不能代替行为测试。
+- **文档与临时产物**：当前进度重写不追加；长期资料按主题维护，不自动生成逐任务 spec/plan/复审报告。`docs/archive/` 是历史档案；临时简报、diff、golden 输出和工具状态放仓库外，勿重新提交 `.superpowers/`。
 - **分支**：trunk-based，每个 milestone/任务开短命特性分支，合入前跑绿 CI。
 - git commit 结尾附：`Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`。
 
@@ -263,4 +267,4 @@ cargo build -p stg-godot && godot --path godot   # 真工程开玩(异机 clone 
 2. 新增了 World 字段吗？→ 它自动进校验和了吗（derive）？复用槽写满了吗？容量进 D10 预算了吗？`copy_into` 同步了吗（尺寸哨兵测试会红）？
 3. 改了 step 顺序 / 碰撞矩阵 / op 清单 / 烘焙表 / 校验和算法吗？→ **过评审 + 可能 bump engine_ver**。
 4. 有对应的测试 / 金向量回归吗？CI 三平台会绿吗？
-5. 这刀是 milestone 收口 / 交班吗？→ `PROGRESS.md` 更新了吗（史加一行 + 重写「现在」段）？
+5. 这刀是 milestone 收口 / 交班吗？→ `PROGRESS.md` 的当前状态准确吗？已完成细节留在 Git 历史或已有档案。

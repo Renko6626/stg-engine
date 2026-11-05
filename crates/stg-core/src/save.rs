@@ -10,6 +10,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadError {
     BadMagic,
+    InvalidCollisionRules,
     BadFileVer {
         got: u8,
     },

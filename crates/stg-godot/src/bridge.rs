@@ -261,6 +261,46 @@ impl WorldBridge {
         lives: i64,
         bombs: i64,
     ) -> bool {
+        self.new_game_with_rules(
+            names,
+            sources,
+            seed,
+            rank,
+            start,
+            character,
+            power,
+            lives,
+            bombs,
+            "LEGACY".into(),
+            true,
+        )
+    }
+
+    /// 按局选择碰撞规则；回放读取日志内的规则，不使用当前宿主选项。
+    #[func]
+    #[allow(clippy::too_many_arguments)]
+    fn new_game_with_rules(
+        &mut self,
+        names: PackedStringArray,
+        sources: PackedStringArray,
+        seed: i64,
+        rank: i64,
+        start: i64,
+        character: i64,
+        power: i64,
+        lives: i64,
+        bombs: i64,
+        collision_mode: GString,
+        graze_enabled: bool,
+    ) -> bool {
+        let mode = match collision_mode.to_string().parse() {
+            Ok(mode) => mode,
+            Err(e) => {
+                godot_error!("[stg] {e}");
+                return false;
+            }
+        };
+        let rules = stg_core::collision::CollisionRules::new(mode, graze_enabled);
         if names.len() != sources.len() {
             godot_error!(
                 "[stg] new_game_at:names/sources 长度不等({} vs {})",
@@ -283,7 +323,7 @@ impl WorldBridge {
         };
         let rank = rank.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let start = start.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-        match boot::boot_at(&units, seed as u64, rank, start, loadout) {
+        match boot::boot_at_with_rules(&units, seed as u64, rank, start, loadout, rules) {
             Ok(g) => {
                 self.game = Some(g);
                 self.view_frame = None;
@@ -651,7 +691,10 @@ impl WorldBridge {
         let v = g.world().vanished();
         let xs: Vec<f32> = v.iter().map(|r| r.x.raw() as f32 / 65536.0).collect();
         let ys: Vec<f32> = v.iter().map(|r| r.y.raw() as f32 / 65536.0).collect();
-        let sprites: Vec<i32> = v.iter().map(|r| r.sprite as i32).collect();
+        let sprites: Vec<i32> = v
+            .iter()
+            .map(|r| g.tables.bullet_sprite(r.sprite) as i32)
+            .collect();
         let reasons: Vec<u8> = v.iter().map(|r| r.reason).collect();
         d.set("x", &PackedFloat32Array::from(xs.as_slice()));
         d.set("y", &PackedFloat32Array::from(ys.as_slice()));

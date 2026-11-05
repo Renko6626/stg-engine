@@ -29,6 +29,9 @@ const BOOT_POWER := 0
 const BOOT_LIVES := 3
 const BOOT_BOMBS := 3
 
+@export_enum("LEGACY", "MODERN") var collision_mode: String = "LEGACY"
+@export var graze_enabled: bool = true
+
 var state: int = S.PLAYING
 var mode: int = Mode.NORMAL
 var rank: int = BOOT_RANK
@@ -173,8 +176,8 @@ func _boot() -> bool:
 		ok = bridge.new_game_from_replay(_units_names, _units_sources, _replay_bytes)
 	else:
 		# 参数序:names, sources, seed, rank, start, character, power, lives, bombs
-		ok = bridge.new_game_at(_units_names, _units_sources, BOOT_SEED, rank, start_mark,
-			BOOT_CHARACTER, BOOT_POWER, lives, BOOT_BOMBS)
+		ok = bridge.new_game_with_rules(_units_names, _units_sources, BOOT_SEED, rank, start_mark,
+			BOOT_CHARACTER, BOOT_POWER, lives, BOOT_BOMBS, collision_mode, graze_enabled)
 	if ok:
 		# 新世界 = 帧号从 0 起:水位、特效行、木偶记忆全部归零(表现契约 v2 §5.2/§5.4)
 		dispatcher.reset()

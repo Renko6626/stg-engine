@@ -44,10 +44,12 @@ func _init() -> void:
 	mmi.multimesh = mm
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/fx.gdshader")
-	mat.set_shader_parameter("bullet_atlas", load(Playfield.TEXTURES[0]))
+	var bullet_atlas: Texture2D = load(Playfield.TEXTURES[0])
+	mat.set_shader_parameter("bullet_atlas", bullet_atlas)
 	mat.set_shader_parameter("grid_cols", float(Playfield.COLS[0]))
-	mat.set_shader_parameter("grid_rows", float(Playfield.ROWS[0]))
+	mat.set_shader_parameter("grid_rows", float(bullet_atlas.get_height()) / Playfield.CELLS[0])
 	mat.set_shader_parameter("quad_px", QUAD_PX)
+	mat.set_shader_parameter("bullet_cell_px", float(Playfield.CELLS[0]))
 	mat.set_shader_parameter("life_0_3", Vector4(
 		ContentTables.FX_LIFE[0], ContentTables.FX_LIFE[1],
 		ContentTables.FX_LIFE[2], ContentTables.FX_LIFE[3]))

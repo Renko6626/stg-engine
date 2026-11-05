@@ -162,6 +162,7 @@ pub struct DiagCounters {
 #[repr(C)]
 #[derive(crate::checksum::Checksum, crate::save::SaveBytes)]
 pub struct WorldBody {
+    pub(crate) collision_rules: crate::collision::CollisionRules,
     /// 写口唯相位/API;读走 `frame()`。
     pub(crate) frame: u32,
     /// I3:状态随快照;外部不可触(唯一转发出口见 `rand_range`,不交出 `&Pcg32` 本身)。

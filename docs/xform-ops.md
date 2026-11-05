@@ -2,7 +2,7 @@
 
 > **这是什么**：弹幕作者视角的变换系统参考——op 编号、效果、参数语义一张表。
 > **权威来源**（冲突时以它们为准）：`crates/stg-core/src/xform.rs` 常量（编号即契约）·
-> `docs/superpowers/specs/2026-07-16-d4-transform-design.md` · `stg-world-design.md` D4。
+> `docs/archive/specs/2026-07-16-d4-transform-design.md` · `stg-world-design.md` D4。
 > **铁律**：op 编号已冻结、随金向量进回放/联机契约——增删改编号 = 过评审 + bump engine_ver
 > （CLAUDE.md 自检清单第 3 条）。
 

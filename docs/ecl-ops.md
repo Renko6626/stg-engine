@@ -6,7 +6,7 @@
 > **这是什么**：ECL VM 底层参考——opcode、syscall 号、fault 码、字节码级须知。
 > **权威来源**（冲突时以它们为准）：`crates/stg-core/src/ecl/{ops,syscall,vm}.rs` 常量
 > （**编号即契约**，冻结纪律同 D4：增删改 = 过评审 + bump engine_ver）·
-> spec `docs/superpowers/specs/2026-07-18-m1-ecl-vm-design.md`。
+> spec `docs/archive/specs/2026-07-18-m1-ecl-vm-design.md`。
 > DSL（stg-ecl-compiler builder）是**临时形态**——表层语言另立刀时本表仍是字节码层契约。
 
 ## 指令编码
@@ -111,7 +111,7 @@
 > 是族容量对一张还在长的表本来就不够。新族落 `8xx` 起。
 >
 > **本刀 74 进 74 出**：只改号，任何 syscall 的语义/参数序/降级口径**一字未改**（spec
-> `docs/superpowers/specs/2026-07-31-syscall-renumber-design.md`）。取值以
+> `docs/archive/specs/2026-07-31-syscall-renumber-design.md`）。取值以
 > `crates/stg-core/src/ecl/syscall.rs` 的 `SYS_*` 常量为唯一权威。
 
 ### 0xx —— `$` 引擎变量（12）

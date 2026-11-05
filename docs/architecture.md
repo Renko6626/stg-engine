@@ -135,8 +135,8 @@ InputFrame ──► step ──► [相位 0-10 演化 World] ──► 通道A
 | [`design_doc.md`](../design_doc.md) | 总纲 v0.3——架构/断层线/确定性契约/ECL/网络/测试（冲突时以世界层蓝图为准） |
 | [`stg-world-design.md`](../stg-world-design.md) | 世界层实施蓝图 v1.0（20 轮评审拍板）——P1-P6 原则、A1-A9 架构、D1-D12 局部实现 |
 | [`CLAUDE.md`](../CLAUDE.md) | 工作宪法：硬规则单一入口（断层线/不变量/原则/自检清单） |
-| [`PROGRESS.md`](../PROGRESS.md) | 当前位置/下一步/里程碑史的**唯一权威** |
+| [`PROGRESS.md`](../PROGRESS.md) | 当前状态与下一步；历史交付见[历史档案](archive/README.md) |
 | [`gameplay-design.md`](gameplay-design.md) | **玩法权威**：三件时间工具数字规格 / 第 1 关 / 体验版验证计划 / 引擎改动入口 |
 | [`setting.md`](setting.md) | 设定集：世界观/剧情/Boss/美术/音乐/预算/合规（玩法冲突处让位于上者） |
 | `docs/*.md` | 专题速查：定点坑/校验和/池布局/变换 op/ECL 语言与字节码/性能基线 |
-| `docs/superpowers/{specs,plans}/` | 各切片的设计 spec 与实施计划（历史记录） |
+| `docs/archive/{specs,plans}/` | 各切片的设计 spec 与实施计划（历史记录） |

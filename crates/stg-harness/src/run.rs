@@ -222,7 +222,10 @@ fn observe(w: &World) -> Counts {
 }
 
 /// 摘当帧全部活弹 + 活敌 + 活激光（各按池索引升序，I4）。
-fn dump_at(w: &World) -> (Vec<BulletRow>, Vec<EnemyRow>, Vec<LaserRow>) {
+fn dump_at(
+    w: &World,
+    tables: &stg_core::tables::WorldTables,
+) -> (Vec<BulletRow>, Vec<EnemyRow>, Vec<LaserRow>) {
     let v = w.view();
     let b = v.bullets();
     let bullets = b
@@ -237,7 +240,7 @@ fn dump_at(w: &World) -> (Vec<BulletRow>, Vec<EnemyRow>, Vec<LaserRow>) {
                 y_raw: b.y()[i].raw(),
                 angle_bam: angle.raw(),
                 speed_raw: speed.raw(),
-                sprite: b.sprite()[i],
+                sprite: tables.bullet_sprite(b.sprite()[i]),
             }
         })
         .collect();
@@ -342,7 +345,7 @@ pub(crate) fn run_scene(
     let c0 = observe(w);
     push(&mut rows, c0);
     if at == Some(0) {
-        let (b, e, l) = dump_at(w);
+        let (b, e, l) = dump_at(w, &stg_core::tables::TABLES_V0);
         at_dump = Some((0, b, e, l));
     }
 
@@ -379,7 +382,7 @@ pub(crate) fn run_scene(
             push(&mut rows, c);
         }
         if at == Some(f) {
-            let (b, e, l) = dump_at(w);
+            let (b, e, l) = dump_at(w, &stg_core::tables::TABLES_V0);
             at_dump = Some((f, b, e, l));
         }
     }
@@ -777,6 +780,31 @@ mod tests {
         );
         assert_eq!(one.last.enemies, 1, "教程第 2 步：一只敌，不动不消失");
         assert_eq!(run_src(EMPTY, 60, None).last.enemies, 0);
+    }
+
+    #[test]
+    fn at_dump_maps_logical_appearance_to_physical_sprite() {
+        let p = tmp_ecl(
+            "sprite",
+            "sub main() { _ = fire(16, 5, 0fx, 80fx, 0fx, 0deg, none, none); wait(10); }",
+        );
+        let (mut w, image, _) = build_ecl_world(p.to_str().unwrap(), 1, 2).unwrap();
+        // 根任务遵循出生后次帧首跑，先推进到脚本已发弹。
+        for frame in 0..2 {
+            stg_core::step(
+                &mut w,
+                &stg_core::tables::TABLES_V0,
+                &image,
+                &InputFrame::empty(frame),
+            );
+        }
+        let mut tables = stg_core::tables::build_tables_v0();
+        tables.appearances[21].sprite = 900;
+        let (bullets, _, _) = dump_at(&w, &tables);
+        assert_eq!(bullets.len(), 1);
+        assert_eq!(bullets[0].sprite, 900);
+        let i = w.view().bullets().iter_alive().next().unwrap();
+        assert_eq!(w.view().bullets().sprite()[i], 21);
     }
 
     /// **判别式②（本刀最要紧的一格）：故意 fault 的脚本必须退非零码、且报出 fault。**

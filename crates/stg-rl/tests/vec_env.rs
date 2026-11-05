@@ -70,6 +70,7 @@ fn game_cfg(seed: u64) -> EnvConfig {
         .map(|(n, s)| (n.to_string(), s.to_string()))
         .collect();
     EnvConfig {
+        collision_rules: Default::default(),
         images: vec![compile(&units).unwrap()],
         starts: vec![
             Start {
@@ -295,6 +296,7 @@ sub main() {
 "#;
     let image = compile(&[("t5_laser.ecl".to_string(), src.to_string())]).unwrap();
     let cfg = EnvConfig {
+        collision_rules: Default::default(),
         images: vec![image],
         starts: vec![Start {
             image: 0,
@@ -399,6 +401,7 @@ sub main() {
 "#;
     let image = compile(&[("t4_dxdy.ecl".to_string(), src.to_string())]).unwrap();
     let cfg = EnvConfig {
+        collision_rules: Default::default(),
         images: vec![image],
         starts: vec![Start {
             image: 0,

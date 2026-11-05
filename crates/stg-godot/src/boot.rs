@@ -49,11 +49,22 @@ pub fn boot_at(
     start: i32,
     loadout: stg_core::player::Loadout,
 ) -> Result<Game, BootError> {
+    boot_at_with_rules(units, seed, rank, start, loadout, Default::default())
+}
+
+pub fn boot_at_with_rules(
+    units: &[(String, String)],
+    seed: u64,
+    rank: i32,
+    start: i32,
+    loadout: stg_core::player::Loadout,
+    rules: stg_core::collision::CollisionRules,
+) -> Result<Game, BootError> {
     let image = stg_ecl_compiler::lang::compile_units(units).map_err(|errs| {
         let msg: Vec<String> = errs.iter().map(|(file, e)| e.render(file)).collect();
         BootError::Compile(msg.join("\n\n"))
     })?;
-    let timeline = Timeline::new_game_at(seed, rank, start, loadout, image)
+    let timeline = Timeline::new_game_at_with_rules(seed, rank, start, loadout, rules, image)
         .map_err(|e| BootError::Start(format!("{e:?}")))?;
     Ok(Game {
         timeline,

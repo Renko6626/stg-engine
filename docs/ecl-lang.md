@@ -43,7 +43,7 @@
 <details><summary>权威来源、编译时机、字节码层去哪看</summary>
 
 - 实现：`crates/stg-ecl-compiler/src/lang/`（`builtins.rs` 内建表 / `xform_map.rs` xform 操作表）。
-- spec：`docs/superpowers/specs/2026-07-18-m19-ecl-language.md`。与本文冲突时以代码和 spec 为准。
+- spec：`docs/archive/specs/2026-07-18-m19-ecl-language.md`。与本文冲突时以代码和 spec 为准。
 - 字节码层参考（op / syscall / fault 码）见 [`ecl-ops.md`](ecl-ops.md)——作者通常不需要看它。
 - 编译时机：启动时从源码文本编译（`lang::compile`），编译器的确定性有测试押运。
 

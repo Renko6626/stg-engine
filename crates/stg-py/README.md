@@ -1,7 +1,7 @@
 # stg-py —— `stg_rl`（stg-engine 批量 RL env 的 Python wheel）
 
 PyO3 abi3 薄壳，包在 [`stg-rl`](../stg-rl/) 外。单进程：Rust 专属 rayon 池批量 `step`，写入调用方
-持有的缓冲，期间释放 GIL。设计见 `docs/superpowers/specs/2026-09-15-stg-rl-env-design.md`。
+持有的缓冲，期间释放 GIL。设计见 `docs/archive/specs/2026-09-15-stg-rl-env-design.md`。
 
 > **不要**再套 `gymnasium.AsyncVectorEnv` / SB3 `SubprocVecEnv` / `make_vec_env`——那会把整个 env
 > 复制进子进程、吃掉全部性能。训练侧请设 `torch.set_num_threads`，避免与 rayon 抢核。

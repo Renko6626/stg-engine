@@ -1,4 +1,4 @@
-//! `stg_rl._native` —— PyO3 abi3 薄壳（spec `docs/superpowers/specs/2026-09-15-stg-rl-env-design.md`）。
+//! `stg_rl._native` —— PyO3 abi3 薄壳（spec `docs/archive/specs/2026-09-15-stg-rl-env-design.md`）。
 //!
 //! 只做三件事：把 Python 值翻译成 `stg-rl` 的类型、把 18 个调用方缓冲的 numpy 视图借成
 //! `BufferSet`、在批量 step 期间用 `py.detach` 释放 GIL。所有世界语义住 `stg-rl`。
@@ -133,6 +133,7 @@ struct NativeVecEnv(vec_env::VecEnv);
 #[pymethods]
 impl NativeVecEnv {
     #[new]
+    #[pyo3(signature = (num_envs, threads, images, starts, frame_skip, max_frames, warmup_max, end_on, bullets_cap, seed, collision_mode="LEGACY", graze_enabled=true))]
     #[allow(clippy::too_many_arguments)] // Python 侧构造参数逐个显式，拆结构体反而绕
     fn new(
         num_envs: usize,
@@ -145,6 +146,8 @@ impl NativeVecEnv {
         end_on: Vec<String>,
         bullets_cap: usize,
         seed: u64,
+        collision_mode: &str,
+        graze_enabled: bool,
     ) -> PyResult<Self> {
         let images = images.into_iter().map(|i| i.0.clone()).collect();
         let starts = starts
@@ -169,6 +172,10 @@ impl NativeVecEnv {
             })
             .collect::<PyResult<Vec<_>>>()?;
         let cfg = EnvConfig {
+            collision_rules: stg_core::collision::CollisionRules::new(
+                collision_mode.parse().map_err(PyValueError::new_err)?,
+                graze_enabled,
+            ),
             images,
             starts,
             frame_skip,
@@ -218,7 +225,9 @@ impl NativeVecEnv {
     }
 
     fn set_hit_radius_extra(&mut self, px: Vec<f64>) -> PyResult<()> {
-        self.0.set_hit_radius_extra(&px).map_err(PyValueError::new_err)
+        self.0
+            .set_hit_radius_extra(&px)
+            .map_err(PyValueError::new_err)
     }
 }
 

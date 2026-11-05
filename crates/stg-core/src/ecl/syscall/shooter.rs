@@ -228,7 +228,7 @@ pub(super) fn sys_sh_fire(task: &mut Task, ctx: &mut VmCtx) -> Result<(), u8> {
     if !cfg.valid {
         return Err(FAULT_BAD_OP);
     }
-    let (sprite, radius) = (cfg.sprite, cfg.radius);
+    let (sprite, radius) = (sh.appearance, cfg.radius);
 
     // ③ xform 解包（照抄 `sys_create_bullet` 的 LOCALS 边界校验与解包循环）。数据住
     //    **本任务的 locals**，由 codegen 在 sub 入口一次性 staging、`slots` 的调用图着色

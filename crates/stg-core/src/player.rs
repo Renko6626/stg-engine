@@ -38,7 +38,8 @@ pub const REWIND_INVULN: u16 = 30;
 // ── 角色配置：M0-17 T3 起移速/半径五常量已迁 `crate::tables::CharacterCfg`
 // （`TABLES_V0.characters[..]`）；`PlayerState::spawn` 从表取值，`update_players` 移动逻辑
 // 读 `tables.characters[character_id]`。行 1/2/3（弹×自机中弹、弹×自机擦弹、敌体×自机中弹）
-// 的**被动**操作数就是 `hit_radius`/`graze_radius` 两半径——它们不经任何 `create_*` 写 API
+// 的玩家尺寸取 `hit_radius`；ENGINE_VER32 的擦弹范围由按局规则推导。
+// `graze_radius` 保留为道具拾取圈的角色参数。这些半径不经任何 `create_*` 写 API
 // 的双边钳制，上限校验已由 `WorldTables::validate()`（`radius_in_range`）接管，取代原编译期
 // 断言（T1 起）。
 
@@ -51,6 +52,7 @@ pub struct PlayerState {
     pub character_id: u8,
     pub facing: i8, // 纯表现，照样入校验和（P6）
     pub hit_radius: Fx,
+    /// 历史名称：目前用于道具拾取，擦弹阈值由 CollisionRules 与 hit_radius 推导。
     pub graze_radius: Fx,
     pub input: u32,
     /// 上一帧的原始动作位（相位 1 `decode_input` 滚存）。**沿检测的唯一原料**：

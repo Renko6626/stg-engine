@@ -239,3 +239,23 @@ def test_current_start_indices_follow_reset_and_preserve_terminal_start():
     assert np.all(b["done"] != 0)
     assert b["start_index"].tolist() == [1] * 4
     assert env.current_start_indices() == [0] * 4
+
+
+@pytest.mark.parametrize("mode,enabled,want", [
+    ("LEGACY", True, 0), ("MODERN", True, 1), ("MODERN", False, 0),
+])
+def test_collision_configuration_reaches_native_environment(mode, enabled, want):
+    image = stg_rl.compile_sources([("graze.ecl", """
+sub main() {
+    _ = fire(0, 0, 35fx, 384fx, 0fx, 0deg, none, none);
+    loop { wait(1); }
+}
+""")])
+    env = stg_rl.VecEnv(1, 1, {"test": image}, [stg_rl.Start("test")],
+                       warmup_max=0, collision_mode=mode, graze_enabled=enabled)
+    for _ in range(2):
+        env.reset()
+        count = sum(int(env.step(np.zeros(1, dtype=np.uint32))["events"][0, 1]) for _ in range(5))
+        assert count == want
+    with pytest.raises(ValueError, match="collision_mode"):
+        stg_rl.VecEnv(1, 1, {"test": image}, [stg_rl.Start("test")], collision_mode="INVALID")

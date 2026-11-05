@@ -8,7 +8,7 @@
 //!
 //! （数字随 shooter 刀 2026-07-31 订正：旧值 "≈460 B / ≈118 KB / World ~1.04MB" 是加
 //! `shooters` 之前的估算口径，与 `bench-baseline.md` 的内存账/`step.rs` 的
-//! `world_size_sentinel` 对齐后取实测值。`docs/superpowers/specs/2026-07-18-m1-ecl-vm-design.md`
+//! `world_size_sentinel` 对齐后取实测值。`docs/archive/specs/2026-07-18-m1-ecl-vm-design.md`
 //! 里那串旧数字**不动**——那是冻结的设计记录。）
 //!
 //! ENGINE_VER 26 增加状态插值并行数组53,248 B：TaskPool为213,024 B，World为1,271,376 B。

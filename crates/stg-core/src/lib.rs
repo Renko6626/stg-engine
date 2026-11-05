@@ -230,7 +230,10 @@ extern crate self as stg_core;
 /// 27：敌人共享脚本槽新增12 KiB状态及170/171/450/451读写接口。
 /// 29：新增六个单值 STEP 操作，沿用两槽 ABI 与固定槽顺序，World 布局不变。
 /// 30：xform 表达式支持 rand，按绑定/出生/操作进入阶段消耗现有世界 RNG；World 布局不变。
-pub const ENGINE_VER: u32 = 30;
+/// 31：追加按作品区分的弹型内容；弹池sprite保存逻辑appearance，表现端经表映射物理图格。
+/// 旧192项不变，World布局与表格式v6不变；内容表hash变化，旧表的非identity行为不兼容。
+/// 31→32：按局碰撞模式与擦弹开关；状态与回放包含规则，圆形判定改为严格小于。
+pub const ENGINE_VER: u32 = 32;
 
 pub use stg_derive::define_pool;
 
@@ -268,3 +271,5 @@ pub use step::{World, step, step_with_director};
 //   pub mod pool;   // D2 `define_pool!` 宏与六个实体池（SoA + generation 句柄）
 //   pub mod world;  // Part III 世界本体（WorldBody 字段、pub(crate) 相位函数）
 //   pub mod step;   // P2 组装层宪法顺序（导演槽 + PhaseGuard）
+
+pub mod collision;

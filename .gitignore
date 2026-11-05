@@ -31,3 +31,7 @@ crates/stg-py/target/
 __pycache__/
 *.pyc
 crates/stg-py/.pytest_cache/
+
+# 本地代理过程产物与打包输出；历史设计保存在 docs/archive/
+/.superpowers/
+/dist/

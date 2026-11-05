@@ -1,6 +1,6 @@
 # 渲染契约（表现层权威；首要读者：美术 + Godot 壳作者）
 
-## 0. 总规则（表现契约 v2，2026-09-07；spec `docs/superpowers/specs/2026-09-07-presentation-contract-v2-design.md`）
+## 0. 总规则（表现契约 v2，2026-09-07；spec `docs/archive/specs/2026-09-07-presentation-contract-v2-design.md`）
 
 1. **电平走通道 A，边沿走通道 B。** 边沿可丢（cap 满确定性丢弃）可重放（回滚重演），
    **电平不可丢**。持续超过一帧、且真值在核里的表现状态，一律每帧从 `WorldView`/桥面读口
@@ -131,7 +131,7 @@
 
 | 层 | 文件 | cell | 网格 | id 源 |
 |---|---|---|---|---|
-| bullets | assets/bullets.png | 16×16 | 16×12 | tables appearances[].sprite（identity：id 即格号） |
+| bullets | assets/bullets.png | 64×64 | 16×40 | tables appearances[逻辑id].sprite（物理图格，支持复用） |
 | shots   | assets/shots.png   | 32×32 | 4×1 | shottype 表 sprite |
 | items   | assets/items.png   | 32×32 | 8×1 | tables item_cfg[].sprite |
 | lasers  | **无图集**（程序化截面，§3.10） | — | — | 池 `sprite` = 颜色号 0..15 |
@@ -150,19 +150,16 @@ sprite 号 = 格号（行优先）；越界号 mod 回卷。QuadMesh 尺寸 = ce
 需要本机装有真 Godot 二进制才能跑（`--headless --path godot --script res://tools/gen_atlas.gd`；
 不是 GPU 问题，纯粹是 CI 镜像不装 Godot 可执行文件），CI 不可跑，只能本机手工核对。
 
-**bullets 层的二维布局（颜色轴刀，2026-07-26）**：`sprite 号 = 弹型 × color_stride + 颜色`，
-其中 `color_stride` 是 `WorldTables` 的字段（内建 = 16），**不是引擎常量**——mod 表可自定义
-列数。表索引 ≡ 图集格号 ≡ 池 `sprite` 值（identity），故 `set_sprite` 与 `fire` 写的是同一个
-数域。**当前内建图集（真美术，12 行全满 16 色）没有空格**；稀疏弹型（某行只做了部分颜色）
-仍要占满一整行、用不到的列留成**空格**：表里 `valid = false`，创建时被拒（编译期报错 /
-运行期 Fault），绝不会造出"有判定但看不见"的弹。摆位纪律：缺色留空、**不压紧**，
-否则色号语义跨行不一致，色名会撒谎。
-网格常量仍住 `playfield.gd`（进表是未来 mod 加载刀的事）。
+**bullets 层的二维布局（ENGINE_VER31）**：逻辑appearance=`弹型 × color_stride + 颜色`，
+表索引=池`sprite`值；实际图集格由`appearances[id].sprite`映射，多个逻辑弹型可共用贴图。
+`color_stride`是WorldTables数据，内建16，不再等价于所有mod的物理图集列数。
+旧192项保持identity，新TH06/TH18项追加。稀疏型仍占完整逻辑行，缺色槽`valid=false`，创建拒绝；
+部分换色允许落到无效槽时，它映射到物理透明格192。物理图格可去重，逻辑色槽不压紧。
+网格格边长仍住`playfield.gd`，行数按实际纹理读取；布局与维护入口见[弹型目录](bullet-catalog.md)。
 
-**弹层图集的来源**：`godot/assets/bullets.png` 由 `godot/tools/slice_bullet_sheet.gd`
-从弹片切出（不再由 `gen_atlas.gd` 生成占位——那个脚本已移除弹层，否则一跑就覆盖真美术）。
-cell 取 16 是因为原作弹片本就是 16×16 网格，切割零留白；**若将来补入 32×32 的大玉一类，
-整张图要改按 32 排、小图元居中留白（1:1 不缩放），并同步 `playfield.gd` 的 `CELLS[0]`。**
+**弹层图集的来源**：`godot/tools/slice_bullet_sheet.gd`从维护目录和TH06/TH18两份合成图源生成，
+旧192格仍取原有`bullet1.png`顶部。统一64px格可以容纳气泡/阴阳玉，小图居中留白，保持1px=1unit。
+`gen_atlas.gd`不生成弹层；改源图后须同时重烘映射表与图集。
 
 **sprite 号截断/回卷语义（跨层唯一权威）**：syscall 侧 `sprite` 参在入池前做
 `sprite as u16` 截断——只取低 16 位，脚本传入的越界值（负数或 > 65535）在核心层就已经静默

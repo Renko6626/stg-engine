@@ -1,4 +1,4 @@
-"""stg_rl —— stg-engine 强化学习批量 env（spec docs/superpowers/specs/2026-09-15-stg-rl-env-design.md）。
+"""stg_rl —— stg-engine 强化学习批量 env（spec docs/archive/specs/2026-09-15-stg-rl-env-design.md）。
 
 单进程：Rust 专属 rayon 池批量 step，写入本包分配的缓冲。**不要**再套 gymnasium AsyncVectorEnv /
 SB3 SubprocVecEnv / make_vec_env —— 那会把整个 env 复制进子进程，吃掉全部性能。
@@ -119,7 +119,8 @@ def _flat_numpy(buffers: dict, n: int, cap: int) -> dict:
 class VecEnv:
     def __init__(self, num_envs: int, threads: int, images: dict, starts: list, frame_skip: int = 1,
                  max_frames: int = 3600, warmup_max: int = 120, end_on=_END_ON, bullets_cap: int = 1024,
-                 seed: int = 0, buffers: dict | None = None, *, warn_bullet_overflow: bool = False):
+                 seed: int = 0, buffers: dict | None = None, *, warn_bullet_overflow: bool = False,
+                 collision_mode: str = "LEGACY", graze_enabled: bool = True):
         # `usize`/`u64` 参数对负数在 Rust 侧抛 OverflowError；按 spec §3 先在包装层拦成 ValueError。
         for name, v in (("num_envs", num_envs), ("threads", threads), ("frame_skip", frame_skip),
                         ("max_frames", max_frames), ("warmup_max", warmup_max),
@@ -134,7 +135,8 @@ class VecEnv:
         self._native = _native.NativeVecEnv(
             num_envs, threads, [images[k] for k in names],
             [(names.index(s.image), s.mark, s.rank, float(s.weight)) for s in starts],
-            frame_skip, max_frames, warmup_max, list(end_on), bullets_cap, seed)
+            frame_skip, max_frames, warmup_max, list(end_on), bullets_cap, seed,
+            collision_mode, graze_enabled)
         self.buffers = buffers if buffers is not None else alloc_buffers(num_envs, bullets_cap, backend="numpy")
         self._flat = _flat_numpy(self.buffers, num_envs, bullets_cap)
         # Host-only diagnostics: no allocation or array scan per step when disabled.

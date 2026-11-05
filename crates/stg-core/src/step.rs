@@ -57,6 +57,22 @@ impl World {
     /// 用指定表构造：自机取 `tables.characters[0]`，并记录 `tables_hash = tables.content_hash`
     /// 供启动期 coherence 守卫。`new(seed)` 委托此函数绑内建 `TABLES_V0`。
     pub fn new_with_tables(seed: u64, tables: &crate::tables::WorldTables) -> Box<World> {
+        Self::new_with_tables_and_rules(seed, tables, Default::default())
+    }
+
+    pub fn new_with_rules(seed: u64, rules: crate::collision::CollisionRules) -> Box<World> {
+        Self::new_with_tables_and_rules(seed, &crate::tables::TABLES_V0, rules)
+    }
+
+    pub fn collision_rules(&self) -> crate::collision::CollisionRules {
+        self.body.collision_rules
+    }
+
+    pub fn new_with_tables_and_rules(
+        seed: u64,
+        tables: &crate::tables::WorldTables,
+        rules: crate::collision::CollisionRules,
+    ) -> Box<World> {
         let layout = Layout::new::<World>();
         // SAFETY: World 全零合法（见上）；layout 由类型给出；分配失败走 handle_alloc_error；
         // Box::from_raw 接管同一全局分配器的这块内存，Drop 时正确释放。
@@ -67,6 +83,7 @@ impl World {
             }
             Box::from_raw(ptr)
         };
+        w.body.collision_rules = rules;
         w.body.rng = Pcg32::new(seed, RNG_SEQ);
         // 自机 1 出场（角色 0，取 `tables.characters[0]`）；自机 2 保持全零=不在场。
         w.body.players[0] = crate::player::PlayerState::spawn(0, &tables.characters[0]);
@@ -98,6 +115,17 @@ impl World {
         loadout: crate::player::Loadout,
         image: &crate::ecl::image::EclImage,
     ) -> Result<Box<World>, crate::ecl::binding::TaskStartError> {
+        Self::new_game_at_with_rules(seed, rank, start, loadout, Default::default(), image)
+    }
+
+    pub fn new_game_at_with_rules(
+        seed: u64,
+        rank: i32,
+        start: i32,
+        loadout: crate::player::Loadout,
+        rules: crate::collision::CollisionRules,
+        image: &crate::ecl::image::EclImage,
+    ) -> Result<Box<World>, crate::ecl::binding::TaskStartError> {
         use crate::ecl::binding::TaskStartError;
         if !(crate::consts::RANK_EASY..=crate::consts::RANK_EXTRA).contains(&rank) {
             return Err(TaskStartError::RankOutOfRange { rank });
@@ -115,7 +143,7 @@ impl World {
         } else {
             None
         };
-        let mut w = World::new(seed);
+        let mut w = World::new_with_rules(seed, rules);
         w.body.players[0] = crate::player::PlayerState::spawn(
             loadout.character,
             &tables.characters[loadout.character as usize],
@@ -153,6 +181,7 @@ impl World {
     pub fn copy_into(&self, dst: &mut World) {
         let s = &self.body;
         let d = &mut dst.body;
+        d.collision_rules = s.collision_rules;
         d.frame = s.frame;
         d.rng = s.rng;
         d.globals = s.globals;
@@ -2413,9 +2442,10 @@ mod tests {
 
     #[test]
     fn engine_ver_anchored() {
+        // 31→32：碰撞规则进状态/快照/回放，圆形判定与擦弹公式按模式分派。
         assert_eq!(
             crate::ENGINE_VER,
-            30,
+            32,
             "29→30：xform表达式新增rand，按三阶段消耗现有世界RNG，World布局不变。前一次28→29：新增六个双槽单值STEP，保持固定槽序写入与World布局。前一次27→28：xform 运行时表达式新增45056 B状态与202/653两个syscall，捕获及进入标记进checksum/save/copy。前一次26→27：敌人共享脚本槽新增12288 B状态及4个syscall。——前一次25→26：任务私有状态插值槽新增6个syscall及53248 B状态，进checksum/save/copy。bump 必须是有意识决定(评审 + 改本测试)——24→25：语义缓动补齐(2026-10-23)。\
              追加22条曲线(编号8–29)，原本坏参数现在合法；旧0–7编码和表字节保持不变，World布局不变。\
              ——前一次23→24：激光池刀(2026-09-25，spec 2026-09-25-laser-pool-design.md)。\

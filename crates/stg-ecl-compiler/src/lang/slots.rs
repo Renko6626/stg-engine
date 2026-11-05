@@ -54,7 +54,7 @@
 //! "入口任务的空间"不再是一个有意义的独立位置——`fire(..., NAME, ...)` 这行代码住在
 //! **某个具体的 sub 体内**（不管这个 sub 最终被哪个/哪几个入口经同步调用链间接跑到），
 //! T3 的 staging 序列（`sub 入口对每个被引用 xformdef 发 PUSHI+POPL`，
-//! `docs/superpowers/plans/2026-07-18-m19-ecl-language.md` Task 3 Commit B）天然就发在**那个
+//! `docs/archive/plans/2026-07-18-m19-ecl-language.md` Task 3 Commit B）天然就发在**那个
 //! sub 自己的入口**——故 xformdef 区归属该 sub 的静态槽区间是唯一自洽的选择：本模块把它
 //! 放在该 sub 的 `params+vars` 区之后（"变量之后"，而非"变量之前"或"整个 locals 顶端
 //! 倒着分配"——顶端倒着分配会跟 `SubBuilder::repeat` 的计数器槽（同样从 `LOCALS-1` 往下借）

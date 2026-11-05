@@ -3,6 +3,8 @@
 //! （I7），`step`/相位按帧以 `&WorldTables` 引用消费。`content_hash`：组 A 恒 0，组 B 由
 //! `from_bytes` 计算并校验（LIVE），coherence 守卫读它。
 
+mod touhou_appearances;
+
 use std::sync::LazyLock;
 
 use crate::items::{ITEM_POINT, ITEM_POWER, ITEM_TYPE_COUNT};
@@ -23,16 +25,17 @@ pub struct WorldTables {
     pub item_cfg: [ItemTypeCfg; ITEM_TYPE_COUNT],
     pub drop_tables: Box<[DropTable]>,
     pub item_gravity: Fx,
-    /// 每种弹型占的连续色数（= 图集列数）。内建 = 16；mod 表自定义。
+    /// 每种逻辑弹型占的连续色数。内建 = 16；mod 表自定义。
     /// **引擎不得硬编码这个数**——一切形/色判据从这里读（spec §2 硬约束一）。
     pub color_stride: u16,
-    /// 弹外观表（索引 = appearance id = 图集格号 = 池 sprite 值，identity）。
+    /// 弹外观表（索引 = 逻辑 appearance id = 弹池 sprite 值）。
     pub appearances: Box<[AppearanceCfg]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AppearanceCfg {
     pub radius: Fx,
+    /// 物理图集格号；不同逻辑弹型可共用同一贴图。
     pub sprite: u16,
     /// 该格图集里是否真有图。`false` = 空格：创建被拒（P4-b Fault），
     /// **不是**"半径为 0 的弹"——空格行照样带本形状的半径，见 spec §4.3。
@@ -59,6 +62,7 @@ pub struct CharacterCfg {
     pub low_speed: Fx,
     pub inv_sqrt2: Fx,
     pub hit_radius: Fx,
+    /// 道具拾取的角色附加半径；保留旧字段名，擦弹公式见 collision-rules.md。
     pub graze_radius: Fx,
     pub shot: ShotTypeCfg,
     /// 规则套件；机体 0 Chronos / 机体 1 Classic。
@@ -289,6 +293,14 @@ pub fn build_tables_v0() -> WorldTables {
         }
     }
 
+    appearances.extend(touhou_appearances::TOUHOU_APPEARANCES.iter().map(
+        |&(radius, sprite, valid)| AppearanceCfg {
+            radius: Fx::from_raw(radius),
+            sprite,
+            valid,
+        },
+    ));
+
     let drop_tables: Box<[DropTable]> = Box::new([
         Box::new([]) as DropTable,
         Box::new([(ITEM_POWER, 2u8), (ITEM_POINT, 1u8)]) as DropTable,
@@ -369,6 +381,13 @@ pub static TABLES_V0: LazyLock<WorldTables> = LazyLock::new(|| {
 });
 
 impl WorldTables {
+    /// 弹池逻辑外观 → 物理图集格。表外手工编号保留原值，兼容直接写入的旧贴图号。
+    pub fn bullet_sprite(&self, appearance: u16) -> u16 {
+        self.appearances
+            .get(appearance as usize)
+            .map_or(appearance, |cfg| cfg.sprite)
+    }
+
     /// 表校验（debug/测试用）：`interval > 0`、`radius` 双边入 `[0, MAX_ENTITY_RADIUS]`、
     /// `option` 号 `<=` 该档子机数、`drop_tables` 条目类型合法、角色判定/擦弹半径同域、
     /// appearance 表逐行半径同域（M1 T3）。
@@ -1072,16 +1091,16 @@ mod tests {
         }
     }
 
-    /// 内建 appearance 表 = 12 形 × 16 色的整齐矩形（identity + 同形同半径 + 空格掩码）。
+    /// 旧前缀保持 12 形 × 16 色（identity + 同形同半径 + 空格掩码）。
     /// 判别力：对调 `SHAPE_RADIUS` 中两个**不同**的值必须让本测试变红。
     #[test]
-    fn appearances_v0_is_12x16_grid() {
+    fn appearances_v0_preserves_legacy_12x16_prefix() {
         let t = &*TABLES_V0;
         assert_eq!(t.color_stride, 16, "内建内容包图集 16 列");
-        assert_eq!(t.appearances.len(), 12 * 16);
+        assert!(t.appearances.len() >= 12 * 16);
 
         // identity：表索引 ≡ 图集格号 ≡ 池 sprite 值
-        for (i, a) in t.appearances.iter().enumerate() {
+        for (i, a) in t.appearances[..12 * 16].iter().enumerate() {
             assert_eq!(
                 a.sprite as usize, i,
                 "第 {i} 行 sprite 必须等于行号（identity）"
@@ -1107,7 +1126,7 @@ mod tests {
         // `blank_cell_survives_bytes_roundtrip` 与 `ecl::syscall` / `lang` 各处），
         // 不靠内建表提供靶子——数据要如实反映美术。
         assert!(
-            t.appearances.iter().all(|a| a.valid),
+            t.appearances[..12 * 16].iter().all(|a| a.valid),
             "当前图集没有空格格；若换了有缺色的美术，请连同 SHAPE_COLOR_MASK 一起更新本断言"
         );
     }
@@ -1172,9 +1191,27 @@ mod tests {
         );
         assert_eq!(
             back2.appearances.iter().filter(|a| !a.valid).count(),
-            1,
-            "只应有这一格是空格——多出来说明往返把别的格也弄坏了"
+            t.appearances.iter().filter(|a| !a.valid).count() + 1,
+            "只应新增这一格空格——多出来说明往返把别的格也弄坏了"
         );
+    }
+
+    #[test]
+    fn bullet_sprite_maps_shared_and_blank_cells_after_roundtrip() {
+        let mut t = build_tables_v0();
+        t.appearances[21].sprite = 5;
+        t.appearances[21].radius = Fx::from_int(2);
+        t.appearances[37].sprite = 5;
+        t.appearances[37].radius = Fx::from_int(7);
+        t.appearances[38].sprite = 900;
+        t.appearances[38].valid = false;
+        let back = WorldTables::from_bytes(&t.to_bytes()).unwrap();
+        assert_eq!(back.bullet_sprite(21), 5);
+        assert_eq!(back.bullet_sprite(37), 5);
+        assert_eq!(back.appearances[21].radius, Fx::from_int(2));
+        assert_eq!(back.appearances[37].radius, Fx::from_int(7));
+        assert_eq!(back.bullet_sprite(38), 900, "无效颜色仍指向约定的透明格");
+        assert_eq!(back.bullet_sprite(u16::MAX), u16::MAX);
     }
 
     /// appearance 表 validate 判别腿：半径超上限的坏行必须被拒绝。

@@ -6,6 +6,8 @@ headless 高速模拟。核心性质是**跨平台 bit 级确定性**。
 > 设计与开发纪律见 [`CLAUDE.md`](./CLAUDE.md)、[`design_doc.md`](./design_doc.md)（总纲 v0.3）、
 > [`stg-world-design.md`](./stg-world-design.md)（世界层蓝图 v1.0）。
 
+TH06/TH18按作品区分的弹型、半径、合成图源与离线重烘方法见[弹型目录](docs/bullet-catalog.md)。旧192项保持，新词表在 `godot/ecl/game/touhou-bullets.ecl`。
+
 ## 架构一句话
 
 五层一断层线：表现层（Godot / headless 消费者）在断层线**以上**；确定性模拟核 `world` + ECL VM
@@ -23,7 +25,7 @@ step: world[n+1] = step(world[n], static_ecl, input_frame[n])
 Phase 1 = `stg-core` + `stg-ecl-compiler` + `stg-harness`。DoD = 金向量在 x86_64 与 aarch64 上
 逐帧校验和一致——**这条流水线从第一天起就是绿的，每个切片都过三平台对拍**。
 
-当前位置 / 下一步 / 里程碑史见 [`PROGRESS.md`](./PROGRESS.md)（**唯一权威**，本节不复述以免漂移）。
+当前位置和下一步见 [`PROGRESS.md`](./PROGRESS.md)，过去的设计与交付记录见[历史档案](docs/archive/README.md)。
 
 ```
 crates/
@@ -43,11 +45,12 @@ crates/
 | [`docs/checksum-mechanism.md`](./docs/checksum-mechanism.md) | 校验和机制 + "新字段默认入校验"的保证是怎么来的 |
 | [`docs/pool-memory-layout.md`](./docs/pool-memory-layout.md) | 池 SoA 布局与缓存精算（热路径驻 L2） |
 | [`docs/xform-ops.md`](./docs/xform-ops.md) | 弹变换 op 速查表（编号/效果/参数语义 + LOOP 等关键坑） |
-| [`docs/superpowers/specs/`](./docs/superpowers/specs/) · [`plans/`](./docs/superpowers/plans/) | 各切片的设计 spec 与实施计划（历史记录） |
+| [历史档案](docs/archive/README.md) | 过去的设计、实施计划与交付记录，不作为当前执行指令 |
+| [碰撞规则](docs/collision-rules.md) | 按局选择 LEGACY/MODERN、关闭擦弹及原作还原范围 |
 
 ## 构建与测试
 
-需要 Rust `1.92.0`（由 `rust-toolchain.toml` 自动装）。
+需要 Rust `1.94.0`（由 `rust-toolchain.toml` 自动装）。
 
 ```bash
 cargo build --workspace

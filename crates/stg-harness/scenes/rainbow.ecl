@@ -1,6 +1,6 @@
 // 彩虹风铃符卡（M1.9 T4 —— .ecl 表层语言重写，金向量二号 scene 2 的脚本源）
 //
-// 结构照 docs/superpowers/specs/2026-07-18-m19-ecl-language.md 语言草图：main 五环 loop +
+// 结构照 docs/archive/specs/2026-07-18-m19-ecl-language.md 语言草图：main 五环 loop +
 // patrol/timer_ui 两个 async 子任务。声明序不再决定 SubId——编译器按名称字典序规范排序
 // （named entry ABI，2026-07-20），建场处走 `resolve_entry("patrol")` 等名字查询而非
 // 位置索引。
